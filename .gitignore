@@ -1,0 +1,6 @@
+node_modules/
+dist/
+canvas-data/
+docs/
+.env
+*.local

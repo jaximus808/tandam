@@ -1,0 +1,9 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Leaflet container needs an explicit height */
+.leaflet-container {
+  height: 100%;
+  width: 100%;
+}

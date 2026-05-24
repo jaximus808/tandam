@@ -1,0 +1,15 @@
+{
+  "name": "agentcanvas",
+  "private": true,
+  "scripts": {
+    "build": "pnpm --filter @agentcanvas/shared build && pnpm --filter web build && pnpm --filter mcp-gateway build",
+    "build:web": "pnpm --filter web build",
+    "build:gateway": "pnpm --filter mcp-gateway build",
+    "dev:web": "pnpm --filter web dev",
+    "dev:gateway": "pnpm --filter mcp-gateway dev",
+    "dev": "concurrently \"pnpm dev:web\" \"pnpm dev:gateway\""
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
