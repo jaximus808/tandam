@@ -51,16 +51,18 @@ jobs:
       # 4. Transfer the codebase to the GCE VM
       - name: Copy files to VM via gcloud scp
         run: |
+          # 1. Use sudo to create the folder
+          # 2. Use chown to hand ownership of the folder to the GitHub Actions SSH user
+          # Note: We escape the $ in \$(whoami) so it runs on the VM, not on the GitHub runner
           gcloud compute ssh ${{ secrets.GCP_VM_NAME }} \
             --zone=${{ secrets.GCP_ZONE }} \
             --project=${{ secrets.GCP_PROJECT }} \
-            --command="mkdir -p /opt/tandem"
+            --command="sudo mkdir -p /opt/tandem && sudo chown -R \$(whoami) /opt/tandem"
 
-          # This copies your code, Caddyfile, and the generated .env
+          # Securely copy files (this will now succeed because we own the folder)
           gcloud compute scp --recurse ./* .env ${{ secrets.GCP_VM_NAME }}:/opt/tandem/ \
             --zone=${{ secrets.GCP_ZONE }} \
             --project=${{ secrets.GCP_PROJECT }}
-
       # 5. Execute the Docker Compose commands on the VM
       - name: Execute deployment via gcloud ssh
         run: |
@@ -71,15 +73,15 @@ jobs:
               cd /opt/tandem
               
               echo '→ Pulling latest base images...'
-              docker compose pull
+              sudo docker compose pull
               
               echo '→ Rebuilding Tandem containers...'
-              docker compose build --no-cache
+              sudo docker compose build --no-cache
               
               echo '→ Restarting containers in detached mode...'
-              docker compose down
-              docker compose up -d
+              sudo docker compose down
+              sudo docker compose up -d
               
               echo '→ Pruning old dangling images...'
-              docker image prune -f
+              sudo docker image prune -f
             "
