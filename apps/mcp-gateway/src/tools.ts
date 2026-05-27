@@ -31,6 +31,18 @@ export async function handleTool(
     case "canvas.mode.set":
       return gateway.post("/api/canvas/mode", { mode: args.mode });
 
+    // ── Map ────────────────────────────────────────────────────────────────────
+    case "canvas.map.list":
+      return gateway.getPublic("/api/maps");
+
+    case "canvas.map.set":
+      // Implicit: switching map also switches mode to "map" (per §10 in DESIGN_PHASE3.md).
+      return gateway.post("/api/canvas/template", {
+        templateId: `map-${args.mapId}`,
+        mode: "map",
+        mapId: args.mapId,
+      });
+
     // ── Pins ───────────────────────────────────────────────────────────────────
     case "canvas.pin.add":
       return gateway.post("/api/canvas/pins", {
@@ -125,11 +137,31 @@ export const TOOLS = [
   },
   {
     name: "canvas.mode.set",
-    description: "Set the canvas display mode (map, itinerary, or docs).",
+    description:
+      "Set the canvas display mode. 'welcome' returns to the template picker; " +
+      "'map', 'itinerary', and 'docs' switch the active view.",
     inputSchema: {
       type: "object" as const,
-      properties: { mode: { type: "string", enum: ["map", "itinerary", "docs"] } },
+      properties: { mode: { type: "string", enum: ["welcome", "map", "itinerary", "docs"] } },
       required: ["mode"],
+    },
+  },
+  {
+    name: "canvas.map.list",
+    description:
+      "List the available base map presets (world, us, tokyo, japan, etc). " +
+      "Use the returned ids with canvas.map.set.",
+    inputSchema: { type: "object" as const, properties: {} },
+  },
+  {
+    name: "canvas.map.set",
+    description:
+      "Switch the base map to a registered preset (e.g. 'world', 'us', 'tokyo'). " +
+      "Also switches the canvas into map mode. Call canvas.map.list to enumerate options.",
+    inputSchema: {
+      type: "object" as const,
+      properties: { mapId: { type: "string", description: "Preset id from canvas.map.list" } },
+      required: ["mapId"],
     },
   },
   {

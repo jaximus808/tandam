@@ -1,4 +1,6 @@
 import type { CanvasMeta, CanvasState, PendingEdit, WSClientMessage } from "../types";
+import { MOCK_ENABLED } from "./mockFixture";
+import { mockConnect, mockOnStateUpdate, mockSendOp } from "./mockWS";
 
 type StateHandler = (canvas: CanvasMeta, canvases: CanvasMeta[], state: CanvasState, pendingEdits: PendingEdit[]) => void;
 
@@ -6,8 +8,11 @@ let socket: WebSocket | null = null;
 let handlers: StateHandler[] = [];
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let currentCode: string | null = null;
+let outboundQueue: WSClientMessage[] = [];
+const QUEUE_MAX = 50;
 
 export function onStateUpdate(fn: StateHandler): () => void {
+  if (MOCK_ENABLED) return mockOnStateUpdate(fn);
   handlers.push(fn);
   return () => {
     handlers = handlers.filter((h) => h !== fn);
@@ -15,6 +20,10 @@ export function onStateUpdate(fn: StateHandler): () => void {
 }
 
 export function connectToCanvas(code: string) {
+  if (MOCK_ENABLED) {
+    mockConnect(code);
+    return;
+  }
   if (currentCode === code && socket?.readyState === WebSocket.OPEN) return;
   currentCode = code;
   if (socket) {
@@ -22,6 +31,21 @@ export function connectToCanvas(code: string) {
     socket.close();
   }
   connect(code);
+}
+
+export function disconnectFromCanvas() {
+  if (MOCK_ENABLED) return;
+  currentCode = null;
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  if (socket) {
+    socket.onclose = null; // prevent reconnect loop
+    socket.close();
+    socket = null;
+  }
+  outboundQueue = [];
 }
 
 function connect(code: string) {
@@ -33,6 +57,11 @@ function connect(code: string) {
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
+    }
+    // Flush any ops that were queued while the socket was opening/reconnecting.
+    while (outboundQueue.length && socket?.readyState === WebSocket.OPEN) {
+      const op = outboundQueue.shift()!;
+      socket.send(JSON.stringify(op));
     }
   };
 
@@ -65,7 +94,17 @@ function connect(code: string) {
 }
 
 export function sendOp(op: WSClientMessage) {
+  if (MOCK_ENABLED) {
+    mockSendOp(op);
+    return;
+  }
   if (socket?.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify(op));
+    return;
   }
+  if (outboundQueue.length >= QUEUE_MAX) {
+    console.warn("[ws] outbound queue full, dropping oldest op");
+    outboundQueue.shift();
+  }
+  outboundQueue.push(op);
 }

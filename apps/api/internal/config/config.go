@@ -3,12 +3,16 @@ package config
 import (
 	"fmt"
 	"os"
+	"time"
 )
+
+const defaultJWTTokenTTL = 24 * time.Hour
 
 type Config struct {
 	SupabaseURL string
 	SupabaseKey string // service role key
 	JWTSecret   string
+	JWTTokenTTL time.Duration
 	Port        string
 	WebDistPath string
 	ImageDir    string
@@ -30,6 +34,18 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("JWT_SECRET is required")
 	}
 
+	jwtTTL := defaultJWTTokenTTL
+	if raw := os.Getenv("JWT_TOKEN_TTL"); raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil {
+			return nil, fmt.Errorf("JWT_TOKEN_TTL: %w (expected Go duration, e.g. 24h, 30m, 7d→use 168h)", err)
+		}
+		if parsed <= 0 {
+			return nil, fmt.Errorf("JWT_TOKEN_TTL must be positive, got %s", parsed)
+		}
+		jwtTTL = parsed
+	}
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "7891"
@@ -49,6 +65,7 @@ func Load() (*Config, error) {
 		SupabaseURL: supabaseURL,
 		SupabaseKey: supabaseKey,
 		JWTSecret:   jwtSecret,
+		JWTTokenTTL: jwtTTL,
 		Port:        port,
 		WebDistPath: webDist,
 		ImageDir:    imageDir,

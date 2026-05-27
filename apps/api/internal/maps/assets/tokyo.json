@@ -1,0 +1,18 @@
+{
+  "id": "tokyo",
+  "name": "Tokyo",
+  "description": "Greater Tokyo area",
+  "category": "city",
+  "tags": ["city", "japan", "asia"],
+  "center": [35.6762, 139.6503],
+  "zoom": 12,
+  "minZoom": 8,
+  "maxZoom": 18,
+  "layers": [
+    {
+      "kind": "tile",
+      "url": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+      "attribution": "© OpenStreetMap contributors"
+    }
+  ]
+}

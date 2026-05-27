@@ -8,8 +8,6 @@ import (
 	"github.com/google/uuid"
 )
 
-const TokenTTL = 24 * time.Hour
-
 type Claims struct {
 	CanvasID uuid.UUID `json:"canvas_id"`
 	Role     string    `json:"role"`
@@ -17,11 +15,12 @@ type Claims struct {
 }
 
 type Service struct {
-	secret []byte
+	secret   []byte
+	tokenTTL time.Duration
 }
 
-func NewService(secret string) *Service {
-	return &Service{secret: []byte(secret)}
+func NewService(secret string, tokenTTL time.Duration) *Service {
+	return &Service{secret: []byte(secret), tokenTTL: tokenTTL}
 }
 
 func (s *Service) Issue(canvasID uuid.UUID, role string) (string, error) {
@@ -29,7 +28,7 @@ func (s *Service) Issue(canvasID uuid.UUID, role string) (string, error) {
 		CanvasID: canvasID,
 		Role:     role,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(TokenTTL)),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(s.tokenTTL)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
 	}

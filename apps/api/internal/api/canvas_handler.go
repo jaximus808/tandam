@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/agentcanvas/api/internal/maps"
 	"github.com/agentcanvas/api/internal/store"
 	"github.com/agentcanvas/api/internal/ws"
 	"github.com/go-chi/chi/v5"
@@ -13,10 +14,11 @@ import (
 type Handler struct {
 	store store.Store
 	hub   *ws.Hub
+	maps  *maps.Registry
 }
 
-func NewHandler(s store.Store, hub *ws.Hub) *Handler {
-	return &Handler{store: s, hub: hub}
+func NewHandler(s store.Store, hub *ws.Hub, mapsReg *maps.Registry) *Handler {
+	return &Handler{store: s, hub: hub, maps: mapsReg}
 }
 
 // POST /api/canvases
@@ -70,6 +72,10 @@ func (h *Handler) SetMode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
+	if !isValidMode(body.Mode) {
+		writeError(w, http.StatusBadRequest, "invalid mode")
+		return
+	}
 	canvasID := CanvasIDFromCtx(r.Context())
 	if _, err := h.store.SetMode(r.Context(), canvasID, body.Mode); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -77,6 +83,62 @@ func (h *Handler) SetMode(w http.ResponseWriter, r *http.Request) {
 	}
 	broadcastState(r.Context(), h.store, h.hub, canvasID)
 	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
+}
+
+// POST /api/canvas/map  (JWT required)
+func (h *Handler) SetMap(w http.ResponseWriter, r *http.Request) {
+	var body struct{ MapID string `json:"mapId"` }
+	if err := decode(r, &body); err != nil || body.MapID == "" {
+		writeError(w, http.StatusBadRequest, "mapId is required")
+		return
+	}
+	if h.maps == nil || !h.maps.Has(body.MapID) {
+		writeError(w, http.StatusBadRequest, "unknown mapId")
+		return
+	}
+	canvasID := CanvasIDFromCtx(r.Context())
+	if _, err := h.store.SetMapID(r.Context(), canvasID, body.MapID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	broadcastState(r.Context(), h.store, h.hub, canvasID)
+	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
+}
+
+// POST /api/canvas/template  (JWT required)
+func (h *Handler) ApplyTemplate(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		TemplateID string  `json:"templateId"`
+		Mode       string  `json:"mode"`
+		MapID      *string `json:"mapId,omitempty"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if !isValidMode(body.Mode) {
+		writeError(w, http.StatusBadRequest, "invalid mode")
+		return
+	}
+	if body.MapID != nil && (h.maps == nil || !h.maps.Has(*body.MapID)) {
+		writeError(w, http.StatusBadRequest, "unknown mapId")
+		return
+	}
+	canvasID := CanvasIDFromCtx(r.Context())
+	if _, err := h.store.ApplyTemplate(r.Context(), canvasID, body.Mode, body.MapID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	broadcastState(r.Context(), h.store, h.hub, canvasID)
+	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
+}
+
+func isValidMode(mode string) bool {
+	switch mode {
+	case "welcome", "map", "itinerary", "docs":
+		return true
+	}
+	return false
 }
 
 // POST /api/canvas/pins

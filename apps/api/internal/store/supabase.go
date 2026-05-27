@@ -25,13 +25,14 @@ func generateCode() string {
 // ── DB row types (snake_case = Supabase column names) ─────────────────────────
 
 type dbCanvas struct {
-	ID        string `json:"id"`
-	Code      string `json:"code"`
-	Name      string `json:"name"`
-	Mode      string `json:"mode"`
-	Version   int    `json:"version"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	ID        string  `json:"id"`
+	Code      string  `json:"code"`
+	Name      string  `json:"name"`
+	Mode      string  `json:"mode"`
+	MapID     *string `json:"map_id"`
+	Version   int     `json:"version"`
+	CreatedAt string  `json:"created_at"`
+	UpdatedAt string  `json:"updated_at"`
 }
 
 type dbPin struct {
@@ -95,7 +96,7 @@ func parseTime(s string) time.Time {
 
 func toCanvas(d dbCanvas) *Canvas {
 	id, _ := uuid.Parse(d.ID)
-	return &Canvas{ID: id, Code: d.Code, Name: d.Name, Mode: d.Mode, Version: d.Version,
+	return &Canvas{ID: id, Code: d.Code, Name: d.Name, Mode: d.Mode, MapID: d.MapID, Version: d.Version,
 		CreatedAt: parseTime(d.CreatedAt), UpdatedAt: parseTime(d.UpdatedAt)}
 }
 
@@ -301,6 +302,54 @@ func (s *supabaseStore) SetMode(ctx context.Context, canvasID uuid.UUID, mode st
 	return s.bumpVersion(ctx, canvasID)
 }
 
+func (s *supabaseStore) SetMapID(ctx context.Context, canvasID uuid.UUID, mapID string) (int, error) {
+	err := s.exec(s.client.From("canvases").
+		Update(map[string]string{"map_id": mapID}, "minimal", "").
+		Eq("id", canvasID.String()))
+	if err != nil {
+		return 0, err
+	}
+	return s.bumpVersion(ctx, canvasID)
+}
+
+func (s *supabaseStore) ApplyTemplate(ctx context.Context, canvasID uuid.UUID, mode string, mapID *string) (int, error) {
+	update := map[string]any{"mode": mode}
+	if mapID != nil {
+		update["map_id"] = *mapID
+	}
+	err := s.exec(s.client.From("canvases").
+		Update(update, "minimal", "").
+		Eq("id", canvasID.String()))
+	if err != nil {
+		return 0, err
+	}
+	return s.bumpVersion(ctx, canvasID)
+}
+
+// LeaveWelcomeIfNeeded transitions a canvas out of `welcome` mode after an entity
+// write (pin/event/note). Idempotent — no-op if the canvas is already in a non-welcome
+// mode. fallbackMode is the mode to transition to (typically map/itinerary/docs based
+// on which entity was written).
+func (s *supabaseStore) LeaveWelcomeIfNeeded(ctx context.Context, canvasID uuid.UUID, fallbackMode string) error {
+	c, err := s.GetCanvasByID(ctx, canvasID)
+	if err != nil {
+		return err
+	}
+	if c.Mode != "welcome" {
+		return nil
+	}
+	update := map[string]any{"mode": fallbackMode}
+	// If transitioning to map and no preset yet chosen, drop a sensible default
+	if fallbackMode == "map" && c.MapID == nil {
+		update["map_id"] = "world"
+	}
+	err = s.exec(s.client.From("canvases").
+		Update(update, "minimal", "").
+		Eq("id", canvasID.String()).
+		Eq("mode", "welcome"))
+	return err
+}
+
 // ── Pins ──────────────────────────────────────────────────────────────────────
 
 func (s *supabaseStore) CreatePin(ctx context.Context, canvasID uuid.UUID, pin *Pin) (int, error) {
@@ -314,6 +363,7 @@ func (s *supabaseStore) CreatePin(ctx context.Context, canvasID uuid.UUID, pin *
 	if err != nil {
 		return 0, err
 	}
+	_ = s.LeaveWelcomeIfNeeded(ctx, canvasID, "map")
 	return s.bumpVersion(ctx, canvasID)
 }
 
@@ -367,6 +417,7 @@ func (s *supabaseStore) CreateEvent(ctx context.Context, canvasID uuid.UUID, ev 
 	if err != nil {
 		return 0, err
 	}
+	_ = s.LeaveWelcomeIfNeeded(ctx, canvasID, "itinerary")
 	return s.bumpVersion(ctx, canvasID)
 }
 
@@ -419,6 +470,7 @@ func (s *supabaseStore) CreateNote(ctx context.Context, canvasID uuid.UUID, n *N
 	if err != nil {
 		return 0, err
 	}
+	_ = s.LeaveWelcomeIfNeeded(ctx, canvasID, "docs")
 	return s.bumpVersion(ctx, canvasID)
 }
 

@@ -1,0 +1,40 @@
+# Tandem Canvas — local Docker deployment.
+#
+# Run:
+#   cp .env.example .env  # fill in Supabase + JWT
+#   docker compose up --build
+#
+# After editing source (frontend or backend), re-run `docker compose up --build`
+# or use scripts/rebuild.sh.
+
+services:
+  tandem:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: tandem:latest
+    container_name: tandem
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-7891}:7891"
+    environment:
+      # Required — surface failure loudly if these aren't set in .env.
+      SUPABASE_URL: ${SUPABASE_URL:?set SUPABASE_URL in .env}
+      SUPABASE_KEY: ${SUPABASE_KEY:?set SUPABASE_KEY in .env (service_role key)}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      # Optional overrides (defaults match the Dockerfile).
+      PORT: "7891"
+      WEB_DIST_PATH: /app/web/dist
+      IMAGE_DIR: /app/canvas-images
+    volumes:
+      # Persist uploaded canvas images across container rebuilds.
+      - canvas-images:/app/canvas-images
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:7891/api/maps"]
+      interval: 30s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  canvas-images:

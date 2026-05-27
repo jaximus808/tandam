@@ -1,0 +1,44 @@
+# Keep the build context lean so layer caches stay sharp.
+
+**/node_modules
+**/dist
+**/.next
+**/.cache
+**/.parcel-cache
+
+# Go build artifacts
+apps/api/bin
+**/*.test
+**/*.out
+
+# Editor / OS
+.DS_Store
+.idea
+.vscode
+*.swp
+*.swo
+
+# Local data the API may write to
+apps/api/canvas-images
+canvas-images
+canvas-data
+
+# Secrets / env (never bake into images)
+.env
+.env.*
+!.env.example
+
+# VCS / CI
+.git
+.github
+.gitignore
+
+# Docs not needed at build time
+docs
+README.md
+*.md
+
+# Prebuilt local outputs
+apps/web/dist
+apps/mcp-gateway/dist
+apps/server/dist

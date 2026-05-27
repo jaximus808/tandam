@@ -2,7 +2,16 @@
   "permissions": {
     "allow": [
       "Bash(pnpm install *)",
-      "Bash(pnpm --filter mcp-gateway build)"
+      "Bash(pnpm --filter mcp-gateway build)",
+      "mcp__agentcanvas__canvas_pin_add",
+      "mcp__agentcanvas__canvas_connect",
+      "mcp__agentcanvas__canvas_mode_set",
+      "mcp__agentcanvas__canvas_note_add",
+      "mcp__agentcanvas__canvas_state_read",
+      "WebSearch",
+      "mcp__agentcanvas__canvas_event_add",
+      "Bash(pnpm add *)",
+      "Bash(go build *)"
     ]
   }
 }

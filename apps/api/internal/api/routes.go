@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/agentcanvas/api/internal/auth"
+	"github.com/agentcanvas/api/internal/maps"
 	"github.com/agentcanvas/api/internal/store"
 	"github.com/agentcanvas/api/internal/ws"
 	"github.com/go-chi/chi/v5"
@@ -15,7 +16,7 @@ import (
 	"github.com/go-chi/cors"
 )
 
-func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, webDistPath string, imageDir string) http.Handler {
+func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, mapsReg *maps.Registry, webDistPath string, imageDir string) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(middleware.Logger)
@@ -27,14 +28,17 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, webDistPath st
 		AllowCredentials: false,
 	}))
 
-	h := NewHandler(s, hub)
-	wsH := NewWSHandler(s, hub, authSvc)
+	h := NewHandler(s, hub, mapsReg)
+	wsH := NewWSHandler(s, hub, authSvc, mapsReg)
+	mapsH := NewMapsHandler(mapsReg)
 
 	// ── Public ─────────────────────────────────────────────────────────────────
 	r.Post("/api/canvases", h.CreateCanvas)
 	r.Get("/api/canvases/{code}", h.GetCanvasByCode)
 	r.Post("/api/mcp/auth", mcpAuthHandlerFunc(h, authSvc))
 	r.Get("/ws", wsH.ServeWS)
+	r.Get("/api/maps", mapsH.List)
+	r.Get("/api/maps/{id}", mapsH.Get)
 
 	// ── Images (public read, protected write) ─────────────────────────────────
 	r.Get("/canvas-images/*", func(w http.ResponseWriter, r *http.Request) {
@@ -53,6 +57,8 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, webDistPath st
 
 		r.Get("/api/canvas/state", h.GetState)
 		r.Post("/api/canvas/mode", h.SetMode)
+		r.Post("/api/canvas/map", h.SetMap)
+		r.Post("/api/canvas/template", h.ApplyTemplate)
 
 		r.Post("/api/canvas/pins", h.CreatePin)
 		r.Patch("/api/canvas/pins/{id}", h.UpdatePin)

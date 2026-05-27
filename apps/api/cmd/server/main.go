@@ -9,6 +9,7 @@ import (
 	"github.com/agentcanvas/api/internal/api"
 	"github.com/agentcanvas/api/internal/auth"
 	"github.com/agentcanvas/api/internal/config"
+	"github.com/agentcanvas/api/internal/maps"
 	"github.com/agentcanvas/api/internal/store"
 	"github.com/agentcanvas/api/internal/ws"
 )
@@ -29,11 +30,22 @@ func main() {
 	}
 	defer db.Close()
 
-	authSvc := auth.NewService(cfg.JWTSecret)
+	authSvc := auth.NewService(cfg.JWTSecret, cfg.JWTTokenTTL)
 	hub := ws.NewHub()
 	go hub.Run()
 
-	router := api.NewRouter(db, hub, authSvc, cfg.WebDistPath, cfg.ImageDir)
+	var mapsReg *maps.Registry
+	if dir := os.Getenv("MAPS_DIR"); dir != "" {
+		mapsReg, err = maps.LoadFromDir(dir)
+	} else {
+		mapsReg, err = maps.LoadEmbedded()
+	}
+	if err != nil {
+		log.Fatalf("maps registry: %v", err)
+	}
+	log.Printf("loaded %d map presets: %v", len(mapsReg.IDs()), mapsReg.IDs())
+
+	router := api.NewRouter(db, hub, authSvc, mapsReg, cfg.WebDistPath, cfg.ImageDir)
 
 	addr := fmt.Sprintf(":%s", cfg.Port)
 	log.Printf("AgentCanvas API listening on %s", addr)

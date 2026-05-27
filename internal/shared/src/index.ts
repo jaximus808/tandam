@@ -1,11 +1,12 @@
 export type EntityId = string;
-export type CanvasMode = "map" | "itinerary" | "docs";
+export type CanvasMode = "welcome" | "map" | "itinerary" | "docs";
 
 export interface CanvasMeta {
   id: string;
   code: string;      // 8-char shareable code, e.g. "TOKYO7X3K"
   name: string;
   mode: string;
+  mapId?: string;    // Phase 3: active map preset (only meaningful in map mode)
   version: number;
   createdAt: string; // ISO timestamp (Go API returns strings)
   updatedAt: string;
@@ -71,6 +72,8 @@ export type WSClientMessage =
   | { op: "note.update"; id: EntityId; partial: Partial<Omit<Note, "id" | "kind">> }
   | { op: "note.delete"; id: EntityId }
   | { op: "mode.set"; mode: CanvasMode }
+  | { op: "map.set"; mapId: string }
+  | { op: "template.apply"; templateId: string; mode: CanvasMode; mapId?: string }
   | { op: "scoped_edit_request"; entityId: EntityId; instruction: string };
 
 export type WSServerMessage =

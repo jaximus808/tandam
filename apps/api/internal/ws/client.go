@@ -3,6 +3,7 @@ package ws
 import (
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,6 +30,9 @@ type Client struct {
 	conn     *websocket.Conn
 	send     chan []byte
 
+	closeOnce sync.Once
+	done      chan struct{}
+
 	// HandleMessage lets the caller react to inbound ops (direct manipulation).
 	HandleMessage func(canvasID uuid.UUID, raw []byte)
 }
@@ -39,17 +43,36 @@ func NewClient(hub *Hub, canvasID uuid.UUID, conn *websocket.Conn, handler func(
 		canvasID:      canvasID,
 		conn:          conn,
 		send:          make(chan []byte, 32),
+		done:          make(chan struct{}),
 		HandleMessage: handler,
 	}
 }
 
-// Send queues a message for delivery to this client (non-blocking; drops if full).
+// Send queues a message for delivery to this client (non-blocking; drops if full or closed).
 func (c *Client) Send(data []byte) {
 	select {
+	case <-c.done:
+		return
+	default:
+	}
+	select {
 	case c.send <- data:
+	case <-c.done:
 	default:
 	}
 }
+
+// Close signals shutdown to WritePump and is safe to call multiple times.
+// The send channel is intentionally not closed so concurrent Send/Broadcast
+// callers cannot panic with "send on closed channel".
+func (c *Client) Close() {
+	c.closeOnce.Do(func() {
+		close(c.done)
+	})
+}
+
+// Done returns a channel closed when the client is shutting down.
+func (c *Client) Done() <-chan struct{} { return c.done }
 
 // Upgrade upgrades an HTTP request to a WebSocket and returns the connection.
 func Upgrade(w http.ResponseWriter, r *http.Request) (*websocket.Conn, error) {
@@ -91,12 +114,12 @@ func (c *Client) WritePump() {
 	}()
 	for {
 		select {
-		case msg, ok := <-c.send:
+		case <-c.done:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
-			if !ok {
-				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
-				return
-			}
+			c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+			return
+		case msg := <-c.send:
+			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
 				return
 			}

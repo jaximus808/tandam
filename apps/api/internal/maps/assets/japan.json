@@ -1,0 +1,18 @@
+{
+  "id": "japan",
+  "name": "Japan",
+  "description": "All of Japan",
+  "category": "country",
+  "tags": ["country", "japan", "asia"],
+  "center": [36.5, 138.0],
+  "zoom": 5,
+  "minZoom": 4,
+  "maxZoom": 18,
+  "layers": [
+    {
+      "kind": "tile",
+      "url": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+      "attribution": "© OpenStreetMap contributors"
+    }
+  ]
+}

@@ -7,3 +7,37 @@
   height: 100%;
   width: 100%;
 }
+
+/* Tandem logo entrance + steady orbit.
+   On mount the orbit ring + dots start collapsed inside the central
+   canvas and spinning fast, then expand outward and decelerate into a
+   slow steady-state rotation. transform-box: view-box anchors all
+   transforms to the SVG viewBox center. */
+@keyframes tandem-orbit-expand {
+  from { transform: scale(0.32); }
+  to   { transform: scale(1); }
+}
+@keyframes tandem-orbit-rotate-intro {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(720deg); }
+}
+@keyframes tandem-orbit-rotate-steady {
+  from { transform: rotate(720deg); }
+  to   { transform: rotate(1080deg); }
+}
+.tandem-orbit-expand {
+  transform-box: view-box;
+  transform-origin: 50% 50%;
+  animation: tandem-orbit-expand 2.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.tandem-orbit-rotate {
+  transform-box: view-box;
+  transform-origin: 50% 50%;
+  animation:
+    tandem-orbit-rotate-intro 2.4s cubic-bezier(0.16, 0.84, 0.44, 1) forwards,
+    tandem-orbit-rotate-steady 18s linear 2.4s infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tandem-orbit-expand,
+  .tandem-orbit-rotate { animation: none; }
+}

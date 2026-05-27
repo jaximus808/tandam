@@ -14,6 +14,7 @@ type Canvas struct {
 	Code      string    `json:"code"`
 	Name      string    `json:"name"`
 	Mode      string    `json:"mode"`
+	MapID     *string   `json:"mapId,omitempty"`
 	Version   int       `json:"version"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
@@ -104,6 +105,9 @@ type Store interface {
 	GetCanvasByID(ctx context.Context, id uuid.UUID) (*Canvas, error)
 	GetCanvasState(ctx context.Context, canvasID uuid.UUID) (*Canvas, *CanvasState, []*PendingEdit, error)
 	SetMode(ctx context.Context, canvasID uuid.UUID, mode string) (int, error)
+	SetMapID(ctx context.Context, canvasID uuid.UUID, mapID string) (int, error)
+	ApplyTemplate(ctx context.Context, canvasID uuid.UUID, mode string, mapID *string) (int, error)
+	LeaveWelcomeIfNeeded(ctx context.Context, canvasID uuid.UUID, fallbackMode string) error
 
 	// Pins
 	CreatePin(ctx context.Context, canvasID uuid.UUID, p *Pin) (int, error)

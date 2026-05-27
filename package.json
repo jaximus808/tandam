@@ -7,6 +7,9 @@
     "build:gateway": "pnpm --filter mcp-gateway build",
     "dev:web": "pnpm --filter web dev",
     "dev:gateway": "pnpm --filter mcp-gateway dev",
+    "dev:api": "./scripts/rebuild.sh -d",
+    "dev:full": "./scripts/rebuild.sh -d && pnpm --filter web dev",
+    "dev:mock": "VITE_MOCK=1 pnpm --filter web dev",
     "dev": "concurrently \"pnpm dev:web\" \"pnpm dev:gateway\""
   },
   "devDependencies": {

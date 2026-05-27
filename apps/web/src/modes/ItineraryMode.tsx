@@ -1,11 +1,13 @@
 import ReactMarkdown from "react-markdown";
-import type { CanvasState, PendingEdit, CanvasEvent } from "../types";
-import ScopedEdit from "../components/ScopedEdit";
+import remarkGfm from "remark-gfm";
+import type { CanvasState, CanvasEvent } from "../types";
+import EmptyState from "../components/EmptyState";
 
 interface Props {
   state: CanvasState;
-  pendingEdits: PendingEdit[];
 }
+
+const MARKDOWN_PLUGINS = [remarkGfm];
 
 function formatTime(iso: string) {
   const d = new Date(iso);
@@ -36,15 +38,16 @@ function groupByDay(events: CanvasEvent[]): [string, CanvasEvent[]][] {
   return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
 }
 
-export default function ItineraryMode({ state, pendingEdits }: Props) {
+export default function ItineraryMode({ state }: Props) {
   const events = Object.values(state.events);
   const days = groupByDay(events);
 
   if (events.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">
-        No events yet — ask Claude to plan your itinerary.
-      </div>
+      <EmptyState
+        title="No events yet"
+        hint="Ask Claude to plan your itinerary, or pick a different template."
+      />
     );
   }
 
@@ -63,29 +66,30 @@ export default function ItineraryMode({ state, pendingEdits }: Props) {
               );
               return (
                 <div key={ev.id} className="bg-white rounded-lg border border-gray-200 p-4">
-                  <ScopedEdit entityId={ev.id} pendingEdits={pendingEdits}>
-                    <div className="flex items-start justify-between gap-2">
-                      <span className="font-medium text-gray-900">{ev.title}</span>
-                      <span className="text-sm text-gray-400 whitespace-nowrap">
-                        {formatTime(ev.start)}
-                        {ev.end && ` – ${formatTime(ev.end)}`}
-                      </span>
-                    </div>
-                    {pin && (
-                      <span className="inline-block mt-1.5 text-xs bg-blue-50 text-blue-700 rounded-full px-2 py-0.5">
-                        📍 {pin.label ?? "Pin"}
-                      </span>
-                    )}
-                  </ScopedEdit>
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="font-medium text-gray-900">{ev.title}</span>
+                    <span className="text-sm text-gray-400 whitespace-nowrap">
+                      {formatTime(ev.start)}
+                      {ev.end && ` – ${formatTime(ev.end)}`}
+                    </span>
+                  </div>
+                  {pin && (
+                    <span className="inline-block mt-1.5 text-xs bg-blue-50 text-blue-700 rounded-full px-2 py-0.5">
+                      {pin.label ?? "Pin"}
+                    </span>
+                  )}
 
                   {notes.length > 0 && (
                     <div className="mt-3 space-y-2 border-t border-gray-100 pt-3">
                       {notes.map((note) => (
-                        <ScopedEdit key={note.id} entityId={note.id} pendingEdits={pendingEdits}>
-                          <div className="text-sm text-gray-600 prose prose-sm max-w-none">
-                            <ReactMarkdown>{note.body}</ReactMarkdown>
-                          </div>
-                        </ScopedEdit>
+                        <div
+                          key={note.id}
+                          className="text-sm text-gray-600 prose prose-sm max-w-none"
+                        >
+                          <ReactMarkdown remarkPlugins={MARKDOWN_PLUGINS}>
+                            {note.body}
+                          </ReactMarkdown>
+                        </div>
                       ))}
                     </div>
                   )}

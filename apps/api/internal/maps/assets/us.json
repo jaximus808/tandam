@@ -1,0 +1,19 @@
+{
+  "id": "us",
+  "name": "United States",
+  "description": "Continental US",
+  "category": "country",
+  "tags": ["country", "us", "north-america"],
+  "center": [39.5, -98.35],
+  "zoom": 4,
+  "minZoom": 3,
+  "maxZoom": 18,
+  "bounds": [[24.5, -125.0], [49.5, -66.5]],
+  "layers": [
+    {
+      "kind": "tile",
+      "url": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+      "attribution": "© OpenStreetMap contributors"
+    }
+  ]
+}

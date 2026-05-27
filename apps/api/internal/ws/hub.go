@@ -50,7 +50,7 @@ func (h *Hub) Run() {
 				}
 			}
 			h.mu.Unlock()
-			close(c.send)
+			c.Close()
 
 		case msg := <-h.broadcast:
 			h.mu.RLock()
@@ -58,10 +58,15 @@ func (h *Hub) Run() {
 			h.mu.RUnlock()
 			for c := range room {
 				select {
+				case <-c.done:
+					// client is shutting down; skip
 				case c.send <- msg.data:
 				default:
 					// slow client — drop and unregister
-					h.unregister <- c
+					select {
+					case h.unregister <- c:
+					default:
+					}
 				}
 			}
 		}

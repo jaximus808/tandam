@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/agentcanvas/api/internal/auth"
+	"github.com/agentcanvas/api/internal/store"
 )
 
 // POST /api/mcp/auth
@@ -19,15 +20,8 @@ func (h *Handler) MCPAuth(w http.ResponseWriter, r *http.Request, authSvc *auth.
 		return
 	}
 
-	canvas, err := h.store.GetCanvasByCode(r.Context(), body.Code)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "canvas not found — check your canvas code")
-		return
-	}
-
-	token, err := authSvc.Issue(canvas.ID, "editor")
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to issue token")
+	canvas, token, ok := h.issueTokenForCode(w, r.Context(), body.Code, authSvc, "editor")
+	if !ok {
 		return
 	}
 
@@ -40,12 +34,25 @@ func (h *Handler) MCPAuth(w http.ResponseWriter, r *http.Request, authSvc *auth.
 	})
 }
 
+// issueTokenForCode resolves a canvas code and issues an auth token for it.
+// On failure it writes the error response and returns ok=false.
+func (h *Handler) issueTokenForCode(w http.ResponseWriter, ctx context.Context, code string, authSvc *auth.Service, role string) (*store.Canvas, string, bool) {
+	canvas, err := h.store.GetCanvasByCode(ctx, code)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "canvas not found — check your canvas code")
+		return nil, "", false
+	}
+	token, err := authSvc.Issue(canvas.ID, role)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to issue token")
+		return nil, "", false
+	}
+	return canvas, token, true
+}
+
 // mcpAuthHandlerFunc returns an http.HandlerFunc that closes over authSvc.
 func mcpAuthHandlerFunc(h *Handler, authSvc *auth.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		h.MCPAuth(w, r, authSvc)
 	}
 }
-
-// ensure context import used
-var _ = context.Background

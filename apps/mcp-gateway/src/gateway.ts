@@ -88,6 +88,13 @@ export class Gateway {
     return res.json() as Promise<T>;
   }
 
+  /** GET an endpoint that does not require auth (e.g. /api/maps). */
+  async getPublic<T>(path: string): Promise<T> {
+    const res = await fetch(`${this.config.apiUrl}${path}`);
+    if (!res.ok) throw new Error(`GET ${path} failed: ${res.status} ${await res.text()}`);
+    return res.json() as Promise<T>;
+  }
+
   async post<T>(path: string, body?: unknown): Promise<T> {
     const res = await fetch(`${this.config.apiUrl}${path}`, {
       method: "POST",
