@@ -1,12 +1,3 @@
-# Tandem Canvas — local Docker deployment.
-#
-# Run:
-#   cp .env.example .env  # fill in Supabase + JWT
-#   docker compose up --build
-#
-# After editing source (frontend or backend), re-run `docker compose up --build`
-# or use scripts/rebuild.sh.
-
 services:
   tandem:
     build:
@@ -15,20 +6,16 @@ services:
     image: tandem:latest
     container_name: tandem
     restart: unless-stopped
-    ports:
-      - "${HOST_PORT:-7891}:7891"
     environment:
-      # Required — surface failure loudly if these aren't set in .env.
       SUPABASE_URL: ${SUPABASE_URL:?set SUPABASE_URL in .env}
-      SUPABASE_KEY: ${SUPABASE_KEY:?set SUPABASE_KEY in .env (service_role key)}
+      SUPABASE_KEY: ${SUPABASE_KEY:?set SUPABASE_KEY in .env}
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
-      # Optional overrides (defaults match the Dockerfile).
-      PORT: "7891"
-      WEB_DIST_PATH: /app/web/dist
-      IMAGE_DIR: /app/canvas-images
+      PORT: "7891" # Hardcoded internal port for the proxy to target
+      WEB_DIST_PATH: ${WEB_DIST_PATH:-/app/web/dist}
+      IMAGE_DIR: ${IMAGE_DIR:-/app/canvas-images}
+      JWT_TOKEN_TTL: ${JWT_TOKEN_TTL:-24h}
     volumes:
-      # Persist uploaded canvas images across container rebuilds.
-      - canvas-images:/app/canvas-images
+      - canvas-images:${IMAGE_DIR:-/app/canvas-images}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:7891/api/maps"]
       interval: 30s
@@ -36,5 +23,23 @@ services:
       retries: 5
       start_period: 10s
 
+  caddy:
+    image: caddy:2
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"     # Catches HTTP traffic to redirect to HTTPS
+      - "443:443"   # Serves secure HTTPS traffic
+    environment:
+      - DOMAIN_NAME=${DOMAIN_NAME:?set DOMAIN_NAME in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data    # Saves your SSL certificates so they aren't lost on restart
+      - caddy_config:/config
+    depends_on:
+      - tandem
+
 volumes:
   canvas-images:
+  caddy_data:
+  caddy_config:

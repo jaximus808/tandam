@@ -1,0 +1,85 @@
+name: Deploy Tandem to GCP Compute Engine
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    name: Build and Deploy
+    
+    environment: prod
+
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 1. Dynamically generate the .env file from GitHub Secrets
+      - name: Inject Secrets to .env
+        run: |
+          echo "Writing secrets to .env file..."
+          echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" >> .env
+          echo "SUPABASE_KEY=${{ secrets.SUPABASE_KEY }}" >> .env
+          echo "JWT_SECRET=${{ secrets.JWT_SECRET }}" >> .env
+          echo "PORT=${{ secrets.PORT }}" >> .env
+          echo "WEB_DIST_PATH=${{ secrets.WEB_DIST_PATH }}" >> .env
+          echo "IMAGE_DIR=${{ secrets.IMAGE_DIR }}" >> .env
+          echo "JWT_TOKEN_TTL=${{ secrets.JWT_TOKEN_TTL }}" >> .env
+          echo "DOMAIN_NAME=${{ secrets.DOMAIN_NAME }}" >> .env
+          
+      - name: Clean up for transfer
+        run: rm -rf .git
+
+      # 2. Keyless Authentication via Workload Identity Federation
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SA_EMAIL }}
+
+      # 3. Setup gcloud CLI
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      # 4. Transfer the codebase to the GCE VM
+      - name: Copy files to VM via gcloud scp
+        run: |
+          gcloud compute ssh ${{ secrets.GCP_VM_NAME }} \
+            --zone=${{ secrets.GCP_ZONE }} \
+            --project=${{ secrets.GCP_PROJECT }} \
+            --command="mkdir -p /opt/tandem"
+
+          # This copies your code, Caddyfile, and the generated .env
+          gcloud compute scp --recurse ./* .env ${{ secrets.GCP_VM_NAME }}:/opt/tandem/ \
+            --zone=${{ secrets.GCP_ZONE }} \
+            --project=${{ secrets.GCP_PROJECT }}
+
+      # 5. Execute the Docker Compose commands on the VM
+      - name: Execute deployment via gcloud ssh
+        run: |
+          gcloud compute ssh ${{ secrets.GCP_VM_NAME }} \
+            --zone=${{ secrets.GCP_ZONE }} \
+            --project=${{ secrets.GCP_PROJECT }} \
+            --command="
+              cd /opt/tandem
+              
+              echo '→ Pulling latest base images...'
+              docker compose pull
+              
+              echo '→ Rebuilding Tandem containers...'
+              docker compose build --no-cache
+              
+              echo '→ Restarting containers in detached mode...'
+              docker compose down
+              docker compose up -d
+              
+              echo '→ Pruning old dangling images...'
+              docker image prune -f
+            "
