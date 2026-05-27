@@ -48,13 +48,16 @@ type dbPin struct {
 }
 
 type dbEvent struct {
-	ID        string  `json:"id"`
-	Title     string  `json:"title"`
-	StartTime string  `json:"start_time"`
-	EndTime   *string `json:"end_time"`
-	PinID     *string `json:"pin_id"`
-	CreatedBy string  `json:"created_by"`
-	UpdatedAt string  `json:"updated_at"`
+	ID         string  `json:"id"`
+	Title      string  `json:"title"`
+	StartTime  string  `json:"start_time"`
+	EndTime    *string `json:"end_time"`
+	PinID      *string `json:"pin_id"`
+	FromPinID  *string `json:"from_pin_id"`
+	ToPinID    *string `json:"to_pin_id"`
+	TravelMode *string `json:"travel_mode"`
+	CreatedBy  string  `json:"created_by"`
+	UpdatedAt  string  `json:"updated_at"`
 }
 
 type dbNote struct {
@@ -67,6 +70,35 @@ type dbNote struct {
 	UpdatedAt  string   `json:"updated_at"`
 }
 
+type dbRoadmapItem struct {
+	ID        string  `json:"id"`
+	ParentID  *string `json:"parent_id"`
+	Title     string  `json:"title"`
+	Body      string  `json:"body"`
+	Status    string  `json:"status"`
+	SortOrder int     `json:"sort_order"`
+	CreatedBy string  `json:"created_by"`
+	UpdatedAt string  `json:"updated_at"`
+}
+
+type dbSheet struct {
+	ID        string          `json:"id"`
+	Name      string          `json:"name"`
+	Columns   json.RawMessage `json:"columns"`
+	SortOrder int             `json:"sort_order"`
+	CreatedBy string          `json:"created_by"`
+	UpdatedAt string          `json:"updated_at"`
+}
+
+type dbSheetRow struct {
+	ID        string          `json:"id"`
+	SheetID   string          `json:"sheet_id"`
+	Data      json.RawMessage `json:"data"`
+	SortOrder int             `json:"sort_order"`
+	CreatedBy string          `json:"created_by"`
+	UpdatedAt string          `json:"updated_at"`
+}
+
 type dbPendingEdit struct {
 	ID          string `json:"id"`
 	EntityID    string `json:"entity_id"`
@@ -77,10 +109,13 @@ type dbPendingEdit struct {
 // Used for GetCanvasState — one request with embedded child tables.
 type dbCanvasWithChildren struct {
 	dbCanvas
-	Pins         []dbPin         `json:"pins"`
-	Events       []dbEvent       `json:"events"`
-	Notes        []dbNote        `json:"notes"`
-	PendingEdits []dbPendingEdit `json:"pending_edits"`
+	Pins          []dbPin          `json:"pins"`
+	Events        []dbEvent        `json:"events"`
+	Notes         []dbNote         `json:"notes"`
+	RoadmapItems  []dbRoadmapItem  `json:"roadmap_items"`
+	Sheets        []dbSheet        `json:"sheets"`
+	SheetRows     []dbSheetRow     `json:"sheet_rows"`
+	PendingEdits  []dbPendingEdit  `json:"pending_edits"`
 }
 
 // ── Converters ────────────────────────────────────────────────────────────────
@@ -110,7 +145,8 @@ func toPin(d dbPin) *Pin {
 func toEvent(d dbEvent) *Event {
 	id, _ := uuid.Parse(d.ID)
 	ev := &Event{ID: id, Kind: "event", Title: d.Title, Start: parseTime(d.StartTime),
-		CreatedBy: d.CreatedBy, UpdatedAt: parseTime(d.UpdatedAt)}
+		TravelMode: d.TravelMode,
+		CreatedBy:  d.CreatedBy, UpdatedAt: parseTime(d.UpdatedAt)}
 	if d.EndTime != nil {
 		t := parseTime(*d.EndTime)
 		ev.End = &t
@@ -119,6 +155,18 @@ func toEvent(d dbEvent) *Event {
 		pinID, err := uuid.Parse(*d.PinID)
 		if err == nil {
 			ev.PinID = &pinID
+		}
+	}
+	if d.FromPinID != nil {
+		pinID, err := uuid.Parse(*d.FromPinID)
+		if err == nil {
+			ev.FromPinID = &pinID
+		}
+	}
+	if d.ToPinID != nil {
+		pinID, err := uuid.Parse(*d.ToPinID)
+		if err == nil {
+			ev.ToPinID = &pinID
 		}
 	}
 	return ev
@@ -139,6 +187,47 @@ func toNote(d dbNote) *Note {
 		}
 	}
 	return n
+}
+
+func toRoadmapItem(d dbRoadmapItem) *RoadmapItem {
+	id, _ := uuid.Parse(d.ID)
+	r := &RoadmapItem{ID: id, Kind: "roadmap",
+		Title: d.Title, Body: d.Body, Status: d.Status, SortOrder: d.SortOrder,
+		CreatedBy: d.CreatedBy, UpdatedAt: parseTime(d.UpdatedAt)}
+	if d.ParentID != nil {
+		parentID, err := uuid.Parse(*d.ParentID)
+		if err == nil {
+			r.ParentID = &parentID
+		}
+	}
+	return r
+}
+
+func toSheet(d dbSheet) *Sheet {
+	id, _ := uuid.Parse(d.ID)
+	s := &Sheet{ID: id, Kind: "sheet",
+		Name: d.Name, SortOrder: d.SortOrder,
+		CreatedBy: d.CreatedBy, UpdatedAt: parseTime(d.UpdatedAt),
+		Columns: []SheetColumn{},
+	}
+	if len(d.Columns) > 0 {
+		_ = json.Unmarshal(d.Columns, &s.Columns)
+	}
+	return s
+}
+
+func toSheetRow(d dbSheetRow) *SheetRow {
+	id, _ := uuid.Parse(d.ID)
+	sheetID, _ := uuid.Parse(d.SheetID)
+	r := &SheetRow{ID: id, Kind: "sheetRow", SheetID: sheetID,
+		SortOrder: d.SortOrder,
+		CreatedBy: d.CreatedBy, UpdatedAt: parseTime(d.UpdatedAt),
+		Data: map[string]any{},
+	}
+	if len(d.Data) > 0 {
+		_ = json.Unmarshal(d.Data, &r.Data)
+	}
+	return r
 }
 
 func toPendingEdit(d dbPendingEdit) *PendingEdit {
@@ -251,8 +340,9 @@ func (s *supabaseStore) GetCanvasByID(_ context.Context, id uuid.UUID) (*Canvas,
 // GetCanvasState uses PostgREST embedded selects — one HTTP request for everything.
 func (s *supabaseStore) GetCanvasState(_ context.Context, canvasID uuid.UUID) (*Canvas, *CanvasState, []*PendingEdit, error) {
 	var rows []dbCanvasWithChildren
+
 	_, err := s.client.From("canvases").
-		Select("*,pins(*),events(*),notes(*),pending_edits(*)", "", false).
+		Select("*,pins(*),events(*),notes(*),roadmap_items(*),sheets(*, sheet_rows(*)),pending_edits(*)", "", false).
 		Eq("id", canvasID.String()).
 		ExecuteTo(&rows)
 	if err != nil {
@@ -266,11 +356,14 @@ func (s *supabaseStore) GetCanvasState(_ context.Context, canvasID uuid.UUID) (*
 	canvas := toCanvas(row.dbCanvas)
 
 	state := &CanvasState{
-		Version: canvas.Version,
-		Mode:    canvas.Mode,
-		Pins:    make(map[string]*Pin, len(row.Pins)),
-		Events:  make(map[string]*Event, len(row.Events)),
-		Notes:   make(map[string]*Note, len(row.Notes)),
+		Version:      canvas.Version,
+		Mode:         canvas.Mode,
+		Pins:         make(map[string]*Pin, len(row.Pins)),
+		Events:       make(map[string]*Event, len(row.Events)),
+		Notes:        make(map[string]*Note, len(row.Notes)),
+		RoadmapItems: make(map[string]*RoadmapItem, len(row.RoadmapItems)),
+		Sheets:       make(map[string]*Sheet, len(row.Sheets)),
+		SheetRows:    make(map[string]*SheetRow, len(row.SheetRows)),
 	}
 	for _, d := range row.Pins {
 		p := toPin(d)
@@ -283,6 +376,18 @@ func (s *supabaseStore) GetCanvasState(_ context.Context, canvasID uuid.UUID) (*
 	for _, d := range row.Notes {
 		n := toNote(d)
 		state.Notes[n.ID.String()] = n
+	}
+	for _, d := range row.RoadmapItems {
+		r := toRoadmapItem(d)
+		state.RoadmapItems[r.ID.String()] = r
+	}
+	for _, d := range row.Sheets {
+		sh := toSheet(d)
+		state.Sheets[sh.ID.String()] = sh
+	}
+	for _, d := range row.SheetRows {
+		sr := toSheetRow(d)
+		state.SheetRows[sr.ID.String()] = sr
 	}
 
 	edits := make([]*PendingEdit, 0, len(row.PendingEdits))
@@ -413,6 +518,15 @@ func (s *supabaseStore) CreateEvent(ctx context.Context, canvasID uuid.UUID, ev 
 	if ev.PinID != nil {
 		row["pin_id"] = ev.PinID.String()
 	}
+	if ev.FromPinID != nil {
+		row["from_pin_id"] = ev.FromPinID.String()
+	}
+	if ev.ToPinID != nil {
+		row["to_pin_id"] = ev.ToPinID.String()
+	}
+	if ev.TravelMode != nil {
+		row["travel_mode"] = *ev.TravelMode
+	}
 	err := s.exec(s.client.From("events").Insert(row, false, "", "minimal", ""))
 	if err != nil {
 		return 0, err
@@ -423,10 +537,13 @@ func (s *supabaseStore) CreateEvent(ctx context.Context, canvasID uuid.UUID, ev 
 
 func (s *supabaseStore) UpdateEvent(ctx context.Context, canvasID uuid.UUID, id uuid.UUID, patch EventPatch) (int, error) {
 	m := map[string]any{}
-	if patch.Title != nil { m["title"] = *patch.Title }
-	if patch.Start != nil { m["start_time"] = patch.Start.Format(time.RFC3339) }
-	if patch.End != nil   { m["end_time"] = patch.End.Format(time.RFC3339) }
-	if patch.PinID != nil { m["pin_id"] = patch.PinID.String() }
+	if patch.Title != nil      { m["title"] = *patch.Title }
+	if patch.Start != nil      { m["start_time"] = patch.Start.Format(time.RFC3339) }
+	if patch.End != nil        { m["end_time"] = patch.End.Format(time.RFC3339) }
+	if patch.PinID != nil      { m["pin_id"] = patch.PinID.String() }
+	if patch.FromPinID != nil  { m["from_pin_id"] = patch.FromPinID.String() }
+	if patch.ToPinID != nil    { m["to_pin_id"] = patch.ToPinID.String() }
+	if patch.TravelMode != nil { m["travel_mode"] = *patch.TravelMode }
 	if len(m) == 0 {
 		return 0, nil
 	}
@@ -500,6 +617,375 @@ func (s *supabaseStore) DeleteNote(ctx context.Context, canvasID uuid.UUID, id u
 		Eq("canvas_id", canvasID.String()))
 	if err != nil {
 		return 0, err
+	}
+	return s.bumpVersion(ctx, canvasID)
+}
+
+// ── Roadmap items ─────────────────────────────────────────────────────────────
+
+func (s *supabaseStore) CreateRoadmapItem(ctx context.Context, canvasID uuid.UUID, r *RoadmapItem) (int, error) {
+	row := map[string]any{
+		"id": r.ID.String(), "canvas_id": canvasID.String(),
+		"title": r.Title, "body": r.Body,
+		"status": r.Status, "sort_order": r.SortOrder,
+		"created_by": r.CreatedBy,
+	}
+	if r.ParentID != nil {
+		row["parent_id"] = r.ParentID.String()
+	}
+	err := s.exec(s.client.From("roadmap_items").Insert(row, false, "", "minimal", ""))
+	if err != nil {
+		return 0, err
+	}
+	_ = s.LeaveWelcomeIfNeeded(ctx, canvasID, "roadmap")
+	return s.bumpVersion(ctx, canvasID)
+}
+
+func (s *supabaseStore) UpdateRoadmapItem(ctx context.Context, canvasID uuid.UUID, id uuid.UUID, patch RoadmapItemPatch) (int, error) {
+	m := map[string]any{}
+	if patch.Title != nil     { m["title"] = *patch.Title }
+	if patch.Body != nil      { m["body"] = *patch.Body }
+	if patch.Status != nil    { m["status"] = *patch.Status }
+	if patch.SortOrder != nil { m["sort_order"] = *patch.SortOrder }
+	if patch.ParentID != nil  { m["parent_id"] = patch.ParentID.String() }
+	if len(m) == 0 {
+		return 0, nil
+	}
+	err := s.exec(s.client.From("roadmap_items").
+		Update(m, "minimal", "").
+		Eq("id", id.String()).
+		Eq("canvas_id", canvasID.String()))
+	if err != nil {
+		return 0, err
+	}
+	return s.bumpVersion(ctx, canvasID)
+}
+
+func (s *supabaseStore) DeleteRoadmapItem(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error) {
+	err := s.exec(s.client.From("roadmap_items").
+		Delete("minimal", "").
+		Eq("id", id.String()).
+		Eq("canvas_id", canvasID.String()))
+	if err != nil {
+		return 0, err
+	}
+	return s.bumpVersion(ctx, canvasID)
+}
+
+// ReorderRoadmapItems applies a batch of (parent_id, sort_order) updates and
+// bumps version once. The frontend builds the batch from a single drag-and-drop
+// gesture, so we avoid N broadcasts. Not transactional — a partial failure
+// leaves the tree in a valid (but unintended) state; the next state read
+// reconciles.
+func (s *supabaseStore) ReorderRoadmapItems(ctx context.Context, canvasID uuid.UUID, updates []RoadmapReorder) (int, error) {
+	for _, u := range updates {
+		m := map[string]any{"sort_order": u.SortOrder}
+		if u.ParentID != nil {
+			m["parent_id"] = u.ParentID.String()
+		} else {
+			m["parent_id"] = nil
+		}
+		err := s.exec(s.client.From("roadmap_items").
+			Update(m, "minimal", "").
+			Eq("id", u.ID.String()).
+			Eq("canvas_id", canvasID.String()))
+		if err != nil {
+			return 0, err
+		}
+	}
+	return s.bumpVersion(ctx, canvasID)
+}
+
+// ── Sheets ────────────────────────────────────────────────────────────────────
+
+// sheetBelongsToCanvas verifies a sheet's canvas_id before allowing column/row
+// mutations against it. PostgREST won't filter through embedded selects, so we
+// must check explicitly to prevent cross-canvas writes.
+func (s *supabaseStore) sheetBelongsToCanvas(canvasID, sheetID uuid.UUID) error {
+	var rows []dbSheet
+	_, err := s.client.From("sheets").
+		Select("id", "", false).
+		Eq("id", sheetID.String()).
+		Eq("canvas_id", canvasID.String()).
+		ExecuteTo(&rows)
+	if err != nil {
+		return err
+	}
+	if len(rows) == 0 {
+		return fmt.Errorf("sheet %s not found in canvas %s", sheetID, canvasID)
+	}
+	return nil
+}
+
+func (s *supabaseStore) getSheet(canvasID, sheetID uuid.UUID) (*Sheet, error) {
+	var rows []dbSheet
+	_, err := s.client.From("sheets").
+		Select("*", "", false).
+		Eq("id", sheetID.String()).
+		Eq("canvas_id", canvasID.String()).
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("sheet %s not found in canvas %s", sheetID, canvasID)
+	}
+	return toSheet(rows[0]), nil
+}
+
+func (s *supabaseStore) CreateSheet(ctx context.Context, canvasID uuid.UUID, sh *Sheet) (int, error) {
+	cols := sh.Columns
+	if cols == nil {
+		cols = []SheetColumn{}
+	}
+	colsJSON, err := json.Marshal(cols)
+	if err != nil {
+		return 0, err
+	}
+	row := map[string]any{
+		"id":          sh.ID.String(),
+		"canvas_id":   canvasID.String(),
+		"name":        sh.Name,
+		"columns":     json.RawMessage(colsJSON),
+		"sort_order":  sh.SortOrder,
+		"created_by":  sh.CreatedBy,
+	}
+	if err := s.exec(s.client.From("sheets").Insert(row, false, "", "minimal", "")); err != nil {
+		return 0, err
+	}
+	_ = s.LeaveWelcomeIfNeeded(ctx, canvasID, "sheets")
+	return s.bumpVersion(ctx, canvasID)
+}
+
+func (s *supabaseStore) UpdateSheet(ctx context.Context, canvasID uuid.UUID, id uuid.UUID, patch SheetPatch) (int, error) {
+	m := map[string]any{}
+	if patch.Name != nil      { m["name"] = *patch.Name }
+	if patch.SortOrder != nil { m["sort_order"] = *patch.SortOrder }
+	if len(m) == 0 {
+		return 0, nil
+	}
+	err := s.exec(s.client.From("sheets").
+		Update(m, "minimal", "").
+		Eq("id", id.String()).
+		Eq("canvas_id", canvasID.String()))
+	if err != nil {
+		return 0, err
+	}
+	return s.bumpVersion(ctx, canvasID)
+}
+
+func (s *supabaseStore) DeleteSheet(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error) {
+	err := s.exec(s.client.From("sheets").
+		Delete("minimal", "").
+		Eq("id", id.String()).
+		Eq("canvas_id", canvasID.String()))
+	if err != nil {
+		return 0, err
+	}
+	return s.bumpVersion(ctx, canvasID)
+}
+
+func (s *supabaseStore) AddSheetColumn(ctx context.Context, canvasID, sheetID uuid.UUID, col SheetColumn) (int, error) {
+	sh, err := s.getSheet(canvasID, sheetID)
+	if err != nil {
+		return 0, err
+	}
+	if col.ID == "" {
+		col.ID = uuid.New().String()
+	}
+	sh.Columns = append(sh.Columns, col)
+	return s.writeSheetColumns(ctx, canvasID, sheetID, sh.Columns)
+}
+
+func (s *supabaseStore) UpdateSheetColumn(ctx context.Context, canvasID, sheetID uuid.UUID, columnID string, patch SheetColumnPatch) (int, error) {
+	sh, err := s.getSheet(canvasID, sheetID)
+	if err != nil {
+		return 0, err
+	}
+	found := false
+	for i := range sh.Columns {
+		if sh.Columns[i].ID == columnID {
+			if patch.Name != nil      { sh.Columns[i].Name = *patch.Name }
+			if patch.Type != nil      { sh.Columns[i].Type = *patch.Type }
+			if patch.SortOrder != nil { sh.Columns[i].SortOrder = *patch.SortOrder }
+			found = true
+			break
+		}
+	}
+	if !found {
+		return 0, fmt.Errorf("column %s not found in sheet %s", columnID, sheetID)
+	}
+	return s.writeSheetColumns(ctx, canvasID, sheetID, sh.Columns)
+}
+
+// DeleteSheetColumn removes the column from the sheet's columns JSONB AND strips
+// the same key from every row's data JSONB. Two writes per affected row.
+func (s *supabaseStore) DeleteSheetColumn(ctx context.Context, canvasID, sheetID uuid.UUID, columnID string) (int, error) {
+	sh, err := s.getSheet(canvasID, sheetID)
+	if err != nil {
+		return 0, err
+	}
+	filtered := make([]SheetColumn, 0, len(sh.Columns))
+	for _, c := range sh.Columns {
+		if c.ID != columnID {
+			filtered = append(filtered, c)
+		}
+	}
+	if _, err := s.writeSheetColumns(ctx, canvasID, sheetID, filtered); err != nil {
+		return 0, err
+	}
+	// Strip the column from each row's JSONB. Cheap-and-clear approach: fetch
+	// all rows for this sheet, mutate, write back. For sheets with <10k rows
+	// this is fine; if a sheet outgrows that we'd switch to a Postgres function.
+	var rows []dbSheetRow
+	_, err = s.client.From("sheet_rows").
+		Select("*", "", false).
+		Eq("sheet_id", sheetID.String()).
+		ExecuteTo(&rows)
+	if err != nil {
+		return 0, err
+	}
+	for _, r := range rows {
+		var data map[string]any
+		_ = json.Unmarshal(r.Data, &data)
+		if _, ok := data[columnID]; !ok {
+			continue
+		}
+		delete(data, columnID)
+		newJSON, _ := json.Marshal(data)
+		err := s.exec(s.client.From("sheet_rows").
+			Update(map[string]any{"data": json.RawMessage(newJSON)}, "minimal", "").
+			Eq("id", r.ID))
+		if err != nil {
+			return 0, err
+		}
+	}
+	return s.bumpVersion(ctx, canvasID)
+}
+
+func (s *supabaseStore) writeSheetColumns(ctx context.Context, canvasID, sheetID uuid.UUID, cols []SheetColumn) (int, error) {
+	colsJSON, err := json.Marshal(cols)
+	if err != nil {
+		return 0, err
+	}
+	err = s.exec(s.client.From("sheets").
+		Update(map[string]any{"columns": json.RawMessage(colsJSON)}, "minimal", "").
+		Eq("id", sheetID.String()).
+		Eq("canvas_id", canvasID.String()))
+	if err != nil {
+		return 0, err
+	}
+	return s.bumpVersion(ctx, canvasID)
+}
+
+func (s *supabaseStore) CreateSheetRow(ctx context.Context, canvasID uuid.UUID, r *SheetRow) (int, error) {
+	if err := s.sheetBelongsToCanvas(canvasID, r.SheetID); err != nil {
+		return 0, err
+	}
+	data := r.Data
+	if data == nil {
+		data = map[string]any{}
+	}
+	dataJSON, err := json.Marshal(data)
+	if err != nil {
+		return 0, err
+	}
+	row := map[string]any{
+		"id":         r.ID.String(),
+		"sheet_id":   r.SheetID.String(),
+		"data":       json.RawMessage(dataJSON),
+		"sort_order": r.SortOrder,
+		"created_by": r.CreatedBy,
+	}
+	if err := s.exec(s.client.From("sheet_rows").Insert(row, false, "", "minimal", "")); err != nil {
+		return 0, err
+	}
+	return s.bumpVersion(ctx, canvasID)
+}
+
+// UpdateSheetRow merges patch.Data into the existing row data (rather than
+// replacing wholesale) so partial cell updates don't clobber other cells.
+func (s *supabaseStore) UpdateSheetRow(ctx context.Context, canvasID uuid.UUID, id uuid.UUID, patch SheetRowPatch) (int, error) {
+	if patch.Data == nil && patch.SortOrder == nil {
+		return 0, nil
+	}
+	// Fetch existing row to scope by canvas and to merge data.
+	var rows []dbSheetRow
+	_, err := s.client.From("sheet_rows").
+		Select("*,sheets!inner(canvas_id)", "", false).
+		Eq("id", id.String()).
+		Eq("sheets.canvas_id", canvasID.String()).
+		ExecuteTo(&rows)
+	if err != nil {
+		return 0, err
+	}
+	if len(rows) == 0 {
+		return 0, fmt.Errorf("sheet row %s not found in canvas %s", id, canvasID)
+	}
+	m := map[string]any{}
+	if patch.Data != nil {
+		var existing map[string]any
+		_ = json.Unmarshal(rows[0].Data, &existing)
+		if existing == nil {
+			existing = map[string]any{}
+		}
+		for k, v := range patch.Data {
+			if v == nil {
+				delete(existing, k)
+			} else {
+				existing[k] = v
+			}
+		}
+		merged, _ := json.Marshal(existing)
+		m["data"] = json.RawMessage(merged)
+	}
+	if patch.SortOrder != nil {
+		m["sort_order"] = *patch.SortOrder
+	}
+	err = s.exec(s.client.From("sheet_rows").
+		Update(m, "minimal", "").
+		Eq("id", id.String()))
+	if err != nil {
+		return 0, err
+	}
+	return s.bumpVersion(ctx, canvasID)
+}
+
+func (s *supabaseStore) DeleteSheetRow(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error) {
+	// Scope-check: use embedded join filter to ensure the row's sheet belongs to canvas.
+	var rows []dbSheetRow
+	_, err := s.client.From("sheet_rows").
+		Select("id,sheets!inner(canvas_id)", "", false).
+		Eq("id", id.String()).
+		Eq("sheets.canvas_id", canvasID.String()).
+		ExecuteTo(&rows)
+	if err != nil {
+		return 0, err
+	}
+	if len(rows) == 0 {
+		return 0, fmt.Errorf("sheet row %s not found in canvas %s", id, canvasID)
+	}
+	err = s.exec(s.client.From("sheet_rows").
+		Delete("minimal", "").
+		Eq("id", id.String()))
+	if err != nil {
+		return 0, err
+	}
+	return s.bumpVersion(ctx, canvasID)
+}
+
+func (s *supabaseStore) ReorderSheetRows(ctx context.Context, canvasID, sheetID uuid.UUID, updates []SheetRowReorder) (int, error) {
+	if err := s.sheetBelongsToCanvas(canvasID, sheetID); err != nil {
+		return 0, err
+	}
+	for _, u := range updates {
+		err := s.exec(s.client.From("sheet_rows").
+			Update(map[string]any{"sort_order": u.SortOrder}, "minimal", "").
+			Eq("id", u.ID.String()).
+			Eq("sheet_id", sheetID.String()))
+		if err != nil {
+			return 0, err
+		}
 	}
 	return s.bumpVersion(ctx, canvasID)
 }

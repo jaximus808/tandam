@@ -190,6 +190,208 @@ func (wh *WSHandler) handleOp(canvasID uuid.UUID, raw []byte) {
 		}
 		_, mutErr = wh.store.DeleteNote(ctx, canvasID, *msg.ID)
 
+	case "roadmap.add":
+		var data struct {
+			ParentID  *uuid.UUID `json:"parentId"`
+			Title     string     `json:"title"`
+			Body      string     `json:"body"`
+			Status    string     `json:"status"`
+			SortOrder int        `json:"sortOrder"`
+		}
+		if len(msg.Data) > 0 {
+			if err := json.Unmarshal(msg.Data, &data); err != nil {
+				log.Printf("ws op roadmap.add: bad data: %v", err)
+				return
+			}
+		}
+		if data.Status == "" {
+			data.Status = "todo"
+		}
+		r := &store.RoadmapItem{
+			ID:        uuid.New(),
+			Kind:      "roadmap",
+			ParentID:  data.ParentID,
+			Title:     data.Title,
+			Body:      data.Body,
+			Status:    data.Status,
+			SortOrder: data.SortOrder,
+			CreatedBy: "user",
+		}
+		_, mutErr = wh.store.CreateRoadmapItem(ctx, canvasID, r)
+
+	case "roadmap.update":
+		if msg.ID == nil {
+			return
+		}
+		var patch store.RoadmapItemPatch
+		if err := json.Unmarshal(msg.Partial, &patch); err != nil {
+			return
+		}
+		_, mutErr = wh.store.UpdateRoadmapItem(ctx, canvasID, *msg.ID, patch)
+
+	case "roadmap.delete":
+		if msg.ID == nil {
+			return
+		}
+		_, mutErr = wh.store.DeleteRoadmapItem(ctx, canvasID, *msg.ID)
+
+	case "roadmap.reorder":
+		var payload struct {
+			Updates []store.RoadmapReorder `json:"updates"`
+		}
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			log.Printf("ws op roadmap.reorder: bad payload: %v", err)
+			return
+		}
+		if len(payload.Updates) == 0 {
+			return
+		}
+		_, mutErr = wh.store.ReorderRoadmapItems(ctx, canvasID, payload.Updates)
+
+	case "sheet.add":
+		var data struct {
+			Name      string              `json:"name"`
+			Columns   []store.SheetColumn `json:"columns"`
+			SortOrder int                 `json:"sortOrder"`
+		}
+		if len(msg.Data) > 0 {
+			if err := json.Unmarshal(msg.Data, &data); err != nil {
+				log.Printf("ws op sheet.add: bad data: %v", err)
+				return
+			}
+		}
+		if data.Name == "" {
+			data.Name = "Untitled sheet"
+		}
+		cols := make([]store.SheetColumn, 0, len(data.Columns))
+		for _, c := range data.Columns {
+			if c.Type == "" {
+				c.Type = "text"
+			}
+			if !isValidSheetColumnType(c.Type) {
+				log.Printf("ws op sheet.add: invalid column type %q", c.Type)
+				return
+			}
+			if c.ID == "" {
+				c.ID = uuid.New().String()
+			}
+			cols = append(cols, c)
+		}
+		sh := &store.Sheet{
+			ID: uuid.New(), Kind: "sheet",
+			Name: data.Name, Columns: cols, SortOrder: data.SortOrder,
+			CreatedBy: "user",
+		}
+		_, mutErr = wh.store.CreateSheet(ctx, canvasID, sh)
+
+	case "sheet.update":
+		if msg.ID == nil {
+			return
+		}
+		var patch store.SheetPatch
+		if err := json.Unmarshal(msg.Partial, &patch); err != nil {
+			return
+		}
+		_, mutErr = wh.store.UpdateSheet(ctx, canvasID, *msg.ID, patch)
+
+	case "sheet.delete":
+		if msg.ID == nil {
+			return
+		}
+		_, mutErr = wh.store.DeleteSheet(ctx, canvasID, *msg.ID)
+
+	case "sheet.column.add":
+		var payload struct {
+			SheetID uuid.UUID         `json:"sheetId"`
+			Column  store.SheetColumn `json:"column"`
+		}
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			log.Printf("ws op sheet.column.add: bad payload: %v", err)
+			return
+		}
+		if payload.Column.Type == "" {
+			payload.Column.Type = "text"
+		}
+		if !isValidSheetColumnType(payload.Column.Type) {
+			log.Printf("ws op sheet.column.add: invalid type %q", payload.Column.Type)
+			return
+		}
+		if payload.Column.ID == "" {
+			payload.Column.ID = uuid.New().String()
+		}
+		_, mutErr = wh.store.AddSheetColumn(ctx, canvasID, payload.SheetID, payload.Column)
+
+	case "sheet.column.update":
+		var payload struct {
+			SheetID  uuid.UUID              `json:"sheetId"`
+			ColumnID string                 `json:"columnId"`
+			Partial  store.SheetColumnPatch `json:"partial"`
+		}
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return
+		}
+		if payload.Partial.Type != nil && !isValidSheetColumnType(*payload.Partial.Type) {
+			return
+		}
+		_, mutErr = wh.store.UpdateSheetColumn(ctx, canvasID, payload.SheetID, payload.ColumnID, payload.Partial)
+
+	case "sheet.column.delete":
+		var payload struct {
+			SheetID  uuid.UUID `json:"sheetId"`
+			ColumnID string    `json:"columnId"`
+		}
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return
+		}
+		_, mutErr = wh.store.DeleteSheetColumn(ctx, canvasID, payload.SheetID, payload.ColumnID)
+
+	case "sheet.row.add":
+		var payload struct {
+			SheetID   uuid.UUID      `json:"sheetId"`
+			Data      map[string]any `json:"data"`
+			SortOrder int            `json:"sortOrder"`
+		}
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return
+		}
+		if payload.Data == nil {
+			payload.Data = map[string]any{}
+		}
+		r := &store.SheetRow{
+			ID: uuid.New(), Kind: "sheetRow", SheetID: payload.SheetID,
+			Data: payload.Data, SortOrder: payload.SortOrder, CreatedBy: "user",
+		}
+		_, mutErr = wh.store.CreateSheetRow(ctx, canvasID, r)
+
+	case "sheet.row.update":
+		if msg.ID == nil {
+			return
+		}
+		var patch store.SheetRowPatch
+		if err := json.Unmarshal(msg.Partial, &patch); err != nil {
+			return
+		}
+		_, mutErr = wh.store.UpdateSheetRow(ctx, canvasID, *msg.ID, patch)
+
+	case "sheet.row.delete":
+		if msg.ID == nil {
+			return
+		}
+		_, mutErr = wh.store.DeleteSheetRow(ctx, canvasID, *msg.ID)
+
+	case "sheet.row.reorder":
+		var payload struct {
+			SheetID uuid.UUID               `json:"sheetId"`
+			Updates []store.SheetRowReorder `json:"updates"`
+		}
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return
+		}
+		if len(payload.Updates) == 0 {
+			return
+		}
+		_, mutErr = wh.store.ReorderSheetRows(ctx, canvasID, payload.SheetID, payload.Updates)
+
 	case "scoped_edit_request":
 		if msg.EntityID == nil {
 			return

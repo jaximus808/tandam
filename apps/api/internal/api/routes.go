@@ -72,6 +72,20 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, mapsReg *maps.
 		r.Patch("/api/canvas/notes/{id}", h.UpdateNote)
 		r.Delete("/api/canvas/notes/{id}", h.DeleteNote)
 
+		r.Post("/api/canvas/roadmap-items", h.CreateRoadmapItem)
+		r.Patch("/api/canvas/roadmap-items/{id}", h.UpdateRoadmapItem)
+		r.Delete("/api/canvas/roadmap-items/{id}", h.DeleteRoadmapItem)
+
+		r.Post("/api/canvas/sheets", h.CreateSheet)
+		r.Patch("/api/canvas/sheets/{id}", h.UpdateSheet)
+		r.Delete("/api/canvas/sheets/{id}", h.DeleteSheet)
+		r.Post("/api/canvas/sheets/{id}/columns", h.AddSheetColumn)
+		r.Patch("/api/canvas/sheets/{id}/columns/{columnId}", h.UpdateSheetColumn)
+		r.Delete("/api/canvas/sheets/{id}/columns/{columnId}", h.DeleteSheetColumn)
+		r.Post("/api/canvas/sheet-rows", h.CreateSheetRow)
+		r.Patch("/api/canvas/sheet-rows/{id}", h.UpdateSheetRow)
+		r.Delete("/api/canvas/sheet-rows/{id}", h.DeleteSheetRow)
+
 		r.Post("/api/canvas/pending-edits", h.CreatePendingEdit)
 		r.Delete("/api/canvas/pending-edits/{id}", h.DeletePendingEdit)
 
