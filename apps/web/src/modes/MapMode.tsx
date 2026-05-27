@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { MapContainer, TileLayer, Marker, Polyline, Popup, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { CanvasState, Pin } from "../types";
+import type { CanvasEvent, CanvasState, Pin, TravelMode } from "../types";
 import { sendOp } from "../lib/ws";
 import { imageUrl } from "../lib/api";
 
@@ -35,6 +35,118 @@ interface Props {
   active: boolean;
   selectedPinId: string | null;
   onSelectPin: (id: string | null) => void;
+  selectedEventId: string | null;
+  onSelectEvent: (id: string | null) => void;
+}
+
+// ── Travel segment rendering ──────────────────────────────────────────────────
+// A "travel event" is a CanvasEvent with fromPinId + toPinId + travelMode all
+// set. It renders as a polyline between the two pins with a mode icon at the
+// midpoint. Clicking either selects the event and fits the camera to both
+// endpoints.
+
+type LatLng = [number, number];
+
+interface ResolvedTravel {
+  event: CanvasEvent;
+  from: Pin;
+  to: Pin;
+  mode: TravelMode;
+}
+
+const TRAVEL_STYLE: Record<TravelMode, { color: string; dashArray?: string }> = {
+  flight: { color: "#3b82f6" },
+  train:  { color: "#10b981" },
+  drive:  { color: "#f59e0b", dashArray: "8 6" },
+};
+
+// Inlined Lucide SVG paths so we can drop them straight into divIcon HTML
+// without pulling in react-dom/server.
+const TRAVEL_ICON_SVG: Record<TravelMode, string> = {
+  flight:
+    '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+    '<path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z"/>' +
+    "</svg>",
+  train:
+    '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+    '<path d="M8 3.1V7a4 4 0 0 0 8 0V3.1"/>' +
+    '<path d="m9 15-1-1"/>' +
+    '<path d="m15 15 1-1"/>' +
+    '<path d="M9 19c-2.8 0-5-2.2-5-5v-4a8 8 0 0 1 16 0v4c0 2.8-2.2 5-5 5Z"/>' +
+    '<path d="m8 19-2 3"/>' +
+    '<path d="m16 19 2 3"/>' +
+    "</svg>",
+  drive:
+    '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+    '<path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.4 2.9A3.7 3.7 0 0 0 2 12v4c0 .6.4 1 1 1h2"/>' +
+    '<circle cx="7" cy="17" r="2"/>' +
+    '<path d="M9 17h6"/>' +
+    '<circle cx="17" cy="17" r="2"/>' +
+    "</svg>",
+};
+
+function bezierPoint(a: LatLng, c: LatLng, b: LatLng, t: number): LatLng {
+  const u = 1 - t;
+  return [
+    u * u * a[0] + 2 * u * t * c[0] + t * t * b[0],
+    u * u * a[1] + 2 * u * t * c[1] + t * t * b[1],
+  ];
+}
+
+// Apex of a flight arc — always biased northward so flights visibly curve
+// upward regardless of travel direction. Magnitude scales with chord length.
+function flightControlPoint(from: LatLng, to: LatLng): LatLng {
+  const dLat = to[0] - from[0];
+  const dLng = to[1] - from[1];
+  const chord = Math.hypot(dLat, dLng);
+  return [(from[0] + to[0]) / 2 + chord * 0.2, (from[1] + to[1]) / 2];
+}
+
+function travelPath(from: LatLng, to: LatLng, mode: TravelMode): LatLng[] {
+  if (mode !== "flight") return [from, to];
+  const ctrl = flightControlPoint(from, to);
+  const samples = 32;
+  const pts: LatLng[] = [];
+  for (let i = 0; i <= samples; i++) {
+    pts.push(bezierPoint(from, ctrl, to, i / samples));
+  }
+  return pts;
+}
+
+function travelMidpoint(from: LatLng, to: LatLng, mode: TravelMode): LatLng {
+  if (mode !== "flight") {
+    return [(from[0] + to[0]) / 2, (from[1] + to[1]) / 2];
+  }
+  return bezierPoint(from, flightControlPoint(from, to), to, 0.5);
+}
+
+// Bearing along the chord direction, in degrees clockwise from north — used to
+// rotate the plane icon so it points along the travel direction. The Lucide
+// Plane icon's nose points "up-right" (~45°) at rotation 0, so we subtract 45
+// to compensate.
+function travelBearing(from: LatLng, to: LatLng): number {
+  return (Math.atan2(to[1] - from[1], to[0] - from[0]) * 180) / Math.PI - 45;
+}
+
+function travelIcon(mode: TravelMode, bearing: number, selected: boolean): L.DivIcon {
+  const style = TRAVEL_STYLE[mode];
+  const rotation = mode === "flight" ? bearing : 0;
+  const size = selected ? 32 : 28;
+  return L.divIcon({
+    className: "",
+    html:
+      `<div style="` +
+      `background:${style.color};` +
+      `width:${size}px;height:${size}px;` +
+      `border-radius:50%;` +
+      `display:flex;align-items:center;justify-content:center;` +
+      `box-shadow:0 1px 4px rgba(0,0,0,.4);` +
+      `border:2px solid white;` +
+      `transform:rotate(${rotation}deg);` +
+      `">${TRAVEL_ICON_SVG[mode]}</div>`,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+  });
 }
 
 function renderLayer(layer: MapLayer, idx: number) {
@@ -73,11 +185,15 @@ function InvalidateOnActive({ active }: { active: boolean }) {
 function MapController({
   pins,
   selectedPinId,
+  selectedEventId,
+  travels,
   autoFollow,
   markerRefs,
 }: {
   pins: Pin[];
   selectedPinId: string | null;
+  selectedEventId: string | null;
+  travels: ResolvedTravel[];
   autoFollow: boolean;
   markerRefs: React.MutableRefObject<Map<string, L.Marker>>;
 }) {
@@ -98,6 +214,17 @@ function MapController({
     }, 350);
     return () => clearTimeout(t);
   }, [selectedPinId, pins, map, markerRefs]);
+
+  useEffect(() => {
+    if (!selectedEventId) return;
+    const travel = travels.find((t) => t.event.id === selectedEventId);
+    if (!travel) return;
+    const bounds = L.latLngBounds([
+      [travel.from.lat, travel.from.lng],
+      [travel.to.lat, travel.to.lng],
+    ]);
+    map.flyToBounds(bounds, { padding: [80, 80], maxZoom: 11, duration: 0.6 });
+  }, [selectedEventId, travels, map]);
 
   useEffect(() => {
     const currentIds = new Set(pins.map((p) => p.id));
@@ -147,8 +274,21 @@ export default function MapMode({
   active,
   selectedPinId,
   onSelectPin,
+  selectedEventId,
+  onSelectEvent,
 }: Props) {
   const pins = useMemo(() => Object.values(state.pins), [state.pins]);
+  const travels = useMemo<ResolvedTravel[]>(() => {
+    const out: ResolvedTravel[] = [];
+    for (const ev of Object.values(state.events)) {
+      if (!ev.fromPinId || !ev.toPinId || !ev.travelMode) continue;
+      const from = state.pins[ev.fromPinId];
+      const to = state.pins[ev.toPinId];
+      if (!from || !to) continue;
+      out.push({ event: ev, from, to, mode: ev.travelMode });
+    }
+    return out;
+  }, [state.events, state.pins]);
   const notesByParent = useMemo(() => {
     const out = new Map<string, typeof state.notes[string][]>();
     for (const n of Object.values(state.notes)) {
@@ -240,9 +380,44 @@ export default function MapMode({
           <MapController
             pins={pins}
             selectedPinId={selectedPinId}
+            selectedEventId={selectedEventId}
+            travels={travels}
             autoFollow={autoFollow}
             markerRefs={markerRefs}
           />
+          {travels.map((t) => {
+            const from: LatLng = [t.from.lat, t.from.lng];
+            const to: LatLng = [t.to.lat, t.to.lng];
+            const path = travelPath(from, to, t.mode);
+            const mid = travelMidpoint(from, to, t.mode);
+            const bearing = travelBearing(from, to);
+            const style = TRAVEL_STYLE[t.mode];
+            const selected = t.event.id === selectedEventId;
+            return (
+              <Fragment key={t.event.id}>
+                <Polyline
+                  positions={path}
+                  pathOptions={{
+                    color: style.color,
+                    weight: selected ? 4 : 3,
+                    opacity: 0.9,
+                    dashArray: style.dashArray,
+                  }}
+                  eventHandlers={{
+                    click: () => onSelectEvent(t.event.id),
+                  }}
+                />
+                <Marker
+                  position={mid}
+                  icon={travelIcon(t.mode, bearing, selected)}
+                  interactive
+                  eventHandlers={{
+                    click: () => onSelectEvent(t.event.id),
+                  }}
+                />
+              </Fragment>
+            );
+          })}
           {pins.map((pin) => {
             const eventCount = eventsByPin.get(pin.id)?.length ?? 0;
             const icon =

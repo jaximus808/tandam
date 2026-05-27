@@ -1,19 +1,22 @@
 /**
- * AgentCanvas MCP Gateway (Phase 2)
+ * Tandem MCP Gateway
  *
- * Spawned by Claude Code as an MCP stdio process. The canvas binding is
- * established at runtime: Claude calls the `canvas.connect` tool with a
+ * Spawned by an MCP-aware agent (Claude Code, Cursor, Codex, OpenAI Agents
+ * SDK, custom orchestrators) as a stdio process. The canvas binding is
+ * established at runtime: the agent calls the `canvas.connect` tool with a
  * canvas code, the gateway exchanges it for a JWT, then proxies all
- * subsequent tool calls to the Go API server.
+ * subsequent tool calls to the Tandem HTTP API.
  *
- * MCP config:
- * {
- *   "agentcanvas": {
- *     "command": "node",
- *     "args": ["/path/to/mcp-gateway/dist/index.js"],
- *     "env": { "API_URL": "http://localhost:7891" }  // optional, this is the default
+ * Example MCP config (npx form):
+ *   {
+ *     "mcpServers": {
+ *       "tandem": {
+ *         "command": "npx",
+ *         "args": ["-y", "@tandem/mcp-gateway"],
+ *         "env": { "API_URL": "https://your-tandem-host" }
+ *       }
+ *     }
  *   }
- * }
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -22,13 +25,56 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import { Gateway } from "./gateway.js";
 import { TOOLS, handleTool } from "./tools.js";
 
-const API_URL = (process.env.API_URL ?? "http://localhost:7891").replace(/\/$/, "");
+// Keep in sync with package.json `version`. Surfaced via `--version` and the
+// MCP server's self-identification.
+const VERSION = "2.0.0";
+
+const DEFAULT_API_URL = "http://localhost:7891";
+
+function printHelp() {
+  process.stdout.write(
+    `@tandem/mcp-gateway ${VERSION} — MCP server for Tandem.\n` +
+      `\n` +
+      `Usage:\n` +
+      `  tandem-mcp                 Run as an MCP stdio server (default).\n` +
+      `  tandem-mcp --version, -v   Print version and exit.\n` +
+      `  tandem-mcp --help, -h      Show this help.\n` +
+      `\n` +
+      `Environment:\n` +
+      `  API_URL                    Tandem API base URL.\n` +
+      `                             Default: ${DEFAULT_API_URL}\n` +
+      `\n` +
+      `This binary is normally spawned by an MCP client (Claude Code, Cursor,\n` +
+      `Codex, OpenAI Agents SDK, …) over stdio. See:\n` +
+      `  https://github.com/jaximus808/tandam#readme\n`
+  );
+}
+
+const cliArgs = process.argv.slice(2);
+if (cliArgs.includes("--version") || cliArgs.includes("-v")) {
+  process.stdout.write(`@tandem/mcp-gateway ${VERSION}\n`);
+  process.exit(0);
+}
+if (cliArgs.includes("--help") || cliArgs.includes("-h")) {
+  printHelp();
+  process.exit(0);
+}
+
+const apiUrlFromEnv = process.env.API_URL;
+const API_URL = (apiUrlFromEnv ?? DEFAULT_API_URL).replace(/\/$/, "");
+
+if (!apiUrlFromEnv) {
+  process.stderr.write(
+    `[tandem] API_URL env not set — using default ${API_URL}. ` +
+      `Set API_URL to point at your Tandem host.\n`
+  );
+}
 
 const gateway = new Gateway({ apiUrl: API_URL });
 
 async function main() {
   const server = new Server(
-    { name: "agentcanvas", version: "2.0.0" },
+    { name: "tandem", version: VERSION },
     { capabilities: { tools: {} } }
   );
 
@@ -41,7 +87,7 @@ async function main() {
     try {
       const result = await handleTool(gateway, name, a);
 
-      // For state.read, decorate with the active canvas so Claude always knows where it is.
+      // For state.read, decorate with the active canvas so the agent always knows where it is.
       if (name === "canvas.state.read" && gateway.isConnected()) {
         const session = gateway.getSession();
         return {
@@ -72,6 +118,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  process.stderr.write(`[agentcanvas] Fatal: ${err}\n`);
+  process.stderr.write(`[tandem] Fatal: ${err}\n`);
   process.exit(1);
 });

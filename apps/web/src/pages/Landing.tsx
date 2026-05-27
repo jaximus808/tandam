@@ -4,6 +4,7 @@ import TandemLogo from "../components/TandemLogo";
 
 interface Props {
   onJoin: (code: string) => void;
+  onOpenMCP: () => void;
 }
 
 function relativeTime(ts: number): string {
@@ -18,7 +19,7 @@ function relativeTime(ts: number): string {
   return new Date(ts).toLocaleDateString();
 }
 
-export default function Landing({ onJoin }: Props) {
+export default function Landing({ onJoin, onOpenMCP }: Props) {
   const [code, setCode] = useState("");
   const [name, setName] = useState("");
   const [creating, setCreating] = useState(false);
@@ -130,6 +131,23 @@ export default function Landing({ onJoin }: Props) {
           )}
         </div>
 
+        {/* Connect your agent CTA */}
+        <button
+          onClick={onOpenMCP}
+          className="group max-w-md mx-auto w-full flex items-center gap-3 bg-gradient-to-r from-gray-900 to-gray-800 hover:from-gray-800 hover:to-gray-700 text-white rounded-xl px-4 py-3 text-left transition-colors"
+        >
+          <div className="shrink-0 w-9 h-9 rounded-lg bg-white/10 flex items-center justify-center text-lg">
+            ⚡
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-semibold">Connect your agent</div>
+            <div className="text-xs text-gray-300 truncate">
+              Claude Code, Cursor, Codex, OpenAI Agents SDK, or your own
+            </div>
+          </div>
+          <span className="text-gray-400 group-hover:text-white transition-colors">→</span>
+        </button>
+
         {/* Recent canvases */}
         {hasRecents && (
           <section className="max-w-md mx-auto w-full">
@@ -208,9 +226,18 @@ export default function Landing({ onJoin }: Props) {
             <h2 className="text-xl font-semibold text-gray-900">How it works</h2>
             <ol className="mt-2 space-y-2 text-sm text-gray-600 list-decimal list-inside leading-relaxed">
               <li>Create a canvas — you'll get a short shareable code.</li>
-              <li>Paste the code into your Claude Code MCP gateway env.</li>
-              <li>Prompt Claude. It reads and writes the same canvas you see.</li>
-              <li>Share the code with anyone else to collaborate live.</li>
+              <li>
+                Connect any MCP-aware agent (
+                <button
+                  onClick={onOpenMCP}
+                  className="text-blue-600 hover:text-blue-700 underline"
+                >
+                  setup guide
+                </button>
+                ) using that code.
+              </li>
+              <li>The agent reads and writes the same canvas you see.</li>
+              <li>Share the code with teammates — or other agents — to collaborate live.</li>
             </ol>
           </div>
 
@@ -231,9 +258,16 @@ export default function Landing({ onJoin }: Props) {
                 free-form markdown notes with image uploads.
               </li>
               <li>
-                <span className="font-medium text-gray-800">MCP integration</span> —
-                native tools so Claude can add, update, and delete entities just like
-                you can.
+                <span className="font-medium text-gray-800">Open MCP server</span> —
+                native tools any MCP-aware agent (Claude, OpenAI, your own) can use
+                to add, update, and delete entities just like you can.{" "}
+                <button
+                  onClick={onOpenMCP}
+                  className="text-blue-600 hover:text-blue-700 underline"
+                >
+                  Details
+                </button>
+                .
               </li>
               <li>
                 <span className="font-medium text-gray-800">Real-time sync</span> —

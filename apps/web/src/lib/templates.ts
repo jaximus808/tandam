@@ -57,6 +57,20 @@ export const TEMPLATES: Template[] = [
     emoji: "📝",
     mode: "docs",
   },
+  {
+    id: "roadmap",
+    name: "Project roadmap",
+    description: "Outline goals and tasks",
+    emoji: "🗺️",
+    mode: "roadmap",
+  },
+  {
+    id: "sheets",
+    name: "Spreadsheet",
+    description: "Rows and columns of data",
+    emoji: "📊",
+    mode: "sheets",
+  },
 ];
 
 export function applyTemplate(t: Template) {

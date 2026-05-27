@@ -4,8 +4,11 @@ import { connectToCanvas, disconnectFromCanvas, onStateUpdate, sendOp } from "./
 import MapMode from "./modes/MapMode";
 import ItineraryMode from "./modes/ItineraryMode";
 import DocsMode from "./modes/DocsMode";
+import RoadmapMode from "./modes/RoadmapMode";
+import SheetsMode from "./modes/SheetsMode";
 import WelcomeMode from "./modes/WelcomeMode";
 import Landing from "./pages/Landing";
+import MCPSupport from "./pages/MCPSupport";
 import ConnectModal, { hasDismissedConnect } from "./components/ConnectModal";
 import TandemLogo from "./components/TandemLogo";
 import { recordRecent } from "./lib/recentCanvases";
@@ -15,6 +18,8 @@ const MODES: { id: CanvasMode; label: string }[] = [
   { id: "map", label: "Map" },
   { id: "itinerary", label: "Itinerary" },
   { id: "docs", label: "Docs" },
+  { id: "roadmap", label: "Roadmap" },
+  { id: "sheets", label: "Sheets" },
 ];
 
 function availableModes(state: CanvasState, currentMode: CanvasMode): CanvasMode[] {
@@ -22,15 +27,19 @@ function availableModes(state: CanvasState, currentMode: CanvasMode): CanvasMode
     map: Object.keys(state.pins).length > 0,
     itinerary: Object.keys(state.events).length > 0,
     docs: Object.keys(state.notes).length > 0,
+    roadmap: Object.keys(state.roadmapItems).length > 0,
+    sheets: Object.keys(state.sheets).length > 0,
   };
   const out = new Set<CanvasMode>();
   // Always include the current mode so the user doesn't lose their tab.
-  if (currentMode === "map" || currentMode === "itinerary" || currentMode === "docs") {
+  if (currentMode === "map" || currentMode === "itinerary" || currentMode === "docs" || currentMode === "roadmap" || currentMode === "sheets") {
     out.add(currentMode);
   }
   if (has.map) out.add("map");
   if (has.itinerary) out.add("itinerary");
   if (has.docs) out.add("docs");
+  if (has.roadmap) out.add("roadmap");
+  if (has.sheets) out.add("sheets");
   return MODES.map((m) => m.id).filter((id) => out.has(id));
 }
 
@@ -42,12 +51,20 @@ function getCodeFromURL(): string | null {
   return new URLSearchParams(window.location.search).get("code")?.toUpperCase() ?? null;
 }
 
+function isMCPRoute(): boolean {
+  return window.location.pathname.replace(/\/$/, "") === "/mcp";
+}
+
 function setCodeInURL(code: string) {
   window.history.replaceState(null, "", `/c/${code}`);
 }
 
 function clearCodeInURL() {
   window.history.replaceState(null, "", "/");
+}
+
+function setMCPInURL() {
+  window.history.pushState(null, "", "/mcp");
 }
 
 function publicApiUrl(): string {
@@ -57,10 +74,12 @@ function publicApiUrl(): string {
 }
 
 export default function App() {
+  const [route, setRoute] = useState<"home" | "mcp">(() => (isMCPRoute() ? "mcp" : "home"));
   const [canvasCode, setCanvasCode] = useState<string | null>(getCodeFromURL);
   const [canvas, setCanvas] = useState<CanvasMeta | null>(null);
   const [canvasState, setCanvasState] = useState<CanvasState | null>(null);
   const [selectedPinId, setSelectedPinId] = useState<string | null>(null);
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [connectOpen, setConnectOpen] = useState(false);
   const [autoOpenedFor, setAutoOpenedFor] = useState<string | null>(null);
   // Keep-alive: once a mode has been opened, keep its subtree mounted and
@@ -104,6 +123,14 @@ export default function App() {
   }, [canvasCode]);
 
   useEffect(() => {
+    function onPop() {
+      setRoute(isMCPRoute() ? "mcp" : "home");
+    }
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
+  useEffect(() => {
     return onStateUpdate((c, _all, s) => {
       setCanvas(c);
       setCanvasState(s);
@@ -141,8 +168,27 @@ export default function App() {
     setCanvasState(null);
   }
 
+  if (route === "mcp") {
+    return (
+      <MCPSupport
+        onBack={() => {
+          window.history.pushState(null, "", "/");
+          setRoute("home");
+        }}
+      />
+    );
+  }
+
   if (!canvasCode) {
-    return <Landing onJoin={handleJoin} />;
+    return (
+      <Landing
+        onJoin={handleJoin}
+        onOpenMCP={() => {
+          setMCPInURL();
+          setRoute("mcp");
+        }}
+      />
+    );
   }
 
   if (!canvasState || !canvas) {
@@ -171,6 +217,10 @@ export default function App() {
       ? "itinerary"
       : Object.keys(canvasState.notes).length > 0
       ? "docs"
+      : Object.keys(canvasState.roadmapItems).length > 0
+      ? "roadmap"
+      : Object.keys(canvasState.sheets).length > 0
+      ? "sheets"
       : null;
 
   return (
@@ -241,7 +291,7 @@ export default function App() {
       </header>
 
       <div className="flex flex-1 min-h-0">
-        {(["welcome", "map", "itinerary", "docs"] as CanvasMode[]).map((m) => {
+        {(["welcome", "map", "itinerary", "docs", "roadmap", "sheets"] as CanvasMode[]).map((m) => {
           const active = effectiveMode === m;
           // Lazy-mount: only render a mode after the user has visited it at
           // least once. After that, keep it mounted and hide with CSS.
@@ -263,10 +313,20 @@ export default function App() {
                   active={active}
                   selectedPinId={selectedPinId}
                   onSelectPin={setSelectedPinId}
+                  selectedEventId={selectedEventId}
+                  onSelectEvent={setSelectedEventId}
                 />
               )}
-              {m === "itinerary" && <ItineraryMode state={canvasState} />}
+              {m === "itinerary" && (
+                <ItineraryMode
+                  state={canvasState}
+                  selectedEventId={selectedEventId}
+                  onSelectEvent={setSelectedEventId}
+                />
+              )}
               {m === "docs" && <DocsMode canvasId={canvas.id} state={canvasState} />}
+              {m === "roadmap" && <RoadmapMode state={canvasState} />}
+              {m === "sheets" && <SheetsMode state={canvasState} />}
             </div>
           );
         })}

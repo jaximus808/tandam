@@ -28,7 +28,7 @@ let _saveTimer: ReturnType<typeof setTimeout> | null = null;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 function emptyState(): CanvasState {
-  return { version: 0, mode: "map", pins: {}, events: {}, notes: {} };
+  return { version: 0, mode: "map", pins: {}, events: {}, notes: {}, roadmapItems: {} };
 }
 
 function canvasDir(id: string) {

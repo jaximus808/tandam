@@ -1,5 +1,11 @@
 export type EntityId = string;
-export type CanvasMode = "welcome" | "map" | "itinerary" | "docs";
+export type CanvasMode = "welcome" | "map" | "itinerary" | "docs" | "roadmap" | "sheets";
+export type RoadmapStatus = "todo" | "in_progress" | "done" | "blocked";
+export type TravelMode = "flight" | "train" | "drive";
+export type SheetColumnType = "text" | "number" | "date" | "checkbox";
+// A cell value is the JSON shape stored in sheet_rows.data[columnId].
+// `null` means cleared/empty. Date stored as ISO-8601 "YYYY-MM-DD" string.
+export type SheetCellValue = string | number | boolean | null;
 
 export interface CanvasMeta {
   id: string;
@@ -32,6 +38,11 @@ export interface CanvasEvent {
   start: string;
   end?: string;
   pinId?: EntityId;
+  // Travel segment: set fromPinId + toPinId + travelMode together to render
+  // this event as a route between two pins on the map (e.g. a flight).
+  fromPinId?: EntityId;
+  toPinId?: EntityId;
+  travelMode?: TravelMode;
   createdBy: "agent" | "user";
   updatedAt: number;
 }
@@ -46,12 +57,54 @@ export interface Note {
   updatedAt: number;
 }
 
+export interface RoadmapItem {
+  id: EntityId;
+  kind: "roadmap";
+  parentId?: EntityId;
+  title: string;
+  body: string;
+  status: RoadmapStatus;
+  sortOrder: number;
+  createdBy: "agent" | "user";
+  updatedAt: number;
+}
+
+export interface SheetColumn {
+  id: string; // uuid, stable across renames so row data keys don't break
+  name: string;
+  type: SheetColumnType;
+  sortOrder: number;
+}
+
+export interface Sheet {
+  id: EntityId;
+  kind: "sheet";
+  name: string;
+  columns: SheetColumn[];
+  sortOrder: number;
+  createdBy: "agent" | "user";
+  updatedAt: number;
+}
+
+export interface SheetRow {
+  id: EntityId;
+  kind: "sheetRow";
+  sheetId: EntityId;
+  data: Record<string, SheetCellValue>; // keyed by SheetColumn.id
+  sortOrder: number;
+  createdBy: "agent" | "user";
+  updatedAt: number;
+}
+
 export interface CanvasState {
   version: number;
   mode: CanvasMode;
   pins: Record<EntityId, Pin>;
   events: Record<EntityId, CanvasEvent>;
   notes: Record<EntityId, Note>;
+  roadmapItems: Record<EntityId, RoadmapItem>;
+  sheets: Record<EntityId, Sheet>;
+  sheetRows: Record<EntityId, SheetRow>;
 }
 
 export interface PendingEdit {
@@ -71,6 +124,23 @@ export type WSClientMessage =
   | { op: "note.add"; data: Omit<Note, "id" | "kind" | "createdBy" | "updatedAt"> }
   | { op: "note.update"; id: EntityId; partial: Partial<Omit<Note, "id" | "kind">> }
   | { op: "note.delete"; id: EntityId }
+  | { op: "roadmap.add"; data: Omit<RoadmapItem, "id" | "kind" | "createdBy" | "updatedAt"> }
+  | { op: "roadmap.update"; id: EntityId; partial: Partial<Omit<RoadmapItem, "id" | "kind">> }
+  | { op: "roadmap.delete"; id: EntityId }
+  | {
+      op: "roadmap.reorder";
+      updates: { id: EntityId; parentId: EntityId | null; sortOrder: number }[];
+    }
+  | { op: "sheet.add"; data: { name?: string; columns?: Omit<SheetColumn, "id">[]; sortOrder?: number } }
+  | { op: "sheet.update"; id: EntityId; partial: { name?: string; sortOrder?: number } }
+  | { op: "sheet.delete"; id: EntityId }
+  | { op: "sheet.column.add"; sheetId: EntityId; column: Omit<SheetColumn, "id"> }
+  | { op: "sheet.column.update"; sheetId: EntityId; columnId: string; partial: Partial<Omit<SheetColumn, "id">> }
+  | { op: "sheet.column.delete"; sheetId: EntityId; columnId: string }
+  | { op: "sheet.row.add"; sheetId: EntityId; data?: Record<string, SheetCellValue>; sortOrder?: number }
+  | { op: "sheet.row.update"; id: EntityId; partial: { data?: Record<string, SheetCellValue>; sortOrder?: number } }
+  | { op: "sheet.row.delete"; id: EntityId }
+  | { op: "sheet.row.reorder"; sheetId: EntityId; updates: { id: EntityId; sortOrder: number }[] }
   | { op: "mode.set"; mode: CanvasMode }
   | { op: "map.set"; mapId: string }
   | { op: "template.apply"; templateId: string; mode: CanvasMode; mapId?: string }

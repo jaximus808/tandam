@@ -1,6 +1,6 @@
 /**
- * Gateway — holds the JWT and proxies all tool calls to the Go API.
- * One instance per MCP session (per Claude Code process).
+ * Gateway — holds the JWT and proxies all tool calls to the Tandem API.
+ * One instance per MCP session (per agent client process).
  *
  * The canvas binding is established at runtime via `canvas.connect`,
  * not from process env. Until that tool is called, all other tools
@@ -28,7 +28,7 @@ export class Gateway {
 
   /** Exchange canvas code for JWT. Called by the `canvas.connect` tool. */
   async connectWithCode(code: string): Promise<CanvasSession> {
-    const res = await fetch(`${this.config.apiUrl}/api/mcp/auth`, {
+    const res = await this.safeFetch("/api/mcp/auth", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ code }),
@@ -54,7 +54,7 @@ export class Gateway {
     };
 
     process.stderr.write(
-      `[agentcanvas] Connected to canvas "${this.session.canvasName}" (${this.session.canvasCode})\n`
+      `[tandem] Connected to canvas "${this.session.canvasName}" (${this.session.canvasCode})\n`
     );
 
     return this.session;
@@ -80,23 +80,37 @@ export class Gateway {
     };
   }
 
+  /**
+   * Wraps fetch so network-level failures (DNS, refused, timeout) surface a
+   * clear "API_URL is wrong / unreachable" message instead of the default
+   * `TypeError: fetch failed` with no context.
+   */
+  private async safeFetch(path: string, init?: RequestInit): Promise<Response> {
+    try {
+      return await fetch(`${this.config.apiUrl}${path}`, init);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `Could not reach Tandem API at ${this.config.apiUrl} — check the API_URL env var. (${reason})`
+      );
+    }
+  }
+
   async get<T>(path: string): Promise<T> {
-    const res = await fetch(`${this.config.apiUrl}${path}`, {
-      headers: this.authHeaders(),
-    });
+    const res = await this.safeFetch(path, { headers: this.authHeaders() });
     if (!res.ok) throw new Error(`GET ${path} failed: ${res.status} ${await res.text()}`);
     return res.json() as Promise<T>;
   }
 
   /** GET an endpoint that does not require auth (e.g. /api/maps). */
   async getPublic<T>(path: string): Promise<T> {
-    const res = await fetch(`${this.config.apiUrl}${path}`);
+    const res = await this.safeFetch(path);
     if (!res.ok) throw new Error(`GET ${path} failed: ${res.status} ${await res.text()}`);
     return res.json() as Promise<T>;
   }
 
   async post<T>(path: string, body?: unknown): Promise<T> {
-    const res = await fetch(`${this.config.apiUrl}${path}`, {
+    const res = await this.safeFetch(path, {
       method: "POST",
       headers: this.authHeaders(),
       body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -106,7 +120,7 @@ export class Gateway {
   }
 
   async patch<T>(path: string, body: unknown): Promise<T> {
-    const res = await fetch(`${this.config.apiUrl}${path}`, {
+    const res = await this.safeFetch(path, {
       method: "PATCH",
       headers: this.authHeaders(),
       body: JSON.stringify(body),
@@ -116,7 +130,7 @@ export class Gateway {
   }
 
   async del<T>(path: string): Promise<T> {
-    const res = await fetch(`${this.config.apiUrl}${path}`, {
+    const res = await this.safeFetch(path, {
       method: "DELETE",
       headers: this.authHeaders(),
     });

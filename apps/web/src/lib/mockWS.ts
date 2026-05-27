@@ -1,7 +1,19 @@
 // In-memory replacement for the WS + REST layers, used when VITE_MOCK=1.
 // Lets you iterate on the UI with hot reload and no backend.
 
-import type { CanvasMeta, CanvasState, PendingEdit, WSClientMessage, Pin, CanvasEvent, Note } from "../types";
+import type {
+  CanvasMeta,
+  CanvasState,
+  PendingEdit,
+  WSClientMessage,
+  Pin,
+  CanvasEvent,
+  Note,
+  RoadmapItem,
+  Sheet,
+  SheetColumn,
+  SheetRow,
+} from "../types";
 import { mockCanvas, mockState, mockNewId } from "./mockFixture";
 
 type StateHandler = (canvas: CanvasMeta, canvases: CanvasMeta[], state: CanvasState, pendingEdits: PendingEdit[]) => void;
@@ -60,6 +72,9 @@ function applyOp(s: CanvasState, op: WSClientMessage): CanvasState {
     pins: { ...s.pins },
     events: { ...s.events },
     notes: { ...s.notes },
+    roadmapItems: { ...s.roadmapItems },
+    sheets: { ...s.sheets },
+    sheetRows: { ...s.sheetRows },
   };
 
   switch (op.op) {
@@ -138,6 +153,175 @@ function applyOp(s: CanvasState, op: WSClientMessage): CanvasState {
     case "note.delete":
       delete next.notes[op.id];
       break;
+
+    case "roadmap.add": {
+      const id = mockNewId();
+      const data = op.data as Omit<RoadmapItem, "id" | "kind" | "createdBy" | "updatedAt">;
+      next.roadmapItems[id] = {
+        id,
+        kind: "roadmap",
+        createdBy: "user",
+        updatedAt: Date.now(),
+        title: data.title ?? "",
+        body: data.body ?? "",
+        status: data.status ?? "todo",
+        sortOrder: data.sortOrder ?? 0,
+        parentId: data.parentId,
+      };
+      break;
+    }
+    case "roadmap.update":
+      if (next.roadmapItems[op.id]) {
+        next.roadmapItems[op.id] = { ...next.roadmapItems[op.id], ...op.partial, updatedAt: Date.now() };
+      }
+      break;
+    case "roadmap.delete": {
+      // Mirror the DB CASCADE on parent_id: deleting an item drops its descendants too.
+      const toDelete = new Set<string>([op.id]);
+      let grew = true;
+      while (grew) {
+        grew = false;
+        for (const it of Object.values(next.roadmapItems)) {
+          if (it.parentId && toDelete.has(it.parentId) && !toDelete.has(it.id)) {
+            toDelete.add(it.id);
+            grew = true;
+          }
+        }
+      }
+      for (const id of toDelete) delete next.roadmapItems[id];
+      break;
+    }
+    case "roadmap.reorder": {
+      for (const u of op.updates) {
+        const existing = next.roadmapItems[u.id];
+        if (!existing) continue;
+        next.roadmapItems[u.id] = {
+          ...existing,
+          parentId: u.parentId ?? undefined,
+          sortOrder: u.sortOrder,
+          updatedAt: Date.now(),
+        };
+      }
+      break;
+    }
+
+    case "sheet.add": {
+      const id = mockNewId();
+      const data = op.data ?? {};
+      const cols: SheetColumn[] = (data.columns ?? []).map((c) => ({
+        id: mockNewId(),
+        name: c.name,
+        type: c.type,
+        sortOrder: c.sortOrder ?? 0,
+      }));
+      next.sheets[id] = {
+        id,
+        kind: "sheet",
+        name: data.name ?? "Untitled sheet",
+        columns: cols,
+        sortOrder: data.sortOrder ?? 0,
+        createdBy: "user",
+        updatedAt: Date.now(),
+      } as Sheet;
+      break;
+    }
+    case "sheet.update":
+      if (next.sheets[op.id]) {
+        next.sheets[op.id] = { ...next.sheets[op.id], ...op.partial, updatedAt: Date.now() };
+      }
+      break;
+    case "sheet.delete": {
+      // Cascade: drop the sheet and all its rows.
+      const sheetId = op.id;
+      delete next.sheets[sheetId];
+      for (const rid of Object.keys(next.sheetRows)) {
+        if (next.sheetRows[rid].sheetId === sheetId) delete next.sheetRows[rid];
+      }
+      break;
+    }
+
+    case "sheet.column.add": {
+      const sheet = next.sheets[op.sheetId];
+      if (!sheet) break;
+      const newCol: SheetColumn = { id: mockNewId(), ...op.column };
+      next.sheets[op.sheetId] = {
+        ...sheet,
+        columns: [...sheet.columns, newCol],
+        updatedAt: Date.now(),
+      };
+      break;
+    }
+    case "sheet.column.update": {
+      const sheet = next.sheets[op.sheetId];
+      if (!sheet) break;
+      next.sheets[op.sheetId] = {
+        ...sheet,
+        columns: sheet.columns.map((c) =>
+          c.id === op.columnId ? { ...c, ...op.partial } : c,
+        ),
+        updatedAt: Date.now(),
+      };
+      break;
+    }
+    case "sheet.column.delete": {
+      const sheet = next.sheets[op.sheetId];
+      if (!sheet) break;
+      next.sheets[op.sheetId] = {
+        ...sheet,
+        columns: sheet.columns.filter((c) => c.id !== op.columnId),
+        updatedAt: Date.now(),
+      };
+      // Strip the column from every row's data (mirror server-side cascade).
+      for (const rid of Object.keys(next.sheetRows)) {
+        const r = next.sheetRows[rid];
+        if (r.sheetId !== op.sheetId) continue;
+        if (!(op.columnId in r.data)) continue;
+        const { [op.columnId]: _drop, ...rest } = r.data;
+        next.sheetRows[rid] = { ...r, data: rest, updatedAt: Date.now() };
+      }
+      break;
+    }
+
+    case "sheet.row.add": {
+      const id = mockNewId();
+      next.sheetRows[id] = {
+        id,
+        kind: "sheetRow",
+        sheetId: op.sheetId,
+        data: op.data ?? {},
+        sortOrder: op.sortOrder ?? 0,
+        createdBy: "user",
+        updatedAt: Date.now(),
+      } as SheetRow;
+      break;
+    }
+    case "sheet.row.update": {
+      const existing = next.sheetRows[op.id];
+      if (!existing) break;
+      const merged: SheetRow = { ...existing, updatedAt: Date.now() };
+      if (op.partial.data) {
+        const data = { ...existing.data };
+        for (const [k, v] of Object.entries(op.partial.data)) {
+          if (v === null) delete data[k];
+          else data[k] = v;
+        }
+        merged.data = data;
+      }
+      if (op.partial.sortOrder !== undefined) merged.sortOrder = op.partial.sortOrder;
+      next.sheetRows[op.id] = merged;
+      break;
+    }
+    case "sheet.row.delete":
+      delete next.sheetRows[op.id];
+      break;
+    case "sheet.row.reorder": {
+      for (const u of op.updates) {
+        const existing = next.sheetRows[u.id];
+        if (!existing) continue;
+        next.sheetRows[u.id] = { ...existing, sortOrder: u.sortOrder, updatedAt: Date.now() };
+      }
+      break;
+    }
   }
 
   // Auto-leave welcome on any entity write (matches server behavior).
@@ -145,6 +329,8 @@ function applyOp(s: CanvasState, op: WSClientMessage): CanvasState {
     if (op.op.startsWith("pin.")) next.mode = "map";
     else if (op.op.startsWith("event.")) next.mode = "itinerary";
     else if (op.op.startsWith("note.")) next.mode = "docs";
+    else if (op.op.startsWith("roadmap.")) next.mode = "roadmap";
+    else if (op.op.startsWith("sheet.")) next.mode = "sheets";
   }
 
   return next;

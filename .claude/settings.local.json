@@ -11,7 +11,10 @@
       "WebSearch",
       "mcp__agentcanvas__canvas_event_add",
       "Bash(pnpm add *)",
-      "Bash(go build *)"
+      "Bash(go build *)",
+      "mcp__agentcanvas__canvas_map_set",
+      "Bash(pnpm build *)",
+      "mcp__agentcanvas__canvas_event_update"
     ]
   }
 }
