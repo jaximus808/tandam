@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { CanvasState, Note } from "../types";
-import { uploadImage, imageUrl } from "../lib/api";
+import { imageUrl } from "../lib/api";
 import { sendOp } from "../lib/ws";
 import EmptyState from "../components/EmptyState";
 
@@ -44,7 +44,12 @@ export default function DocsMode({ canvasId, state }: Props) {
         ) : (
           <div className="space-y-4">
             {notes.map((note) => (
-              <NoteCard key={note.id} note={note} canvasId={canvasId} state={state} />
+              <NoteCard
+                key={note.id}
+                note={note}
+                canvasId={canvasId}
+                state={state}
+              />
             ))}
           </div>
         )}
@@ -110,34 +115,13 @@ function NoteCard({
     }
   }
 
-  async function handleFileDrop(files: FileList | null) {
-    if (!files?.length) return;
-    try {
-      const uploads = await Promise.all(Array.from(files).map(uploadImage));
-      sendOp({
-        op: "note.update",
-        id: note.id,
-        partial: { imageRefs: [...note.imageRefs, ...uploads] },
-      });
-    } catch (err) {
-      alert(`Upload failed: ${err}`);
-    }
-  }
-
   function handleDelete() {
     if (!confirm("Delete this note?")) return;
     sendOp({ op: "note.delete", id: note.id });
   }
 
   return (
-    <div
-      className="group bg-white rounded-lg border border-gray-200 hover:border-gray-300 transition-colors"
-      onDragOver={(e) => e.preventDefault()}
-      onDrop={(e) => {
-        e.preventDefault();
-        handleFileDrop(e.dataTransfer.files);
-      }}
-    >
+    <div className="group bg-white rounded-lg border border-gray-200 hover:border-gray-300 transition-colors">
       <div className="flex items-center justify-between px-4 pt-3">
         {parent ? (
           <span className="text-xs bg-gray-100 text-gray-600 rounded-full px-2 py-0.5">
@@ -225,21 +209,6 @@ function NoteCard({
           </div>
         )}
 
-        {!editing && (
-          <label className="mt-3 inline-block text-xs text-gray-400 hover:text-gray-600 cursor-pointer">
-            <input
-              type="file"
-              accept="image/*"
-              multiple
-              className="hidden"
-              onChange={(e) => {
-                handleFileDrop(e.target.files);
-                e.target.value = "";
-              }}
-            />
-            + attach image
-          </label>
-        )}
       </div>
     </div>
   );

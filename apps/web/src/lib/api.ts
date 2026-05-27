@@ -1,15 +1,6 @@
-export async function uploadImage(file: File): Promise<string> {
-  const form = new FormData();
-  form.append("file", file);
-  const res = await fetch("/api/images", { method: "POST", body: form });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(body || `Upload failed: ${res.status}`);
-  }
-  const { filename } = (await res.json()) as { filename: string };
-  return filename;
-}
-
+// Image upload is disabled for v1 (no durable-storage story yet). Reading
+// stays available so any imageRefs left from dev still render via the
+// `/canvas-images/*` route.
 export function imageUrl(canvasId: string, filename: string): string {
   return `/canvas-images/${canvasId}/${filename}`;
 }

@@ -34,7 +34,9 @@ RUN pnpm --filter @agentcanvas/shared build \
  && pnpm --filter web build
 
 # ── Go API stage ──────────────────────────────────────────────────────────────
-FROM golang:1.22-alpine AS api-builder
+# Must track apps/api/go.mod's `go` directive — bumping go.mod without bumping
+# this version fails the build with a "requires go >= …" error.
+FROM golang:1.24-alpine AS api-builder
 WORKDIR /src
 
 COPY apps/api/go.mod apps/api/go.sum ./

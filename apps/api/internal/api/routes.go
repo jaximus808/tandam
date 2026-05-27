@@ -1,7 +1,6 @@
 package api
 
 import (
-	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -40,7 +39,13 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, mapsReg *maps.
 	r.Get("/api/maps", mapsH.List)
 	r.Get("/api/maps/{id}", mapsH.Get)
 
-	// ── Images (public read, protected write) ─────────────────────────────────
+	// Sheet export — public by canvas code (matches WS auth model).
+	r.Get("/api/canvas/sheets/{id}/export", h.ExportSheet)
+
+	// Image upload is intentionally disabled for v1 — needs a real storage
+	// story (durable disk + backups) before we offer it. The read path below
+	// stays so any imageRefs left from dev still render instead of 404'ing
+	// in a confusing way.
 	r.Get("/canvas-images/*", func(w http.ResponseWriter, r *http.Request) {
 		path := filepath.Join(imageDir, chi.URLParam(r, "*"))
 		// prevent path traversal
@@ -88,8 +93,6 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, mapsReg *maps.
 
 		r.Post("/api/canvas/pending-edits", h.CreatePendingEdit)
 		r.Delete("/api/canvas/pending-edits/{id}", h.DeletePendingEdit)
-
-		r.Post("/api/images", imageUploadHandler(imageDir, authSvc))
 	})
 
 	// ── SPA (web app) ──────────────────────────────────────────────────────────
@@ -111,45 +114,3 @@ func spaHandler(distPath string) http.Handler {
 		http.ServeFile(w, r, filepath.Join(distPath, "index.html"))
 	})
 }
-
-// imageUploadHandler handles multipart image uploads.
-func imageUploadHandler(imageDir string, _ *auth.Service) http.HandlerFunc {
-	allowed := map[string]bool{".jpg": true, ".jpeg": true, ".png": true, ".gif": true, ".webp": true}
-	return func(w http.ResponseWriter, r *http.Request) {
-		if err := r.ParseMultipartForm(5 << 20); err != nil {
-			writeError(w, http.StatusBadRequest, "file too large (max 5MB)")
-			return
-		}
-		file, header, err := r.FormFile("file")
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "file field required")
-			return
-		}
-		defer file.Close()
-
-		ext := strings.ToLower(filepath.Ext(header.Filename))
-		if !allowed[ext] {
-			writeError(w, http.StatusBadRequest, "unsupported file type")
-			return
-		}
-
-		// Use canvas ID from JWT claims for namespacing
-		canvasID := CanvasIDFromCtx(r.Context())
-		dir := filepath.Join(imageDir, canvasID.String())
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			writeError(w, http.StatusInternalServerError, "could not create image dir")
-			return
-		}
-
-		filename := newFileID() + ext
-		dest := filepath.Join(dir, filename)
-		if err := writeFile(dest, file); err != nil {
-			writeError(w, http.StatusInternalServerError, "could not save file")
-			return
-		}
-		writeJSON(w, http.StatusCreated, map[string]string{"filename": filename, "canvasId": canvasID.String()})
-	}
-}
-
-// ensure fs is used
-var _ fs.FS

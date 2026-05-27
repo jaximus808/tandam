@@ -2,9 +2,9 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"math/rand"
 	"strings"
 	"time"
 
@@ -12,14 +12,24 @@ import (
 	"github.com/google/uuid"
 )
 
+// Ambiguous glyphs (0/O, 1/I/L) intentionally excluded so codes are easy to
+// dictate over voice/chat. Length 8 over this 32-char alphabet → 32^8 ≈ 1.1e12
+// keyspace, which is what makes brute-forcing the canvas code (our only auth)
+// infeasible — provided the generator is unpredictable. Hence crypto/rand.
 const codeChars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 func generateCode() string {
 	b := make([]byte, 8)
-	for i := range b {
-		b[i] = codeChars[rand.Intn(len(codeChars))]
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand failure is a kernel-level problem; we'd rather refuse
+		// to issue a guessable code than silently fall back to math/rand.
+		panic(fmt.Errorf("crypto/rand: %w", err))
 	}
-	return string(b)
+	out := make([]byte, 8)
+	for i, x := range b {
+		out[i] = codeChars[int(x)%len(codeChars)]
+	}
+	return string(out)
 }
 
 // ── DB row types (snake_case = Supabase column names) ─────────────────────────

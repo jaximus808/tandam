@@ -27,10 +27,12 @@ import type {
   SheetRow,
 } from "../types";
 import { sendOp } from "../lib/ws";
+import { MOCK_ENABLED } from "../lib/mockFixture";
 import EmptyState from "../components/EmptyState";
 
 interface Props {
   state: CanvasState;
+  canvasCode: string;
 }
 
 const COLUMN_TYPES: { value: SheetColumnType; label: string }[] = [
@@ -40,7 +42,7 @@ const COLUMN_TYPES: { value: SheetColumnType; label: string }[] = [
   { value: "checkbox", label: "Checkbox" },
 ];
 
-export default function SheetsMode({ state }: Props) {
+export default function SheetsMode({ state, canvasCode }: Props) {
   const sheets = useMemo(
     () =>
       Object.values(state.sheets).sort(
@@ -78,17 +80,47 @@ export default function SheetsMode({ state }: Props) {
     });
   }
 
+  function handleExport() {
+    if (!activeSheet) return;
+    // Public endpoint gated by canvas code (same model as the WS). A plain
+    // <a download> click triggers the browser save dialog using the
+    // Content-Disposition filename from the server.
+    const url = `/api/canvas/sheets/${activeSheet.id}/export?code=${encodeURIComponent(canvasCode)}`;
+    const a = document.createElement("a");
+    a.href = url;
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }
+
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <div className="max-w-5xl mx-auto w-full px-6 py-6 flex-1 flex flex-col min-h-0">
         <div className="flex items-center justify-between mb-3 shrink-0">
           <h1 className="text-lg font-semibold text-gray-900">Sheets</h1>
-          <button
-            onClick={handleAddSheet}
-            className="text-sm px-3 py-1.5 rounded-md bg-blue-600 text-white font-medium hover:bg-blue-700 transition-colors"
-          >
-            + New sheet
-          </button>
+          <div className="flex items-center gap-2">
+            {activeSheet && (
+              <button
+                onClick={handleExport}
+                disabled={MOCK_ENABLED}
+                className="text-sm px-3 py-1.5 rounded-md border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
+                title={MOCK_ENABLED ? "Export unavailable in mock mode" : `Download "${activeSheet.name}" as .xlsx`}
+              >
+                <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden>
+                  <path d="M7 1 L 7 9 M 4 6 L 7 9 L 10 6" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M2 11 L 12 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                </svg>
+                Export
+              </button>
+            )}
+            <button
+              onClick={handleAddSheet}
+              className="text-sm px-3 py-1.5 rounded-md bg-blue-600 text-white font-medium hover:bg-blue-700 transition-colors"
+            >
+              + New sheet
+            </button>
+          </div>
         </div>
 
         {sheets.length === 0 ? (

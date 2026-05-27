@@ -152,20 +152,41 @@ export default function App() {
     if (canvas) recordRecent(canvas.code, canvas.name);
   }, [canvas]);
 
+  // resetPerCanvasState clears every piece of UI state scoped to the canvas
+  // we're leaving. Without this, a stale selectedPinId / visitedModes /
+  // pendingMode from canvas A leaks into canvas B and can render references
+  // to entities that don't exist there.
+  function resetPerCanvasState() {
+    setCanvas(null);
+    setCanvasState(null);
+    setSelectedPinId(null);
+    setSelectedEventId(null);
+    setVisitedModes(new Set());
+    setPendingMode(null);
+    pendingModeRef.current = null;
+    setConnectOpen(false);
+  }
+
   function handleJoin(code: string) {
     if (!code) {
       disconnectFromCanvas();
       setCanvasCode(null);
-      setCanvas(null);
-      setCanvasState(null);
       setAutoOpenedFor(null);
+      resetPerCanvasState();
       clearCodeInURL();
       return;
     }
+    // Switching from one canvas straight to another: tear down the old socket
+    // explicitly so its lingering reconnect/onerror can't interfere with the
+    // new connection (canvasCode change alone triggers connectToCanvas, but
+    // the old socket's queued events would otherwise still fire first).
+    if (canvasCode && canvasCode !== code) {
+      disconnectFromCanvas();
+      setAutoOpenedFor(null);
+    }
     setCanvasCode(code);
     setCodeInURL(code);
-    setCanvas(null);
-    setCanvasState(null);
+    resetPerCanvasState();
   }
 
   if (route === "mcp") {
@@ -326,7 +347,7 @@ export default function App() {
               )}
               {m === "docs" && <DocsMode canvasId={canvas.id} state={canvasState} />}
               {m === "roadmap" && <RoadmapMode state={canvasState} />}
-              {m === "sheets" && <SheetsMode state={canvasState} />}
+              {m === "sheets" && <SheetsMode state={canvasState} canvasCode={canvas.code} />}
             </div>
           );
         })}

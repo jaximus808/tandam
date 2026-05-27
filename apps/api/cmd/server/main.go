@@ -1,10 +1,15 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/agentcanvas/api/internal/api"
 	"github.com/agentcanvas/api/internal/auth"
@@ -47,9 +52,46 @@ func main() {
 
 	router := api.NewRouter(db, hub, authSvc, mapsReg, cfg.WebDistPath, cfg.ImageDir)
 
-	addr := fmt.Sprintf(":%s", cfg.Port)
-	log.Printf("AgentCanvas API listening on %s", addr)
-	if err := http.ListenAndServe(addr, router); err != nil {
-		log.Fatalf("server: %v", err)
+	srv := &http.Server{
+		Addr:    fmt.Sprintf(":%s", cfg.Port),
+		Handler: router,
+		// WriteTimeout is intentionally NOT set: it would kill long-lived
+		// WebSocket upgrades (gorilla hijacks the conn but Go still enforces
+		// the server-level timeout against the response). The per-message
+		// deadlines in ws/client.go cover slow WS peers; ReadHeaderTimeout +
+		// IdleTimeout cover slowloris on plain HTTP.
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
+
+	serverErr := make(chan error, 1)
+	go func() {
+		log.Printf("AgentCanvas API listening on %s", srv.Addr)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serverErr <- err
+		}
+	}()
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+
+	select {
+	case err := <-serverErr:
+		log.Fatalf("server: %v", err)
+	case sig := <-stop:
+		log.Printf("received %s, shutting down…", sig)
+	}
+
+	// Give in-flight requests up to 15s to finish before forcing the close.
+	// WebSocket connections are sent a close frame by hub.Shutdown so clients
+	// can reconnect cleanly instead of dropping mid-frame.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	hub.Shutdown()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("graceful shutdown: %v (forcing close)", err)
+		_ = srv.Close()
+	}
+	log.Printf("bye")
 }

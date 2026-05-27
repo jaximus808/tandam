@@ -14,6 +14,8 @@ type Hub struct {
 	register   chan *Client
 	unregister chan *Client
 	broadcast  chan broadcastMsg
+	quit       chan struct{}
+	quitOnce   sync.Once
 }
 
 type broadcastMsg struct {
@@ -27,12 +29,32 @@ func NewHub() *Hub {
 		register:   make(chan *Client, 64),
 		unregister: make(chan *Client, 64),
 		broadcast:  make(chan broadcastMsg, 256),
+		quit:       make(chan struct{}),
 	}
+}
+
+// Shutdown signals every connected client to close cleanly and exits Run.
+// Safe to call multiple times; subsequent calls are no-ops.
+func (h *Hub) Shutdown() {
+	h.quitOnce.Do(func() {
+		close(h.quit)
+	})
 }
 
 func (h *Hub) Run() {
 	for {
 		select {
+		case <-h.quit:
+			h.mu.Lock()
+			for _, room := range h.rooms {
+				for c := range room {
+					c.Close()
+				}
+			}
+			h.rooms = map[uuid.UUID]map[*Client]bool{}
+			h.mu.Unlock()
+			return
+
 		case c := <-h.register:
 			h.mu.Lock()
 			if h.rooms[c.canvasID] == nil {
