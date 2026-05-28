@@ -35,8 +35,7 @@ const INSTALL_METHODS: InstallMethod[] = [
   "mcpServers": {
     "tandem": {
       "command": "npx",
-      "args": ["-y", "@tandem/mcp-gateway"],
-      "env": { "API_URL": "https://your-tandem-host" }
+      "args": ["-y", "@jaximus/tandem-mcp"]
     }
   }
 }`,
@@ -52,7 +51,7 @@ const INSTALL_METHODS: InstallMethod[] = [
       {
         text: "Install:",
         lang: "bash",
-        code: "npm install -g @tandem/mcp-gateway",
+        code: "npm install -g @jaximus/tandem-mcp",
       },
       {
         text: "Then in your MCP client config:",
@@ -60,8 +59,7 @@ const INSTALL_METHODS: InstallMethod[] = [
         code: `{
   "mcpServers": {
     "tandem": {
-      "command": "tandem-mcp",
-      "env": { "API_URL": "https://your-tandem-host" }
+      "command": "tandem-mcp"
     }
   }
 }`,
@@ -78,19 +76,19 @@ const INSTALL_METHODS: InstallMethod[] = [
         text: "pnpm:",
         lang: "json",
         code: `"command": "pnpm",
-"args": ["dlx", "@tandem/mcp-gateway"]`,
+"args": ["dlx", "@jaximus/tandem-mcp"]`,
       },
       {
         text: "yarn:",
         lang: "json",
         code: `"command": "yarn",
-"args": ["dlx", "@tandem/mcp-gateway"]`,
+"args": ["dlx", "@jaximus/tandem-mcp"]`,
       },
       {
         text: "bun:",
         lang: "json",
         code: `"command": "bunx",
-"args": ["@tandem/mcp-gateway"]`,
+"args": ["@jaximus/tandem-mcp"]`,
       },
     ],
   },
@@ -109,14 +107,14 @@ pnpm install
 pnpm --filter mcp-gateway build`,
       },
       {
-        text: "Point your MCP client at the built file:",
+        text: "Point your MCP client at the built file. Set API_URL to your local backend since you're running a fork:",
         lang: "json",
         code: `{
   "mcpServers": {
     "tandem": {
       "command": "node",
       "args": ["/abs/path/to/tandam/apps/mcp-gateway/dist/index.js"],
-      "env": { "API_URL": "https://your-tandem-host" }
+      "env": { "API_URL": "http://localhost:7891" }
     }
   }
 }`,
@@ -152,7 +150,6 @@ pnpm --filter mcp-gateway build`,
     "tandem": {
       "command": "docker",
       "args": ["run", "-i", "--rm",
-        "-e", "API_URL=https://your-tandem-host",
         "ghcr.io/jaximus808/tandem-mcp:latest"]
     }
   }
@@ -172,8 +169,7 @@ const CLIENT_TABS: ClientTab[] = [
   "mcpServers": {
     "tandem": {
       "command": "npx",
-      "args": ["-y", "@tandem/mcp-gateway"],
-      "env": { "API_URL": "https://your-tandem-host" }
+      "args": ["-y", "@jaximus/tandem-mcp"]
     }
   }
 }`,
@@ -187,8 +183,7 @@ const CLIENT_TABS: ClientTab[] = [
   "mcpServers": {
     "tandem": {
       "command": "npx",
-      "args": ["-y", "@tandem/mcp-gateway"],
-      "env": { "API_URL": "https://your-tandem-host" }
+      "args": ["-y", "@jaximus/tandem-mcp"]
     }
   }
 }`,
@@ -200,8 +195,7 @@ const CLIENT_TABS: ClientTab[] = [
       "Codex CLI supports MCP servers via its config file (typically `~/.codex/config.toml`).",
     config: `[mcp_servers.tandem]
 command = "npx"
-args = ["-y", "@tandem/mcp-gateway"]
-env = { API_URL = "https://your-tandem-host" }`,
+args = ["-y", "@jaximus/tandem-mcp"]`,
   },
   {
     id: "openai-agents",
@@ -215,8 +209,7 @@ from agents.mcp import MCPServerStdio
 tandem = MCPServerStdio(
     params={
         "command": "npx",
-        "args": ["-y", "@tandem/mcp-gateway"],
-        "env": {"API_URL": "https://your-tandem-host"},
+        "args": ["-y", "@jaximus/tandem-mcp"],
     },
 )
 
@@ -239,8 +232,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 
 const transport = new StdioClientTransport({
   command: "npx",
-  args: ["-y", "@tandem/mcp-gateway"],
-  env: { API_URL: "https://your-tandem-host" },
+  args: ["-y", "@jaximus/tandem-mcp"],
 });
 
 const client = new Client({ name: "my-orchestrator", version: "0.1.0" });
@@ -451,9 +443,10 @@ export default function MCPSupport({ onBack }: Props) {
               </div>
             ))}
             <p className="text-xs text-gray-400 pt-2 border-t border-gray-100">
-              <span className="font-medium text-gray-500">API_URL</span> defaults to{" "}
-              <span className="font-mono">http://localhost:7891</span>. Set it to wherever
-              the Tandem API is reachable from the machine running the agent.
+              No config needed — the gateway connects to the hosted backend at{" "}
+              <span className="font-mono">https://tandemcanvas.com</span> by default. Only set{" "}
+              <span className="font-medium text-gray-500">API_URL</span> if you're pointing at a
+              local or self-hosted instance.
             </p>
           </div>
         </section>
