@@ -8,7 +8,6 @@ on:
 jobs:
   deploy:
     name: Build and Deploy
-    
     environment: prod
 
     permissions:
@@ -20,18 +19,29 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 1. Dynamically generate the .env file from GitHub Secrets
+      # 1. Dynamically generate the .env file from GitHub Secrets (Secured)
       - name: Inject Secrets to .env
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          PORT: ${{ secrets.PORT }}
+          WEB_DIST_PATH: ${{ secrets.WEB_DIST_PATH }}
+          IMAGE_DIR: ${{ secrets.IMAGE_DIR }}
+          JWT_TOKEN_TTL: ${{ secrets.JWT_TOKEN_TTL }}
+          DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
         run: |
           echo "Writing secrets to .env file..."
-          echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" >> .env
-          echo "SUPABASE_KEY=${{ secrets.SUPABASE_KEY }}" >> .env
-          echo "JWT_SECRET=${{ secrets.JWT_SECRET }}" >> .env
-          echo "PORT=${{ secrets.PORT }}" >> .env
-          echo "WEB_DIST_PATH=${{ secrets.WEB_DIST_PATH }}" >> .env
-          echo "IMAGE_DIR=${{ secrets.IMAGE_DIR }}" >> .env
-          echo "JWT_TOKEN_TTL=${{ secrets.JWT_TOKEN_TTL }}" >> .env
-          echo "DOMAIN_NAME=${{ secrets.DOMAIN_NAME }}" >> .env
+          cat <<EOF > .env
+          SUPABASE_URL=$SUPABASE_URL
+          SUPABASE_KEY=$SUPABASE_KEY
+          JWT_SECRET=$JWT_SECRET
+          PORT=$PORT
+          WEB_DIST_PATH=$WEB_DIST_PATH
+          IMAGE_DIR=$IMAGE_DIR
+          JWT_TOKEN_TTL=$JWT_TOKEN_TTL
+          DOMAIN_NAME=$DOMAIN_NAME
+          EOF
           
       - name: Clean up for transfer
         run: rm -rf .git
@@ -48,22 +58,21 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
-      # 4. Transfer the codebase to the GCE VM
+      # 4. Transfer the codebase to the GCE VM (Fixed hidden files issue)
       - name: Copy files to VM via gcloud scp
         run: |
-          # 1. Use sudo to create the folder
-          # 2. Use chown to hand ownership of the folder to the GitHub Actions SSH user
-          # Note: We escape the $ in \$(whoami) so it runs on the VM, not on the GitHub runner
           gcloud compute ssh ${{ secrets.GCP_VM_NAME }} \
             --zone=${{ secrets.GCP_ZONE }} \
             --project=${{ secrets.GCP_PROJECT }} \
             --command="sudo mkdir -p /opt/tandem && sudo chown -R \$(whoami) /opt/tandem"
 
-          # Securely copy files (this will now succeed because we own the folder)
-          gcloud compute scp --recurse ./* .env ${{ secrets.GCP_VM_NAME }}:/opt/tandem/ \
+          # Use dotglob so that '*' captures hidden files like .dockerignore
+          shopt -s dotglob 
+          gcloud compute scp --recurse * ${{ secrets.GCP_VM_NAME }}:/opt/tandem/ \
             --zone=${{ secrets.GCP_ZONE }} \
             --project=${{ secrets.GCP_PROJECT }}
-      # 5. Execute the Docker Compose commands on the VM
+
+      # 5. Execute the Docker Compose commands on the VM (Zero-downtime fix)
       - name: Execute deployment via gcloud ssh
         run: |
           gcloud compute ssh ${{ secrets.GCP_VM_NAME }} \
@@ -75,12 +84,8 @@ jobs:
               echo '→ Pulling latest base images...'
               sudo docker compose pull
               
-              echo '→ Rebuilding Tandem containers...'
-              sudo docker compose build --no-cache
-              
-              echo '→ Restarting containers in detached mode...'
-              sudo docker compose down
-              sudo docker compose up -d
+              echo '→ Deploying Tandem containers...'
+              sudo docker compose up -d --build
               
               echo '→ Pruning old dangling images...'
               sudo docker image prune -f
