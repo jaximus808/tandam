@@ -273,7 +273,18 @@ export default function Landing({ onJoin, onOpenMCP }: Props) {
 
             {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
 
-            <p className="mt-4 text-xs text-gray-400">
+            <button
+              onClick={onOpenMCP}
+              className="mt-4 inline-flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-medium text-sky-700 hover:bg-sky-100 hover:border-sky-300 transition-colors"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M13 2 4.5 13.5H11l-1 8.5L19.5 10H13z" />
+              </svg>
+              Connect an AI agent
+              <span aria-hidden="true">→</span>
+            </button>
+
+            <p className="mt-3 text-xs text-gray-400">
               No sign-up. Share one link with teammates — or other agents — to
               collaborate live.
             </p>

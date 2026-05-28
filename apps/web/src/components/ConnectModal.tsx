@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 
 interface Props {
   code: string;
-  apiUrl: string;
   version: number;
   onClose: () => void;
   onSwitchCanvas: () => void;
@@ -28,11 +27,11 @@ export function markConnectDismissed(code: string) {
   }
 }
 
-export default function ConnectModal({ code, apiUrl, version, onClose, onSwitchCanvas }: Props) {
+export default function ConnectModal({ code, version, onClose, onSwitchCanvas }: Props) {
   const dialogRef = useRef<HTMLDivElement>(null);
-  const [copied, setCopied] = useState<"code" | "snippet" | null>(null);
+  const [copied, setCopied] = useState<"code" | "prompt" | null>(null);
 
-  const snippet = `CANVAS_CODE=${code}\nAPI_URL=${apiUrl}`;
+  const prompt = `Connect to Tandem canvas ${code}`;
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -43,7 +42,7 @@ export default function ConnectModal({ code, apiUrl, version, onClose, onSwitchC
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  function copy(text: string, which: "code" | "snippet") {
+  function copy(text: string, which: "code" | "prompt") {
     navigator.clipboard.writeText(text).then(() => {
       setCopied(which);
       setTimeout(() => setCopied((c) => (c === which ? null : c)), 1500);
@@ -69,10 +68,11 @@ export default function ConnectModal({ code, apiUrl, version, onClose, onSwitchC
         className="w-full max-w-md bg-white rounded-2xl shadow-xl p-6 outline-none"
       >
         <h2 id="connect-title" className="text-lg font-semibold text-gray-900">
-          Connect Claude to this canvas
+          Connect your agent to this canvas
         </h2>
         <p className="text-sm text-gray-500 mt-1">
-          Share this code with Claude so it can read and write the same canvas.
+          Anyone with the Tandem MCP server connected can read and write this
+          canvas — just tell your agent to join.
         </p>
 
         <div className="mt-5">
@@ -88,26 +88,45 @@ export default function ConnectModal({ code, apiUrl, version, onClose, onSwitchC
           </div>
         </div>
 
-        <div className="mt-4">
-          <label className="text-xs font-medium text-gray-700">MCP gateway env</label>
-          <div className="mt-1 relative">
-            <pre className="bg-gray-900 text-gray-100 text-xs rounded-lg px-3 py-2.5 overflow-x-auto whitespace-pre">
-{snippet}
-            </pre>
+        <div className="mt-5 rounded-xl border-2 border-blue-200 bg-blue-50/60 p-4">
+          <div className="flex items-center gap-2 text-blue-700">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+            </svg>
+            <span className="text-sm font-semibold">In your AI agent's chat, paste this:</span>
+          </div>
+
+          <div className="mt-2.5 flex items-center gap-2 bg-white border border-blue-200 rounded-lg pl-3 pr-1.5 py-3 shadow-sm">
+            <span className="font-mono text-sm font-medium text-gray-900 flex-1 min-w-0 break-words">
+              {prompt}
+            </span>
             <button
-              onClick={() => copy(snippet, "snippet")}
-              className="absolute top-1.5 right-1.5 text-xs bg-gray-800 hover:bg-gray-700 text-gray-100 px-2 py-1 rounded"
+              onClick={() => copy(prompt, "prompt")}
+              className="shrink-0 text-xs bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-md font-medium"
             >
-              {copied === "snippet" ? "Copied!" : "Copy"}
+              {copied === "prompt" ? "Copied!" : "Copy"}
             </button>
           </div>
+
+          <p className="mt-2.5 text-xs text-blue-900/70">
+            Your agent reads the code and calls <span className="font-mono">canvas.connect</span> —
+            it'll be editing this canvas in seconds.
+          </p>
         </div>
 
-        <ol className="mt-4 text-sm text-gray-600 space-y-1 list-decimal list-inside">
-          <li>Paste the snippet into your MCP gateway's env.</li>
-          <li>Restart Claude Code so it picks up the new env.</li>
-          <li>Click "I'm connected" below.</li>
-        </ol>
+        <div className="mt-4 rounded-lg bg-sky-50 border border-sky-100 px-3 py-2.5">
+          <p className="text-xs text-sky-900">
+            First time? You'll need the Tandem MCP server connected to your agent.{" "}
+            <a
+              href="/mcp"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-medium underline hover:text-sky-700"
+            >
+              Learn how to connect your MCP agent here →
+            </a>
+          </p>
+        </div>
 
         <div className="mt-6 flex items-center gap-2">
           <button

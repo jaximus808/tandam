@@ -31,11 +31,19 @@ export default function WelcomeMode({ canvasName, onOpenConnect }: Props) {
             {canvasName ? `"${canvasName}" — ` : ""}pick a starting point, or just start prompting.
           </p>
           <p className="text-xs text-gray-400">
-            Haven't connected Claude yet?{" "}
+            Haven't connected an agent yet?{" "}
             <button onClick={onOpenConnect} className="text-blue-600 hover:underline">
               Open the connect dialog
-            </button>
-            .
+            </button>{" "}
+            or{" "}
+            <a
+              href="/mcp"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-600 hover:underline"
+            >
+              learn how to connect your MCP agent →
+            </a>
           </p>
         </div>
 
@@ -60,7 +68,7 @@ export default function WelcomeMode({ canvasName, onOpenConnect }: Props) {
 
         <section>
           <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
-            Or try asking Claude
+            Or try asking your agent
           </h2>
           <ul className="space-y-2">
             {EXAMPLE_PROMPTS.map((p, idx) => (

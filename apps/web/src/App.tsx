@@ -68,12 +68,6 @@ function setMCPInURL() {
   window.history.pushState(null, "", "/mcp");
 }
 
-function publicApiUrl(): string {
-  const fromEnv = (import.meta.env.VITE_PUBLIC_API_URL as string | undefined)?.trim();
-  if (fromEnv) return fromEnv;
-  return window.location.origin;
-}
-
 export default function App() {
   const [route, setRoute] = useState<"home" | "mcp">(() => (isMCPRoute() ? "mcp" : "home"));
   const [canvasCode, setCanvasCode] = useState<string | null>(getCodeFromURL);
@@ -416,7 +410,6 @@ export default function App() {
       {connectOpen && (
         <ConnectModal
           code={canvas.code}
-          apiUrl={publicApiUrl()}
           version={canvasState.version}
           onClose={() => setConnectOpen(false)}
           onSwitchCanvas={() => { setConnectOpen(false); handleJoin(""); }}
