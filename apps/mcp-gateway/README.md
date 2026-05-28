@@ -1,4 +1,4 @@
-# @tandem/mcp-gateway
+# @jaximus/tandem-mcp
 
 MCP server for [Tandem](https://github.com/jaximus808/tandam) — a shared canvas you and AI agents edit together in real time.
 
@@ -19,7 +19,7 @@ No install. Drop this into your MCP client config:
   "mcpServers": {
     "tandem": {
       "command": "npx",
-      "args": ["-y", "@tandem/mcp-gateway"]
+      "args": ["-y", "@jaximus/tandem-mcp"]
     }
   }
 }
@@ -30,7 +30,7 @@ This connects to the hosted backend at `https://tandemcanvas.com` out of the box
 ### Global install
 
 ```bash
-npm install -g @tandem/mcp-gateway
+npm install -g @jaximus/tandem-mcp
 # then in MCP config:
 #   "command": "tandem-mcp"
 ```
@@ -41,7 +41,7 @@ npm install -g @tandem/mcp-gateway
 git clone https://github.com/jaximus808/tandam.git
 cd tandam
 pnpm install
-pnpm --filter mcp-gateway build
+pnpm --filter @jaximus/tandem-mcp build
 # point your client at apps/mcp-gateway/dist/index.js
 ```
 

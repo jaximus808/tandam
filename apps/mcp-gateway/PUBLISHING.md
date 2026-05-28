@@ -1,23 +1,23 @@
-# Publishing `@tandem/mcp-gateway`
+# Publishing `@jaximus/tandem-mcp`
 
 One-time setup, then a single command per release.
 
 ## One-time setup
 
-### 1. Claim the `@tandem` scope on npm
+### 1. Log in to npm
 
 ```bash
 npm login
 # username, password, OTP — uses your existing npm account
 ```
 
-If you don't have an org, create one (free for public packages):
+The package is published under your personal username scope (`@jaximus`), so
+there's no org to create — any package named `@jaximus/*` publishes straight to
+your account. `publishConfig.access` is already set to `public` in
+`package.json`, which scoped packages require to be visible.
 
-1. Go to <https://www.npmjs.com/org/create>
-2. Org name: `tandem`
-3. Plan: "Unlimited public packages" (free)
-
-If `tandem` is taken, switch to a different scope and update `name` in `package.json` accordingly.
+If you ever change your npm username, update the `@jaximus` scope in `name` in
+`package.json` (and the docs that reference it) accordingly.
 
 ### 2. Verify what will ship
 
@@ -46,8 +46,8 @@ That's it. `npm version` commits and tags. `npm publish` pushes the tarball to n
 
 After publish:
 
-- The package is live at <https://www.npmjs.com/package/@tandem/mcp-gateway>
-- Users can immediately `npx -y @tandem/mcp-gateway` or `npm i -g @tandem/mcp-gateway`
+- The package is live at <https://www.npmjs.com/package/@jaximus/tandem-mcp>
+- Users can immediately `npx -y @jaximus/tandem-mcp` or `npm i -g @jaximus/tandem-mcp`
 - `pnpm dlx` and `yarn dlx` also work — npm publish covers all four install methods.
 
 ## Smoke test after publish
@@ -55,7 +55,7 @@ After publish:
 ```bash
 # In a scratch directory, NOT inside this repo:
 cd /tmp
-npx -y @tandem/mcp-gateway
+npx -y @jaximus/tandem-mcp
 # should start and wait on stdin — kill with Ctrl-C
 ```
 

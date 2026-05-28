@@ -12,7 +12,7 @@
  *     "mcpServers": {
  *       "tandem": {
  *         "command": "npx",
- *         "args": ["-y", "@tandem/mcp-gateway"]
+ *         "args": ["-y", "@jaximus/tandem-mcp"]
  *       }
  *     }
  *   }
@@ -35,7 +35,7 @@ const DEFAULT_API_URL = "https://tandemcanvas.com";
 
 function printHelp() {
   process.stdout.write(
-    `@tandem/mcp-gateway ${VERSION} — MCP server for Tandem.\n` +
+    `@jaximus/tandem-mcp ${VERSION} — MCP server for Tandem.\n` +
       `\n` +
       `Usage:\n` +
       `  tandem-mcp                 Run as an MCP stdio server (default).\n` +
@@ -54,7 +54,7 @@ function printHelp() {
 
 const cliArgs = process.argv.slice(2);
 if (cliArgs.includes("--version") || cliArgs.includes("-v")) {
-  process.stdout.write(`@tandem/mcp-gateway ${VERSION}\n`);
+  process.stdout.write(`@jaximus/tandem-mcp ${VERSION}\n`);
   process.exit(0);
 }
 if (cliArgs.includes("--help") || cliArgs.includes("-h")) {
