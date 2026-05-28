@@ -19,12 +19,13 @@ No install. Drop this into your MCP client config:
   "mcpServers": {
     "tandem": {
       "command": "npx",
-      "args": ["-y", "@tandem/mcp-gateway"],
-      "env": { "API_URL": "https://your-tandem-host" }
+      "args": ["-y", "@tandem/mcp-gateway"]
     }
   }
 }
 ```
+
+This connects to the hosted backend at `https://tandemcanvas.com` out of the box — no `API_URL` needed. To point at a local or self-hosted instance, add `"env": { "API_URL": "http://localhost:7891" }`.
 
 ### Global install
 
@@ -46,9 +47,9 @@ pnpm --filter mcp-gateway build
 
 ## Configuration
 
-| Env var   | Default                   | Purpose                                        |
-| --------- | ------------------------- | ---------------------------------------------- |
-| `API_URL` | `http://localhost:7891`   | Where the Tandem HTTP API is reachable.        |
+| Env var   | Default                    | Purpose                                                          |
+| --------- | -------------------------- | ---------------------------------------------------------------- |
+| `API_URL` | `https://tandemcanvas.com` | Tandem HTTP API base URL. Only set this to override the default. |
 
 ## Tools
 

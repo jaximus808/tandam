@@ -12,11 +12,13 @@
  *     "mcpServers": {
  *       "tandem": {
  *         "command": "npx",
- *         "args": ["-y", "@tandem/mcp-gateway"],
- *         "env": { "API_URL": "https://your-tandem-host" }
+ *         "args": ["-y", "@tandem/mcp-gateway"]
  *       }
  *     }
  *   }
+ *
+ * Defaults to the hosted backend (https://tandemcanvas.com). Set the API_URL
+ * env var only to point at a local or self-hosted instance.
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -27,9 +29,9 @@ import { TOOLS, handleTool } from "./tools.js";
 
 // Keep in sync with package.json `version`. Surfaced via `--version` and the
 // MCP server's self-identification.
-const VERSION = "2.0.0";
+const VERSION = "2.0.1";
 
-const DEFAULT_API_URL = "http://localhost:7891";
+const DEFAULT_API_URL = "https://tandemcanvas.com";
 
 function printHelp() {
   process.stdout.write(
@@ -62,13 +64,6 @@ if (cliArgs.includes("--help") || cliArgs.includes("-h")) {
 
 const apiUrlFromEnv = process.env.API_URL;
 const API_URL = (apiUrlFromEnv ?? DEFAULT_API_URL).replace(/\/$/, "");
-
-if (!apiUrlFromEnv) {
-  process.stderr.write(
-    `[tandem] API_URL env not set — using default ${API_URL}. ` +
-      `Set API_URL to point at your Tandem host.\n`
-  );
-}
 
 const gateway = new Gateway({ apiUrl: API_URL });
 
