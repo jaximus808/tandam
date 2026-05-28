@@ -41,3 +41,32 @@
   .tandem-orbit-expand,
   .tandem-orbit-rotate { animation: none; }
 }
+
+/* Hero canvas demo: pins drop in, itinerary rows slide in, the "editing"
+   agent name cross-fades, and the live dot pings. */
+@keyframes tandem-pin-drop {
+  0%   { opacity: 0; transform: translate(-50%, -140%) scale(0.6); }
+  60%  { opacity: 1; transform: translate(-50%, -92%) scale(1.05); }
+  100% { opacity: 1; transform: translate(-50%, -100%) scale(1); }
+}
+@keyframes tandem-row-slide {
+  from { opacity: 0; transform: translateX(10px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes tandem-fade-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes tandem-ping {
+  75%, 100% { transform: scale(2.2); opacity: 0; }
+}
+.tandem-pin-drop { animation: tandem-pin-drop 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.tandem-row-slide { animation: tandem-row-slide 0.4s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.tandem-fade-in { animation: tandem-fade-in 0.4s ease both; }
+.tandem-ping { animation: tandem-ping 1.6s cubic-bezier(0, 0, 0.2, 1) infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .tandem-pin-drop,
+  .tandem-row-slide,
+  .tandem-fade-in,
+  .tandem-ping { animation: none; }
+}

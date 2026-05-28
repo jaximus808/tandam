@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ChevronDown } from "lucide-react";
 import type { CanvasMeta, CanvasMode, CanvasState } from "./types";
 import { connectToCanvas, disconnectFromCanvas, onStateUpdate, sendOp } from "./lib/ws";
 import MapMode from "./modes/MapMode";
@@ -81,6 +82,7 @@ export default function App() {
   const [selectedPinId, setSelectedPinId] = useState<string | null>(null);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [connectOpen, setConnectOpen] = useState(false);
+  const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [autoOpenedFor, setAutoOpenedFor] = useState<string | null>(null);
   // Keep-alive: once a mode has been opened, keep its subtree mounted and
   // toggle visibility instead of re-mounting on every tab switch. This avoids
@@ -165,6 +167,7 @@ export default function App() {
     setPendingMode(null);
     pendingModeRef.current = null;
     setConnectOpen(false);
+    setModeMenuOpen(false);
   }
 
   function handleJoin(code: string) {
@@ -249,16 +252,16 @@ export default function App() {
       <header className="flex items-center gap-2 px-4 py-2 bg-white border-b border-gray-200 shrink-0">
         <button
           onClick={() => handleJoin("")}
-          className="flex items-center gap-1.5 font-bold text-gray-900 text-sm hover:text-blue-600 transition-colors"
+          className="flex items-center gap-1.5 font-bold text-gray-900 text-sm hover:text-blue-600 transition-colors shrink-0"
           title="Back to home"
         >
           <TandemLogo size={20} />
           <span>Tandem</span>
         </button>
-        <div className="w-px h-4 bg-gray-200 mx-1" />
-        <div className="flex items-center gap-2">
-          <span className="font-semibold text-gray-900 text-sm">{canvas.name}</span>
-          <span className="text-xs text-gray-400 font-mono">{canvas.code}</span>
+        <div className="w-px h-4 bg-gray-200 mx-1 shrink-0" />
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="font-semibold text-gray-900 text-sm truncate">{canvas.name}</span>
+          <span className="text-xs text-gray-400 font-mono shrink-0">{canvas.code}</span>
         </div>
 
         {inWelcome && canvasReturnMode && (
@@ -276,8 +279,10 @@ export default function App() {
 
         {!inWelcome && visibleModes.length > 0 && (
           <>
-            <div className="w-px h-4 bg-gray-200 mx-1" />
-            <div className="flex gap-1">
+            <div className="w-px h-4 bg-gray-200 mx-1 shrink-0" />
+
+            {/* Desktop: all modes laid out inline. */}
+            <div className="hidden sm:flex gap-1">
               {MODES.filter((m) => visibleModes.includes(m.id)).map((m) => (
                 <button
                   key={m.id}
@@ -299,6 +304,61 @@ export default function App() {
               >
                 ← Templates
               </button>
+            </div>
+
+            {/* Mobile: a dropdown so every mode is reachable regardless of count. */}
+            <div className="relative sm:hidden">
+              <button
+                onClick={() => setModeMenuOpen((o) => !o)}
+                className="flex items-center gap-1 px-3 py-1 rounded-md text-sm font-medium bg-blue-600 text-white"
+                aria-haspopup="menu"
+                aria-expanded={modeMenuOpen}
+              >
+                {MODES.find((m) => m.id === effectiveMode)?.label ?? "Mode"}
+                <ChevronDown
+                  className={`w-3.5 h-3.5 transition-transform ${modeMenuOpen ? "rotate-180" : ""}`}
+                  aria-hidden="true"
+                />
+              </button>
+              {modeMenuOpen && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setModeMenuOpen(false)} />
+                  <div
+                    role="menu"
+                    className="absolute left-0 mt-1 z-20 min-w-[10rem] rounded-md bg-white border border-gray-200 shadow-lg py-1"
+                  >
+                    {MODES.filter((m) => visibleModes.includes(m.id)).map((m) => (
+                      <button
+                        key={m.id}
+                        role="menuitem"
+                        onClick={() => {
+                          setMode(m.id);
+                          setModeMenuOpen(false);
+                        }}
+                        className={[
+                          "w-full text-left px-3 py-2 text-sm font-medium",
+                          effectiveMode === m.id
+                            ? "bg-blue-50 text-blue-700"
+                            : "text-gray-700 hover:bg-gray-100",
+                        ].join(" ")}
+                      >
+                        {m.label}
+                      </button>
+                    ))}
+                    <div className="my-1 border-t border-gray-100" />
+                    <button
+                      role="menuitem"
+                      onClick={() => {
+                        setMode("welcome");
+                        setModeMenuOpen(false);
+                      }}
+                      className="w-full text-left px-3 py-2 text-sm font-medium text-gray-500 hover:bg-gray-100"
+                    >
+                      ← Templates
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </>
         )}
