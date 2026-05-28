@@ -492,8 +492,10 @@ export const TOOLS = [
   {
     name: "canvas.sheet.row.add",
     description:
-      "Add a row to a sheet. `data` is an object keyed by column.id with cell values " +
-      "(strings for text/date, numbers for number, booleans for checkbox).",
+      "Add a row to a sheet. `data` is an object of cell values keyed by either the " +
+      "column NAME (e.g. \"Task\", case-insensitive) or the column.id — names are " +
+      "resolved to ids server-side, so you don't need to look up the uuids. Values: " +
+      "strings for text/date, numbers for number, booleans for checkbox.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -508,7 +510,8 @@ export const TOOLS = [
     name: "canvas.sheet.row.update",
     description:
       "Update a row by ID. `data` is merged into the existing row data — keys not present " +
-      "are left untouched; setting a key to null clears that cell.",
+      "are left untouched; setting a key to null clears that cell. Cells may be keyed by " +
+      "column NAME (case-insensitive) or column.id; names are resolved to ids server-side.",
     inputSchema: {
       type: "object" as const,
       properties: {

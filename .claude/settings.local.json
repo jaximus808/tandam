@@ -14,7 +14,12 @@
       "Bash(go build *)",
       "mcp__agentcanvas__canvas_map_set",
       "Bash(pnpm build *)",
-      "mcp__agentcanvas__canvas_event_update"
+      "mcp__agentcanvas__canvas_event_update",
+      "mcp__agentcanvas__canvas_roadmap_item_add",
+      "mcp__agentcanvas__canvas_sheet_add",
+      "mcp__agentcanvas__canvas_sheet_row_add",
+      "mcp__agentcanvas__canvas_map_list",
+      "mcp__agentcanvas__canvas_note_update"
     ]
   }
 }

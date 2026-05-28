@@ -468,11 +468,14 @@ func (s *supabaseStore) LeaveWelcomeIfNeeded(ctx context.Context, canvasID uuid.
 // ── Pins ──────────────────────────────────────────────────────────────────────
 
 func (s *supabaseStore) CreatePin(ctx context.Context, canvasID uuid.UUID, pin *Pin) (int, error) {
+	now := time.Now().UTC()
+	pin.UpdatedAt = now
 	row := map[string]any{
 		"id": pin.ID.String(), "canvas_id": canvasID.String(),
 		"pin_type": pin.PinType, "lat": pin.Lat, "lng": pin.Lng,
 		"label": pin.Label, "body": pin.Body, "color": pin.Color,
 		"created_by": pin.CreatedBy,
+		"updated_at": now.Format(time.RFC3339),
 	}
 	err := s.exec(s.client.From("pins").Insert(row, false, "", "minimal", ""))
 	if err != nil {
@@ -517,10 +520,13 @@ func (s *supabaseStore) DeletePin(ctx context.Context, canvasID uuid.UUID, id uu
 // ── Events ────────────────────────────────────────────────────────────────────
 
 func (s *supabaseStore) CreateEvent(ctx context.Context, canvasID uuid.UUID, ev *Event) (int, error) {
+	now := time.Now().UTC()
+	ev.UpdatedAt = now
 	row := map[string]any{
 		"id": ev.ID.String(), "canvas_id": canvasID.String(),
 		"title": ev.Title, "start_time": ev.Start.Format(time.RFC3339),
 		"created_by": ev.CreatedBy,
+		"updated_at": now.Format(time.RFC3339),
 	}
 	if ev.End != nil {
 		row["end_time"] = ev.End.Format(time.RFC3339)
@@ -581,6 +587,8 @@ func (s *supabaseStore) DeleteEvent(ctx context.Context, canvasID uuid.UUID, id 
 // ── Notes ─────────────────────────────────────────────────────────────────────
 
 func (s *supabaseStore) CreateNote(ctx context.Context, canvasID uuid.UUID, n *Note) (int, error) {
+	now := time.Now().UTC()
+	n.UpdatedAt = now
 	refs := n.ImageRefs
 	if refs == nil {
 		refs = []string{}
@@ -589,6 +597,7 @@ func (s *supabaseStore) CreateNote(ctx context.Context, canvasID uuid.UUID, n *N
 		"id": n.ID.String(), "canvas_id": canvasID.String(),
 		"body": n.Body, "image_refs": refs,
 		"parent_kind": n.ParentKind, "created_by": n.CreatedBy,
+		"updated_at": now.Format(time.RFC3339),
 	}
 	if n.ParentID != nil {
 		row["parent_id"] = n.ParentID.String()
@@ -634,11 +643,14 @@ func (s *supabaseStore) DeleteNote(ctx context.Context, canvasID uuid.UUID, id u
 // ── Roadmap items ─────────────────────────────────────────────────────────────
 
 func (s *supabaseStore) CreateRoadmapItem(ctx context.Context, canvasID uuid.UUID, r *RoadmapItem) (int, error) {
+	now := time.Now().UTC()
+	r.UpdatedAt = now
 	row := map[string]any{
 		"id": r.ID.String(), "canvas_id": canvasID.String(),
 		"title": r.Title, "body": r.Body,
 		"status": r.Status, "sort_order": r.SortOrder,
 		"created_by": r.CreatedBy,
+		"updated_at": now.Format(time.RFC3339),
 	}
 	if r.ParentID != nil {
 		row["parent_id"] = r.ParentID.String()
@@ -752,6 +764,8 @@ func (s *supabaseStore) CreateSheet(ctx context.Context, canvasID uuid.UUID, sh 
 	if err != nil {
 		return 0, err
 	}
+	now := time.Now().UTC()
+	sh.UpdatedAt = now
 	row := map[string]any{
 		"id":          sh.ID.String(),
 		"canvas_id":   canvasID.String(),
@@ -759,6 +773,7 @@ func (s *supabaseStore) CreateSheet(ctx context.Context, canvasID uuid.UUID, sh 
 		"columns":     json.RawMessage(colsJSON),
 		"sort_order":  sh.SortOrder,
 		"created_by":  sh.CreatedBy,
+		"updated_at":  now.Format(time.RFC3339),
 	}
 	if err := s.exec(s.client.From("sheets").Insert(row, false, "", "minimal", "")); err != nil {
 		return 0, err
@@ -888,14 +903,49 @@ func (s *supabaseStore) writeSheetColumns(ctx context.Context, canvasID, sheetID
 	return s.bumpVersion(ctx, canvasID)
 }
 
+// resolveRowData remaps human-friendly column-name keys in row data to the
+// canonical column.id keys storage uses (the JSONB is keyed by id so renames
+// stay free — see migration 0007). Keys already matching a column id pass
+// through; keys matching a column name (case-insensitive) are rewritten to that
+// column's id; anything unrecognized is left untouched. This lets agents write
+// rows keyed by column name without first looking up the column uuids.
+func resolveRowData(cols []SheetColumn, data map[string]any) map[string]any {
+	if len(data) == 0 || len(cols) == 0 {
+		return data
+	}
+	ids := make(map[string]bool, len(cols))
+	byName := make(map[string]string, len(cols))
+	for _, c := range cols {
+		ids[c.ID] = true
+		byName[strings.ToLower(strings.TrimSpace(c.Name))] = c.ID
+	}
+	out := make(map[string]any, len(data))
+	for k, v := range data {
+		if ids[k] {
+			out[k] = v
+		} else if id, ok := byName[strings.ToLower(strings.TrimSpace(k))]; ok {
+			out[id] = v
+		} else {
+			out[k] = v
+		}
+	}
+	return out
+}
+
 func (s *supabaseStore) CreateSheetRow(ctx context.Context, canvasID uuid.UUID, r *SheetRow) (int, error) {
-	if err := s.sheetBelongsToCanvas(canvasID, r.SheetID); err != nil {
+	// getSheet both scope-checks the sheet against the canvas and gives us the
+	// column schema needed to resolve name-keyed cell data.
+	sh, err := s.getSheet(canvasID, r.SheetID)
+	if err != nil {
 		return 0, err
 	}
-	data := r.Data
+	now := time.Now().UTC()
+	r.UpdatedAt = now
+	data := resolveRowData(sh.Columns, r.Data)
 	if data == nil {
 		data = map[string]any{}
 	}
+	r.Data = data
 	dataJSON, err := json.Marshal(data)
 	if err != nil {
 		return 0, err
@@ -906,6 +956,7 @@ func (s *supabaseStore) CreateSheetRow(ctx context.Context, canvasID uuid.UUID, 
 		"data":       json.RawMessage(dataJSON),
 		"sort_order": r.SortOrder,
 		"created_by": r.CreatedBy,
+		"updated_at": now.Format(time.RFC3339),
 	}
 	if err := s.exec(s.client.From("sheet_rows").Insert(row, false, "", "minimal", "")); err != nil {
 		return 0, err
@@ -934,6 +985,13 @@ func (s *supabaseStore) UpdateSheetRow(ctx context.Context, canvasID uuid.UUID, 
 	}
 	m := map[string]any{}
 	if patch.Data != nil {
+		// Resolve name-keyed cells to column ids before merging (best-effort:
+		// if the sheet lookup fails we merge the keys as given).
+		if sheetID, perr := uuid.Parse(rows[0].SheetID); perr == nil {
+			if sh, serr := s.getSheet(canvasID, sheetID); serr == nil {
+				patch.Data = resolveRowData(sh.Columns, patch.Data)
+			}
+		}
 		var existing map[string]any
 		_ = json.Unmarshal(rows[0].Data, &existing)
 		if existing == nil {
