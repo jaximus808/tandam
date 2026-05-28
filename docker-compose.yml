@@ -10,12 +10,14 @@ services:
       SUPABASE_URL: ${SUPABASE_URL:?set SUPABASE_URL in .env}
       SUPABASE_KEY: ${SUPABASE_KEY:?set SUPABASE_KEY in .env}
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
-      PORT: "7891" # Hardcoded internal port for the proxy to target
+      PORT: "7891" 
       WEB_DIST_PATH: ${WEB_DIST_PATH:-/app/web/dist}
-      IMAGE_DIR: ${IMAGE_DIR:-/app/canvas-images}
+      # You can still pass this to the app internally if your code needs it
+      IMAGE_DIR: "/app/canvas-images" 
       JWT_TOKEN_TTL: ${JWT_TOKEN_TTL:-24h}
     volumes:
-      - canvas-images:${IMAGE_DIR:-/app/canvas-images}
+      # FIX: Hardcoded the absolute path on the container side (/app/canvas-images)
+      - canvas-images:/app/canvas-images
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:7891/api/maps"]
       interval: 30s
@@ -28,13 +30,13 @@ services:
     container_name: caddy
     restart: unless-stopped
     ports:
-      - "80:80"     # Catches HTTP traffic to redirect to HTTPS
-      - "443:443"   # Serves secure HTTPS traffic
+      - "80:80"     
+      - "443:443"   
     environment:
       - DOMAIN_NAME=${DOMAIN_NAME:?set DOMAIN_NAME in .env}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile
-      - caddy_data:/data    # Saves your SSL certificates so they aren't lost on restart
+      - caddy_data:/data    
       - caddy_config:/config
     depends_on:
       - tandem
