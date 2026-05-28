@@ -25,9 +25,6 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
-          PORT: ${{ secrets.PORT }}
-          WEB_DIST_PATH: ${{ secrets.WEB_DIST_PATH }}
-          IMAGE_DIR: ${{ secrets.IMAGE_DIR }}
           JWT_TOKEN_TTL: ${{ secrets.JWT_TOKEN_TTL }}
           DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
         run: |
@@ -36,9 +33,6 @@ jobs:
           SUPABASE_URL=$SUPABASE_URL
           SUPABASE_KEY=$SUPABASE_KEY
           JWT_SECRET=$JWT_SECRET
-          PORT=$PORT
-          WEB_DIST_PATH=$WEB_DIST_PATH
-          IMAGE_DIR=$IMAGE_DIR
           JWT_TOKEN_TTL=$JWT_TOKEN_TTL
           DOMAIN_NAME=$DOMAIN_NAME
           EOF
