@@ -81,7 +81,7 @@ agent: canvas.pin.add {
   → { id: "pin_abc123", ... }
 
 agent: canvas.event.add {
-  title: "Shibuya at sunset", start: "2026-06-04T18:00:00Z",
+  title: "Shibuya at sunset", start: "2026-06-04T18:00:00",
   pinId: "pin_abc123"
 }
 ```

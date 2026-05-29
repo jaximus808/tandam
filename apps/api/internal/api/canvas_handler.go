@@ -209,14 +209,16 @@ func (h *Handler) DeletePin(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) CreateEvent(w http.ResponseWriter, r *http.Request) {
 	canvasID := CanvasIDFromCtx(r.Context())
 	var body struct {
-		Title      string     `json:"title"`
-		Start      time.Time  `json:"start"`
-		End        *time.Time `json:"end"`
-		PinID      *uuid.UUID `json:"pinId"`
-		FromPinID  *uuid.UUID `json:"fromPinId"`
-		ToPinID    *uuid.UUID `json:"toPinId"`
-		TravelMode *string    `json:"travelMode"`
-		CreatedBy  string     `json:"createdBy"`
+		Title      string      `json:"title"`
+		Start      time.Time   `json:"start"`
+		End        *time.Time  `json:"end"`
+		Timezone   *string     `json:"timezone"`
+		PinIDs     []uuid.UUID `json:"pinIds"`
+		PinID      *uuid.UUID  `json:"pinId"`
+		FromPinID  *uuid.UUID  `json:"fromPinId"`
+		ToPinID    *uuid.UUID  `json:"toPinId"`
+		TravelMode *string     `json:"travelMode"`
+		CreatedBy  string      `json:"createdBy"`
 	}
 	if err := decode(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -226,7 +228,9 @@ func (h *Handler) CreateEvent(w http.ResponseWriter, r *http.Request) {
 	ev := &store.Event{
 		ID: uuid.New(), Kind: "event",
 		Title: body.Title, Start: body.Start, End: body.End,
-		PinID: body.PinID, FromPinID: body.FromPinID, ToPinID: body.ToPinID,
+		Timezone: body.Timezone,
+		PinIDs: body.PinIDs, PinID: body.PinID,
+		FromPinID: body.FromPinID, ToPinID: body.ToPinID,
 		TravelMode: body.TravelMode, CreatedBy: body.CreatedBy,
 	}
 	if _, err := h.store.CreateEvent(r.Context(), canvasID, ev); err != nil {

@@ -36,11 +36,13 @@ type Pin struct {
 type Event struct {
 	ID         uuid.UUID  `json:"id"`
 	Kind       string     `json:"kind"` // always "event"
-	Title      string     `json:"title"`
-	Start      time.Time  `json:"start"`
-	End        *time.Time `json:"end,omitempty"`
-	PinID      *uuid.UUID `json:"pinId,omitempty"`
-	FromPinID  *uuid.UUID `json:"fromPinId,omitempty"`
+	Title      string      `json:"title"`
+	Start      time.Time   `json:"start"`
+	End        *time.Time  `json:"end,omitempty"`
+	Timezone   *string     `json:"timezone,omitempty"`
+	PinIDs     []uuid.UUID `json:"pinIds,omitempty"`
+	PinID      *uuid.UUID  `json:"pinId,omitempty"`
+	FromPinID  *uuid.UUID  `json:"fromPinId,omitempty"`
 	ToPinID    *uuid.UUID `json:"toPinId,omitempty"`
 	TravelMode *string    `json:"travelMode,omitempty"`
 	CreatedBy  string     `json:"createdBy"`
@@ -97,6 +99,16 @@ type SheetRow struct {
 	UpdatedAt time.Time              `json:"updatedAt"`
 }
 
+type User struct {
+	ID          uuid.UUID `json:"id"`
+	GoogleSub   string    `json:"-"`
+	Email       string    `json:"email"`
+	DisplayName string    `json:"displayName"`
+	AvatarURL   string    `json:"avatarUrl"`
+	CreatedAt   time.Time `json:"createdAt"`
+	LastSeenAt  time.Time `json:"lastSeenAt"`
+}
+
 type PendingEdit struct {
 	ID          uuid.UUID `json:"id"`
 	EntityID    uuid.UUID `json:"entityId"`
@@ -128,11 +140,13 @@ type PinPatch struct {
 }
 
 type EventPatch struct {
-	Title      *string    `json:"title"`
-	Start      *time.Time `json:"start"`
-	End        *time.Time `json:"end"`
-	PinID      *uuid.UUID `json:"pinId"`
-	FromPinID  *uuid.UUID `json:"fromPinId"`
+	Title      *string      `json:"title"`
+	Start      *time.Time   `json:"start"`
+	End        *time.Time   `json:"end"`
+	Timezone   *string      `json:"timezone"`
+	PinIDs     *[]uuid.UUID `json:"pinIds"`
+	PinID      *uuid.UUID   `json:"pinId"`
+	FromPinID  *uuid.UUID   `json:"fromPinId"`
 	ToPinID    *uuid.UUID `json:"toPinId"`
 	TravelMode *string    `json:"travelMode"`
 }
@@ -229,6 +243,10 @@ type Store interface {
 	UpdateSheetRow(ctx context.Context, canvasID uuid.UUID, id uuid.UUID, patch SheetRowPatch) (int, error)
 	DeleteSheetRow(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error)
 	ReorderSheetRows(ctx context.Context, canvasID, sheetID uuid.UUID, updates []SheetRowReorder) (int, error)
+
+	// Users
+	UpsertUserByGoogleSub(ctx context.Context, u *User) (*User, error)
+	GetUserByID(ctx context.Context, id uuid.UUID) (*User, error)
 
 	// Pending edits
 	CreatePendingEdit(ctx context.Context, canvasID uuid.UUID, entityID uuid.UUID, instruction string) (*PendingEdit, error)

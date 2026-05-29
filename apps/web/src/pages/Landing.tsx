@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { listRecent, removeRecent } from "../lib/recentCanvases";
 import TandemLogo from "../components/TandemLogo";
 import HeroCanvasDemo from "../components/HeroCanvasDemo";
+import AccountMenu from "../components/AccountMenu";
 
 interface Props {
   onJoin: (code: string) => void;
@@ -210,6 +211,7 @@ export default function Landing({ onJoin, onOpenMCP }: Props) {
             >
               Connect an agent
             </button>
+            <AccountMenu />
           </nav>
         </div>
       </header>

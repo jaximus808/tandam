@@ -12,6 +12,7 @@ import Landing from "./pages/Landing";
 import MCPSupport from "./pages/MCPSupport";
 import ConnectModal, { hasDismissedConnect } from "./components/ConnectModal";
 import TandemLogo from "./components/TandemLogo";
+import AccountMenu from "./components/AccountMenu";
 import { recordRecent } from "./lib/recentCanvases";
 import { MOCK_ENABLED, mockCanvas } from "./lib/mockFixture";
 
@@ -357,12 +358,15 @@ export default function App() {
           </>
         )}
 
-        <button
-          onClick={() => setConnectOpen(true)}
-          className="ml-auto px-3 py-1 rounded-md text-sm font-medium bg-gray-900 text-white hover:bg-gray-800"
-        >
-          Connect
-        </button>
+        <div className="ml-auto flex items-center gap-2 shrink-0">
+          <button
+            onClick={() => setConnectOpen(true)}
+            className="px-3 py-1 rounded-md text-sm font-medium bg-gray-900 text-white hover:bg-gray-800"
+          >
+            Connect
+          </button>
+          <AccountMenu />
+        </div>
       </header>
 
       <div className="flex flex-1 min-h-0">

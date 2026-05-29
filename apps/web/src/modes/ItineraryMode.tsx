@@ -3,6 +3,8 @@ import remarkGfm from "remark-gfm";
 import { Plane, TrainFront, Car } from "lucide-react";
 import type { CanvasState, CanvasEvent, TravelMode } from "../types";
 import EmptyState from "../components/EmptyState";
+import { instantMs, formatTime, formatDay, dayOf, tzAbbrev } from "../lib/itineraryTime";
+import { eventPinIds } from "../lib/eventPins";
 
 interface Props {
   state: CanvasState;
@@ -25,31 +27,15 @@ function TravelIcon({ mode, className }: { mode: TravelMode; className?: string 
 
 const MARKDOWN_PLUGINS = [remarkGfm];
 
-function formatTime(iso: string) {
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return iso;
-  return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-}
-
-function formatDay(dayStr: string) {
-  const d = new Date(dayStr + "T00:00:00");
-  if (isNaN(d.getTime())) return dayStr;
-  return d.toLocaleDateString(undefined, {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-  });
-}
-
 function groupByDay(events: CanvasEvent[]): [string, CanvasEvent[]][] {
   const map = new Map<string, CanvasEvent[]>();
   for (const ev of events) {
-    const day = ev.start.split("T")[0] ?? ev.start;
+    const day = dayOf(ev.start, ev.timezone);
     if (!map.has(day)) map.set(day, []);
     map.get(day)!.push(ev);
   }
   for (const evts of map.values()) {
-    evts.sort((a, b) => a.start.localeCompare(b.start));
+    evts.sort((a, b) => instantMs(a.start) - instantMs(b.start));
   }
   return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
 }
@@ -62,21 +48,24 @@ export default function ItineraryMode({ state, selectedEventId, onSelectEvent }:
     return (
       <EmptyState
         title="No events yet"
-        hint="Ask Claude to plan your itinerary, or pick a different template."
+        hint="Ask your agent to plan your itinerary, or pick a different template."
       />
     );
   }
 
   return (
-    <div className="flex-1 overflow-y-auto px-6 py-6 max-w-2xl mx-auto w-full">
-      {days.map(([day, dayEvents]) => (
+    <div className="flex-1 overflow-y-auto">
+      <div className="max-w-2xl mx-auto w-full px-6 py-6">
+        {days.map(([day, dayEvents]) => (
         <section key={day} className="mb-8">
           <h2 className="text-base font-semibold text-gray-900 mb-3 sticky top-0 bg-gray-50 py-1">
             {formatDay(day)}
           </h2>
           <div className="space-y-3">
             {dayEvents.map((ev) => {
-              const pin = ev.pinId ? state.pins[ev.pinId] : null;
+              const eventPins = eventPinIds(ev)
+                .map((id) => state.pins[id])
+                .filter(Boolean);
               const fromPin = ev.fromPinId ? state.pins[ev.fromPinId] : null;
               const toPin = ev.toPinId ? state.pins[ev.toPinId] : null;
               const isTravel = !!(ev.travelMode && fromPin && toPin);
@@ -98,8 +87,11 @@ export default function ItineraryMode({ state, selectedEventId, onSelectEvent }:
                   <div className="flex items-start justify-between gap-2">
                     <span className="font-medium text-gray-900">{ev.title}</span>
                     <span className="text-sm text-gray-400 whitespace-nowrap">
-                      {formatTime(ev.start)}
-                      {ev.end && ` – ${formatTime(ev.end)}`}
+                      {formatTime(ev.start, ev.timezone)}
+                      {ev.end && ` – ${formatTime(ev.end, ev.timezone)}`}
+                      {tzAbbrev(ev.start, ev.timezone) && (
+                        <span className="ml-1 text-gray-300">{tzAbbrev(ev.start, ev.timezone)}</span>
+                      )}
                     </span>
                   </div>
 
@@ -118,10 +110,21 @@ export default function ItineraryMode({ state, selectedEventId, onSelectEvent }:
                     </div>
                   )}
 
-                  {!isTravel && pin && (
-                    <span className="inline-block mt-1.5 text-xs bg-blue-50 text-blue-700 rounded-full px-2 py-0.5">
-                      {pin.label ?? "Pin"}
-                    </span>
+                  {!isTravel && eventPins.length > 0 && (
+                    <div className="mt-1.5 flex flex-wrap gap-1.5">
+                      {eventPins.map((p) => (
+                        <span
+                          key={p!.id}
+                          className="inline-flex items-center gap-1 text-xs bg-blue-50 text-blue-700 rounded-full px-2 py-0.5"
+                        >
+                          <span
+                            className="w-2 h-2 rounded-full shrink-0"
+                            style={{ background: p!.color ?? "#3b82f6" }}
+                          />
+                          {p!.label ?? "Pin"}
+                        </span>
+                      ))}
+                    </div>
                   )}
 
                   {notes.length > 0 && (
@@ -143,7 +146,8 @@ export default function ItineraryMode({ state, selectedEventId, onSelectEvent }:
             })}
           </div>
         </section>
-      ))}
+        ))}
+      </div>
     </div>
   );
 }

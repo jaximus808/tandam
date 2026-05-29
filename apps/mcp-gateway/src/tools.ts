@@ -69,6 +69,8 @@ export async function handleTool(
         title: args.title,
         start: args.start,
         end: args.end,
+        timezone: args.timezone,
+        pinIds: args.pinIds,
         pinId: args.pinId,
         fromPinId: args.fromPinId,
         toPinId: args.toPinId,
@@ -275,20 +277,47 @@ export const TOOLS = [
   {
     name: "canvas.event.add",
     description:
-      "Add a timed event. Two flavors:\n" +
-      "  • Point-in-time event at a single location: set pinId.\n" +
+      "Add a timed itinerary entry. Three flavors:\n" +
+      "  • Single-stop entry: set pinIds to one pin id (or use pinId).\n" +
+      "  • Multi-stop entry: set pinIds to several pin ids — one entry that " +
+      "covers multiple places (e.g. a 'check-in errands' block hitting a few " +
+      "stops). All listed pins are grouped under this entry in the map sidebar.\n" +
       "  • Travel segment between two pins (flight/train/drive): set " +
       "fromPinId + toPinId + travelMode TOGETHER. The map will draw a " +
       "polyline between the two pins with a mode icon at the midpoint, " +
       "and the itinerary will show the card as 'A → B'. Use end for the " +
-      "arrival time on travel events.",
+      "arrival time on travel events.\n" +
+      "Pins left off every entry stay 'ungrouped' (fine for 'just pin some places' use).",
     inputSchema: {
       type: "object" as const,
       properties: {
         title: { type: "string" },
-        start: { type: "string", description: "ISO 8601, e.g. 2024-06-01T18:00:00Z" },
-        end: { type: "string", description: "ISO 8601 end / arrival time." },
-        pinId: { type: "string", description: "Pin this event takes place at (point-in-time events only)." },
+        start: {
+          type: "string",
+          description:
+            "The actual instant as timezone-aware ISO-8601. Write the local time at the " +
+            "location WITH its UTC offset, e.g. 6:00 PM in Chicago (CDT) = " +
+            "2024-06-01T18:00:00-05:00. A 'Z' UTC form is also fine. Always include an " +
+            "offset or Z — do NOT send a bare time. Pair with `timezone` below so it " +
+            "displays in the location's local zone.",
+        },
+        end: {
+          type: "string",
+          description: "End / arrival instant, same timezone-aware ISO-8601 format as start.",
+        },
+        timezone: {
+          type: "string",
+          description:
+            "IANA timezone of THIS event's location, e.g. 'America/Chicago', 'America/New_York', " +
+            "'Asia/Tokyo'. The itinerary formats and day-groups the event in this zone. Set it " +
+            "per-event so a trip across timezones shows each stop in its own local time.",
+        },
+        pinIds: {
+          type: "array",
+          items: { type: "string" },
+          description: "Pin ids this entry covers. Use this (not pinId) when an entry spans multiple stops.",
+        },
+        pinId: { type: "string", description: "Single pin this entry takes place at. Legacy — pinIds is preferred." },
         fromPinId: { type: "string", description: "Origin pin for a travel segment." },
         toPinId: { type: "string", description: "Destination pin for a travel segment." },
         travelMode: {
@@ -303,15 +332,31 @@ export const TOOLS = [
   {
     name: "canvas.event.update",
     description:
-      "Update an existing event by its ID. To convert a point-in-time event " +
+      "Update an existing entry by its ID. Set pinIds to change which pins it " +
+      "covers (replaces the whole list; pass [] to clear). To convert an entry " +
       "into a travel segment, set fromPinId + toPinId + travelMode.",
     inputSchema: {
       type: "object" as const,
       properties: {
         id: { type: "string" },
         title: { type: "string" },
-        start: { type: "string" },
-        end: { type: "string" },
+        start: {
+          type: "string",
+          description: "Timezone-aware ISO-8601 instant (include offset or Z), e.g. 2024-06-01T18:00:00-05:00.",
+        },
+        end: {
+          type: "string",
+          description: "End / arrival instant, timezone-aware ISO-8601.",
+        },
+        timezone: {
+          type: "string",
+          description: "IANA timezone of the location, e.g. 'America/Chicago'. Controls how the event displays.",
+        },
+        pinIds: {
+          type: "array",
+          items: { type: "string" },
+          description: "Replaces the entry's pin list. Pass [] to clear all pins.",
+        },
         pinId: { type: "string" },
         fromPinId: { type: "string" },
         toPinId: { type: "string" },

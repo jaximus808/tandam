@@ -19,7 +19,12 @@
       "mcp__agentcanvas__canvas_sheet_add",
       "mcp__agentcanvas__canvas_sheet_row_add",
       "mcp__agentcanvas__canvas_map_list",
-      "mcp__agentcanvas__canvas_note_update"
+      "mcp__agentcanvas__canvas_note_update",
+      "Bash(go mod *)",
+      "mcp__agentcanvas__canvas_roadmap_item_update",
+      "Bash(python3 -c ' *)",
+      "Read(//Users/jaxon/**)",
+      "Bash(lsof -nP -iTCP:7891 -sTCP:LISTEN)"
     ]
   }
 }

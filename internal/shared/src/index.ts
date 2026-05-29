@@ -35,8 +35,16 @@ export interface CanvasEvent {
   id: EntityId;
   kind: "event";
   title: string;
-  start: string;
+  start: string;     // true UTC instant (ISO-8601)
   end?: string;
+  // IANA timezone of this event's location (e.g. "America/Chicago"). The
+  // itinerary formats + day-groups `start`/`end` in this zone. Per-event so
+  // cross-timezone trips render correctly. Absent → viewer's local zone.
+  timezone?: string;
+  // Pins this entry covers. A single entry can span multiple stops (e.g. a
+  // "check-in errands" entry hitting several places). The API populates this
+  // from pinId for legacy single-pin events, so prefer reading pinIds.
+  pinIds?: EntityId[];
   pinId?: EntityId;
   // Travel segment: set fromPinId + toPinId + travelMode together to render
   // this event as a route between two pins on the map (e.g. a flight).

@@ -58,12 +58,14 @@ type dbPin struct {
 }
 
 type dbEvent struct {
-	ID         string  `json:"id"`
-	Title      string  `json:"title"`
-	StartTime  string  `json:"start_time"`
-	EndTime    *string `json:"end_time"`
-	PinID      *string `json:"pin_id"`
-	FromPinID  *string `json:"from_pin_id"`
+	ID         string   `json:"id"`
+	Title      string   `json:"title"`
+	StartTime  string   `json:"start_time"`
+	EndTime    *string  `json:"end_time"`
+	Timezone   *string  `json:"timezone"`
+	PinIDs     []string `json:"pin_ids"`
+	PinID      *string  `json:"pin_id"`
+	FromPinID  *string  `json:"from_pin_id"`
 	ToPinID    *string `json:"to_pin_id"`
 	TravelMode *string `json:"travel_mode"`
 	CreatedBy  string  `json:"created_by"`
@@ -109,6 +111,16 @@ type dbSheetRow struct {
 	UpdatedAt string          `json:"updated_at"`
 }
 
+type dbUser struct {
+	ID          string `json:"id"`
+	GoogleSub   string `json:"google_sub"`
+	Email       string `json:"email"`
+	DisplayName string `json:"display_name"`
+	AvatarURL   string `json:"avatar_url"`
+	CreatedAt   string `json:"created_at"`
+	LastSeenAt  string `json:"last_seen_at"`
+}
+
 type dbPendingEdit struct {
 	ID          string `json:"id"`
 	EntityID    string `json:"entity_id"`
@@ -129,6 +141,14 @@ type dbCanvasWithChildren struct {
 }
 
 // ── Converters ────────────────────────────────────────────────────────────────
+
+func uuidStrings(ids []uuid.UUID) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, id.String())
+	}
+	return out
+}
 
 func parseTime(s string) time.Time {
 	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02T15:04:05"} {
@@ -155,6 +175,7 @@ func toPin(d dbPin) *Pin {
 func toEvent(d dbEvent) *Event {
 	id, _ := uuid.Parse(d.ID)
 	ev := &Event{ID: id, Kind: "event", Title: d.Title, Start: parseTime(d.StartTime),
+		Timezone:   d.Timezone,
 		TravelMode: d.TravelMode,
 		CreatedBy:  d.CreatedBy, UpdatedAt: parseTime(d.UpdatedAt)}
 	if d.EndTime != nil {
@@ -166,6 +187,16 @@ func toEvent(d dbEvent) *Event {
 		if err == nil {
 			ev.PinID = &pinID
 		}
+	}
+	for _, s := range d.PinIDs {
+		if id, err := uuid.Parse(s); err == nil {
+			ev.PinIDs = append(ev.PinIDs, id)
+		}
+	}
+	// Canonicalize: legacy single-pin events have pin_id but no pin_ids — surface
+	// them through pinIds too so readers only need to look at one field.
+	if len(ev.PinIDs) == 0 && ev.PinID != nil {
+		ev.PinIDs = []uuid.UUID{*ev.PinID}
 	}
 	if d.FromPinID != nil {
 		pinID, err := uuid.Parse(*d.FromPinID)
@@ -238,6 +269,15 @@ func toSheetRow(d dbSheetRow) *SheetRow {
 		_ = json.Unmarshal(d.Data, &r.Data)
 	}
 	return r
+}
+
+func toUser(d dbUser) *User {
+	id, _ := uuid.Parse(d.ID)
+	return &User{
+		ID: id, GoogleSub: d.GoogleSub, Email: d.Email,
+		DisplayName: d.DisplayName, AvatarURL: d.AvatarURL,
+		CreatedAt: parseTime(d.CreatedAt), LastSeenAt: parseTime(d.LastSeenAt),
+	}
 }
 
 func toPendingEdit(d dbPendingEdit) *PendingEdit {
@@ -522,14 +562,22 @@ func (s *supabaseStore) DeletePin(ctx context.Context, canvasID uuid.UUID, id uu
 func (s *supabaseStore) CreateEvent(ctx context.Context, canvasID uuid.UUID, ev *Event) (int, error) {
 	now := time.Now().UTC()
 	ev.UpdatedAt = now
+	// Canonicalize the pin list: prefer PinIDs, fall back to a single PinID.
+	if len(ev.PinIDs) == 0 && ev.PinID != nil {
+		ev.PinIDs = []uuid.UUID{*ev.PinID}
+	}
 	row := map[string]any{
 		"id": ev.ID.String(), "canvas_id": canvasID.String(),
 		"title": ev.Title, "start_time": ev.Start.Format(time.RFC3339),
+		"pin_ids":    uuidStrings(ev.PinIDs),
 		"created_by": ev.CreatedBy,
 		"updated_at": now.Format(time.RFC3339),
 	}
 	if ev.End != nil {
 		row["end_time"] = ev.End.Format(time.RFC3339)
+	}
+	if ev.Timezone != nil {
+		row["timezone"] = *ev.Timezone
 	}
 	if ev.PinID != nil {
 		row["pin_id"] = ev.PinID.String()
@@ -556,6 +604,8 @@ func (s *supabaseStore) UpdateEvent(ctx context.Context, canvasID uuid.UUID, id 
 	if patch.Title != nil      { m["title"] = *patch.Title }
 	if patch.Start != nil      { m["start_time"] = patch.Start.Format(time.RFC3339) }
 	if patch.End != nil        { m["end_time"] = patch.End.Format(time.RFC3339) }
+	if patch.Timezone != nil   { m["timezone"] = *patch.Timezone }
+	if patch.PinIDs != nil     { m["pin_ids"] = uuidStrings(*patch.PinIDs) }
 	if patch.PinID != nil      { m["pin_id"] = patch.PinID.String() }
 	if patch.FromPinID != nil  { m["from_pin_id"] = patch.FromPinID.String() }
 	if patch.ToPinID != nil    { m["to_pin_id"] = patch.ToPinID.String() }
@@ -1056,6 +1106,48 @@ func (s *supabaseStore) ReorderSheetRows(ctx context.Context, canvasID, sheetID 
 		}
 	}
 	return s.bumpVersion(ctx, canvasID)
+}
+
+// ── Users ─────────────────────────────────────────────────────────────────────
+
+// UpsertUserByGoogleSub inserts a user or, on google_sub conflict, refreshes
+// their profile fields + last_seen_at. Returns the resulting row. We never pass
+// `id` so the PK default fills on insert and the existing id is preserved on
+// conflict.
+func (s *supabaseStore) UpsertUserByGoogleSub(_ context.Context, u *User) (*User, error) {
+	row := map[string]any{
+		"google_sub":   u.GoogleSub,
+		"email":        u.Email,
+		"display_name": u.DisplayName,
+		"avatar_url":   u.AvatarURL,
+		"last_seen_at": time.Now().UTC().Format(time.RFC3339),
+	}
+	var rows []dbUser
+	_, err := s.client.From("users").
+		Insert(row, true, "google_sub", "representation", "").
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("no row returned after user upsert")
+	}
+	return toUser(rows[0]), nil
+}
+
+func (s *supabaseStore) GetUserByID(_ context.Context, id uuid.UUID) (*User, error) {
+	var rows []dbUser
+	_, err := s.client.From("users").
+		Select("*", "", false).
+		Eq("id", id.String()).
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("user not found: %s", id)
+	}
+	return toUser(rows[0]), nil
 }
 
 // ── Pending edits ─────────────────────────────────────────────────────────────

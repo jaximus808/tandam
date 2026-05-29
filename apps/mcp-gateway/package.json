@@ -1,6 +1,6 @@
 {
   "name": "@jaximus/tandem-mcp",
-  "version": "2.0.1",
+  "version": "2.0.3",
   "description": "MCP server for Tandem — lets any MCP-aware agent (Claude Code, Cursor, Codex, OpenAI Agents SDK, custom orchestrators) read and write a shared Tandem canvas in real time.",
   "type": "module",
   "main": "./dist/index.js",

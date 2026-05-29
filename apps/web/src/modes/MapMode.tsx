@@ -12,6 +12,8 @@ const MARKDOWN_PLUGINS = [remarkGfm];
 import { useMapDefinition } from "../lib/useMapDefinition";
 import type { MapLayer } from "../lib/maps";
 import { useResizablePanel } from "../lib/useResizablePanel";
+import { instantMs, formatTime, formatDay, dayOf } from "../lib/itineraryTime";
+import { eventPinIds } from "../lib/eventPins";
 
 // Fix Leaflet default marker icons with bundlers
 import markerIcon2x from "leaflet/dist/images/marker-icon-2x.png";
@@ -93,18 +95,28 @@ function bezierPoint(a: LatLng, c: LatLng, b: LatLng, t: number): LatLng {
   ];
 }
 
-// Apex of a flight arc — always biased northward so flights visibly curve
-// upward regardless of travel direction. Magnitude scales with chord length.
-function flightControlPoint(from: LatLng, to: LatLng): LatLng {
+// Apex of a flight arc. A lone flight bows northward (so it curves "up"
+// regardless of direction). When `separate` is set — there's a return leg
+// between the same two pins — it instead bows perpendicular to the direction of
+// travel. Because that direction flips on the return, the two legs curve to
+// opposite sides instead of overlapping, so a round trip reads as a loop rather
+// than one arc retraced backwards. Magnitude scales with chord length (~20%).
+function flightControlPoint(from: LatLng, to: LatLng, separate: boolean): LatLng {
   const dLat = to[0] - from[0];
   const dLng = to[1] - from[1];
+  const midLat = (from[0] + to[0]) / 2;
+  const midLng = (from[1] + to[1]) / 2;
+  if (separate) {
+    // Perpendicular to (dLat, dLng) is (-dLng, dLat); offset is ~20% of chord.
+    return [midLat - dLng * 0.2, midLng + dLat * 0.2];
+  }
   const chord = Math.hypot(dLat, dLng);
-  return [(from[0] + to[0]) / 2 + chord * 0.2, (from[1] + to[1]) / 2];
+  return [midLat + chord * 0.2, midLng];
 }
 
-function travelPath(from: LatLng, to: LatLng, mode: TravelMode): LatLng[] {
+function travelPath(from: LatLng, to: LatLng, mode: TravelMode, separate: boolean): LatLng[] {
   if (mode !== "flight") return [from, to];
-  const ctrl = flightControlPoint(from, to);
+  const ctrl = flightControlPoint(from, to, separate);
   const samples = 32;
   const pts: LatLng[] = [];
   for (let i = 0; i <= samples; i++) {
@@ -113,11 +125,16 @@ function travelPath(from: LatLng, to: LatLng, mode: TravelMode): LatLng[] {
   return pts;
 }
 
-function travelMidpoint(from: LatLng, to: LatLng, mode: TravelMode): LatLng {
+function travelMidpoint(from: LatLng, to: LatLng, mode: TravelMode, separate: boolean): LatLng {
   if (mode !== "flight") {
     return [(from[0] + to[0]) / 2, (from[1] + to[1]) / 2];
   }
-  return bezierPoint(from, flightControlPoint(from, to), to, 0.5);
+  return bezierPoint(from, flightControlPoint(from, to, separate), to, 0.5);
+}
+
+// Unordered key for a pin pair, so A→B and B→A collide in the same bucket.
+function pinPairKey(a: string, b: string): string {
+  return a < b ? `${a}|${b}` : `${b}|${a}`;
 }
 
 // Bearing along the chord direction, in degrees clockwise from north — used to
@@ -289,6 +306,17 @@ export default function MapMode({
     }
     return out;
   }, [state.events, state.pins]);
+
+  // How many travel legs connect each pin pair (either direction). >1 means a
+  // round trip, so we fan those legs to opposite sides instead of overlapping.
+  const travelPairCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const t of travels) {
+      const key = pinPairKey(t.from.id, t.to.id);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return counts;
+  }, [travels]);
   const notesByParent = useMemo(() => {
     const out = new Map<string, typeof state.notes[string][]>();
     for (const n of Object.values(state.notes)) {
@@ -302,13 +330,48 @@ export default function MapMode({
   const eventsByPin = useMemo(() => {
     const out = new Map<string, typeof state.events[string][]>();
     for (const ev of Object.values(state.events)) {
-      if (!ev.pinId) continue;
-      const arr = out.get(ev.pinId) ?? [];
-      arr.push(ev);
-      out.set(ev.pinId, arr);
+      for (const pid of eventPinIds(ev)) {
+        const arr = out.get(pid) ?? [];
+        arr.push(ev);
+        out.set(pid, arr);
+      }
     }
     return out;
   }, [state.events]);
+
+  // Sidebar structure: ungrouped pins (referenced by no entry) first, then pins
+  // grouped under the itinerary — by day, then entry (event) in time order.
+  const { ungrouped, dayGroups } = useMemo(() => {
+    const events = Object.values(state.events);
+    const referenced = new Set<string>();
+    for (const ev of events) {
+      for (const id of eventPinIds(ev)) referenced.add(id);
+      if (ev.fromPinId) referenced.add(ev.fromPinId);
+      if (ev.toPinId) referenced.add(ev.toPinId);
+    }
+    const ungrouped = pins.filter((p) => !referenced.has(p.id));
+
+    type Entry = { event: CanvasEvent; pins: Pin[] };
+    const byDay = new Map<string, Entry[]>();
+    for (const ev of events) {
+      const evPins: Pin[] =
+        ev.travelMode && ev.fromPinId && ev.toPinId
+          ? ([state.pins[ev.fromPinId], state.pins[ev.toPinId]].filter(Boolean) as Pin[])
+          : (eventPinIds(ev).map((id) => state.pins[id]).filter(Boolean) as Pin[]);
+      if (evPins.length === 0) continue;
+      const day = dayOf(ev.start, ev.timezone);
+      const arr = byDay.get(day) ?? [];
+      arr.push({ event: ev, pins: evPins });
+      byDay.set(day, arr);
+    }
+    const dayGroups = [...byDay.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([day, entries]) => ({
+        day,
+        entries: entries.sort((x, y) => instantMs(x.event.start) - instantMs(y.event.start)),
+      }));
+    return { ungrouped, dayGroups };
+  }, [pins, state.events, state.pins]);
 
   const markerRefs = useRef<Map<string, L.Marker>>(new Map());
 
@@ -355,6 +418,45 @@ export default function MapMode({
     );
   }
 
+  const renderPinRow = (pin: Pin, indent = false) => {
+    const notes = notesByParent.get(pin.id) ?? [];
+    const isSelected = pin.id === selectedPinId;
+    const preview =
+      pin.body?.split("\n").find((l) => l.trim()) ??
+      notes[0]?.body.split("\n").find((l) => l.trim()) ??
+      null;
+    return (
+      <li key={pin.id}>
+        <button
+          onClick={() => onSelectPin(pin.id)}
+          className={[
+            "w-full text-left py-2.5 transition-colors",
+            indent ? "pl-8 pr-4" : "px-4",
+            isSelected ? "bg-blue-50" : "hover:bg-gray-50",
+          ].join(" ")}
+        >
+          <div className="flex items-center gap-2">
+            <span
+              className="w-2.5 h-2.5 rounded-full shrink-0"
+              style={{ background: pin.color ?? "#3b82f6" }}
+            />
+            <span className="font-medium text-sm text-gray-900 truncate">
+              {pin.label ?? "Pin"}
+            </span>
+          </div>
+          {preview && (
+            <p className="mt-1 text-xs text-gray-500 line-clamp-2 pl-[18px]">{preview}</p>
+          )}
+          {notes.length > 0 && (
+            <div className="mt-1 text-[10px] text-gray-400 pl-[18px]">
+              {notes.length} note{notes.length === 1 ? "" : "s"}
+            </div>
+          )}
+        </button>
+      </li>
+    );
+  };
+
   const center: [number, number] =
     pins.length > 0
       ? [
@@ -388,8 +490,9 @@ export default function MapMode({
           {travels.map((t) => {
             const from: LatLng = [t.from.lat, t.from.lng];
             const to: LatLng = [t.to.lat, t.to.lng];
-            const path = travelPath(from, to, t.mode);
-            const mid = travelMidpoint(from, to, t.mode);
+            const separate = (travelPairCounts.get(pinPairKey(t.from.id, t.to.id)) ?? 0) > 1;
+            const path = travelPath(from, to, t.mode, separate);
+            const mid = travelMidpoint(from, to, t.mode, separate);
             const bearing = travelBearing(from, to);
             const style = TRAVEL_STYLE[t.mode];
             const selected = t.event.id === selectedEventId;
@@ -488,6 +591,7 @@ export default function MapMode({
                                   day: "numeric",
                                   hour: "2-digit",
                                   minute: "2-digit",
+                                  timeZone: ev.timezone || undefined,
                                 })}
                               </span>
                             </li>
@@ -628,54 +732,48 @@ export default function MapMode({
             </button>
           </div>
 
-          <ul
+          <div
             className={[
-              "flex-1 overflow-y-auto divide-y divide-gray-50",
+              "flex-1 overflow-y-auto",
               dir.resizing ? "select-none" : "",
             ].join(" ")}
           >
-            {pins.map((pin) => {
-              const notes = notesByParent.get(pin.id) ?? [];
-              const events = eventsByPin.get(pin.id) ?? [];
-              const isSelected = pin.id === selectedPinId;
-              const preview =
-                pin.body?.split("\n").find((l) => l.trim()) ??
-                notes[0]?.body.split("\n").find((l) => l.trim()) ??
-                null;
-              return (
-                <li key={pin.id}>
-                  <button
-                    onClick={() => onSelectPin(pin.id)}
-                    className={[
-                      "w-full text-left px-4 py-2.5 transition-colors",
-                      isSelected ? "bg-blue-50" : "hover:bg-gray-50",
-                    ].join(" ")}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span
-                        className="w-2.5 h-2.5 rounded-full shrink-0"
-                        style={{ background: pin.color ?? "#3b82f6" }}
-                      />
-                      <span className="font-medium text-sm text-gray-900 truncate">
-                        {pin.label ?? "Pin"}
+            {ungrouped.length > 0 && (
+              <div>
+                {dayGroups.length > 0 && (
+                  <div className="px-4 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+                    Ungrouped <span className="text-gray-300">· {ungrouped.length}</span>
+                  </div>
+                )}
+                <ul className="divide-y divide-gray-50">
+                  {ungrouped.map((p) => renderPinRow(p))}
+                </ul>
+              </div>
+            )}
+
+            {dayGroups.map(({ day, entries }) => (
+              <div key={day}>
+                <div className="px-4 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400 border-t border-gray-100">
+                  {formatDay(day)}
+                </div>
+                {entries.map(({ event, pins: entryPins }) => (
+                  <div key={event.id}>
+                    <div className="px-4 pt-1.5 pb-0.5 flex items-baseline gap-2">
+                      <span className="text-xs font-medium text-gray-700 truncate">
+                        {event.title}
+                      </span>
+                      <span className="text-[10px] text-gray-400 shrink-0">
+                        {formatTime(event.start, event.timezone)}
                       </span>
                     </div>
-                    {preview && (
-                      <p className="mt-1 text-xs text-gray-500 line-clamp-2 pl-[18px]">
-                        {preview}
-                      </p>
-                    )}
-                    {(notes.length > 0 || events.length > 0) && (
-                      <div className="mt-1 flex gap-2 text-[10px] text-gray-400 pl-[18px]">
-                        {notes.length > 0 && <span>{notes.length} note{notes.length === 1 ? "" : "s"}</span>}
-                        {events.length > 0 && <span>{events.length} event{events.length === 1 ? "" : "s"}</span>}
-                      </div>
-                    )}
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+                    <ul className="divide-y divide-gray-50">
+                      {entryPins.map((p) => renderPinRow(p, true))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
         </aside>
       )}
     </div>
