@@ -16,6 +16,13 @@ type Config struct {
 	Port        string
 	WebDistPath string
 	ImageDir    string
+
+	// GoogleClientID enables Google sign-in. Optional — if empty, auth routes
+	// return 503 and the rest of the app runs normally.
+	GoogleClientID string
+	// CookieSecure marks the session cookie Secure. Leave false in local dev
+	// (http); set COOKIE_SECURE=true in production (https behind Caddy).
+	CookieSecure bool
 }
 
 func Load() (*Config, error) {
@@ -62,12 +69,14 @@ func Load() (*Config, error) {
 	}
 
 	return &Config{
-		SupabaseURL: supabaseURL,
-		SupabaseKey: supabaseKey,
-		JWTSecret:   jwtSecret,
-		JWTTokenTTL: jwtTTL,
-		Port:        port,
-		WebDistPath: webDist,
-		ImageDir:    imageDir,
+		SupabaseURL:    supabaseURL,
+		SupabaseKey:    supabaseKey,
+		JWTSecret:      jwtSecret,
+		JWTTokenTTL:    jwtTTL,
+		Port:           port,
+		WebDistPath:    webDist,
+		ImageDir:       imageDir,
+		GoogleClientID: os.Getenv("GOOGLE_CLIENT_ID"),
+		CookieSecure:   os.Getenv("COOKIE_SECURE") == "true",
 	}, nil
 }

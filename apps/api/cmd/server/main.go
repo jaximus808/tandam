@@ -36,6 +36,18 @@ func main() {
 	defer db.Close()
 
 	authSvc := auth.NewService(cfg.JWTSecret, cfg.JWTTokenTTL)
+
+	var googleVerifier *auth.GoogleVerifier
+	if cfg.GoogleClientID != "" {
+		googleVerifier, err = auth.NewGoogleVerifier(context.Background(), cfg.GoogleClientID)
+		if err != nil {
+			log.Fatalf("google verifier: %v", err)
+		}
+		log.Printf("google sign-in enabled")
+	} else {
+		log.Printf("GOOGLE_CLIENT_ID not set — google sign-in disabled")
+	}
+
 	hub := ws.NewHub()
 	go hub.Run()
 
@@ -50,7 +62,7 @@ func main() {
 	}
 	log.Printf("loaded %d map presets: %v", len(mapsReg.IDs()), mapsReg.IDs())
 
-	router := api.NewRouter(db, hub, authSvc, mapsReg, cfg.WebDistPath, cfg.ImageDir)
+	router := api.NewRouter(db, hub, authSvc, googleVerifier, cfg.CookieSecure, mapsReg, cfg.WebDistPath, cfg.ImageDir)
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%s", cfg.Port),

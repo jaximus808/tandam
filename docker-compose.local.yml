@@ -1,0 +1,33 @@
+# docker-compose.local.yml
+services:
+  tandem:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: tandem:local
+    container_name: tandem-local
+    restart: unless-stopped
+    ports:
+      # Expose the container's port to your local machine
+      - "7891:7891" 
+    environment:
+      SUPABASE_URL: ${SUPABASE_URL:?set SUPABASE_URL in .env}
+      SUPABASE_KEY: ${SUPABASE_KEY:?set SUPABASE_KEY in .env}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      PORT: "7891" 
+      WEB_DIST_PATH: ${WEB_DIST_PATH:-/app/web/dist}
+      IMAGE_DIR: "/app/canvas-images" 
+      JWT_TOKEN_TTL: ${JWT_TOKEN_TTL:-24h}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?set GOOGLE_CLIENT_ID in .env}
+    volumes:
+      - canvas-images-local:/app/canvas-images
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:7891/api/maps"]
+      interval: 30s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  # Using a separate volume name so it doesn't clash with prod data if tested on the same machine
+  canvas-images-local:

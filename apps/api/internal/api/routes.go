@@ -15,7 +15,7 @@ import (
 	"github.com/go-chi/cors"
 )
 
-func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, mapsReg *maps.Registry, webDistPath string, imageDir string) http.Handler {
+func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier *auth.GoogleVerifier, cookieSecure bool, mapsReg *maps.Registry, webDistPath string, imageDir string) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(middleware.Logger)
@@ -30,6 +30,7 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, mapsReg *maps.
 	h := NewHandler(s, hub, mapsReg)
 	wsH := NewWSHandler(s, hub, authSvc, mapsReg)
 	mapsH := NewMapsHandler(mapsReg)
+	authH := NewAuthHandler(s, authSvc, googleVerifier, cookieSecure)
 
 	// ── Public ─────────────────────────────────────────────────────────────────
 	r.Post("/api/canvases", h.CreateCanvas)
@@ -38,6 +39,11 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, mapsReg *maps.
 	r.Get("/ws", wsH.ServeWS)
 	r.Get("/api/maps", mapsH.List)
 	r.Get("/api/maps/{id}", mapsH.Get)
+
+	// ── Auth (human login; cookie-based session) ─────────────────────────────────
+	r.Post("/api/auth/google", authH.GoogleLogin)
+	r.Get("/api/auth/me", authH.Me)
+	r.Post("/api/auth/logout", authH.Logout)
 
 	// Sheet export — public by canvas code (matches WS auth model).
 	r.Get("/api/canvas/sheets/{id}/export", h.ExportSheet)
