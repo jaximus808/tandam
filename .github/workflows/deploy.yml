@@ -27,6 +27,7 @@ jobs:
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           JWT_TOKEN_TTL: ${{ secrets.JWT_TOKEN_TTL }}
           DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
         run: |
           echo "Writing secrets to .env file..."
           cat <<EOF > .env
