@@ -7,13 +7,13 @@
   "center": [39.5, -98.35],
   "zoom": 4,
   "minZoom": 3,
-  "maxZoom": 18,
+  "maxZoom": 20,
   "bounds": [[24.5, -125.0], [49.5, -66.5]],
   "layers": [
     {
       "kind": "tile",
-      "url": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-      "attribution": "© OpenStreetMap contributors"
+      "url": "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
+      "attribution": "© OpenStreetMap contributors © CARTO"
     }
   ]
 }

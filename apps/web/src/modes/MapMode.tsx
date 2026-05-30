@@ -254,6 +254,12 @@ function renderLayer(layer: MapLayer, idx: number) {
         attribution={layer.attribution}
         minZoom={layer.minZoom}
         maxZoom={layer.maxZoom}
+        // Smooth out pin-to-pin flyTo: don't thrash tile requests at every
+        // intermediate zoom level, keep a wider ring of off-screen tiles so the
+        // destination is usually pre-loaded, and reuse parent tiles to fill gaps
+        // instead of flashing gray while the new ones arrive.
+        updateWhenZooming={false}
+        keepBuffer={4}
       />
     );
   }

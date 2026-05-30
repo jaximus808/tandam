@@ -33,27 +33,29 @@ const MOCK_ENABLED = import.meta.env.VITE_MOCK === "1";
 
 // Built-in fallback presets used when running without a backend (VITE_MOCK=1).
 // Keep these in sync with apps/api/internal/maps/assets/*.json.
+const CARTO_VOYAGER = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png";
+const CARTO_ATTRIBUTION = "© OpenStreetMap contributors © CARTO";
 const BUILTIN_PRESETS: Record<string, MapDefinition> = {
   world: {
     id: "world", name: "World", description: "Global view",
-    center: [20, 0], zoom: 2, minZoom: 1, maxZoom: 18,
-    layers: [{ kind: "tile", url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", attribution: "© OpenStreetMap contributors" }],
+    center: [20, 0], zoom: 2, minZoom: 1, maxZoom: 20,
+    layers: [{ kind: "tile", url: CARTO_VOYAGER, attribution: CARTO_ATTRIBUTION }],
   },
   us: {
     id: "us", name: "United States", description: "Continental US",
-    center: [39.5, -98.35], zoom: 4, minZoom: 3, maxZoom: 18,
+    center: [39.5, -98.35], zoom: 4, minZoom: 3, maxZoom: 20,
     bounds: [[24.5, -125.0], [49.5, -66.5]],
-    layers: [{ kind: "tile", url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", attribution: "© OpenStreetMap contributors" }],
+    layers: [{ kind: "tile", url: CARTO_VOYAGER, attribution: CARTO_ATTRIBUTION }],
   },
   tokyo: {
     id: "tokyo", name: "Tokyo", description: "Greater Tokyo area",
-    center: [35.6762, 139.6503], zoom: 12, minZoom: 8, maxZoom: 18,
-    layers: [{ kind: "tile", url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", attribution: "© OpenStreetMap contributors" }],
+    center: [35.6762, 139.6503], zoom: 12, minZoom: 8, maxZoom: 20,
+    layers: [{ kind: "tile", url: CARTO_VOYAGER, attribution: CARTO_ATTRIBUTION }],
   },
   japan: {
     id: "japan", name: "Japan", description: "All of Japan",
-    center: [36.5, 138.0], zoom: 5, minZoom: 4, maxZoom: 18,
-    layers: [{ kind: "tile", url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", attribution: "© OpenStreetMap contributors" }],
+    center: [36.5, 138.0], zoom: 5, minZoom: 4, maxZoom: 20,
+    layers: [{ kind: "tile", url: CARTO_VOYAGER, attribution: CARTO_ATTRIBUTION }],
   },
 };
 
