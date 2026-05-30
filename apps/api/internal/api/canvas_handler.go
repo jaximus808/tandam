@@ -218,6 +218,7 @@ func (h *Handler) CreateEvent(w http.ResponseWriter, r *http.Request) {
 		FromPinID  *uuid.UUID  `json:"fromPinId"`
 		ToPinID    *uuid.UUID  `json:"toPinId"`
 		TravelMode *string     `json:"travelMode"`
+		DayTag     *string     `json:"dayTag"`
 		CreatedBy  string      `json:"createdBy"`
 	}
 	if err := decode(r, &body); err != nil {
@@ -231,7 +232,8 @@ func (h *Handler) CreateEvent(w http.ResponseWriter, r *http.Request) {
 		Timezone: body.Timezone,
 		PinIDs: body.PinIDs, PinID: body.PinID,
 		FromPinID: body.FromPinID, ToPinID: body.ToPinID,
-		TravelMode: body.TravelMode, CreatedBy: body.CreatedBy,
+		TravelMode: body.TravelMode, DayTag: body.DayTag,
+		CreatedBy: body.CreatedBy,
 	}
 	if _, err := h.store.CreateEvent(r.Context(), canvasID, ev); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())

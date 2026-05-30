@@ -11,6 +11,11 @@ import (
 	"syscall"
 	"time"
 
+	// Embed Go's tzdata so time.LoadLocation works in any container, regardless
+	// of whether the base image ships system tzdata. Needed for per-event IANA
+	// timezones in the .ics export.
+	_ "time/tzdata"
+
 	"github.com/agentcanvas/api/internal/api"
 	"github.com/agentcanvas/api/internal/auth"
 	"github.com/agentcanvas/api/internal/config"

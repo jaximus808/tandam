@@ -36,6 +36,7 @@ jobs:
           JWT_SECRET=$JWT_SECRET
           JWT_TOKEN_TTL=$JWT_TOKEN_TTL
           DOMAIN_NAME=$DOMAIN_NAME
+          GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID
           EOF
           
       - name: Clean up for transfer

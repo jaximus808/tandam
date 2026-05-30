@@ -68,6 +68,7 @@ type dbEvent struct {
 	FromPinID  *string  `json:"from_pin_id"`
 	ToPinID    *string `json:"to_pin_id"`
 	TravelMode *string `json:"travel_mode"`
+	DayTag     *string `json:"day_tag"`
 	CreatedBy  string  `json:"created_by"`
 	UpdatedAt  string  `json:"updated_at"`
 }
@@ -177,6 +178,7 @@ func toEvent(d dbEvent) *Event {
 	ev := &Event{ID: id, Kind: "event", Title: d.Title, Start: parseTime(d.StartTime),
 		Timezone:   d.Timezone,
 		TravelMode: d.TravelMode,
+		DayTag:     d.DayTag,
 		CreatedBy:  d.CreatedBy, UpdatedAt: parseTime(d.UpdatedAt)}
 	if d.EndTime != nil {
 		t := parseTime(*d.EndTime)
@@ -591,6 +593,9 @@ func (s *supabaseStore) CreateEvent(ctx context.Context, canvasID uuid.UUID, ev 
 	if ev.TravelMode != nil {
 		row["travel_mode"] = *ev.TravelMode
 	}
+	if ev.DayTag != nil {
+		row["day_tag"] = *ev.DayTag
+	}
 	err := s.exec(s.client.From("events").Insert(row, false, "", "minimal", ""))
 	if err != nil {
 		return 0, err
@@ -610,6 +615,7 @@ func (s *supabaseStore) UpdateEvent(ctx context.Context, canvasID uuid.UUID, id 
 	if patch.FromPinID != nil  { m["from_pin_id"] = patch.FromPinID.String() }
 	if patch.ToPinID != nil    { m["to_pin_id"] = patch.ToPinID.String() }
 	if patch.TravelMode != nil { m["travel_mode"] = *patch.TravelMode }
+	if patch.DayTag != nil     { m["day_tag"] = *patch.DayTag }
 	if len(m) == 0 {
 		return 0, nil
 	}

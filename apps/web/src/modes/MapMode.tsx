@@ -14,6 +14,7 @@ import type { MapLayer } from "../lib/maps";
 import { useResizablePanel } from "../lib/useResizablePanel";
 import { instantMs, formatTime, formatDay, dayOf } from "../lib/itineraryTime";
 import { eventPinIds } from "../lib/eventPins";
+import { buildDayClusters } from "../lib/dayClusters";
 
 // Fix Leaflet default marker icons with bundlers
 import markerIcon2x from "leaflet/dist/images/marker-icon-2x.png";
@@ -166,6 +167,84 @@ function travelIcon(mode: TravelMode, bearing: number, selected: boolean): L.Div
   });
 }
 
+// HTML-escape user/agent strings before they go into divIcon HTML. Day tags
+// and event titles are agent-authored and could contain markup characters.
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function formatDuration(ms: number): string {
+  const totalMin = Math.max(0, Math.round(ms / 60000));
+  if (totalMin < 60) return `${totalMin}m`;
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return m === 0 ? `${h}h` : `${h}h ${m}m`;
+}
+
+// Pill that hovers below the travel-mode circle at the midpoint, showing the
+// event's title plus auto-derived duration. Anchored so the pill's TOP-CENTER
+// sits at the polyline midpoint, then transformed down so it clears the
+// circle icon above. Non-interactive — clicks fall through to the underlying
+// polyline / travel circle.
+function travelTextPillIcon(text: string, color: string): L.DivIcon {
+  return L.divIcon({
+    className: "",
+    html:
+      `<div style="` +
+      `position:absolute;` +
+      `transform:translate(-50%, 22px);` +
+      `max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;` +
+      `padding:3px 9px;` +
+      `background:rgba(255,255,255,0.95);` +
+      `border:1px solid ${color};` +
+      `border-radius:9999px;` +
+      `box-shadow:0 1px 3px rgba(0,0,0,.12);` +
+      `font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;` +
+      `font-size:11px;` +
+      `font-weight:600;` +
+      `color:#1f2937;` +
+      `pointer-events:none;` +
+      `">${escapeHtml(text)}</div>`,
+    iconSize: [0, 0],
+    iconAnchor: [0, 0],
+  });
+}
+
+// Floating "DAY 1 · Friday, May 29" pill that sits above a day's pin cluster.
+// Anchored so the pill's BOTTOM-CENTER sits at the cluster centroid, then
+// nudged 16px further up so it hovers visibly above the pins below it.
+function dayLabelIcon(tag: string | null, dayText: string): L.DivIcon {
+  const text = tag ? `${tag} · ${dayText}` : dayText;
+  return L.divIcon({
+    className: "",
+    html:
+      `<div style="` +
+      `position:absolute;` +
+      `transform:translate(-50%, calc(-100% - 16px));` +
+      `white-space:nowrap;` +
+      `padding:4px 10px;` +
+      `background:rgba(255,255,255,0.94);` +
+      `border:1px solid #e5e7eb;` +
+      `border-radius:9999px;` +
+      `box-shadow:0 1px 3px rgba(0,0,0,.10);` +
+      `font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;` +
+      `font-size:10px;` +
+      `font-weight:700;` +
+      `letter-spacing:0.06em;` +
+      `text-transform:uppercase;` +
+      `color:#374151;` +
+      `pointer-events:none;` +
+      `">${escapeHtml(text)}</div>`,
+    iconSize: [0, 0],
+    iconAnchor: [0, 0],
+  });
+}
+
 function renderLayer(layer: MapLayer, idx: number) {
   if (layer.kind === "tile") {
     return (
@@ -306,6 +385,12 @@ export default function MapMode({
     }
     return out;
   }, [state.events, state.pins]);
+
+  // Floating "DAY 1 · Friday, May 29" labels above each day's pin clusters.
+  // Derived from events (no separate group entity) — a pin belongs to the
+  // earliest day any event references it on; pins far apart within the same
+  // day form separate clusters so labels stay grounded near the actual pins.
+  const dayClusters = useMemo(() => buildDayClusters(state), [state]);
 
   // How many travel legs connect each pin pair (either direction). >1 means a
   // round trip, so we fan those legs to opposite sides instead of overlapping.
@@ -496,6 +581,13 @@ export default function MapMode({
             const bearing = travelBearing(from, to);
             const style = TRAVEL_STYLE[t.mode];
             const selected = t.event.id === selectedEventId;
+            // Pill below the travel circle: agent-authored title + auto duration.
+            const durationMs = t.event.end
+              ? instantMs(t.event.end) - instantMs(t.event.start)
+              : 0;
+            const pillText = durationMs > 0
+              ? `${t.event.title} · ${formatDuration(durationMs)}`
+              : t.event.title;
             return (
               <Fragment key={t.event.id}>
                 <Polyline
@@ -518,9 +610,24 @@ export default function MapMode({
                     click: () => onSelectEvent(t.event.id),
                   }}
                 />
+                <Marker
+                  position={mid}
+                  icon={travelTextPillIcon(pillText, style.color)}
+                  interactive={false}
+                  zIndexOffset={-200}
+                />
               </Fragment>
             );
           })}
+          {dayClusters.map((c) => (
+            <Marker
+              key={`day-${c.dayKey}-${c.pinIds.join(",")}`}
+              position={c.centroid}
+              icon={dayLabelIcon(c.dayTag, formatDay(c.dayKey))}
+              interactive={false}
+              zIndexOffset={-500}
+            />
+          ))}
           {pins.map((pin) => {
             const eventCount = eventsByPin.get(pin.id)?.length ?? 0;
             const icon =

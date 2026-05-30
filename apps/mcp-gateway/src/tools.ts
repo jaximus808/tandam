@@ -75,6 +75,7 @@ export async function handleTool(
         fromPinId: args.fromPinId,
         toPinId: args.toPinId,
         travelMode: args.travelMode,
+        dayTag: args.dayTag,
         createdBy: "agent",
       });
 
@@ -325,6 +326,15 @@ export const TOOLS = [
           enum: ["flight", "train", "drive"],
           description: "Travel mode. Required when fromPinId/toPinId are set.",
         },
+        dayTag: {
+          type: "string",
+          description:
+            "Optional SHORT prefix the map renders before the day-cluster label " +
+            "(e.g. 'DAY 1' → 'DAY 1 · Friday, May 29'). Any event on a day can carry " +
+            "this; the renderer picks the first non-empty tag (sorted by start), so " +
+            "typically set it on the FIRST event of each day. Keep it punchy: 'DAY 1', " +
+            "'ARRIVAL', 'KYOTO'.",
+        },
       },
       required: ["title", "start"],
     },
@@ -361,6 +371,11 @@ export const TOOLS = [
         fromPinId: { type: "string" },
         toPinId: { type: "string" },
         travelMode: { type: "string", enum: ["flight", "train", "drive"] },
+        dayTag: {
+          type: "string",
+          description:
+            "Short prefix for the map day label, e.g. 'DAY 1'. First non-empty tag on the day wins.",
+        },
       },
       required: ["id"],
     },

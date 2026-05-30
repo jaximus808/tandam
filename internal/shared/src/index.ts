@@ -51,6 +51,11 @@ export interface CanvasEvent {
   fromPinId?: EntityId;
   toPinId?: EntityId;
   travelMode?: TravelMode;
+  // Optional short prefix the map renders before the day-cluster label
+  // (e.g. "DAY 1" → "DAY 1 · Friday, May 29"). Any event on a given day can
+  // carry the tag; the renderer picks the first non-empty one (sorted by
+  // start) so agents typically set it on the first event of each day.
+  dayTag?: string;
   createdBy: "agent" | "user";
   updatedAt: number;
 }

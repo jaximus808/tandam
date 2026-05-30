@@ -48,6 +48,10 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 	// Sheet export — public by canvas code (matches WS auth model).
 	r.Get("/api/canvas/sheets/{id}/export", h.ExportSheet)
 
+	// Itinerary export — public by canvas code. Doubles as a calendar
+	// subscription URL (Google / Apple / Outlook poll it to stay in sync).
+	r.Get("/api/canvas/{code}/itinerary.ics", h.ExportItineraryICS)
+
 	// Image upload is intentionally disabled for v1 — needs a real storage
 	// story (durable disk + backups) before we offer it. The read path below
 	// stays so any imageRefs left from dev still render instead of 404'ing

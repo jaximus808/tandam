@@ -1,3 +1,4 @@
+import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Plane, TrainFront, Car } from "lucide-react";
@@ -8,6 +9,8 @@ import { eventPinIds } from "../lib/eventPins";
 
 interface Props {
   state: CanvasState;
+  canvasCode: string;
+  canvasName: string;
   selectedEventId: string | null;
   onSelectEvent: (id: string | null) => void;
 }
@@ -40,9 +43,32 @@ function groupByDay(events: CanvasEvent[]): [string, CanvasEvent[]][] {
   return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
 }
 
-export default function ItineraryMode({ state, selectedEventId, onSelectEvent }: Props) {
+export default function ItineraryMode({
+  state,
+  canvasCode,
+  canvasName,
+  selectedEventId,
+  onSelectEvent,
+}: Props) {
   const events = Object.values(state.events);
   const days = groupByDay(events);
+
+  // Export URL doubles as a download (Content-Disposition forces it) AND a
+  // calendar subscription URL (Google / Apple / Outlook can poll it). Same URL,
+  // two uses.
+  const icsPath = `/api/canvas/${canvasCode}/itinerary.ics`;
+  const icsAbsoluteUrl =
+    typeof window !== "undefined" ? `${window.location.origin}${icsPath}` : icsPath;
+  const downloadFilename = (canvasName || "itinerary").replace(/[^\w\- .]/g, "_") + ".ics";
+
+  const [copied, setCopied] = useState(false);
+  function copySubscribeUrl() {
+    if (typeof navigator === "undefined" || !navigator.clipboard) return;
+    navigator.clipboard.writeText(icsAbsoluteUrl).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    });
+  }
 
   if (events.length === 0) {
     return (
@@ -56,6 +82,23 @@ export default function ItineraryMode({ state, selectedEventId, onSelectEvent }:
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-2xl mx-auto w-full px-6 py-6">
+        <div className="flex items-center justify-end gap-3 mb-4 -mt-2">
+          <a
+            href={icsPath}
+            download={downloadFilename}
+            className="text-xs text-gray-500 hover:text-gray-800 underline underline-offset-2"
+            title="Download a one-time .ics file. Import into Google / Apple / Outlook calendar."
+          >
+            Download .ics
+          </a>
+          <button
+            onClick={copySubscribeUrl}
+            className="text-xs text-gray-500 hover:text-gray-800 underline underline-offset-2"
+            title="Copy a calendar subscription URL. Paste into Google Calendar → Other calendars → From URL — the trip will stay in sync as you edit Tandem."
+          >
+            {copied ? "Copied!" : "Copy subscribe URL"}
+          </button>
+        </div>
         {days.map(([day, dayEvents]) => (
         <section key={day} className="mb-8">
           <h2 className="text-base font-semibold text-gray-900 mb-3 sticky top-0 bg-gray-50 py-1">

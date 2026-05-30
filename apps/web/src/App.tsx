@@ -399,6 +399,8 @@ export default function App() {
               {m === "itinerary" && (
                 <ItineraryMode
                   state={canvasState}
+                  canvasCode={canvas.code}
+                  canvasName={canvas.name}
                   selectedEventId={selectedEventId}
                   onSelectEvent={setSelectedEventId}
                 />
