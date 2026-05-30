@@ -4,6 +4,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # Build-time only: Vite bakes this into the static bundle. Maps the
+        # .env's GOOGLE_CLIENT_ID onto the VITE_-prefixed name Vite requires.
+        VITE_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?set GOOGLE_CLIENT_ID in .env}
     image: tandem:local
     container_name: tandem-local
     restart: unless-stopped

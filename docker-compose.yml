@@ -3,6 +3,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # Build-time only: baked into the static web bundle by Vite. Maps the
+        # .env's GOOGLE_CLIENT_ID onto the VITE_-prefixed name Vite requires.
+        VITE_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?set GOOGLE_CLIENT_ID in .env}
     image: tandem:latest
     container_name: tandem
     restart: unless-stopped
@@ -10,11 +14,13 @@ services:
       SUPABASE_URL: ${SUPABASE_URL:?set SUPABASE_URL in .env}
       SUPABASE_KEY: ${SUPABASE_KEY:?set SUPABASE_KEY in .env}
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
-      PORT: "7891" 
+      PORT: "7891"
       WEB_DIST_PATH: ${WEB_DIST_PATH:-/app/web/dist}
       # You can still pass this to the app internally if your code needs it
-      IMAGE_DIR: "/app/canvas-images" 
+      IMAGE_DIR: "/app/canvas-images"
       JWT_TOKEN_TTL: ${JWT_TOKEN_TTL:-24h}
+      # Runtime: the Go server verifies Google ID tokens against this audience.
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?set GOOGLE_CLIENT_ID in .env}
     volumes:
       # FIX: Hardcoded the absolute path on the container side (/app/canvas-images)
       - canvas-images:/app/canvas-images

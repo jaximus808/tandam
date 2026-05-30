@@ -30,6 +30,13 @@ RUN pnpm install --frozen-lockfile
 COPY internal/shared internal/shared
 COPY apps/web apps/web
 
+# Vite inlines VITE_*-prefixed env vars into the static bundle at build time, so
+# the Google client id must be present HERE, not as a runtime container env.
+# Declared right before the build so changing it only busts this layer, not the
+# (slow) pnpm install layer above. Passed in via docker-compose build.args.
+ARG VITE_GOOGLE_CLIENT_ID
+ENV VITE_GOOGLE_CLIENT_ID=$VITE_GOOGLE_CLIENT_ID
+
 RUN pnpm --filter @agentcanvas/shared build \
  && pnpm --filter web build
 
