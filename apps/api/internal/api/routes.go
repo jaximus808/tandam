@@ -101,6 +101,10 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 		r.Patch("/api/canvas/sheet-rows/{id}", h.UpdateSheetRow)
 		r.Delete("/api/canvas/sheet-rows/{id}", h.DeleteSheetRow)
 
+		r.Post("/api/canvas/charts", h.CreateChart)
+		r.Patch("/api/canvas/charts/{id}", h.UpdateChart)
+		r.Delete("/api/canvas/charts/{id}", h.DeleteChart)
+
 		r.Post("/api/canvas/pending-edits", h.CreatePendingEdit)
 		r.Delete("/api/canvas/pending-edits/{id}", h.DeletePendingEdit)
 	})

@@ -172,6 +172,26 @@ export async function handleTool(
     case "canvas.sheet.row.delete":
       return gateway.del(`/api/canvas/sheet-rows/${args.id}`);
 
+    // ── Charts ─────────────────────────────────────────────────────────────────
+    case "canvas.chart.add":
+      return gateway.post("/api/canvas/charts", {
+        name: args.name,
+        sheetId: args.sheetId,
+        chartType: args.chartType,
+        xColumn: args.xColumn,
+        yColumns: args.yColumns,
+        sortOrder: args.sortOrder ?? 0,
+        createdBy: "agent",
+      });
+
+    case "canvas.chart.update": {
+      const { id, ...partial } = args;
+      return gateway.patch(`/api/canvas/charts/${id}`, partial);
+    }
+
+    case "canvas.chart.delete":
+      return gateway.del(`/api/canvas/charts/${args.id}`);
+
     // ── Pending edits ──────────────────────────────────────────────────────────
     case "canvas.pending_edits.read":
       return gateway.get("/api/canvas/state").then((s: any) => ({
@@ -215,7 +235,7 @@ export const TOOLS = [
       "'map', 'itinerary', and 'docs' switch the active view.",
     inputSchema: {
       type: "object" as const,
-      properties: { mode: { type: "string", enum: ["welcome", "map", "itinerary", "docs", "roadmap", "sheets"] } },
+      properties: { mode: { type: "string", enum: ["welcome", "map", "itinerary", "docs", "roadmap", "sheets", "charts"] } },
       required: ["mode"],
     },
   },
@@ -585,6 +605,56 @@ export const TOOLS = [
   {
     name: "canvas.sheet.row.delete",
     description: "Delete a sheet row by its ID.",
+    inputSchema: { type: "object" as const, properties: { id: { type: "string" } }, required: ["id"] },
+  },
+  {
+    name: "canvas.chart.add",
+    description:
+      "Add a chart that visualizes data from a sheet. Pick a source `sheetId`, a " +
+      "`chartType` (bar | line | area | pie), an `xColumn` for category/x-axis labels, " +
+      "and one or more `yColumns` to plot as numeric series. Columns may be referenced " +
+      "by NAME (case-insensitive) or column.id — names are resolved server-side. Use " +
+      "this for tracking values over time (e.g. projected inventory by month, spend by " +
+      "category). Also switches the canvas into charts mode.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        name: { type: "string", description: "Chart title." },
+        sheetId: { type: "string", description: "Source sheet id." },
+        chartType: { type: "string", enum: ["bar", "line", "area", "pie"] },
+        xColumn: { type: "string", description: "Column name or id for x-axis / categories." },
+        yColumns: {
+          type: "array",
+          items: { type: "string" },
+          description: "Column names or ids to plot as series (numeric). Pie uses the first.",
+        },
+        sortOrder: { type: "number" },
+      },
+      required: ["sheetId"],
+    },
+  },
+  {
+    name: "canvas.chart.update",
+    description:
+      "Update a chart by ID. Any of name, sheetId, chartType, xColumn, yColumns, sortOrder " +
+      "may be set. Column refs (xColumn / yColumns) may be names or ids; resolved server-side.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        id: { type: "string" },
+        name: { type: "string" },
+        sheetId: { type: "string" },
+        chartType: { type: "string", enum: ["bar", "line", "area", "pie"] },
+        xColumn: { type: "string" },
+        yColumns: { type: "array", items: { type: "string" } },
+        sortOrder: { type: "number" },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "canvas.chart.delete",
+    description: "Delete a chart by its ID.",
     inputSchema: { type: "object" as const, properties: { id: { type: "string" } }, required: ["id"] },
   },
   {

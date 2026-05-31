@@ -75,6 +75,7 @@ function applyOp(s: CanvasState, op: WSClientMessage): CanvasState {
     roadmapItems: { ...s.roadmapItems },
     sheets: { ...s.sheets },
     sheetRows: { ...s.sheetRows },
+    charts: { ...s.charts },
   };
 
   switch (op.op) {

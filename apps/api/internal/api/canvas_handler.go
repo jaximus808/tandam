@@ -135,7 +135,7 @@ func (h *Handler) ApplyTemplate(w http.ResponseWriter, r *http.Request) {
 
 func isValidMode(mode string) bool {
 	switch mode {
-	case "welcome", "map", "itinerary", "docs", "roadmap", "sheets":
+	case "welcome", "map", "itinerary", "docs", "roadmap", "sheets", "charts":
 		return true
 	}
 	return false
@@ -144,6 +144,14 @@ func isValidMode(mode string) bool {
 func isValidSheetColumnType(t string) bool {
 	switch t {
 	case "text", "number", "date", "checkbox":
+		return true
+	}
+	return false
+}
+
+func isValidChartType(t string) bool {
+	switch t {
+	case "bar", "line", "area", "pie":
 		return true
 	}
 	return false
@@ -578,6 +586,91 @@ func (h *Handler) DeleteSheetRow(w http.ResponseWriter, r *http.Request) {
 	canvasID := CanvasIDFromCtx(r.Context())
 	id, _ := uuid.Parse(chi.URLParam(r, "id"))
 	if _, err := h.store.DeleteSheetRow(r.Context(), canvasID, id); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	broadcastState(r.Context(), h.store, h.hub, canvasID)
+	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
+}
+
+// ── Charts ────────────────────────────────────────────────────────────────────
+
+// POST /api/canvas/charts
+func (h *Handler) CreateChart(w http.ResponseWriter, r *http.Request) {
+	canvasID := CanvasIDFromCtx(r.Context())
+	var body struct {
+		Name      string    `json:"name"`
+		SheetID   uuid.UUID `json:"sheetId"`
+		ChartType string    `json:"chartType"`
+		XColumn   string    `json:"xColumn"`
+		YColumns  []string  `json:"yColumns"`
+		SortOrder int       `json:"sortOrder"`
+		CreatedBy string    `json:"createdBy"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if body.SheetID == uuid.Nil {
+		writeError(w, http.StatusBadRequest, "sheetId is required")
+		return
+	}
+	if body.CreatedBy == "" {
+		body.CreatedBy = "agent"
+	}
+	if body.ChartType == "" {
+		body.ChartType = "bar"
+	}
+	if !isValidChartType(body.ChartType) {
+		writeError(w, http.StatusBadRequest, "invalid chart type: "+body.ChartType)
+		return
+	}
+	if body.Name == "" {
+		body.Name = "Untitled chart"
+	}
+	if body.YColumns == nil {
+		body.YColumns = []string{}
+	}
+	ch := &store.Chart{
+		ID: uuid.New(), Kind: "chart",
+		Name: body.Name, SheetID: body.SheetID, ChartType: body.ChartType,
+		XColumn: body.XColumn, YColumns: body.YColumns, SortOrder: body.SortOrder,
+		CreatedBy: body.CreatedBy,
+	}
+	if _, err := h.store.CreateChart(r.Context(), canvasID, ch); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	broadcastState(r.Context(), h.store, h.hub, canvasID)
+	writeJSON(w, http.StatusCreated, ch)
+}
+
+// PATCH /api/canvas/charts/{id}
+func (h *Handler) UpdateChart(w http.ResponseWriter, r *http.Request) {
+	canvasID := CanvasIDFromCtx(r.Context())
+	id, _ := uuid.Parse(chi.URLParam(r, "id"))
+	var patch store.ChartPatch
+	if err := decode(r, &patch); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if patch.ChartType != nil && !isValidChartType(*patch.ChartType) {
+		writeError(w, http.StatusBadRequest, "invalid chart type: "+*patch.ChartType)
+		return
+	}
+	if _, err := h.store.UpdateChart(r.Context(), canvasID, id, patch); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	broadcastState(r.Context(), h.store, h.hub, canvasID)
+	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
+}
+
+// DELETE /api/canvas/charts/{id}
+func (h *Handler) DeleteChart(w http.ResponseWriter, r *http.Request) {
+	canvasID := CanvasIDFromCtx(r.Context())
+	id, _ := uuid.Parse(chi.URLParam(r, "id"))
+	if _, err := h.store.DeleteChart(r.Context(), canvasID, id); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

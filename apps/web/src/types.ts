@@ -13,6 +13,8 @@ export type {
   SheetColumnType,
   SheetRow,
   SheetCellValue,
+  Chart,
+  ChartType,
   CanvasState,
   PendingEdit,
   WSClientMessage,

@@ -26,6 +26,7 @@ import { sendOp } from "../lib/ws";
 import EmptyState from "../components/EmptyState";
 
 const INDENT_PX = 20;
+const LIST_HINT_KEY = "tandem.roadmapListHint.dismissed";
 
 const STATUS_LABELS: Record<RoadmapStatus, string> = {
   todo: "Todo",
@@ -59,6 +60,23 @@ export default function RoadmapMode({ state }: Props) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   const [offsetX, setOffsetX] = useState(0);
+  const [view, setView] = useState<"list" | "board">("board");
+  const [listHintDismissed, setListHintDismissed] = useState(() => {
+    try {
+      return localStorage.getItem(LIST_HINT_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+
+  function dismissListHint() {
+    setListHintDismissed(true);
+    try {
+      localStorage.setItem(LIST_HINT_KEY, "1");
+    } catch {
+      /* ignore (private mode / disabled storage) */
+    }
+  }
 
   // While dragging, hide descendants of the active item — they ride along with
   // the moved subtree implicitly (parent_id doesn't change), so they shouldn't
@@ -192,11 +210,38 @@ export default function RoadmapMode({ state }: Props) {
     });
   }
 
+  const isEmpty = Object.keys(items).length === 0;
+
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="max-w-3xl mx-auto w-full px-6 py-6">
+    <div className="flex-1 flex flex-col min-h-0 min-w-0">
+      <div className="shrink-0 max-w-5xl mx-auto w-full px-6 pt-6 pb-3">
         <div className="flex items-center justify-between mb-3">
-          <h1 className="text-lg font-semibold text-gray-900">Roadmap</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-lg font-semibold text-gray-900">Roadmap</h1>
+            <ViewToggle
+              view={view}
+              onChange={(v) => {
+                setView(v);
+                if (v === "list") dismissListHint();
+              }}
+            />
+            {view === "board" && !listHintDismissed && (
+              <div className="inline-flex items-center gap-1.5 pl-2 pr-1 py-1 rounded-md bg-blue-50 border border-blue-200 text-xs text-blue-700">
+                <span aria-hidden className="text-blue-400">←</span>
+                <span>Switch to List to edit &amp; reorder</span>
+                <button
+                  onClick={dismissListHint}
+                  className="shrink-0 w-4 h-4 flex items-center justify-center text-blue-400 hover:text-blue-700 hover:bg-blue-100 rounded"
+                  title="Dismiss"
+                  aria-label="Dismiss hint"
+                >
+                  <svg width="9" height="9" viewBox="0 0 12 12">
+                    <path d="M3 3 L 9 9 M 9 3 L 3 9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                  </svg>
+                </button>
+              </div>
+            )}
+          </div>
           <button
             onClick={handleAddRoot}
             className="text-sm px-3 py-1.5 rounded-md bg-blue-600 text-white font-medium hover:bg-blue-700 transition-colors"
@@ -205,7 +250,7 @@ export default function RoadmapMode({ state }: Props) {
           </button>
         </div>
 
-        <div className="flex items-center flex-wrap gap-x-4 gap-y-1 mb-4 px-2 py-1.5 text-xs text-gray-500 bg-gray-100/70 rounded-md border border-gray-200">
+        <div className="flex items-center flex-wrap gap-x-4 gap-y-1 px-2 py-1.5 text-xs text-gray-500 bg-gray-100/70 rounded-md border border-gray-200">
           <span className="font-medium text-gray-600">Legend:</span>
           {STATUS_CYCLE.map((s) => (
             <span key={s} className="inline-flex items-center gap-1.5">
@@ -213,46 +258,86 @@ export default function RoadmapMode({ state }: Props) {
               <span>{STATUS_LABELS[s]}</span>
             </span>
           ))}
-          <span className="ml-auto text-gray-400">Drag rows to reorder · click icon to cycle</span>
+          <span className="ml-auto text-gray-400">
+            {view === "board"
+              ? "Click a status icon to cycle · edit items in list view"
+              : "Drag rows to reorder · click icon to cycle"}
+          </span>
         </div>
+      </div>
 
-        {flat.length === 0 ? (
+      {isEmpty ? (
+        <div className="max-w-3xl mx-auto w-full px-6">
           <EmptyState
             title="No roadmap items yet"
             hint="Click + New item to start, or ask Claude to outline a plan."
           />
-        ) : (
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragStart={handleDragStart}
-            onDragMove={handleDragMove}
-            onDragOver={handleDragOver}
-            onDragEnd={handleDragEnd}
-            onDragCancel={handleDragCancel}
-          >
-            <SortableContext items={flatIds} strategy={verticalListSortingStrategy}>
-              <ul className="text-sm">
-                {flat.map((f) => {
-                  const isActive = f.id === activeId;
-                  const displayDepth = isActive && projected ? projected.depth : f.depth;
-                  return (
-                    <SortableRow
-                      key={f.id}
-                      flat={f}
-                      displayDepth={displayDepth}
-                      isActive={isActive}
-                      collapsed={collapsed.has(f.id)}
-                      onToggleCollapse={() => toggleCollapse(f.id)}
-                      onAddChild={() => handleAddChild(f.id)}
-                    />
-                  );
-                })}
-              </ul>
-            </SortableContext>
-          </DndContext>
-        )}
-      </div>
+        </div>
+      ) : view === "board" ? (
+        <RoadmapBoard items={items} />
+      ) : (
+        <div className="flex-1 overflow-y-auto">
+          <div className="max-w-3xl mx-auto w-full px-6 pb-6">
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragStart={handleDragStart}
+              onDragMove={handleDragMove}
+              onDragOver={handleDragOver}
+              onDragEnd={handleDragEnd}
+              onDragCancel={handleDragCancel}
+            >
+              <SortableContext items={flatIds} strategy={verticalListSortingStrategy}>
+                <ul className="text-sm">
+                  {flat.map((f) => {
+                    const isActive = f.id === activeId;
+                    const displayDepth = isActive && projected ? projected.depth : f.depth;
+                    return (
+                      <SortableRow
+                        key={f.id}
+                        flat={f}
+                        displayDepth={displayDepth}
+                        isActive={isActive}
+                        collapsed={collapsed.has(f.id)}
+                        onToggleCollapse={() => toggleCollapse(f.id)}
+                        onAddChild={() => handleAddChild(f.id)}
+                      />
+                    );
+                  })}
+                </ul>
+              </SortableContext>
+            </DndContext>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── View toggle ──────────────────────────────────────────────────────────────
+
+function ViewToggle({
+  view,
+  onChange,
+}: {
+  view: "list" | "board";
+  onChange: (v: "list" | "board") => void;
+}) {
+  return (
+    <div className="inline-flex rounded-md border border-gray-300 overflow-hidden text-xs font-medium">
+      {(["board", "list"] as const).map((v) => (
+        <button
+          key={v}
+          onClick={() => onChange(v)}
+          className={`px-2.5 py-1 capitalize transition-colors ${
+            view === v
+              ? "bg-blue-600 text-white"
+              : "bg-white text-gray-600 hover:bg-gray-50"
+          }`}
+        >
+          {v}
+        </button>
+      ))}
     </div>
   );
 }
@@ -487,6 +572,156 @@ function Row({
         </button>
       </div>
     </div>
+  );
+}
+
+// ── Board view (swimlanes) ───────────────────────────────────────────────────
+//
+// Each top-level goal is a column; its descendants are an indented list inside.
+// Containment instead of drawn edges → no crossing-connector problem, and the
+// horizontal axis is used by the (few) top-level goals while tasks stack down.
+// A second view over the same roadmap items — no schema change.
+
+const STATUS_ACCENT: Record<RoadmapStatus, string> = {
+  todo: "bg-gray-300",
+  in_progress: "bg-blue-400",
+  done: "bg-green-400",
+  blocked: "bg-red-400",
+};
+
+function childIndex(items: Record<string, RoadmapItem>): Map<string | null, RoadmapItem[]> {
+  const byParent = new Map<string | null, RoadmapItem[]>();
+  for (const it of Object.values(items)) {
+    const key = it.parentId ?? null;
+    const arr = byParent.get(key) ?? [];
+    arr.push(it);
+    byParent.set(key, arr);
+  }
+  for (const arr of byParent.values()) {
+    arr.sort((a, b) => a.sortOrder - b.sortOrder || a.updatedAt - b.updatedAt);
+  }
+  return byParent;
+}
+
+function RoadmapBoard({ items }: { items: Record<string, RoadmapItem> }) {
+  const byParent = useMemo(() => childIndex(items), [items]);
+  const roots = byParent.get(null) ?? [];
+
+  return (
+    <div className="flex-1 min-h-0 min-w-0 overflow-x-auto overflow-y-hidden bg-gray-50/60">
+      <div className="flex gap-4 px-6 py-4 h-full items-start min-w-min">
+        {roots.map((root) => (
+          <RoadmapColumn key={root.id} root={root} byParent={byParent} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RoadmapColumn({
+  root,
+  byParent,
+}: {
+  root: RoadmapItem;
+  byParent: Map<string | null, RoadmapItem[]>;
+}) {
+  // Flatten the subtree (excluding the root) into indented rows, in order.
+  const rows = useMemo(() => {
+    const out: { item: RoadmapItem; depth: number }[] = [];
+    function walk(id: string, depth: number) {
+      for (const kid of byParent.get(id) ?? []) {
+        out.push({ item: kid, depth });
+        walk(kid.id, depth + 1);
+      }
+    }
+    walk(root.id, 0);
+    return out;
+  }, [root.id, byParent]);
+
+  const done = rows.filter((r) => r.item.status === "done").length;
+  const total = rows.length;
+  const status = root.status as RoadmapStatus;
+
+  return (
+    <div className="w-72 shrink-0 flex flex-col max-h-full rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+      <div className={`h-1 shrink-0 ${STATUS_ACCENT[status]}`} />
+      <div className="shrink-0 px-3 pt-2.5 pb-3 border-b border-gray-100">
+        <div className="flex items-start gap-2">
+          <StatusButton item={root} className="mt-0.5" />
+          <span
+            className={`text-sm font-semibold leading-snug ${
+              status === "done" ? "line-through decoration-gray-400 text-gray-500" : "text-gray-900"
+            }`}
+          >
+            {root.title || <span className="text-gray-400 italic font-normal">Untitled goal</span>}
+          </span>
+        </div>
+        {total > 0 && <ProgressBar done={done} total={total} />}
+      </div>
+      <div className="flex-1 overflow-y-auto p-1.5 flex flex-col gap-0.5">
+        {rows.length === 0 ? (
+          <div className="px-2 py-3 text-xs text-gray-400 italic">No sub-items</div>
+        ) : (
+          rows.map((r) => <BoardRow key={r.item.id} item={r.item} depth={r.depth} />)
+        )}
+      </div>
+    </div>
+  );
+}
+
+function BoardRow({ item, depth }: { item: RoadmapItem; depth: number }) {
+  const status = item.status as RoadmapStatus;
+  return (
+    <div
+      className="group flex items-start gap-1.5 py-1 pr-1.5 rounded hover:bg-gray-50"
+      style={{ paddingLeft: 6 + depth * 16 }}
+    >
+      {depth > 0 && <span aria-hidden className="self-stretch w-px bg-gray-200 ml-0.5 mr-0.5" />}
+      <StatusButton item={item} className="mt-0.5" />
+      <span
+        className={`text-xs leading-snug ${
+          status === "done" ? "line-through decoration-gray-400 text-gray-400" : "text-gray-700"
+        }`}
+        title={item.body || undefined}
+      >
+        {item.title || <span className="text-gray-400 italic">Untitled item</span>}
+      </span>
+    </div>
+  );
+}
+
+function ProgressBar({ done, total }: { done: number; total: number }) {
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  return (
+    <div className="mt-2">
+      <div className="flex items-center justify-between text-[10px] text-gray-400 mb-0.5">
+        <span>
+          {done}/{total} done
+        </span>
+        <span className="tabular-nums">{pct}%</span>
+      </div>
+      <div className="h-1 rounded-full bg-gray-100 overflow-hidden">
+        <div className="h-full bg-green-400 transition-all" style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function StatusButton({ item, className }: { item: RoadmapItem; className?: string }) {
+  const status = item.status as RoadmapStatus;
+  function cycleStatus() {
+    const i = STATUS_CYCLE.indexOf(status);
+    const next = STATUS_CYCLE[(i + 1) % STATUS_CYCLE.length];
+    sendOp({ op: "roadmap.update", id: item.id, partial: { status: next } });
+  }
+  return (
+    <button
+      onClick={cycleStatus}
+      className={`shrink-0 hover:opacity-80 transition-opacity ${className ?? ""}`}
+      title={`${STATUS_LABELS[status]} — click to cycle`}
+    >
+      <StatusIcon status={status} />
+    </button>
   );
 }
 

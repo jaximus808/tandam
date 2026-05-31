@@ -24,7 +24,9 @@
       "mcp__agentcanvas__canvas_roadmap_item_update",
       "Bash(python3 -c ' *)",
       "Read(//Users/jaxon/**)",
-      "Bash(lsof -nP -iTCP:7891 -sTCP:LISTEN)"
+      "Bash(lsof -nP -iTCP:7891 -sTCP:LISTEN)",
+      "Bash(pnpm dev *)",
+      "Bash(curl -s -o /dev/null -w \"vite: %{http_code}\\\\n\" http://localhost:5173)"
     ]
   }
 }

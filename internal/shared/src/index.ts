@@ -1,8 +1,9 @@
 export type EntityId = string;
-export type CanvasMode = "welcome" | "map" | "itinerary" | "docs" | "roadmap" | "sheets";
+export type CanvasMode = "welcome" | "map" | "itinerary" | "docs" | "roadmap" | "sheets" | "charts";
 export type RoadmapStatus = "todo" | "in_progress" | "done" | "blocked";
 export type TravelMode = "flight" | "train" | "drive";
 export type SheetColumnType = "text" | "number" | "date" | "checkbox";
+export type ChartType = "bar" | "line" | "area" | "pie";
 // A cell value is the JSON shape stored in sheet_rows.data[columnId].
 // `null` means cleared/empty. Date stored as ISO-8601 "YYYY-MM-DD" string.
 export type SheetCellValue = string | number | boolean | null;
@@ -109,6 +110,23 @@ export interface SheetRow {
   updatedAt: number;
 }
 
+// A chart visualizes data from a sheet. The agent (or user) picks a source
+// sheet, a category column for the x-axis, and one or more numeric columns to
+// plot as series. Column refs are stored as SheetColumn.id; the API resolves
+// column NAMES → ids on write so agents can pass human-readable names.
+export interface Chart {
+  id: EntityId;
+  kind: "chart";
+  name: string;
+  sheetId: EntityId;       // source sheet
+  chartType: ChartType;
+  xColumn: string;          // SheetColumn.id used for category / x-axis labels
+  yColumns: string[];       // SheetColumn.ids plotted as series (numeric)
+  sortOrder: number;
+  createdBy: "agent" | "user";
+  updatedAt: number;
+}
+
 export interface CanvasState {
   version: number;
   mode: CanvasMode;
@@ -118,6 +136,7 @@ export interface CanvasState {
   roadmapItems: Record<EntityId, RoadmapItem>;
   sheets: Record<EntityId, Sheet>;
   sheetRows: Record<EntityId, SheetRow>;
+  charts: Record<EntityId, Chart>;
 }
 
 export interface PendingEdit {
@@ -154,6 +173,23 @@ export type WSClientMessage =
   | { op: "sheet.row.update"; id: EntityId; partial: { data?: Record<string, SheetCellValue>; sortOrder?: number } }
   | { op: "sheet.row.delete"; id: EntityId }
   | { op: "sheet.row.reorder"; sheetId: EntityId; updates: { id: EntityId; sortOrder: number }[] }
+  | {
+      op: "chart.add";
+      data: {
+        name?: string;
+        sheetId: EntityId;
+        chartType?: ChartType;
+        xColumn?: string;
+        yColumns?: string[];
+        sortOrder?: number;
+      };
+    }
+  | {
+      op: "chart.update";
+      id: EntityId;
+      partial: Partial<Pick<Chart, "name" | "sheetId" | "chartType" | "xColumn" | "yColumns" | "sortOrder">>;
+    }
+  | { op: "chart.delete"; id: EntityId }
   | { op: "mode.set"; mode: CanvasMode }
   | { op: "map.set"; mapId: string }
   | { op: "template.apply"; templateId: string; mode: CanvasMode; mapId?: string }

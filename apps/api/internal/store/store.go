@@ -100,6 +100,19 @@ type SheetRow struct {
 	UpdatedAt time.Time              `json:"updatedAt"`
 }
 
+type Chart struct {
+	ID        uuid.UUID `json:"id"`
+	Kind      string    `json:"kind"` // always "chart"
+	Name      string    `json:"name"`
+	SheetID   uuid.UUID `json:"sheetId"`
+	ChartType string    `json:"chartType"` // "bar" | "line" | "area" | "pie"
+	XColumn   string    `json:"xColumn"`   // SheetColumn.id
+	YColumns  []string  `json:"yColumns"`  // SheetColumn.ids
+	SortOrder int       `json:"sortOrder"`
+	CreatedBy string    `json:"createdBy"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
 type User struct {
 	ID          uuid.UUID `json:"id"`
 	GoogleSub   string    `json:"-"`
@@ -127,6 +140,7 @@ type CanvasState struct {
 	RoadmapItems  map[string]*RoadmapItem      `json:"roadmapItems"`
 	Sheets        map[string]*Sheet            `json:"sheets"`
 	SheetRows     map[string]*SheetRow         `json:"sheetRows"`
+	Charts        map[string]*Chart            `json:"charts"`
 }
 
 // ── Patch types (partial updates from JSON body) ──────────────────────────────
@@ -200,6 +214,15 @@ type SheetRowReorder struct {
 	SortOrder int       `json:"sortOrder"`
 }
 
+type ChartPatch struct {
+	Name      *string    `json:"name"`
+	SheetID   *uuid.UUID `json:"sheetId"`
+	ChartType *string    `json:"chartType"`
+	XColumn   *string    `json:"xColumn"`
+	YColumns  *[]string  `json:"yColumns"`
+	SortOrder *int       `json:"sortOrder"`
+}
+
 // ── Store interface ───────────────────────────────────────────────────────────
 
 type Store interface {
@@ -245,6 +268,11 @@ type Store interface {
 	UpdateSheetRow(ctx context.Context, canvasID uuid.UUID, id uuid.UUID, patch SheetRowPatch) (int, error)
 	DeleteSheetRow(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error)
 	ReorderSheetRows(ctx context.Context, canvasID, sheetID uuid.UUID, updates []SheetRowReorder) (int, error)
+
+	// Charts
+	CreateChart(ctx context.Context, canvasID uuid.UUID, c *Chart) (int, error)
+	UpdateChart(ctx context.Context, canvasID uuid.UUID, id uuid.UUID, patch ChartPatch) (int, error)
+	DeleteChart(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error)
 
 	// Users
 	UpsertUserByGoogleSub(ctx context.Context, u *User) (*User, error)

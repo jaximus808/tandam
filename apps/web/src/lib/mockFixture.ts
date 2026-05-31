@@ -322,6 +322,7 @@ const initialState: CanvasState = {
   roadmapItems: toRecord(roadmapItems),
   sheets: toRecord(sheets),
   sheetRows: toRecord(sheetRows),
+  charts: {},
 };
 
 export const mockCanvas: CanvasMeta = initialCanvas;

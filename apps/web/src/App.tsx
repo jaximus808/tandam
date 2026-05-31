@@ -7,6 +7,7 @@ import ItineraryMode from "./modes/ItineraryMode";
 import DocsMode from "./modes/DocsMode";
 import RoadmapMode from "./modes/RoadmapMode";
 import SheetsMode from "./modes/SheetsMode";
+import ChartsMode from "./modes/ChartsMode";
 import WelcomeMode from "./modes/WelcomeMode";
 import Landing from "./pages/Landing";
 import MCPSupport from "./pages/MCPSupport";
@@ -22,6 +23,7 @@ const MODES: { id: CanvasMode; label: string }[] = [
   { id: "docs", label: "Docs" },
   { id: "roadmap", label: "Roadmap" },
   { id: "sheets", label: "Sheets" },
+  { id: "charts", label: "Charts" },
 ];
 
 function availableModes(state: CanvasState, currentMode: CanvasMode): CanvasMode[] {
@@ -31,10 +33,18 @@ function availableModes(state: CanvasState, currentMode: CanvasMode): CanvasMode
     docs: Object.keys(state.notes).length > 0,
     roadmap: Object.keys(state.roadmapItems).length > 0,
     sheets: Object.keys(state.sheets).length > 0,
+    charts: Object.keys(state.charts).length > 0,
   };
   const out = new Set<CanvasMode>();
   // Always include the current mode so the user doesn't lose their tab.
-  if (currentMode === "map" || currentMode === "itinerary" || currentMode === "docs" || currentMode === "roadmap" || currentMode === "sheets") {
+  if (
+    currentMode === "map" ||
+    currentMode === "itinerary" ||
+    currentMode === "docs" ||
+    currentMode === "roadmap" ||
+    currentMode === "sheets" ||
+    currentMode === "charts"
+  ) {
     out.add(currentMode);
   }
   if (has.map) out.add("map");
@@ -42,6 +52,7 @@ function availableModes(state: CanvasState, currentMode: CanvasMode): CanvasMode
   if (has.docs) out.add("docs");
   if (has.roadmap) out.add("roadmap");
   if (has.sheets) out.add("sheets");
+  if (has.charts) out.add("charts");
   return MODES.map((m) => m.id).filter((id) => out.has(id));
 }
 
@@ -370,12 +381,12 @@ export default function App() {
       </header>
 
       <div className="flex flex-1 min-h-0">
-        {(["welcome", "map", "itinerary", "docs", "roadmap", "sheets"] as CanvasMode[]).map((m) => {
+        {(["welcome", "map", "itinerary", "docs", "roadmap", "sheets", "charts"] as CanvasMode[]).map((m) => {
           const active = effectiveMode === m;
           // Lazy-mount: only render a mode after the user has visited it at
           // least once. After that, keep it mounted and hide with CSS.
           if (!active && !visitedModes.has(m)) return null;
-          const wrapperClass = active ? "flex flex-1 min-h-0" : "hidden";
+          const wrapperClass = active ? "flex flex-1 min-h-0 min-w-0" : "hidden";
           return (
             <div key={m} className={wrapperClass}>
               {m === "welcome" && (
@@ -408,6 +419,7 @@ export default function App() {
               {m === "docs" && <DocsMode canvasId={canvas.id} state={canvasState} />}
               {m === "roadmap" && <RoadmapMode state={canvasState} />}
               {m === "sheets" && <SheetsMode state={canvasState} canvasCode={canvas.code} />}
+              {m === "charts" && <ChartsMode state={canvasState} />}
             </div>
           );
         })}

@@ -112,6 +112,18 @@ type dbSheetRow struct {
 	UpdatedAt string          `json:"updated_at"`
 }
 
+type dbChart struct {
+	ID        string          `json:"id"`
+	Name      string          `json:"name"`
+	SheetID   string          `json:"sheet_id"`
+	ChartType string          `json:"chart_type"`
+	XColumn   string          `json:"x_column"`
+	YColumns  json.RawMessage `json:"y_columns"`
+	SortOrder int             `json:"sort_order"`
+	CreatedBy string          `json:"created_by"`
+	UpdatedAt string          `json:"updated_at"`
+}
+
 type dbUser struct {
 	ID          string `json:"id"`
 	GoogleSub   string `json:"google_sub"`
@@ -138,6 +150,7 @@ type dbCanvasWithChildren struct {
 	RoadmapItems  []dbRoadmapItem  `json:"roadmap_items"`
 	Sheets        []dbSheet        `json:"sheets"`
 	SheetRows     []dbSheetRow     `json:"sheet_rows"`
+	Charts        []dbChart        `json:"charts"`
 	PendingEdits  []dbPendingEdit  `json:"pending_edits"`
 }
 
@@ -257,6 +270,21 @@ func toSheet(d dbSheet) *Sheet {
 		_ = json.Unmarshal(d.Columns, &s.Columns)
 	}
 	return s
+}
+
+func toChart(d dbChart) *Chart {
+	id, _ := uuid.Parse(d.ID)
+	sheetID, _ := uuid.Parse(d.SheetID)
+	c := &Chart{ID: id, Kind: "chart",
+		Name: d.Name, SheetID: sheetID, ChartType: d.ChartType,
+		XColumn: d.XColumn, SortOrder: d.SortOrder,
+		CreatedBy: d.CreatedBy, UpdatedAt: parseTime(d.UpdatedAt),
+		YColumns: []string{},
+	}
+	if len(d.YColumns) > 0 {
+		_ = json.Unmarshal(d.YColumns, &c.YColumns)
+	}
+	return c
 }
 
 func toSheetRow(d dbSheetRow) *SheetRow {
@@ -394,7 +422,7 @@ func (s *supabaseStore) GetCanvasState(_ context.Context, canvasID uuid.UUID) (*
 	var rows []dbCanvasWithChildren
 
 	_, err := s.client.From("canvases").
-		Select("*,pins(*),events(*),notes(*),roadmap_items(*),sheets(*, sheet_rows(*)),pending_edits(*)", "", false).
+		Select("*,pins(*),events(*),notes(*),roadmap_items(*),sheets(*, sheet_rows(*)),charts(*),pending_edits(*)", "", false).
 		Eq("id", canvasID.String()).
 		ExecuteTo(&rows)
 	if err != nil {
@@ -416,6 +444,7 @@ func (s *supabaseStore) GetCanvasState(_ context.Context, canvasID uuid.UUID) (*
 		RoadmapItems: make(map[string]*RoadmapItem, len(row.RoadmapItems)),
 		Sheets:       make(map[string]*Sheet, len(row.Sheets)),
 		SheetRows:    make(map[string]*SheetRow, len(row.SheetRows)),
+		Charts:       make(map[string]*Chart, len(row.Charts)),
 	}
 	for _, d := range row.Pins {
 		p := toPin(d)
@@ -440,6 +469,10 @@ func (s *supabaseStore) GetCanvasState(_ context.Context, canvasID uuid.UUID) (*
 	for _, d := range row.SheetRows {
 		sr := toSheetRow(d)
 		state.SheetRows[sr.ID.String()] = sr
+	}
+	for _, d := range row.Charts {
+		ch := toChart(d)
+		state.Charts[ch.ID.String()] = ch
 	}
 
 	edits := make([]*PendingEdit, 0, len(row.PendingEdits))
@@ -1110,6 +1143,162 @@ func (s *supabaseStore) ReorderSheetRows(ctx context.Context, canvasID, sheetID 
 		if err != nil {
 			return 0, err
 		}
+	}
+	return s.bumpVersion(ctx, canvasID)
+}
+
+// ── Charts ────────────────────────────────────────────────────────────────────
+
+func (s *supabaseStore) getChart(canvasID, id uuid.UUID) (*Chart, error) {
+	var rows []dbChart
+	_, err := s.client.From("charts").
+		Select("*", "", false).
+		Eq("id", id.String()).
+		Eq("canvas_id", canvasID.String()).
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("chart %s not found in canvas %s", id, canvasID)
+	}
+	return toChart(rows[0]), nil
+}
+
+// resolveChartCols maps human-readable column NAMES to SheetColumn ids so agents
+// can pass either. An exact id match wins; otherwise a case-insensitive name
+// match; otherwise the ref is left as-is. Empty x is passed through (used by
+// UpdateChart when only y columns change).
+func (s *supabaseStore) resolveChartCols(canvasID, sheetID uuid.UUID, x string, ys []string) (string, []string) {
+	sh, err := s.getSheet(canvasID, sheetID)
+	if err != nil {
+		return x, ys
+	}
+	resolve := func(ref string) string {
+		ref = strings.TrimSpace(ref)
+		for _, c := range sh.Columns {
+			if c.ID == ref {
+				return ref
+			}
+		}
+		for _, c := range sh.Columns {
+			if strings.EqualFold(strings.TrimSpace(c.Name), ref) {
+				return c.ID
+			}
+		}
+		return ref
+	}
+	rx := x
+	if x != "" {
+		rx = resolve(x)
+	}
+	rys := make([]string, 0, len(ys))
+	for _, y := range ys {
+		if strings.TrimSpace(y) != "" {
+			rys = append(rys, resolve(y))
+		}
+	}
+	return rx, rys
+}
+
+func (s *supabaseStore) CreateChart(ctx context.Context, canvasID uuid.UUID, ch *Chart) (int, error) {
+	if err := s.sheetBelongsToCanvas(canvasID, ch.SheetID); err != nil {
+		return 0, err
+	}
+	ch.XColumn, ch.YColumns = s.resolveChartCols(canvasID, ch.SheetID, ch.XColumn, ch.YColumns)
+	if ch.YColumns == nil {
+		ch.YColumns = []string{}
+	}
+	ysJSON, err := json.Marshal(ch.YColumns)
+	if err != nil {
+		return 0, err
+	}
+	now := time.Now().UTC()
+	ch.UpdatedAt = now
+	row := map[string]any{
+		"id":         ch.ID.String(),
+		"canvas_id":  canvasID.String(),
+		"sheet_id":   ch.SheetID.String(),
+		"name":       ch.Name,
+		"chart_type": ch.ChartType,
+		"x_column":   ch.XColumn,
+		"y_columns":  json.RawMessage(ysJSON),
+		"sort_order": ch.SortOrder,
+		"created_by": ch.CreatedBy,
+		"updated_at": now.Format(time.RFC3339),
+	}
+	if err := s.exec(s.client.From("charts").Insert(row, false, "", "minimal", "")); err != nil {
+		return 0, err
+	}
+	_ = s.LeaveWelcomeIfNeeded(ctx, canvasID, "charts")
+	return s.bumpVersion(ctx, canvasID)
+}
+
+func (s *supabaseStore) UpdateChart(ctx context.Context, canvasID uuid.UUID, id uuid.UUID, patch ChartPatch) (int, error) {
+	m := map[string]any{}
+	if patch.Name != nil {
+		m["name"] = *patch.Name
+	}
+	if patch.ChartType != nil {
+		m["chart_type"] = *patch.ChartType
+	}
+	if patch.SortOrder != nil {
+		m["sort_order"] = *patch.SortOrder
+	}
+
+	// Column refs are resolved against the chart's (possibly new) sheet.
+	if patch.XColumn != nil || patch.YColumns != nil || patch.SheetID != nil {
+		var sheetID uuid.UUID
+		if patch.SheetID != nil {
+			sheetID = *patch.SheetID
+			if err := s.sheetBelongsToCanvas(canvasID, sheetID); err != nil {
+				return 0, err
+			}
+			m["sheet_id"] = sheetID.String()
+		} else {
+			cur, err := s.getChart(canvasID, id)
+			if err != nil {
+				return 0, err
+			}
+			sheetID = cur.SheetID
+		}
+		if patch.XColumn != nil {
+			x, _ := s.resolveChartCols(canvasID, sheetID, *patch.XColumn, nil)
+			m["x_column"] = x
+		}
+		if patch.YColumns != nil {
+			_, ys := s.resolveChartCols(canvasID, sheetID, "", *patch.YColumns)
+			if ys == nil {
+				ys = []string{}
+			}
+			yj, err := json.Marshal(ys)
+			if err != nil {
+				return 0, err
+			}
+			m["y_columns"] = json.RawMessage(yj)
+		}
+	}
+
+	if len(m) == 0 {
+		return 0, nil
+	}
+	err := s.exec(s.client.From("charts").
+		Update(m, "minimal", "").
+		Eq("id", id.String()).
+		Eq("canvas_id", canvasID.String()))
+	if err != nil {
+		return 0, err
+	}
+	return s.bumpVersion(ctx, canvasID)
+}
+
+func (s *supabaseStore) DeleteChart(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error) {
+	err := s.exec(s.client.From("charts").
+		Delete("minimal", "").
+		Eq("id", id.String()).
+		Eq("canvas_id", canvasID.String()))
+	if err != nil {
+		return 0, err
 	}
 	return s.bumpVersion(ctx, canvasID)
 }

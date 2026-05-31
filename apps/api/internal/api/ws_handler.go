@@ -392,6 +392,61 @@ func (wh *WSHandler) handleOp(canvasID uuid.UUID, raw []byte) {
 		}
 		_, mutErr = wh.store.ReorderSheetRows(ctx, canvasID, payload.SheetID, payload.Updates)
 
+	case "chart.add":
+		var data struct {
+			Name      string    `json:"name"`
+			SheetID   uuid.UUID `json:"sheetId"`
+			ChartType string    `json:"chartType"`
+			XColumn   string    `json:"xColumn"`
+			YColumns  []string  `json:"yColumns"`
+			SortOrder int       `json:"sortOrder"`
+		}
+		if len(msg.Data) > 0 {
+			if err := json.Unmarshal(msg.Data, &data); err != nil {
+				log.Printf("ws op chart.add: bad data: %v", err)
+				return
+			}
+		}
+		if data.ChartType == "" {
+			data.ChartType = "bar"
+		}
+		if !isValidChartType(data.ChartType) {
+			log.Printf("ws op chart.add: invalid chart type %q", data.ChartType)
+			return
+		}
+		if data.Name == "" {
+			data.Name = "Untitled chart"
+		}
+		if data.YColumns == nil {
+			data.YColumns = []string{}
+		}
+		ch := &store.Chart{
+			ID: uuid.New(), Kind: "chart",
+			Name: data.Name, SheetID: data.SheetID, ChartType: data.ChartType,
+			XColumn: data.XColumn, YColumns: data.YColumns, SortOrder: data.SortOrder,
+			CreatedBy: "user",
+		}
+		_, mutErr = wh.store.CreateChart(ctx, canvasID, ch)
+
+	case "chart.update":
+		if msg.ID == nil {
+			return
+		}
+		var patch store.ChartPatch
+		if err := json.Unmarshal(msg.Partial, &patch); err != nil {
+			return
+		}
+		if patch.ChartType != nil && !isValidChartType(*patch.ChartType) {
+			return
+		}
+		_, mutErr = wh.store.UpdateChart(ctx, canvasID, *msg.ID, patch)
+
+	case "chart.delete":
+		if msg.ID == nil {
+			return
+		}
+		_, mutErr = wh.store.DeleteChart(ctx, canvasID, *msg.ID)
+
 	case "scoped_edit_request":
 		if msg.EntityID == nil {
 			return
