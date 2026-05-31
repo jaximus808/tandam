@@ -70,3 +70,72 @@
   .tandem-fade-in,
   .tandem-ping { animation: none; }
 }
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Landing page (pages/Landing.tsx): on-load reveals, the shape-shifting hero
+   canvas, the use-case marquee, floating cursors, and ambient blobs. Every
+   animation is disabled under prefers-reduced-motion at the bottom.
+   ─────────────────────────────────────────────────────────────────────────── */
+@keyframes tandem-rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.tandem-rise { animation: tandem-rise 0.7s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+@keyframes tandem-scene-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.985); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.tandem-scene-in { animation: tandem-scene-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+/* The cycling headline word: blurs up into place each time the scene changes. */
+@keyframes tandem-word-in {
+  from { opacity: 0; transform: translateY(0.42em); filter: blur(5px); }
+  to   { opacity: 1; transform: translateY(0); filter: blur(0); }
+}
+.tandem-word-in { animation: tandem-word-in 0.55s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+@keyframes tandem-marquee {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+.tandem-marquee { animation: tandem-marquee 42s linear infinite; }
+.tandem-marquee-rev { animation: tandem-marquee 52s linear infinite reverse; }
+
+@keyframes tandem-drift-a {
+  0%   { transform: translate(0, 0); }
+  50%  { transform: translate(20px, -16px); }
+  100% { transform: translate(0, 0); }
+}
+@keyframes tandem-drift-b {
+  0%   { transform: translate(0, 0); }
+  50%  { transform: translate(-18px, 14px); }
+  100% { transform: translate(0, 0); }
+}
+.tandem-drift-a { animation: tandem-drift-a 7s ease-in-out infinite; }
+.tandem-drift-b { animation: tandem-drift-b 9.5s ease-in-out infinite; }
+
+@keyframes tandem-blob {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33%      { transform: translate(26px, -20px) scale(1.08); }
+  66%      { transform: translate(-18px, 14px) scale(0.95); }
+}
+.tandem-blob { animation: tandem-blob 18s ease-in-out infinite; }
+
+@keyframes tandem-grid-pan {
+  from { background-position: 0 0; }
+  to   { background-position: 34px 34px; }
+}
+.tandem-grid-pan { animation: tandem-grid-pan 7s linear infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .tandem-rise,
+  .tandem-scene-in,
+  .tandem-word-in,
+  .tandem-marquee,
+  .tandem-marquee-rev,
+  .tandem-drift-a,
+  .tandem-drift-b,
+  .tandem-blob,
+  .tandem-grid-pan { animation: none; }
+}

@@ -337,26 +337,31 @@ export default function MCPSupport({ onBack }: Props) {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 overflow-y-auto">
-      <header className="sticky top-0 z-10 bg-white/90 backdrop-blur border-b border-gray-200">
+    <div className="min-h-screen bg-[#FBFAF8] font-brand text-gray-900 antialiased overflow-y-auto">
+      <header className="sticky top-0 z-10 bg-[#FBFAF8]/85 backdrop-blur border-b border-gray-900/5">
         <div className="max-w-4xl mx-auto px-6 py-3 flex items-center gap-3">
           <button
             onClick={onBack}
-            className="flex items-center gap-1.5 font-bold text-gray-900 text-sm hover:text-blue-600 transition-colors"
+            className="flex items-center gap-2 font-semibold text-gray-900 text-sm hover:text-sky-600 transition-colors"
             title="Back to home"
           >
-            <TandemLogo size={20} />
+            <TandemLogo size={22} />
             <span>Tandem</span>
           </button>
           <div className="w-px h-4 bg-gray-200" />
-          <span className="text-sm font-medium text-gray-500">MCP support</span>
+          <span className="font-code text-[11px] uppercase tracking-[0.2em] text-gray-400">
+            MCP support
+          </span>
         </div>
       </header>
 
-      <div className="max-w-4xl mx-auto px-6 py-10 space-y-12">
+      <div className="max-w-4xl mx-auto px-6 py-12 space-y-14">
         {/* Hero */}
         <section className="space-y-3">
-          <h1 className="text-3xl font-bold text-gray-900">
+          <span className="font-code text-[11px] uppercase tracking-[0.2em] text-sky-600">
+            Bring your own agent
+          </span>
+          <h1 className="font-display text-4xl font-medium tracking-tight text-gray-900 sm:text-5xl">
             Any agent, same canvas.
           </h1>
           <p className="text-base text-gray-600 leading-relaxed">
@@ -365,20 +370,20 @@ export default function MCPSupport({ onBack }: Props) {
               href="https://modelcontextprotocol.io"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-blue-600 underline hover:text-blue-700"
+              className="text-sky-600 underline hover:text-sky-700"
             >
               Model Context Protocol
             </a>{" "}
             stdio server. It isn't Claude-specific. Any MCP-aware client — editor,
             agent framework, or a bespoke orchestrator you wrote yourself — can
-            spawn the gateway, call <span className="font-mono text-sm">canvas.connect</span> with a
+            spawn the gateway, call <span className="font-code text-sm">canvas.connect</span> with a
             canvas code, and start reading and writing the same canvas a human is
             looking at in the browser.
           </p>
           <p className="text-base text-gray-600 leading-relaxed">
             Multiple agents can connect to the same canvas at the same time. The
-            canvas is the shared workspace — every <span className="font-mono text-sm">pin.add</span>,{" "}
-            <span className="font-mono text-sm">event.add</span>, or <span className="font-mono text-sm">note.add</span> is
+            canvas is the shared workspace — every <span className="font-code text-sm">pin.add</span>,{" "}
+            <span className="font-code text-sm">event.add</span>, or <span className="font-code text-sm">note.add</span> is
             broadcast over the WebSocket to every browser and every other agent
             subscribed to that code.
           </p>
@@ -387,7 +392,7 @@ export default function MCPSupport({ onBack }: Props) {
         {/* Install */}
         <section className="space-y-4">
           <div>
-            <h2 className="text-xl font-semibold text-gray-900">1. Install the gateway</h2>
+            <h2 className="font-display text-2xl font-medium tracking-tight text-gray-900">1. Install the gateway</h2>
             <p className="mt-1 text-sm text-gray-500">
               Pick whichever fits your setup. The npx form is the easiest and
               works for almost everyone.
@@ -402,7 +407,7 @@ export default function MCPSupport({ onBack }: Props) {
                 className={[
                   "px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5",
                   installTab === m.id
-                    ? "bg-blue-600 text-white"
+                    ? "bg-gray-900 text-white"
                     : "bg-white border border-gray-200 text-gray-600 hover:bg-gray-50",
                 ].join(" ")}
               >
@@ -413,8 +418,8 @@ export default function MCPSupport({ onBack }: Props) {
                       "text-[10px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded",
                       m.badge === "Recommended"
                         ? installTab === m.id
-                          ? "bg-blue-500 text-blue-50"
-                          : "bg-blue-100 text-blue-700"
+                          ? "bg-gray-700 text-gray-100"
+                          : "bg-sky-100 text-sky-700"
                         : installTab === m.id
                           ? "bg-gray-700 text-gray-200"
                           : "bg-gray-100 text-gray-500",
@@ -444,7 +449,7 @@ export default function MCPSupport({ onBack }: Props) {
             ))}
             <p className="text-xs text-gray-400 pt-2 border-t border-gray-100">
               No config needed — the gateway connects to the hosted backend at{" "}
-              <span className="font-mono">https://tandemcanvas.com</span> by default. Only set{" "}
+              <span className="font-code">https://tandemcanvas.com</span> by default. Only set{" "}
               <span className="font-medium text-gray-500">API_URL</span> if you're pointing at a
               local or self-hosted instance.
             </p>
@@ -454,9 +459,9 @@ export default function MCPSupport({ onBack }: Props) {
         {/* Client setup */}
         <section className="space-y-4">
           <div>
-            <h2 className="text-xl font-semibold text-gray-900">2. Wire it into your client</h2>
+            <h2 className="font-display text-2xl font-medium tracking-tight text-gray-900">2. Wire it into your client</h2>
             <p className="mt-1 text-sm text-gray-500">
-              These snippets all use the npx form. Swap to <span className="font-mono text-xs">tandem-mcp</span>{" "}
+              These snippets all use the npx form. Swap to <span className="font-code text-xs">tandem-mcp</span>{" "}
               if you installed globally, or to a full path if you built from source.
             </p>
           </div>
@@ -469,7 +474,7 @@ export default function MCPSupport({ onBack }: Props) {
                 className={[
                   "px-3 py-1.5 rounded-md text-sm font-medium transition-colors",
                   clientTab === t.id
-                    ? "bg-blue-600 text-white"
+                    ? "bg-gray-900 text-white"
                     : "bg-white border border-gray-200 text-gray-600 hover:bg-gray-50",
                 ].join(" ")}
               >
@@ -491,11 +496,11 @@ export default function MCPSupport({ onBack }: Props) {
 
         {/* Connect step */}
         <section className="space-y-3">
-          <h2 className="text-xl font-semibold text-gray-900">3. Connect to a canvas</h2>
+          <h2 className="font-display text-2xl font-medium tracking-tight text-gray-900">3. Connect to a canvas</h2>
           <p className="text-sm text-gray-600 leading-relaxed">
             Create a canvas in your browser (it'll give you an 8-character code
-            like <span className="font-mono text-xs">TOKYO7X3K</span>), then tell your
-            agent the code. The agent calls <span className="font-mono text-xs">canvas.connect</span>{" "}
+            like <span className="font-code text-xs">TOKYO7X3K</span>), then tell your
+            agent the code. The agent calls <span className="font-code text-xs">canvas.connect</span>{" "}
             once with that code; from then on every other tool operates on that
             canvas with no ID to pass around.
           </p>
@@ -504,7 +509,7 @@ export default function MCPSupport({ onBack }: Props) {
         {/* Tool surface */}
         <section className="space-y-4">
           <div>
-            <h2 className="text-xl font-semibold text-gray-900">The tool surface</h2>
+            <h2 className="font-display text-2xl font-medium tracking-tight text-gray-900">The tool surface</h2>
             <p className="mt-1 text-sm text-gray-500">
               Every tool operates on whatever canvas this session connected to.
               No IDs to pass around — the JWT held in the gateway pins the
@@ -523,7 +528,7 @@ export default function MCPSupport({ onBack }: Props) {
                 <ul className="space-y-2">
                   {group.items.map(([name, desc]) => (
                     <li key={name} className="text-sm">
-                      <span className="font-mono text-xs text-blue-700">{name}</span>
+                      <span className="font-code text-xs text-sky-700">{name}</span>
                       <span className="text-gray-600"> — {desc}</span>
                     </li>
                   ))}
@@ -536,7 +541,7 @@ export default function MCPSupport({ onBack }: Props) {
         {/* Multi-agent example */}
         <section className="space-y-4">
           <div>
-            <h2 className="text-xl font-semibold text-gray-900">
+            <h2 className="font-display text-2xl font-medium tracking-tight text-gray-900">
               Multi-agent flow: research → report
             </h2>
             <p className="mt-1 text-sm text-gray-500 leading-relaxed">
@@ -554,26 +559,26 @@ export default function MCPSupport({ onBack }: Props) {
                 <div className="font-semibold text-gray-900">1. Scout agent — fills the map</div>
                 <p className="text-gray-600 mt-1 leading-relaxed">
                   Web-searching agent gathers candidate venues, calls{" "}
-                  <span className="font-mono text-xs">canvas.connect</span> with the user's
-                  code, then drops <span className="font-mono text-xs">canvas.pin.add</span> for
+                  <span className="font-code text-xs">canvas.connect</span> with the user's
+                  code, then drops <span className="font-code text-xs">canvas.pin.add</span> for
                   each location with lat/lng, label, and a short note.
                 </p>
               </li>
               <li>
                 <div className="font-semibold text-gray-900">2. Planner agent — builds the itinerary</div>
                 <p className="text-gray-600 mt-1 leading-relaxed">
-                  Reads <span className="font-mono text-xs">canvas.state.read</span> to see what
-                  the scout dropped, then emits <span className="font-mono text-xs">canvas.event.add</span>{" "}
-                  for each day, linking back to pins via <span className="font-mono text-xs">pinId</span>.
+                  Reads <span className="font-code text-xs">canvas.state.read</span> to see what
+                  the scout dropped, then emits <span className="font-code text-xs">canvas.event.add</span>{" "}
+                  for each day, linking back to pins via <span className="font-code text-xs">pinId</span>.
                 </p>
               </li>
               <li>
                 <div className="font-semibold text-gray-900">3. Reporter agent — writes the brief</div>
                 <p className="text-gray-600 mt-1 leading-relaxed">
                   Walks the final state and emits a markdown summary via{" "}
-                  <span className="font-mono text-xs">canvas.note.add</span>. Attaches
+                  <span className="font-code text-xs">canvas.note.add</span>. Attaches
                   per-stop reasoning to each pin with{" "}
-                  <span className="font-mono text-xs">parentKind: "pin"</span>.
+                  <span className="font-code text-xs">parentKind: "pin"</span>.
                 </p>
               </li>
               <li>
@@ -582,14 +587,14 @@ export default function MCPSupport({ onBack }: Props) {
                   Throughout, the user is watching the canvas update live in
                   their browser. They can reject pins, edit events directly, or
                   post scoped edit requests that come back through{" "}
-                  <span className="font-mono text-xs">canvas.pending_edits.read</span> for the
+                  <span className="font-code text-xs">canvas.pending_edits.read</span> for the
                   agents to pick up.
                 </p>
               </li>
             </ol>
           </div>
 
-          <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 text-sm text-blue-900 leading-relaxed">
+          <div className="bg-sky-50 border border-sky-100 rounded-xl p-4 text-sm text-sky-900 leading-relaxed">
             <span className="font-semibold">The pattern:</span> the canvas is the
             blackboard. Each agent only needs the code, an MCP client, and a
             narrow role. Hand-offs happen through canvas state, not through a
@@ -601,12 +606,12 @@ export default function MCPSupport({ onBack }: Props) {
 
         {/* Authoring your own */}
         <section className="space-y-3">
-          <h2 className="text-xl font-semibold text-gray-900">Build your own integration</h2>
+          <h2 className="font-display text-2xl font-medium tracking-tight text-gray-900">Build your own integration</h2>
           <p className="text-sm text-gray-600 leading-relaxed">
             The gateway is intentionally thin: it owns a JWT and forwards
             tool calls to the Tandem HTTP API. If you'd rather skip the gateway
             and talk to the API directly from your agent runtime, the same
-            endpoints are documented under <span className="font-mono text-xs">/api/canvas/*</span>.
+            endpoints are documented under <span className="font-code text-xs">/api/canvas/*</span>.
             The MCP gateway exists so MCP-aware clients get a zero-config
             experience; it isn't a required layer.
           </p>
@@ -616,7 +621,7 @@ export default function MCPSupport({ onBack }: Props) {
               href="https://github.com/jaximus808/tandam/tree/main/apps/mcp-gateway"
               target="_blank"
               rel="noopener noreferrer"
-              className="font-mono text-xs text-blue-600 underline hover:text-blue-700"
+              className="font-code text-xs text-sky-600 underline hover:text-sky-700"
             >
               apps/mcp-gateway/
             </a>{" "}

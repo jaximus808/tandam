@@ -26,7 +26,16 @@
       "Read(//Users/jaxon/**)",
       "Bash(lsof -nP -iTCP:7891 -sTCP:LISTEN)",
       "Bash(pnpm dev *)",
-      "Bash(curl -s -o /dev/null -w \"vite: %{http_code}\\\\n\" http://localhost:5173)"
+      "Bash(curl -s -o /dev/null -w \"vite: %{http_code}\\\\n\" http://localhost:5173)",
+      "Bash(awk 'NR>=40 && NR<=152' /Users/jaxon/coding-project/agentcanvas/apps/web/src/App.tsx)",
+      "Bash(awk 'NR>=69 && NR<=152' /Users/jaxon/coding-project/agentcanvas/apps/web/src/App.tsx)",
+      "Bash(md5 /Users/jaxon/coding-project/agentcanvas/apps/web/src/App.tsx)",
+      "Bash(cp /Users/jaxon/coding-project/agentcanvas/apps/web/src/App.tsx /tmp/app_copy.txt)",
+      "Read(//tmp/**)",
+      "Bash(tr 'a-zA-Z' 'n-za-mN-ZA-M')",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5191/)",
+      "Bash(curl -s -o /dev/null -w \"landing %{http_code}\\\\n\" http://localhost:5191/)",
+      "Bash(open \"http://localhost:5191/\")"
     ]
   }
 }
