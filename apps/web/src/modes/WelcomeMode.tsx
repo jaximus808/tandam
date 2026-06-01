@@ -1,16 +1,22 @@
 import { useState } from "react";
+import type { CanvasMode } from "../types";
 import { TEMPLATES, EXAMPLE_PROMPTS, applyTemplate, type Template } from "../lib/templates";
 
 interface Props {
   canvasName: string;
   onOpenConnect: () => void;
+  // Move this viewer into the template's mode locally after applying it.
+  // Applying a template IS a shared mutation (template.apply), but the person
+  // who clicked should follow into it without yanking everyone else.
+  onApply?: (mode: CanvasMode) => void;
 }
 
-export default function WelcomeMode({ canvasName, onOpenConnect }: Props) {
+export default function WelcomeMode({ canvasName, onOpenConnect, onApply }: Props) {
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
 
   function pick(t: Template) {
     applyTemplate(t);
+    onApply?.(t.mode);
   }
 
   function copyPrompt(p: string, idx: number) {

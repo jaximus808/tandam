@@ -1,4 +1,4 @@
-import { sendOp } from "../lib/ws";
+import { useModeNav } from "../lib/modeNav";
 
 interface Props {
   title: string;
@@ -6,6 +6,7 @@ interface Props {
 }
 
 export default function EmptyState({ title, hint }: Props) {
+  const navMode = useModeNav();
   return (
     <div className="flex-1 flex items-center justify-center p-6">
       <div className="tandem-mode-enter relative overflow-hidden rounded-2xl border border-gray-900/10 bg-white px-8 py-7 text-center max-w-sm shadow-sm">
@@ -16,7 +17,7 @@ export default function EmptyState({ title, hint }: Props) {
         <p className="font-display text-lg font-medium text-gray-900">{title}</p>
         {hint && <p className="mt-1.5 text-sm leading-relaxed text-gray-500">{hint}</p>}
         <button
-          onClick={() => sendOp({ op: "mode.set", mode: "welcome" })}
+          onClick={() => navMode("welcome")}
           className="mt-5 inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:border-sky-300 hover:text-sky-600"
         >
           ← Back to templates

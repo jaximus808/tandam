@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import type { CanvasMeta, CanvasMode, CanvasState } from "./types";
-import { connectToCanvas, disconnectFromCanvas, onStateUpdate, sendOp } from "./lib/ws";
+import { connectToCanvas, disconnectFromCanvas, onStateUpdate } from "./lib/ws";
+import { ModeNavContext } from "./lib/modeNav";
 import MapMode from "./modes/MapMode";
 import ItineraryMode from "./modes/ItineraryMode";
 import DocsMode from "./modes/DocsMode";
@@ -95,36 +96,23 @@ export default function App() {
   // toggle visibility instead of re-mounting on every tab switch. This avoids
   // re-constructing Leaflet, re-parsing markdown, and losing useMemo caches.
   const [visitedModes, setVisitedModes] = useState<Set<CanvasMode>>(new Set());
-  // Optimistic UI: snap the tab highlight + content swap immediately on click,
-  // before the WS roundtrip echoes back. The mode the user MOST RECENTLY
-  // clicked is the source of truth for what's displayed — server echoes for
-  // older clicks are ignored. Without this, rapid X→Y switching can flicker
-  // back to X when the stale X-echo arrives between Y's click and Y's echo.
-  const [pendingMode, setPendingMode] = useState<CanvasMode | null>(null);
-  // Mirror in a ref so the WS handler closure can read the *latest* intent
-  // synchronously, even before React commits the state update.
-  const pendingModeRef = useRef<CanvasMode | null>(null);
-  const displayMode = (pendingMode ?? (canvasState?.mode as CanvasMode | undefined)) as
+  // The active tab is LOCAL to this viewer — switching tabs only changes what
+  // *I* see, never the shared canvas (like switching tabs in a Google Doc). It
+  // is never persisted to canvas state and never broadcast.
+  //   - null → "follow the canvas": show whatever mode the canvas is in. Lets a
+  //     fresh viewer land where the agent/template put things, and auto-advances
+  //     off the welcome screen once content appears.
+  //   - set  → the user took the wheel; their view is fully local and unaffected
+  //     by what anyone else (or the agent) does.
+  const [viewMode, setViewMode] = useState<CanvasMode | null>(null);
+  const currentMode = (viewMode ?? (canvasState?.mode as CanvasMode | undefined)) as
     | CanvasMode
     | undefined;
 
   useEffect(() => {
-    if (!displayMode) return;
-    setVisitedModes((prev) => (prev.has(displayMode) ? prev : new Set(prev).add(displayMode)));
-  }, [displayMode]);
-
-  // Clear the pending mode only when the server's echo matches what we MOST
-  // RECENTLY asked for (tracked via the ref). If the user clicked X then Y,
-  // and the X-echo arrives first, the ref is "Y" — we keep pendingMode=Y so
-  // the UI doesn't flicker back to X. We deliberately do NOT use a timeout
-  // fallback: the user's latest click wins until the server confirms it.
-  useEffect(() => {
-    if (!canvasState?.mode) return;
-    if (pendingModeRef.current && canvasState.mode === pendingModeRef.current) {
-      pendingModeRef.current = null;
-      setPendingMode(null);
-    }
-  }, [canvasState?.mode]);
+    if (!currentMode) return;
+    setVisitedModes((prev) => (prev.has(currentMode) ? prev : new Set(prev).add(currentMode)));
+  }, [currentMode]);
 
   useEffect(() => {
     if (!canvasCode) return;
@@ -171,8 +159,7 @@ export default function App() {
     setSelectedPinId(null);
     setSelectedEventId(null);
     setVisitedModes(new Set());
-    setPendingMode(null);
-    pendingModeRef.current = null;
+    setViewMode(null);
     setConnectOpen(false);
     setModeMenuOpen(false);
   }
@@ -232,12 +219,14 @@ export default function App() {
     );
   }
 
-  const setMode = (mode: CanvasMode) => {
-    pendingModeRef.current = mode;
-    setPendingMode(mode);
-    sendOp({ op: "mode.set", mode });
-  };
-  const effectiveMode = (displayMode ?? canvasState.mode) as CanvasMode;
+  // Local navigation only — switching tabs never touches the shared canvas or
+  // other viewers. See viewMode above.
+  const setMode = (mode: CanvasMode) => setViewMode(mode);
+  const effectiveMode = (viewMode ?? canvasState.mode) as CanvasMode;
+  // "Following" = no local override, so the view tracks the canvas mode the
+  // agent drives. Toggling off pins the view to whatever's showing right now.
+  const following = viewMode === null;
+  const toggleFollow = () => setViewMode(following ? effectiveMode : null);
   const inWelcome = effectiveMode === "welcome";
   const visibleModes = availableModes(canvasState, effectiveMode);
   const theme = modeTheme(effectiveMode);
@@ -258,6 +247,7 @@ export default function App() {
       : null;
 
   return (
+    <ModeNavContext.Provider value={setMode}>
     <div className="flex flex-col h-screen bg-paper font-brand text-gray-900 overflow-hidden">
       <header className="relative z-30 flex items-center gap-1.5 px-3 py-2.5 bg-paper/85 backdrop-blur border-b border-gray-900/5 shrink-0 sm:gap-2 sm:px-4">
         {/* Accent rule across the top of the chrome — picks up the active mode's
@@ -393,6 +383,34 @@ export default function App() {
 
         <div className="ml-auto flex items-center gap-2 shrink-0">
           <button
+            onClick={toggleFollow}
+            className={[
+              "inline-flex items-center gap-1.5 rounded-lg h-8 px-3 text-sm font-medium transition-colors",
+              following ? "" : "text-gray-500 hover:bg-gray-900/5 hover:text-gray-800",
+            ].join(" ")}
+            style={following ? { backgroundColor: theme.soft, color: theme.solid } : undefined}
+            title={
+              following
+                ? "Following the agent — your view jumps to whatever it's working on. Click to pin your own view."
+                : "Pinned to your own view. Click to follow the agent and track where it's working."
+            }
+            aria-pressed={following}
+          >
+            <span className="relative flex h-1.5 w-1.5">
+              {following && (
+                <span
+                  className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-70"
+                  style={{ backgroundColor: theme.solid }}
+                />
+              )}
+              <span
+                className="relative inline-flex h-1.5 w-1.5 rounded-full"
+                style={{ backgroundColor: following ? theme.solid : "#9ca3af" }}
+              />
+            </span>
+            <span className="hidden sm:inline">{following ? "Following" : "Follow agent"}</span>
+          </button>
+          <button
             onClick={() => setConnectOpen(true)}
             className="rounded-lg px-3.5 py-1.5 text-sm font-medium bg-gray-900 text-white shadow-sm transition-all hover:bg-gray-800 hover:shadow"
           >
@@ -415,6 +433,7 @@ export default function App() {
                 <WelcomeMode
                   canvasName={canvas.name}
                   onOpenConnect={() => setConnectOpen(true)}
+                  onApply={(mode) => setViewMode(mode)}
                 />
               )}
               {m === "map" && (
@@ -456,5 +475,6 @@ export default function App() {
         />
       )}
     </div>
+    </ModeNavContext.Provider>
   );
 }
