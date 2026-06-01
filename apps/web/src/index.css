@@ -2,6 +2,41 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Brand-wide selection + a calmer, paper-friendly scrollbar so the canvas
+   chrome feels finished rather than default-OS. */
+::selection {
+  background: rgba(56, 189, 248, 0.22);
+}
+.tandem-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(100, 116, 139, 0.32) transparent;
+}
+.tandem-scroll::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+.tandem-scroll::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.28);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.tandem-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.5);
+  background-clip: padding-box;
+}
+
+/* When you switch canvas modes, the incoming view eases up into place — a
+   small editorial flourish that makes view-switching feel intentional. */
+@keyframes tandem-mode-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.tandem-mode-enter { animation: tandem-mode-enter 0.32s cubic-bezier(0.22, 1, 0.36, 1) both; }
+@media (prefers-reduced-motion: reduce) {
+  .tandem-mode-enter { animation: none; }
+}
+
 /* Leaflet container needs an explicit height */
 .leaflet-container {
   height: 100%;

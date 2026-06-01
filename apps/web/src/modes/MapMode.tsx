@@ -521,25 +521,26 @@ export default function MapMode({
         <button
           onClick={() => onSelectPin(pin.id)}
           className={[
-            "w-full text-left py-2.5 transition-colors",
-            indent ? "pl-8 pr-4" : "px-4",
+            "w-full text-left py-2.5 transition-colors max-sm:py-1.5",
+            indent ? "pl-8 pr-4 max-sm:pl-6 max-sm:pr-3" : "px-4 max-sm:px-3",
             isSelected ? "bg-blue-50" : "hover:bg-gray-50",
           ].join(" ")}
         >
           <div className="flex items-center gap-2">
             <span
-              className="w-2.5 h-2.5 rounded-full shrink-0"
+              className="w-2.5 h-2.5 rounded-full shrink-0 max-sm:w-2 max-sm:h-2"
               style={{ background: pin.color ?? "#3b82f6" }}
             />
-            <span className="font-medium text-sm text-gray-900 truncate">
+            <span className="font-medium text-sm text-gray-900 truncate max-sm:text-[13px]">
               {pin.label ?? "Pin"}
             </span>
           </div>
+          {/* Preview blurb is desktop-only — on the compact mobile card it's noise. */}
           {preview && (
-            <p className="mt-1 text-xs text-gray-500 line-clamp-2 pl-[18px]">{preview}</p>
+            <p className="mt-1 text-xs text-gray-500 line-clamp-2 pl-[18px] max-sm:hidden">{preview}</p>
           )}
           {notes.length > 0 && (
-            <div className="mt-1 text-[10px] text-gray-400 pl-[18px]">
+            <div className="mt-1 text-[10px] text-gray-400 pl-[18px] max-sm:hidden">
               {notes.length} note{notes.length === 1 ? "" : "s"}
             </div>
           )}
@@ -558,7 +559,7 @@ export default function MapMode({
   const zoom = pins.length > 0 ? Math.max(map.zoom, 11) : map.zoom;
 
   return (
-    <div className="flex flex-1 min-h-0">
+    <div className="relative flex flex-1 min-h-0">
       {/* Map */}
       <div className="flex-1 relative">
         <MapContainer
@@ -803,7 +804,7 @@ export default function MapMode({
               onClick={() => dir.setCollapsed(false)}
               aria-label="Show pin directory"
               title="Show pins"
-              className="flex items-center gap-1.5 bg-white hover:bg-gray-50 border border-gray-200 shadow-sm rounded-lg px-2.5 py-1.5 text-xs font-medium text-gray-700"
+              className="hidden items-center gap-1.5 bg-white hover:bg-gray-50 border border-gray-200 shadow-sm rounded-lg px-2.5 py-1.5 text-xs font-medium text-gray-700 sm:flex"
             >
               <span aria-hidden>‹</span>
               <span>Pins</span>
@@ -811,50 +812,96 @@ export default function MapMode({
             </button>
           )}
         </div>
+
+        {/* Mobile: compact corner chip to reveal the floating pin card. */}
+        {pins.length > 0 && dir.collapsed && (
+          <button
+            onClick={() => dir.setCollapsed(false)}
+            aria-label="Show pins"
+            title="Show pins"
+            className="absolute bottom-3 right-3 z-[1000] flex items-center gap-1.5 rounded-full bg-white border border-gray-200 shadow-lg pl-2.5 pr-3 py-2 text-sm font-semibold text-gray-800 sm:hidden"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
+              <path
+                d="M12 21s-6-5.3-6-10a6 6 0 0 1 12 0c0 4.7-6 10-6 10z"
+                fill="#0EA5E9"
+              />
+              <circle cx="12" cy="11" r="2.2" fill="#fff" />
+            </svg>
+            {pins.length}
+          </button>
+        )}
       </div>
 
       {/* Pin directory (resizable + collapsible) */}
       {pins.length > 0 && !dir.collapsed && (
         <aside
           style={{ width: dir.width }}
-          className="relative shrink-0 border-l border-gray-200 bg-white flex flex-col overflow-hidden"
+          className={[
+            // Desktop: a resizable, full-height right rail.
+            "relative shrink-0 border-l border-gray-200 bg-white flex flex-col overflow-hidden",
+            // Mobile: a floating card tucked into the bottom-right corner — inset
+            // from every edge so it never collides with iOS swipe gestures, and
+            // narrow enough to leave the map visible around it. The arbitrary
+            // !w override beats the inline desktop pixel width.
+            "max-sm:absolute max-sm:bottom-3 max-sm:right-3 max-sm:left-auto max-sm:top-auto",
+            "max-sm:z-[1000] max-sm:max-h-[44vh] max-sm:!w-[min(58vw,232px)]",
+            "max-sm:rounded-2xl max-sm:border max-sm:border-gray-200 max-sm:shadow-2xl",
+          ].join(" ")}
         >
-          {/* Drag handle on the LEFT edge of the right-docked panel */}
+          {/* Drag handle on the LEFT edge of the right-docked panel (desktop only) */}
           <div
             {...dir.handleProps}
             aria-label="Resize pin directory"
             className={[
-              "absolute left-0 top-0 bottom-0 w-1.5 -ml-0.5 z-10 cursor-col-resize",
+              "absolute left-0 top-0 bottom-0 w-1.5 -ml-0.5 z-10 cursor-col-resize max-sm:hidden",
               "hover:bg-blue-400/40 active:bg-blue-500/60 transition-colors",
               dir.resizing ? "bg-blue-500/60" : "",
             ].join(" ")}
           />
 
-          <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+          <div className="px-4 py-2.5 border-b border-gray-100 flex items-center justify-between max-sm:px-3 max-sm:py-2 sm:py-3">
             <div className="flex items-center gap-2">
-              <h2 className="font-semibold text-gray-900 text-sm">Pins</h2>
-              <span className="text-xs text-gray-400">{pins.length}</span>
+              <h2 className="font-display text-base font-medium tracking-tight text-gray-900 max-sm:text-sm">Pins</h2>
+              <span className="font-code text-[11px] text-gray-400">{pins.length}</span>
             </div>
             <button
               onClick={() => dir.setCollapsed(true)}
               aria-label="Hide pin directory"
               title="Hide"
-              className="text-gray-400 hover:text-gray-600 px-1"
+              className="flex items-center justify-center text-gray-400 hover:text-gray-600 px-1"
             >
-              <span aria-hidden>›</span>
+              {/* Down chevron on mobile (card tucks into corner); right on desktop (docks right). */}
+              <svg
+                aria-hidden
+                className="sm:hidden"
+                width="15"
+                height="15"
+                viewBox="0 0 16 16"
+                fill="none"
+              >
+                <path
+                  d="M4 6.5 L 8 10 L 12 6.5"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              <span aria-hidden className="hidden sm:inline">›</span>
             </button>
           </div>
 
           <div
             className={[
-              "flex-1 overflow-y-auto",
+              "tandem-scroll flex-1 min-h-0 overflow-y-auto",
               dir.resizing ? "select-none" : "",
             ].join(" ")}
           >
             {ungrouped.length > 0 && (
               <div>
                 {dayGroups.length > 0 && (
-                  <div className="px-4 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+                  <div className="px-4 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400 max-sm:px-3 max-sm:pt-2">
                     Ungrouped <span className="text-gray-300">· {ungrouped.length}</span>
                   </div>
                 )}
@@ -866,12 +913,12 @@ export default function MapMode({
 
             {dayGroups.map(({ day, entries }) => (
               <div key={day}>
-                <div className="px-4 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400 border-t border-gray-100">
+                <div className="px-4 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400 border-t border-gray-100 max-sm:px-3 max-sm:pt-2">
                   {formatDay(day)}
                 </div>
                 {entries.map(({ event, pins: entryPins }) => (
                   <div key={event.id}>
-                    <div className="px-4 pt-1.5 pb-0.5 flex items-baseline gap-2">
+                    <div className="px-4 pt-1.5 pb-0.5 flex items-baseline gap-2 max-sm:px-3">
                       <span className="text-xs font-medium text-gray-700 truncate">
                         {event.title}
                       </span>

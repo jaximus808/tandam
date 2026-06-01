@@ -24,6 +24,9 @@ import { CSS } from "@dnd-kit/utilities";
 import type { CanvasState, RoadmapItem, RoadmapStatus } from "../types";
 import { sendOp } from "../lib/ws";
 import EmptyState from "../components/EmptyState";
+import { modeTheme } from "../lib/modeTheme";
+
+const ACCENT = modeTheme("roadmap");
 
 const INDENT_PX = 20;
 const LIST_HINT_KEY = "tandem.roadmapListHint.dismissed";
@@ -214,10 +217,10 @@ export default function RoadmapMode({ state }: Props) {
 
   return (
     <div className="flex-1 flex flex-col min-h-0 min-w-0">
-      <div className="shrink-0 max-w-5xl mx-auto w-full px-6 pt-6 pb-3">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-3">
-            <h1 className="text-lg font-semibold text-gray-900">Roadmap</h1>
+      <div className="shrink-0 max-w-5xl mx-auto w-full px-4 pt-6 pb-3 sm:px-6">
+        <div className="flex items-center justify-between gap-2 mb-3">
+          <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+            <h1 className="font-display text-xl font-medium tracking-tight text-gray-900">Roadmap</h1>
             <ViewToggle
               view={view}
               onChange={(v) => {
@@ -226,12 +229,15 @@ export default function RoadmapMode({ state }: Props) {
               }}
             />
             {view === "board" && !listHintDismissed && (
-              <div className="inline-flex items-center gap-1.5 pl-2 pr-1 py-1 rounded-md bg-blue-50 border border-blue-200 text-xs text-blue-700">
-                <span aria-hidden className="text-blue-400">←</span>
+              <div
+                className="hidden items-center gap-1.5 pl-2 pr-1 py-1 rounded-lg border text-xs lg:inline-flex"
+                style={{ backgroundColor: ACCENT.soft, borderColor: ACCENT.line, color: ACCENT.hover }}
+              >
+                <span aria-hidden style={{ color: ACCENT.solid }}>←</span>
                 <span>Switch to List to edit &amp; reorder</span>
                 <button
                   onClick={dismissListHint}
-                  className="shrink-0 w-4 h-4 flex items-center justify-center text-blue-400 hover:text-blue-700 hover:bg-blue-100 rounded"
+                  className="shrink-0 w-4 h-4 flex items-center justify-center rounded hover:bg-black/5"
                   title="Dismiss"
                   aria-label="Dismiss hint"
                 >
@@ -244,7 +250,8 @@ export default function RoadmapMode({ state }: Props) {
           </div>
           <button
             onClick={handleAddRoot}
-            className="text-sm px-3 py-1.5 rounded-md bg-blue-600 text-white font-medium hover:bg-blue-700 transition-colors"
+            className="shrink-0 whitespace-nowrap text-sm px-3.5 py-1.5 rounded-lg text-white font-medium shadow-sm transition-opacity hover:opacity-90"
+            style={{ backgroundColor: ACCENT.solid }}
           >
             + New item
           </button>
@@ -324,16 +331,15 @@ function ViewToggle({
   onChange: (v: "list" | "board") => void;
 }) {
   return (
-    <div className="inline-flex rounded-md border border-gray-300 overflow-hidden text-xs font-medium">
+    <div className="inline-flex rounded-lg border border-gray-300 overflow-hidden text-xs font-medium">
       {(["board", "list"] as const).map((v) => (
         <button
           key={v}
           onClick={() => onChange(v)}
           className={`px-2.5 py-1 capitalize transition-colors ${
-            view === v
-              ? "bg-blue-600 text-white"
-              : "bg-white text-gray-600 hover:bg-gray-50"
+            view === v ? "text-white" : "bg-white text-gray-600 hover:bg-gray-50"
           }`}
+          style={view === v ? { backgroundColor: ACCENT.solid } : undefined}
         >
           {v}
         </button>
@@ -608,7 +614,7 @@ function RoadmapBoard({ items }: { items: Record<string, RoadmapItem> }) {
   const roots = byParent.get(null) ?? [];
 
   return (
-    <div className="flex-1 min-h-0 min-w-0 overflow-x-auto overflow-y-hidden bg-gray-50/60">
+    <div className="tandem-scroll flex-1 min-h-0 min-w-0 overflow-x-auto overflow-y-hidden bg-paper">
       <div className="flex gap-4 px-6 py-4 h-full items-start min-w-min">
         {roots.map((root) => (
           <RoadmapColumn key={root.id} root={root} byParent={byParent} />

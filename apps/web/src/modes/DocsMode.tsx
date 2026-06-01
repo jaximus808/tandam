@@ -5,11 +5,14 @@ import type { CanvasState, Note } from "../types";
 import { imageUrl } from "../lib/api";
 import { sendOp } from "../lib/ws";
 import EmptyState from "../components/EmptyState";
+import { modeTheme } from "../lib/modeTheme";
 
 interface Props {
   canvasId: string;
   state: CanvasState;
 }
+
+const ACCENT = modeTheme("docs");
 
 const MARKDOWN_PLUGINS = [remarkGfm];
 
@@ -24,13 +27,14 @@ export default function DocsMode({ canvasId, state }: Props) {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto">
+    <div className="tandem-scroll flex-1 overflow-y-auto bg-paper">
       <div className="max-w-3xl mx-auto w-full px-6 py-6">
         <div className="flex items-center justify-between mb-4">
-          <h1 className="text-lg font-semibold text-gray-900">Docs</h1>
+          <h1 className="font-display text-xl font-medium tracking-tight text-gray-900">Docs</h1>
           <button
             onClick={handleAddNote}
-            className="text-sm px-3 py-1.5 rounded-md bg-blue-600 text-white font-medium hover:bg-blue-700 transition-colors"
+            className="text-sm px-3.5 py-1.5 rounded-lg text-white font-medium shadow-sm transition-opacity hover:opacity-90"
+            style={{ backgroundColor: ACCENT.solid }}
           >
             + New note
           </button>
@@ -170,7 +174,8 @@ function NoteCard({
                 <button onClick={cancel} className="hover:text-gray-600">Cancel</button>
                 <button
                   onClick={commit}
-                  className="text-blue-600 hover:text-blue-700 font-medium"
+                  className="font-medium transition-opacity hover:opacity-80"
+                  style={{ color: ACCENT.solid }}
                 >
                   Done
                 </button>

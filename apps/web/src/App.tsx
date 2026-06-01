@@ -16,6 +16,7 @@ import TandemLogo from "./components/TandemLogo";
 import AccountMenu from "./components/AccountMenu";
 import { recordRecent } from "./lib/recentCanvases";
 import { MOCK_ENABLED, mockCanvas } from "./lib/mockFixture";
+import { modeTheme } from "./lib/modeTheme";
 
 const MODES: { id: CanvasMode; label: string }[] = [
   { id: "map", label: "Map" },
@@ -223,8 +224,10 @@ export default function App() {
 
   if (!canvasState || !canvas) {
     return (
-      <div className="flex items-center justify-center h-screen text-gray-400 text-sm">
-        Connecting to canvas {canvasCode}…
+      <div className="flex h-screen flex-col items-center justify-center bg-paper font-brand text-gray-900">
+        <TandemLogo size={56} />
+        <p className="mt-6 text-sm font-medium text-gray-600">Joining canvas</p>
+        <p className="mt-1 font-code text-xs tracking-[0.3em] text-gray-400">{canvasCode}</p>
       </div>
     );
   }
@@ -237,6 +240,7 @@ export default function App() {
   const effectiveMode = (displayMode ?? canvasState.mode) as CanvasMode;
   const inWelcome = effectiveMode === "welcome";
   const visibleModes = availableModes(canvasState, effectiveMode);
+  const theme = modeTheme(effectiveMode);
 
   // In welcome mode, "Canvas →" returns the user to whichever existing
   // content-bearing mode is most relevant. Preference: map > itinerary > docs.
@@ -254,20 +258,34 @@ export default function App() {
       : null;
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50 overflow-hidden">
-      <header className="flex items-center gap-2 px-4 py-2 bg-white border-b border-gray-200 shrink-0">
+    <div className="flex flex-col h-screen bg-paper font-brand text-gray-900 overflow-hidden">
+      <header className="relative z-30 flex items-center gap-1.5 px-3 py-2.5 bg-paper/85 backdrop-blur border-b border-gray-900/5 shrink-0 sm:gap-2 sm:px-4">
+        {/* Accent rule across the top of the chrome — picks up the active mode's
+            colour and eases between them as you switch views. */}
+        <span
+          aria-hidden="true"
+          className="absolute inset-x-0 top-0 h-0.5 transition-colors duration-500"
+          style={{ backgroundColor: theme.solid }}
+        />
+
         <button
           onClick={() => handleJoin("")}
-          className="flex items-center gap-1.5 font-bold text-gray-900 text-sm hover:text-blue-600 transition-colors shrink-0"
+          className="group flex items-center gap-1.5 text-sm shrink-0"
           title="Back to home"
         >
-          <TandemLogo size={20} />
-          <span>Tandem</span>
+          <TandemLogo size={22} animate={false} />
+          <span className="hidden font-semibold tracking-tight text-gray-900 transition-colors group-hover:text-sky-600 sm:inline">
+            Tandem
+          </span>
         </button>
-        <div className="w-px h-4 bg-gray-200 mx-1 shrink-0" />
+        <span className="hidden text-gray-200 shrink-0 sm:inline">/</span>
         <div className="flex items-center gap-2 min-w-0">
-          <span className="font-semibold text-gray-900 text-sm truncate">{canvas.name}</span>
-          <span className="text-xs text-gray-400 font-mono shrink-0">{canvas.code}</span>
+          <span className="font-display text-[15px] font-medium leading-tight text-gray-900 truncate">
+            {canvas.name}
+          </span>
+          <span className="hidden font-code text-[11px] tracking-[0.15em] text-gray-300 shrink-0 sm:inline">
+            {canvas.code}
+          </span>
         </div>
 
         {inWelcome && canvasReturnMode && (
@@ -275,7 +293,7 @@ export default function App() {
             <div className="w-px h-4 bg-gray-200 mx-1" />
             <button
               onClick={() => setMode(canvasReturnMode)}
-              className="px-3 py-1 rounded-md text-sm font-medium text-gray-400 hover:bg-gray-100"
+              className="px-3 py-1 rounded-lg text-sm font-medium text-gray-400 hover:bg-gray-900/5 hover:text-gray-700 transition-colors"
               title="Back to canvas"
             >
               Canvas →
@@ -285,27 +303,30 @@ export default function App() {
 
         {!inWelcome && visibleModes.length > 0 && (
           <>
-            <div className="w-px h-4 bg-gray-200 mx-1 shrink-0" />
+            <div className="hidden w-px h-4 bg-gray-200 mx-1.5 shrink-0 sm:block" />
 
-            {/* Desktop: all modes laid out inline. */}
-            <div className="hidden sm:flex gap-1">
-              {MODES.filter((m) => visibleModes.includes(m.id)).map((m) => (
-                <button
-                  key={m.id}
-                  onClick={() => setMode(m.id)}
-                  className={[
-                    "px-3 py-1 rounded-md text-sm font-medium transition-colors",
-                    effectiveMode === m.id
-                      ? "bg-blue-600 text-white"
-                      : "text-gray-500 hover:bg-gray-100",
-                  ].join(" ")}
-                >
-                  {m.label}
-                </button>
-              ))}
+            {/* Desktop: all modes laid out inline as accent-tinted pills. */}
+            <div className="hidden sm:flex items-center gap-0.5">
+              {MODES.filter((m) => visibleModes.includes(m.id)).map((m) => {
+                const active = effectiveMode === m.id;
+                const t = modeTheme(m.id);
+                return (
+                  <button
+                    key={m.id}
+                    onClick={() => setMode(m.id)}
+                    className={[
+                      "rounded-lg px-3 py-1 text-sm font-medium transition-colors",
+                      active ? "" : "text-gray-500 hover:bg-gray-900/5 hover:text-gray-800",
+                    ].join(" ")}
+                    style={active ? { backgroundColor: t.soft, color: t.solid } : undefined}
+                  >
+                    {m.label}
+                  </button>
+                );
+              })}
               <button
                 onClick={() => setMode("welcome")}
-                className="px-3 py-1 rounded-md text-sm font-medium text-gray-400 hover:bg-gray-100"
+                className="ml-0.5 rounded-lg px-3 py-1 text-sm font-medium text-gray-400 hover:bg-gray-900/5 hover:text-gray-700 transition-colors"
                 title="Back to templates"
               >
                 ← Templates
@@ -313,10 +334,11 @@ export default function App() {
             </div>
 
             {/* Mobile: a dropdown so every mode is reachable regardless of count. */}
-            <div className="relative sm:hidden">
+            <div className="relative shrink-0 sm:hidden">
               <button
                 onClick={() => setModeMenuOpen((o) => !o)}
-                className="flex items-center gap-1 px-3 py-1 rounded-md text-sm font-medium bg-blue-600 text-white"
+                className="flex items-center gap-1 rounded-lg px-3 py-1 text-sm font-semibold"
+                style={{ backgroundColor: theme.soft, color: theme.solid }}
                 aria-haspopup="menu"
                 aria-expanded={modeMenuOpen}
               >
@@ -331,26 +353,26 @@ export default function App() {
                   <div className="fixed inset-0 z-10" onClick={() => setModeMenuOpen(false)} />
                   <div
                     role="menu"
-                    className="absolute left-0 mt-1 z-20 min-w-[10rem] rounded-md bg-white border border-gray-200 shadow-lg py-1"
+                    className="absolute left-0 mt-1.5 z-20 min-w-[10rem] rounded-xl bg-white border border-gray-900/10 shadow-lg shadow-gray-900/5 py-1"
                   >
-                    {MODES.filter((m) => visibleModes.includes(m.id)).map((m) => (
-                      <button
-                        key={m.id}
-                        role="menuitem"
-                        onClick={() => {
-                          setMode(m.id);
-                          setModeMenuOpen(false);
-                        }}
-                        className={[
-                          "w-full text-left px-3 py-2 text-sm font-medium",
-                          effectiveMode === m.id
-                            ? "bg-blue-50 text-blue-700"
-                            : "text-gray-700 hover:bg-gray-100",
-                        ].join(" ")}
-                      >
-                        {m.label}
-                      </button>
-                    ))}
+                    {MODES.filter((m) => visibleModes.includes(m.id)).map((m) => {
+                      const active = effectiveMode === m.id;
+                      const t = modeTheme(m.id);
+                      return (
+                        <button
+                          key={m.id}
+                          role="menuitem"
+                          onClick={() => {
+                            setMode(m.id);
+                            setModeMenuOpen(false);
+                          }}
+                          className="w-full text-left px-3 py-2 text-sm font-medium"
+                          style={active ? { backgroundColor: t.soft, color: t.solid } : undefined}
+                        >
+                          <span className={active ? "" : "text-gray-700"}>{m.label}</span>
+                        </button>
+                      );
+                    })}
                     <div className="my-1 border-t border-gray-100" />
                     <button
                       role="menuitem"
@@ -372,7 +394,7 @@ export default function App() {
         <div className="ml-auto flex items-center gap-2 shrink-0">
           <button
             onClick={() => setConnectOpen(true)}
-            className="px-3 py-1 rounded-md text-sm font-medium bg-gray-900 text-white hover:bg-gray-800"
+            className="rounded-lg px-3.5 py-1.5 text-sm font-medium bg-gray-900 text-white shadow-sm transition-all hover:bg-gray-800 hover:shadow"
           >
             Connect
           </button>

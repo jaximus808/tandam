@@ -80,7 +80,7 @@ export default function ItineraryMode({
   }
 
   return (
-    <div className="flex-1 overflow-y-auto">
+    <div className="tandem-scroll flex-1 overflow-y-auto bg-paper">
       <div className="max-w-2xl mx-auto w-full px-6 py-6">
         <div className="flex items-center justify-end gap-3 mb-4 -mt-2">
           <a
@@ -101,7 +101,7 @@ export default function ItineraryMode({
         </div>
         {days.map(([day, dayEvents]) => (
         <section key={day} className="mb-8">
-          <h2 className="text-base font-semibold text-gray-900 mb-3 sticky top-0 bg-gray-50 py-1">
+          <h2 className="font-display text-lg font-medium tracking-tight text-gray-900 mb-3 sticky top-0 bg-paper/90 backdrop-blur py-1.5 z-10">
             {formatDay(day)}
           </h2>
           <div className="space-y-3">
@@ -158,7 +158,8 @@ export default function ItineraryMode({
                       {eventPins.map((p) => (
                         <span
                           key={p!.id}
-                          className="inline-flex items-center gap-1 text-xs bg-blue-50 text-blue-700 rounded-full px-2 py-0.5"
+                          className="inline-flex items-center gap-1 text-xs rounded-full px-2 py-0.5"
+                          style={{ backgroundColor: "rgba(245,158,11,0.12)", color: "#B45309" }}
                         >
                           <span
                             className="w-2 h-2 rounded-full shrink-0"

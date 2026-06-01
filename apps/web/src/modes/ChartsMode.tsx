@@ -2,6 +2,9 @@ import { useMemo, useState } from "react";
 import type { CanvasState, Chart, ChartType, Sheet, SheetRow } from "../types";
 import { sendOp } from "../lib/ws";
 import EmptyState from "../components/EmptyState";
+import { modeTheme } from "../lib/modeTheme";
+
+const ACCENT = modeTheme("charts");
 
 interface Props {
   state: CanvasState;
@@ -69,14 +72,15 @@ export default function ChartsMode({ state }: Props) {
   }
 
   return (
-    <div className="flex-1 flex flex-col min-h-0">
+    <div className="flex-1 flex flex-col min-h-0 bg-paper">
       <div className="shrink-0 max-w-5xl mx-auto w-full px-6 pt-6 pb-3">
         <div className="flex items-center justify-between">
-          <h1 className="text-lg font-semibold text-gray-900">Charts</h1>
+          <h1 className="font-display text-xl font-medium tracking-tight text-gray-900">Charts</h1>
           <button
             onClick={handleAddChart}
             disabled={sheets.length === 0}
-            className="text-sm px-3 py-1.5 rounded-md bg-blue-600 text-white font-medium hover:bg-blue-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            className="text-sm px-3.5 py-1.5 rounded-lg text-white font-medium shadow-sm transition-opacity hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
+            style={{ backgroundColor: ACCENT.solid }}
             title={sheets.length === 0 ? "Create a sheet first — charts read from sheet data" : "Add a chart"}
           >
             + New chart
@@ -84,7 +88,7 @@ export default function ChartsMode({ state }: Props) {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto">
+      <div className="tandem-scroll flex-1 overflow-y-auto">
         <div className="max-w-5xl mx-auto w-full px-6 pb-8">
           {charts.length === 0 ? (
             <EmptyState

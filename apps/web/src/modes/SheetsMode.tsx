@@ -29,6 +29,9 @@ import type {
 import { sendOp } from "../lib/ws";
 import { MOCK_ENABLED } from "../lib/mockFixture";
 import EmptyState from "../components/EmptyState";
+import { modeTheme } from "../lib/modeTheme";
+
+const ACCENT = modeTheme("sheets");
 
 interface Props {
   state: CanvasState;
@@ -95,10 +98,10 @@ export default function SheetsMode({ state, canvasCode }: Props) {
   }
 
   return (
-    <div className="flex-1 flex flex-col min-h-0">
+    <div className="flex-1 flex flex-col min-h-0 bg-paper">
       <div className="max-w-5xl mx-auto w-full px-6 py-6 flex-1 flex flex-col min-h-0">
         <div className="flex items-center justify-between mb-3 shrink-0">
-          <h1 className="text-lg font-semibold text-gray-900">Sheets</h1>
+          <h1 className="font-display text-xl font-medium tracking-tight text-gray-900">Sheets</h1>
           <div className="flex items-center gap-2">
             {activeSheet && (
               <button
@@ -116,7 +119,8 @@ export default function SheetsMode({ state, canvasCode }: Props) {
             )}
             <button
               onClick={handleAddSheet}
-              className="text-sm px-3 py-1.5 rounded-md bg-blue-600 text-white font-medium hover:bg-blue-700 transition-colors"
+              className="text-sm px-3.5 py-1.5 rounded-lg text-white font-medium shadow-sm transition-opacity hover:opacity-90"
+              style={{ backgroundColor: ACCENT.solid }}
             >
               + New sheet
             </button>
@@ -225,9 +229,10 @@ function SheetTab({
       onDoubleClick={() => active && setEditing(true)}
       className={`group cursor-pointer flex items-center gap-1.5 px-3 py-1.5 rounded-t-md text-sm border-b-2 -mb-px ${
         active
-          ? "border-blue-600 text-gray-900 font-medium bg-white"
+          ? "text-gray-900 font-medium bg-white"
           : "border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50"
       }`}
+      style={active ? { borderColor: ACCENT.solid } : undefined}
     >
       {editing ? (
         <input
