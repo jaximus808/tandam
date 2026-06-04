@@ -323,6 +323,8 @@ const initialState: CanvasState = {
   sheets: toRecord(sheets),
   sheetRows: toRecord(sheetRows),
   charts: {},
+  actions: {},
+  agents: {},
 };
 
 export const mockCanvas: CanvasMeta = initialCanvas;

@@ -250,7 +250,8 @@ const TOOLS = [
   {
     group: "Connection",
     items: [
-      ["canvas.connect", "Bind this session to a canvas. Required before anything else."],
+      ["canvas.create", "Create a new canvas and bind to it in one step. Returns a shareable URL."],
+      ["canvas.connect", "Bind this session to an existing canvas by code."],
       ["canvas.state.read", "Snapshot of pins, events, notes, mode, and pending edits."],
     ],
   },

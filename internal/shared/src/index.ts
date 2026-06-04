@@ -4,6 +4,17 @@ export type RoadmapStatus = "todo" | "in_progress" | "done" | "blocked";
 export type TravelMode = "flight" | "train" | "drive";
 export type SheetColumnType = "text" | "number" | "date" | "checkbox";
 export type ChartType = "bar" | "line" | "area" | "pie";
+// v1 (Tandem × ANDR) execution primitive.
+export type ActionType = "navigate";
+export type ActionState =
+  | "proposed"
+  | "approved"
+  | "rejected"
+  | "executing"
+  | "done"
+  | "failed";
+export type AgentRole = "planner" | "executor";
+export type AgentStatus = "online" | "offline";
 // A cell value is the JSON shape stored in sheet_rows.data[columnId].
 // `null` means cleared/empty. Date stored as ISO-8601 "YYYY-MM-DD" string.
 export type SheetCellValue = string | number | boolean | null;
@@ -78,6 +89,9 @@ export interface RoadmapItem {
   title: string;
   body: string;
   status: RoadmapStatus;
+  // Free-text phase label ("Now"/"Next"/"Later", "v1"/"v2", …) used to group
+  // top-level goals into bands on the board. Empty/absent = unstaged.
+  stage?: string;
   sortOrder: number;
   createdBy: "agent" | "user";
   updatedAt: number;
@@ -127,6 +141,42 @@ export interface Chart {
   updatedAt: number;
 }
 
+// An Action is the unit two agents coordinate on and a human approves before
+// anything moves. `payload` shape depends on `type`; for "navigate":
+// { goalLabel?, goal?: {lat,lng}, waypoints?: {lat,lng}[] }.
+export interface NavigatePayload {
+  goalLabel?: string;
+  goal?: { lat: number; lng: number };
+  waypoints?: { lat: number; lng: number }[];
+}
+
+export interface Action {
+  id: EntityId;
+  kind: "action";
+  type: ActionType;
+  state: ActionState;
+  payload: NavigatePayload;
+  proposedBy: string;        // agent id (provenance)
+  approvedBy?: string;       // human/agent id that approved
+  result?: string;           // execution outcome summary
+  error?: string;            // failure detail
+  linkedPinIds: EntityId[];  // pins this action references
+  createdAt: string;
+  updatedAt: string;
+}
+
+// Minimal identity so the canvas knows who is writing (provenance) and who is
+// connected. Exactly one planner + one executor in v1.
+export interface Agent {
+  id: EntityId;
+  kind: "agent";
+  name: string;
+  role: AgentRole;
+  model?: string;
+  status: AgentStatus;
+  lastSeen: string;
+}
+
 export interface CanvasState {
   version: number;
   mode: CanvasMode;
@@ -137,6 +187,8 @@ export interface CanvasState {
   sheets: Record<EntityId, Sheet>;
   sheetRows: Record<EntityId, SheetRow>;
   charts: Record<EntityId, Chart>;
+  actions: Record<EntityId, Action>;
+  agents: Record<EntityId, Agent>;
 }
 
 export interface PendingEdit {

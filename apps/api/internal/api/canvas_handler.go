@@ -350,6 +350,7 @@ func (h *Handler) CreateRoadmapItem(w http.ResponseWriter, r *http.Request) {
 		Title     string     `json:"title"`
 		Body      string     `json:"body"`
 		Status    string     `json:"status"`
+		Stage     string     `json:"stage"`
 		SortOrder int        `json:"sortOrder"`
 		CreatedBy string     `json:"createdBy"`
 	}
@@ -362,7 +363,7 @@ func (h *Handler) CreateRoadmapItem(w http.ResponseWriter, r *http.Request) {
 	item := &store.RoadmapItem{
 		ID: uuid.New(), Kind: "roadmap",
 		ParentID: body.ParentID, Title: body.Title, Body: body.Body,
-		Status: body.Status, SortOrder: body.SortOrder, CreatedBy: body.CreatedBy,
+		Status: body.Status, Stage: body.Stage, SortOrder: body.SortOrder, CreatedBy: body.CreatedBy,
 	}
 	if _, err := h.store.CreateRoadmapItem(r.Context(), canvasID, item); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())

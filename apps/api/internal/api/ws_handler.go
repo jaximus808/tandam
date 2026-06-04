@@ -196,6 +196,7 @@ func (wh *WSHandler) handleOp(canvasID uuid.UUID, raw []byte) {
 			Title     string     `json:"title"`
 			Body      string     `json:"body"`
 			Status    string     `json:"status"`
+			Stage     string     `json:"stage"`
 			SortOrder int        `json:"sortOrder"`
 		}
 		if len(msg.Data) > 0 {
@@ -214,6 +215,7 @@ func (wh *WSHandler) handleOp(canvasID uuid.UUID, raw []byte) {
 			Title:     data.Title,
 			Body:      data.Body,
 			Status:    data.Status,
+			Stage:     data.Stage,
 			SortOrder: data.SortOrder,
 			CreatedBy: "user",
 		}

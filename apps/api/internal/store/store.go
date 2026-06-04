@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -68,6 +69,9 @@ type RoadmapItem struct {
 	Title     string     `json:"title"`
 	Body      string     `json:"body"`
 	Status    string     `json:"status"`
+	// Stage is a free-text phase label ("Now"/"Next"/"Later", "v1"/"v2", …)
+	// used to group top-level goals into bands. Empty/absent = unstaged.
+	Stage     string     `json:"stage,omitempty"`
 	SortOrder int        `json:"sortOrder"`
 	CreatedBy string     `json:"createdBy"`
 	UpdatedAt time.Time  `json:"updatedAt"`
@@ -113,6 +117,37 @@ type Chart struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
+// Action is the v1 execution primitive: the unit two agents coordinate on and
+// a human approves before anything moves. Payload shape depends on Type; for
+// "navigate" it is { goalLabel?, goal?{lat,lng}, waypoints?[{lat,lng}] }.
+// Stored raw (json.RawMessage) so the canvas stays agnostic to payload shape.
+type Action struct {
+	ID           uuid.UUID       `json:"id"`
+	Kind         string          `json:"kind"` // always "action"
+	Type         string          `json:"type"`
+	State        string          `json:"state"`
+	Payload      json.RawMessage `json:"payload"`
+	ProposedBy   string          `json:"proposedBy"`
+	ApprovedBy   *string         `json:"approvedBy,omitempty"`
+	Result       *string         `json:"result,omitempty"`
+	Error        *string         `json:"error,omitempty"`
+	LinkedPinIDs []uuid.UUID     `json:"linkedPinIds"`
+	CreatedAt    time.Time       `json:"createdAt"`
+	UpdatedAt    time.Time       `json:"updatedAt"`
+}
+
+// Agent is minimal identity so the canvas knows who is writing (provenance) and
+// can show who is connected. Exactly one planner + one executor in v1.
+type Agent struct {
+	ID         uuid.UUID `json:"id"`
+	Kind       string    `json:"kind"` // always "agent"
+	Name       string    `json:"name"`
+	Role       string    `json:"role"`
+	Model      *string   `json:"model,omitempty"`
+	Status     string    `json:"status"`
+	LastSeenAt time.Time `json:"lastSeen"`
+}
+
 type User struct {
 	ID          uuid.UUID `json:"id"`
 	GoogleSub   string    `json:"-"`
@@ -141,6 +176,8 @@ type CanvasState struct {
 	Sheets        map[string]*Sheet            `json:"sheets"`
 	SheetRows     map[string]*SheetRow         `json:"sheetRows"`
 	Charts        map[string]*Chart            `json:"charts"`
+	Actions       map[string]*Action           `json:"actions"`
+	Agents        map[string]*Agent            `json:"agents"`
 }
 
 // ── Patch types (partial updates from JSON body) ──────────────────────────────
@@ -179,6 +216,8 @@ type RoadmapItemPatch struct {
 	Title     *string    `json:"title"`
 	Body      *string    `json:"body"`
 	Status    *string    `json:"status"`
+	// Stage: pass "" to clear (unstage), a label to set. nil = leave unchanged.
+	Stage     *string    `json:"stage"`
 	SortOrder *int       `json:"sortOrder"`
 }
 
@@ -221,6 +260,20 @@ type ChartPatch struct {
 	XColumn   *string    `json:"xColumn"`
 	YColumns  *[]string  `json:"yColumns"`
 	SortOrder *int       `json:"sortOrder"`
+}
+
+// ActionStatePatch carries a single state transition plus its outcome fields.
+// State is required; Result/Error/ApprovedBy are set depending on the target
+// (approve sets ApprovedBy; failed sets Error; done sets Result).
+type ActionStatePatch struct {
+	State      string  `json:"state"`
+	Result     *string `json:"result"`
+	Error      *string `json:"error"`
+	ApprovedBy *string `json:"approvedBy"`
+	// Payload, when non-nil, replaces the action payload — used by the executor
+	// to write computed waypoints back before approval (safe: computing a path
+	// does not move the robot).
+	Payload json.RawMessage `json:"payload"`
 }
 
 // ── Store interface ───────────────────────────────────────────────────────────
@@ -273,6 +326,15 @@ type Store interface {
 	CreateChart(ctx context.Context, canvasID uuid.UUID, c *Chart) (int, error)
 	UpdateChart(ctx context.Context, canvasID uuid.UUID, id uuid.UUID, patch ChartPatch) (int, error)
 	DeleteChart(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error)
+
+	// Agents (v1 identity / provenance)
+	RegisterAgent(ctx context.Context, canvasID uuid.UUID, a *Agent) (int, error)
+
+	// Actions (v1 execution primitive)
+	CreateAction(ctx context.Context, canvasID uuid.UUID, a *Action) (int, error)
+	GetAction(ctx context.Context, canvasID, id uuid.UUID) (*Action, error)
+	ListActions(ctx context.Context, canvasID uuid.UUID, stateFilter string) ([]*Action, error)
+	UpdateActionState(ctx context.Context, canvasID, id uuid.UUID, patch ActionStatePatch) (int, error)
 
 	// Users
 	UpsertUserByGoogleSub(ctx context.Context, u *User) (*User, error)

@@ -89,6 +89,7 @@ type dbRoadmapItem struct {
 	Title     string  `json:"title"`
 	Body      string  `json:"body"`
 	Status    string  `json:"status"`
+	Stage     *string `json:"stage"`
 	SortOrder int     `json:"sort_order"`
 	CreatedBy string  `json:"created_by"`
 	UpdatedAt string  `json:"updated_at"`
@@ -124,6 +125,29 @@ type dbChart struct {
 	UpdatedAt string          `json:"updated_at"`
 }
 
+type dbAction struct {
+	ID           string          `json:"id"`
+	Type         string          `json:"type"`
+	State        string          `json:"state"`
+	Payload      json.RawMessage `json:"payload"`
+	ProposedBy   string          `json:"proposed_by"`
+	ApprovedBy   *string         `json:"approved_by"`
+	Result       *string         `json:"result"`
+	Error        *string         `json:"error"`
+	LinkedPinIDs json.RawMessage `json:"linked_pin_ids"`
+	CreatedAt    string          `json:"created_at"`
+	UpdatedAt    string          `json:"updated_at"`
+}
+
+type dbAgent struct {
+	ID         string  `json:"id"`
+	Name       string  `json:"name"`
+	Role       string  `json:"role"`
+	Model      *string `json:"model"`
+	Status     string  `json:"status"`
+	LastSeenAt string  `json:"last_seen_at"`
+}
+
 type dbUser struct {
 	ID          string `json:"id"`
 	GoogleSub   string `json:"google_sub"`
@@ -151,6 +175,8 @@ type dbCanvasWithChildren struct {
 	Sheets        []dbSheet        `json:"sheets"`
 	SheetRows     []dbSheetRow     `json:"sheet_rows"`
 	Charts        []dbChart        `json:"charts"`
+	Actions       []dbAction       `json:"actions"`
+	Agents        []dbAgent        `json:"agents"`
 	PendingEdits  []dbPendingEdit  `json:"pending_edits"`
 }
 
@@ -250,6 +276,9 @@ func toRoadmapItem(d dbRoadmapItem) *RoadmapItem {
 	r := &RoadmapItem{ID: id, Kind: "roadmap",
 		Title: d.Title, Body: d.Body, Status: d.Status, SortOrder: d.SortOrder,
 		CreatedBy: d.CreatedBy, UpdatedAt: parseTime(d.UpdatedAt)}
+	if d.Stage != nil {
+		r.Stage = *d.Stage
+	}
 	if d.ParentID != nil {
 		parentID, err := uuid.Parse(*d.ParentID)
 		if err == nil {
@@ -285,6 +314,39 @@ func toChart(d dbChart) *Chart {
 		_ = json.Unmarshal(d.YColumns, &c.YColumns)
 	}
 	return c
+}
+
+func toAction(d dbAction) *Action {
+	id, _ := uuid.Parse(d.ID)
+	a := &Action{ID: id, Kind: "action",
+		Type: d.Type, State: d.State,
+		Payload:    d.Payload,
+		ProposedBy: d.ProposedBy, ApprovedBy: d.ApprovedBy,
+		Result: d.Result, Error: d.Error,
+		LinkedPinIDs: []uuid.UUID{},
+		CreatedAt:    parseTime(d.CreatedAt), UpdatedAt: parseTime(d.UpdatedAt),
+	}
+	if len(a.Payload) == 0 {
+		a.Payload = json.RawMessage("{}")
+	}
+	if len(d.LinkedPinIDs) > 0 {
+		var ids []string
+		if err := json.Unmarshal(d.LinkedPinIDs, &ids); err == nil {
+			for _, s := range ids {
+				if pid, err := uuid.Parse(s); err == nil {
+					a.LinkedPinIDs = append(a.LinkedPinIDs, pid)
+				}
+			}
+		}
+	}
+	return a
+}
+
+func toAgent(d dbAgent) *Agent {
+	id, _ := uuid.Parse(d.ID)
+	return &Agent{ID: id, Kind: "agent",
+		Name: d.Name, Role: d.Role, Model: d.Model, Status: d.Status,
+		LastSeenAt: parseTime(d.LastSeenAt)}
 }
 
 func toSheetRow(d dbSheetRow) *SheetRow {
@@ -422,7 +484,7 @@ func (s *supabaseStore) GetCanvasState(_ context.Context, canvasID uuid.UUID) (*
 	var rows []dbCanvasWithChildren
 
 	_, err := s.client.From("canvases").
-		Select("*,pins(*),events(*),notes(*),roadmap_items(*),sheets(*, sheet_rows(*)),charts(*),pending_edits(*)", "", false).
+		Select("*,pins(*),events(*),notes(*),roadmap_items(*),sheets(*, sheet_rows(*)),charts(*),actions(*),agents(*),pending_edits(*)", "", false).
 		Eq("id", canvasID.String()).
 		ExecuteTo(&rows)
 	if err != nil {
@@ -445,6 +507,8 @@ func (s *supabaseStore) GetCanvasState(_ context.Context, canvasID uuid.UUID) (*
 		Sheets:       make(map[string]*Sheet, len(row.Sheets)),
 		SheetRows:    make(map[string]*SheetRow, len(row.SheetRows)),
 		Charts:       make(map[string]*Chart, len(row.Charts)),
+		Actions:      make(map[string]*Action, len(row.Actions)),
+		Agents:       make(map[string]*Agent, len(row.Agents)),
 	}
 	for _, d := range row.Pins {
 		p := toPin(d)
@@ -473,6 +537,14 @@ func (s *supabaseStore) GetCanvasState(_ context.Context, canvasID uuid.UUID) (*
 	for _, d := range row.Charts {
 		ch := toChart(d)
 		state.Charts[ch.ID.String()] = ch
+	}
+	for _, d := range row.Actions {
+		a := toAction(d)
+		state.Actions[a.ID.String()] = a
+	}
+	for _, d := range row.Agents {
+		ag := toAgent(d)
+		state.Agents[ag.ID.String()] = ag
 	}
 
 	edits := make([]*PendingEdit, 0, len(row.PendingEdits))
@@ -744,6 +816,9 @@ func (s *supabaseStore) CreateRoadmapItem(ctx context.Context, canvasID uuid.UUI
 	if r.ParentID != nil {
 		row["parent_id"] = r.ParentID.String()
 	}
+	if r.Stage != "" {
+		row["stage"] = r.Stage
+	}
 	err := s.exec(s.client.From("roadmap_items").Insert(row, false, "", "minimal", ""))
 	if err != nil {
 		return 0, err
@@ -759,6 +834,14 @@ func (s *supabaseStore) UpdateRoadmapItem(ctx context.Context, canvasID uuid.UUI
 	if patch.Status != nil    { m["status"] = *patch.Status }
 	if patch.SortOrder != nil { m["sort_order"] = *patch.SortOrder }
 	if patch.ParentID != nil  { m["parent_id"] = patch.ParentID.String() }
+	// Stage: "" clears the phase (store NULL), a label sets it.
+	if patch.Stage != nil {
+		if *patch.Stage == "" {
+			m["stage"] = nil
+		} else {
+			m["stage"] = *patch.Stage
+		}
+	}
 	if len(m) == 0 {
 		return 0, nil
 	}
@@ -803,6 +886,105 @@ func (s *supabaseStore) ReorderRoadmapItems(ctx context.Context, canvasID uuid.U
 		if err != nil {
 			return 0, err
 		}
+	}
+	return s.bumpVersion(ctx, canvasID)
+}
+
+// ── Agents (v1 identity / provenance) ─────────────────────────────────────────
+
+func (s *supabaseStore) RegisterAgent(ctx context.Context, canvasID uuid.UUID, a *Agent) (int, error) {
+	now := time.Now().UTC()
+	a.LastSeenAt = now
+	a.Status = "online"
+	row := map[string]any{
+		"id": a.ID.String(), "canvas_id": canvasID.String(),
+		"name": a.Name, "role": a.Role, "status": "online",
+		"last_seen_at": now.Format(time.RFC3339),
+	}
+	if a.Model != nil {
+		row["model"] = *a.Model
+	}
+	if err := s.exec(s.client.From("agents").Insert(row, false, "", "minimal", "")); err != nil {
+		return 0, err
+	}
+	return s.bumpVersion(ctx, canvasID)
+}
+
+// ── Actions (v1 execution primitive) ──────────────────────────────────────────
+
+func (s *supabaseStore) CreateAction(ctx context.Context, canvasID uuid.UUID, a *Action) (int, error) {
+	now := time.Now().UTC()
+	a.CreatedAt, a.UpdatedAt = now, now
+	if len(a.Payload) == 0 {
+		a.Payload = json.RawMessage("{}")
+	}
+	linkedJSON, err := json.Marshal(uuidStrings(a.LinkedPinIDs))
+	if err != nil {
+		return 0, err
+	}
+	row := map[string]any{
+		"id": a.ID.String(), "canvas_id": canvasID.String(),
+		"type": a.Type, "state": a.State,
+		"payload":        json.RawMessage(a.Payload),
+		"proposed_by":    a.ProposedBy,
+		"linked_pin_ids": json.RawMessage(linkedJSON),
+		"updated_at":     now.Format(time.RFC3339),
+	}
+	if err := s.exec(s.client.From("actions").Insert(row, false, "", "minimal", "")); err != nil {
+		return 0, err
+	}
+	return s.bumpVersion(ctx, canvasID)
+}
+
+func (s *supabaseStore) GetAction(_ context.Context, canvasID, id uuid.UUID) (*Action, error) {
+	var rows []dbAction
+	_, err := s.client.From("actions").
+		Select("*", "", false).
+		Eq("id", id.String()).
+		Eq("canvas_id", canvasID.String()).
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("action %s not found in canvas %s", id, canvasID)
+	}
+	return toAction(rows[0]), nil
+}
+
+func (s *supabaseStore) ListActions(_ context.Context, canvasID uuid.UUID, stateFilter string) ([]*Action, error) {
+	var rows []dbAction
+	q := s.client.From("actions").
+		Select("*", "", false).
+		Eq("canvas_id", canvasID.String())
+	if stateFilter != "" {
+		q = q.Eq("state", stateFilter)
+	}
+	if _, err := q.Order("created_at", nil).ExecuteTo(&rows); err != nil {
+		return nil, err
+	}
+	out := make([]*Action, 0, len(rows))
+	for _, d := range rows {
+		out = append(out, toAction(d))
+	}
+	return out, nil
+}
+
+// UpdateActionState applies a single transition. The caller (handler) is
+// responsible for validating the transition is legal; this just writes the
+// fields the target state carries.
+func (s *supabaseStore) UpdateActionState(ctx context.Context, canvasID, id uuid.UUID, patch ActionStatePatch) (int, error) {
+	m := map[string]any{"state": patch.State}
+	if patch.Result != nil     { m["result"] = *patch.Result }
+	if patch.Error != nil      { m["error"] = *patch.Error }
+	if patch.ApprovedBy != nil { m["approved_by"] = *patch.ApprovedBy }
+	if len(patch.Payload) > 0  { m["payload"] = json.RawMessage(patch.Payload) }
+	err := s.exec(s.client.From("actions").
+		Update(m, "minimal", "").
+		Eq("id", id.String()).
+		Eq("canvas_id", canvasID.String()))
+	if err != nil {
+		return 0, err
 	}
 	return s.bumpVersion(ctx, canvasID)
 }

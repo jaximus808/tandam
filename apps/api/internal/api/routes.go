@@ -105,6 +105,15 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 		r.Patch("/api/canvas/charts/{id}", h.UpdateChart)
 		r.Delete("/api/canvas/charts/{id}", h.DeleteChart)
 
+		// Agents + actions (v1 execution primitive)
+		r.Post("/api/canvas/agents", h.RegisterAgent)
+		r.Post("/api/canvas/actions", h.ProposeAction)
+		r.Get("/api/canvas/actions", h.ListActions)
+		r.Get("/api/canvas/actions/{id}", h.ReadAction)
+		r.Post("/api/canvas/actions/{id}/approve", h.ApproveAction)
+		r.Post("/api/canvas/actions/{id}/reject", h.RejectAction)
+		r.Patch("/api/canvas/actions/{id}", h.UpdateActionState)
+
 		r.Post("/api/canvas/pending-edits", h.CreatePendingEdit)
 		r.Delete("/api/canvas/pending-edits/{id}", h.DeletePendingEdit)
 	})

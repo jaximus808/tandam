@@ -1,0 +1,11 @@
+-- Roadmap "stages" (phases). A free-text grouping label on top-level roadmap
+-- items so a plan can be organised into phases ("Now" / "Next" / "Later", or
+-- "v1" / "v2", or anything the user/agent names). Distinct from `status`
+-- (todo/in_progress/done/blocked): status is per-item progress, stage is which
+-- phase a goal belongs to.
+--
+-- Nullable + free-text on purpose: NULL = unstaged (renders in a "No stage"
+-- band), and the agent can introduce a new phase just by naming it — no enum
+-- migration when the user invents "Q3" or "post-launch". Only top-level items
+-- are grouped by stage in the board; children inherit their root's band.
+ALTER TABLE roadmap_items ADD COLUMN stage TEXT;

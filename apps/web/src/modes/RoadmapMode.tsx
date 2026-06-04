@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import {
   DndContext,
   KeyboardSensor,
@@ -46,6 +46,15 @@ interface FlatItem {
   depth: number;
   parentId: string | null;
   hasChildren: boolean;
+  // Which phase section this row is rendered under (the root's stage). Used to
+  // re-assign a goal's stage when it's dragged into a different section.
+  sectionStage: string | null;
+}
+
+interface StageSection {
+  stage: string | null;
+  roots: RoadmapItem[];
+  rows: FlatItem[];
 }
 
 interface Projection {
@@ -81,14 +90,17 @@ export default function RoadmapMode({ state }: Props) {
     }
   }
 
-  // While dragging, hide descendants of the active item — they ride along with
-  // the moved subtree implicitly (parent_id doesn't change), so they shouldn't
-  // appear in the flat sortable list.
-  const flat = useMemo(
-    () => flattenTree(items, collapsed, activeId),
+  // Top-level goals group into phase sections (by `stage`); each section's
+  // subtree is flattened beneath its header. `flat` is the concatenation in
+  // section order — dnd-kit sorts over it, headers render between sections.
+  // While dragging, descendants of the active item are hidden — they ride along
+  // with the moved subtree implicitly, so they shouldn't appear in the list.
+  const sections = useMemo(
+    () => flattenByStage(items, collapsed, activeId),
     [items, collapsed, activeId],
   );
 
+  const flat = useMemo(() => sections.flatMap((s) => s.rows), [sections]);
   const flatIds = useMemo(() => flat.map((f) => f.id), [flat]);
 
   // Projected drop position — depth derived from horizontal drag offset, parent
@@ -161,8 +173,23 @@ export default function RoadmapMode({ state }: Props) {
       }
     }
 
+    // If a top-level goal landed in a different phase section, re-file it under
+    // that phase. Section membership is read off the neighbour in the new order
+    // (every row carries its sectionStage); children inherit, so only roots move.
+    let stageUpdate: string | undefined;
+    if (proj.parentId === null) {
+      const movedIdx = moved.findIndex((f) => f.id === activeIdLocal);
+      const neighbour = movedIdx > 0 ? moved[movedIdx - 1] : moved[movedIdx + 1];
+      const target = (neighbour?.sectionStage ?? "").trim() || null;
+      const existing = (items[activeIdLocal]?.stage ?? "").trim() || null;
+      if (target !== existing) stageUpdate = target ?? "";
+    }
+
     if (updates.length > 0) {
       sendOp({ op: "roadmap.reorder", updates });
+    }
+    if (stageUpdate !== undefined) {
+      sendOp({ op: "roadmap.update", id: activeIdLocal, partial: { stage: stageUpdate } });
     }
   }
 
@@ -213,6 +240,46 @@ export default function RoadmapMode({ state }: Props) {
     });
   }
 
+  // Add a top-level goal directly into a phase section (or unstaged when null).
+  function handleAddRootInStage(stage: string | null) {
+    sendOp({
+      op: "roadmap.add",
+      data: {
+        title: "",
+        body: "",
+        status: "todo",
+        sortOrder: nextSortOrderFor(null),
+        ...(stage ? { stage } : {}),
+      },
+    });
+  }
+
+  // Create a brand-new phase by seeding it with one (empty) goal.
+  function handleAddPhase() {
+    const name = window.prompt("New phase name (e.g. Now, Next, Later, v1, v2):", "")?.trim();
+    if (!name) return;
+    handleAddRootInStage(name);
+  }
+
+  // Rename a phase: rewrite the stage on every top-level goal currently in it.
+  function renameStage(oldStage: string, newStage: string) {
+    const target = newStage.trim();
+    for (const it of Object.values(items)) {
+      if (!it.parentId && (it.stage ?? "").trim() === oldStage) {
+        sendOp({ op: "roadmap.update", id: it.id, partial: { stage: target } });
+      }
+    }
+  }
+
+  // Dissolve a phase: unstage every goal in it (they fall into "No phase").
+  function clearStage(stage: string) {
+    for (const it of Object.values(items)) {
+      if (!it.parentId && (it.stage ?? "").trim() === stage) {
+        sendOp({ op: "roadmap.update", id: it.id, partial: { stage: "" } });
+      }
+    }
+  }
+
   const isEmpty = Object.keys(items).length === 0;
 
   return (
@@ -248,13 +315,23 @@ export default function RoadmapMode({ state }: Props) {
               </div>
             )}
           </div>
-          <button
-            onClick={handleAddRoot}
-            className="shrink-0 whitespace-nowrap text-sm px-3.5 py-1.5 rounded-lg text-white font-medium shadow-sm transition-opacity hover:opacity-90"
-            style={{ backgroundColor: ACCENT.solid }}
-          >
-            + New item
-          </button>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <button
+              onClick={handleAddPhase}
+              className="whitespace-nowrap text-sm px-3 py-1.5 rounded-lg font-medium border transition-colors"
+              style={{ color: ACCENT.hover, borderColor: ACCENT.line, backgroundColor: ACCENT.soft }}
+              title="Create a new phase (e.g. Now, Next, Later, v1, v2)"
+            >
+              + Phase
+            </button>
+            <button
+              onClick={handleAddRoot}
+              className="whitespace-nowrap text-sm px-3.5 py-1.5 rounded-lg text-white font-medium shadow-sm transition-opacity hover:opacity-90"
+              style={{ backgroundColor: ACCENT.solid }}
+            >
+              + New item
+            </button>
+          </div>
         </div>
 
         <div className="flex items-center flex-wrap gap-x-4 gap-y-1 px-2 py-1.5 text-xs text-gray-500 bg-gray-100/70 rounded-md border border-gray-200">
@@ -268,7 +345,7 @@ export default function RoadmapMode({ state }: Props) {
           <span className="ml-auto text-gray-400">
             {view === "board"
               ? "Click a status icon to cycle · edit items in list view"
-              : "Drag rows to reorder · click icon to cycle"}
+              : "Drag rows to reorder · drag across a phase to re-file · click icon to cycle"}
           </span>
         </div>
       </div>
@@ -295,23 +372,49 @@ export default function RoadmapMode({ state }: Props) {
               onDragCancel={handleDragCancel}
             >
               <SortableContext items={flatIds} strategy={verticalListSortingStrategy}>
-                <ul className="text-sm">
-                  {flat.map((f) => {
-                    const isActive = f.id === activeId;
-                    const displayDepth = isActive && projected ? projected.depth : f.depth;
+                <div className="text-sm">
+                  {sections.map((section) => {
+                    // Hide the header in the trivial "nothing staged yet" case so
+                    // an unphased roadmap looks exactly like before.
+                    const showHeader = sections.length > 1 || section.stage !== null;
                     return (
-                      <SortableRow
-                        key={f.id}
-                        flat={f}
-                        displayDepth={displayDepth}
-                        isActive={isActive}
-                        collapsed={collapsed.has(f.id)}
-                        onToggleCollapse={() => toggleCollapse(f.id)}
-                        onAddChild={() => handleAddChild(f.id)}
-                      />
+                      <div key={section.stage ?? "__none__"} className="mb-1">
+                        {showHeader && (
+                          <SectionHeader
+                            stage={section.stage}
+                            count={section.roots.length}
+                            onRename={
+                              section.stage
+                                ? (name) => renameStage(section.stage as string, name)
+                                : undefined
+                            }
+                            onClear={
+                              section.stage ? () => clearStage(section.stage as string) : undefined
+                            }
+                            onAddGoal={() => handleAddRootInStage(section.stage)}
+                          />
+                        )}
+                        <ul>
+                          {section.rows.map((f) => {
+                            const isActive = f.id === activeId;
+                            const displayDepth = isActive && projected ? projected.depth : f.depth;
+                            return (
+                              <SortableRow
+                                key={f.id}
+                                flat={f}
+                                displayDepth={displayDepth}
+                                isActive={isActive}
+                                collapsed={collapsed.has(f.id)}
+                                onToggleCollapse={() => toggleCollapse(f.id)}
+                                onAddChild={() => handleAddChild(f.id)}
+                              />
+                            );
+                          })}
+                        </ul>
+                      </div>
                     );
                   })}
-                </ul>
+                </div>
               </SortableContext>
             </DndContext>
           </div>
@@ -440,6 +543,13 @@ function Row({
     setEditing(false);
   }
 
+  function setPhase() {
+    const current = item.stage?.trim() ?? "";
+    const name = window.prompt("Phase for this goal (blank to clear):", current);
+    if (name === null) return; // cancelled
+    sendOp({ op: "roadmap.update", id: item.id, partial: { stage: name.trim() } });
+  }
+
   function cycleStatus() {
     const i = STATUS_CYCLE.indexOf(status);
     const next = STATUS_CYCLE[(i + 1) % STATUS_CYCLE.length];
@@ -559,6 +669,21 @@ function Row({
         </span>
       )}
 
+      {depth === 0 && (
+        <button
+          onClick={setPhase}
+          className={`shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded transition-colors ${
+            item.stage?.trim()
+              ? ""
+              : "opacity-0 group-hover:opacity-100 border border-dashed border-gray-300 text-gray-400 hover:text-gray-700"
+          }`}
+          style={item.stage?.trim() ? { backgroundColor: ACCENT.soft, color: ACCENT.hover } : undefined}
+          title="Set the phase for this goal"
+        >
+          {item.stage?.trim() ? item.stage : "+ phase"}
+        </button>
+      )}
+
       <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
         <button
           onClick={onAddChild}
@@ -609,27 +734,146 @@ function childIndex(items: Record<string, RoadmapItem>): Map<string | null, Road
   return byParent;
 }
 
+// Group top-level goals by their `stage` (phase) label. Staged bands come
+// first, ordered by the smallest sortOrder among their members (so dragging a
+// goal earlier pulls its phase up); the unstaged band sorts last. With nothing
+// staged this returns a single null group → the board renders exactly as before.
+function groupRootsByStage(
+  roots: RoadmapItem[],
+): { stage: string | null; roots: RoadmapItem[] }[] {
+  const groups = new Map<string | null, RoadmapItem[]>();
+  for (const r of roots) {
+    const key = r.stage && r.stage.trim() ? r.stage.trim() : null;
+    const arr = groups.get(key) ?? [];
+    arr.push(r);
+    groups.set(key, arr);
+  }
+  return Array.from(groups.entries())
+    .map(([stage, rs]) => ({
+      stage,
+      roots: rs,
+      minOrder: Math.min(...rs.map((r) => r.sortOrder)),
+    }))
+    .sort((a, b) => {
+      if (a.stage === null) return 1;
+      if (b.stage === null) return -1;
+      return a.minOrder - b.minOrder || a.stage.localeCompare(b.stage);
+    })
+    .map(({ stage, roots: rs }) => ({ stage, roots: rs }));
+}
+
 function RoadmapBoard({ items }: { items: Record<string, RoadmapItem> }) {
   const byParent = useMemo(() => childIndex(items), [items]);
   const roots = byParent.get(null) ?? [];
+  const groups = useMemo(() => groupRootsByStage(roots), [roots]);
+  const stages = useMemo(
+    () =>
+      Array.from(
+        new Set(roots.map((r) => (r.stage ?? "").trim()).filter(Boolean)),
+      ).sort(),
+    [roots],
+  );
+
+  // Nothing staged yet → keep the original single-row layout so the feature is
+  // invisible until someone actually files goals into phases.
+  const unstagedOnly = groups.length <= 1 && (groups[0]?.stage ?? null) === null;
+
+  if (unstagedOnly) {
+    return (
+      <div className="tandem-scroll flex-1 min-h-0 min-w-0 overflow-x-auto overflow-y-hidden bg-paper">
+        <div className="flex gap-4 px-6 py-4 h-full items-start min-w-min">
+          {roots.map((root) => (
+            <RoadmapColumn key={root.id} root={root} byParent={byParent} stages={stages} />
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="tandem-scroll flex-1 min-h-0 min-w-0 overflow-x-auto overflow-y-hidden bg-paper">
-      <div className="flex gap-4 px-6 py-4 h-full items-start min-w-min">
-        {roots.map((root) => (
-          <RoadmapColumn key={root.id} root={root} byParent={byParent} />
+    <div className="tandem-scroll flex-1 min-h-0 min-w-0 overflow-y-auto bg-paper">
+      <div className="flex flex-col gap-5 px-6 py-4">
+        {groups.map((g) => (
+          <section key={g.stage ?? "__none__"}>
+            <div className="flex items-center gap-2 mb-2">
+              <h2
+                className="text-xs font-semibold uppercase tracking-wider"
+                style={{ color: g.stage ? ACCENT.solid : "#9ca3af" }}
+              >
+                {g.stage ?? "No stage"}
+              </h2>
+              <span className="text-[11px] text-gray-400">
+                {g.roots.length} {g.roots.length === 1 ? "goal" : "goals"}
+              </span>
+              <span
+                className="flex-1 h-px"
+                style={{ backgroundColor: g.stage ? ACCENT.line : "#e5e7eb" }}
+              />
+            </div>
+            <div className="tandem-scroll flex gap-4 overflow-x-auto pb-1 items-start">
+              {g.roots.map((root) => (
+                <RoadmapColumn
+                  key={root.id}
+                  root={root}
+                  byParent={byParent}
+                  stages={stages}
+                  compact
+                />
+              ))}
+            </div>
+          </section>
         ))}
       </div>
     </div>
   );
 }
 
+// Phase picker on a goal column: set/clear/create the stage band a top-level
+// goal lives in. Free-text so a new phase is one prompt away.
+function StageSelect({ item, stages }: { item: RoadmapItem; stages: string[] }) {
+  const current = item.stage?.trim() ?? "";
+  function apply(stage: string) {
+    sendOp({ op: "roadmap.update", id: item.id, partial: { stage } });
+  }
+  function onChange(e: ChangeEvent<HTMLSelectElement>) {
+    const v = e.target.value;
+    if (v === "__new__") {
+      const name = window.prompt("New phase name (e.g. Now, Next, Later, v1, v2):", "")?.trim();
+      if (name) apply(name);
+      return;
+    }
+    apply(v); // "" clears (unstage)
+  }
+  const options = current && !stages.includes(current) ? [current, ...stages] : stages;
+  return (
+    <select
+      value={current}
+      onChange={onChange}
+      title="Phase / stage for this goal"
+      className="max-w-full text-[11px] rounded border border-gray-200 bg-gray-50 px-1.5 py-0.5 text-gray-600 hover:border-gray-300 focus:outline-none"
+      style={current ? { color: ACCENT.hover, borderColor: ACCENT.line } : undefined}
+    >
+      <option value="">No stage</option>
+      {options.map((s) => (
+        <option key={s} value={s}>
+          {s}
+        </option>
+      ))}
+      <option value="__new__">+ New phase…</option>
+    </select>
+  );
+}
+
 function RoadmapColumn({
   root,
   byParent,
+  stages,
+  compact,
 }: {
   root: RoadmapItem;
   byParent: Map<string | null, RoadmapItem[]>;
+  stages: string[];
+  compact?: boolean;
 }) {
   // Flatten the subtree (excluding the root) into indented rows, in order.
   const rows = useMemo(() => {
@@ -649,7 +893,11 @@ function RoadmapColumn({
   const status = root.status as RoadmapStatus;
 
   return (
-    <div className="w-72 shrink-0 flex flex-col max-h-full rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+    <div
+      className={`w-72 shrink-0 flex flex-col rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden ${
+        compact ? "max-h-[26rem]" : "max-h-full"
+      }`}
+    >
       <div className={`h-1 shrink-0 ${STATUS_ACCENT[status]}`} />
       <div className="shrink-0 px-3 pt-2.5 pb-3 border-b border-gray-100">
         <div className="flex items-start gap-2">
@@ -661,6 +909,9 @@ function RoadmapColumn({
           >
             {root.title || <span className="text-gray-400 italic font-normal">Untitled goal</span>}
           </span>
+        </div>
+        <div className="mt-2">
+          <StageSelect item={root} stages={stages} />
         </div>
         {total > 0 && <ProgressBar done={done} total={total} />}
       </div>
@@ -733,11 +984,14 @@ function StatusButton({ item, className }: { item: RoadmapItem; className?: stri
 
 // ── Tree helpers ─────────────────────────────────────────────────────────────
 
-function flattenTree(
+// Flatten the tree into phase sections: top-level goals grouped by `stage`,
+// each section carrying its goals' flattened subtrees. Rows are tagged with the
+// section's stage so a drag across sections can re-file the goal's phase.
+function flattenByStage(
   items: Record<string, RoadmapItem>,
   collapsedIds: Set<string>,
   excludeDescendantsOf: string | null,
-): FlatItem[] {
+): StageSection[] {
   const byParent = new Map<string | null, RoadmapItem[]>();
   for (const it of Object.values(items)) {
     const key = it.parentId ?? null;
@@ -749,19 +1003,96 @@ function flattenTree(
     arr.sort((a, b) => a.sortOrder - b.sortOrder || a.updatedAt - b.updatedAt);
   }
 
-  const out: FlatItem[] = [];
-  function walk(parentId: string | null, depth: number) {
-    const kids = byParent.get(parentId) ?? [];
-    for (const kid of kids) {
-      const hasChildren = (byParent.get(kid.id) ?? []).length > 0;
-      out.push({ id: kid.id, item: kid, depth, parentId, hasChildren });
-      if (kid.id === excludeDescendantsOf) continue;
-      if (collapsedIds.has(kid.id)) continue;
-      walk(kid.id, depth + 1);
+  const roots = byParent.get(null) ?? [];
+  const groups = groupRootsByStage(roots);
+
+  return groups.map((g) => {
+    const rows: FlatItem[] = [];
+    function walk(parentId: string | null, depth: number) {
+      for (const kid of byParent.get(parentId) ?? []) {
+        const hasChildren = (byParent.get(kid.id) ?? []).length > 0;
+        rows.push({ id: kid.id, item: kid, depth, parentId, hasChildren, sectionStage: g.stage });
+        if (kid.id === excludeDescendantsOf) continue;
+        if (collapsedIds.has(kid.id)) continue;
+        walk(kid.id, depth + 1);
+      }
     }
+    for (const root of g.roots) {
+      const hasChildren = (byParent.get(root.id) ?? []).length > 0;
+      rows.push({
+        id: root.id,
+        item: root,
+        depth: 0,
+        parentId: null,
+        hasChildren,
+        sectionStage: g.stage,
+      });
+      if (root.id !== excludeDescendantsOf && !collapsedIds.has(root.id)) {
+        walk(root.id, 1);
+      }
+    }
+    return { stage: g.stage, roots: g.roots, rows };
+  });
+}
+
+// Phase section header in the list view — the group title on top, with rename /
+// dissolve / add-goal affordances.
+function SectionHeader({
+  stage,
+  count,
+  onRename,
+  onClear,
+  onAddGoal,
+}: {
+  stage: string | null;
+  count: number;
+  onRename?: (name: string) => void;
+  onClear?: () => void;
+  onAddGoal: () => void;
+}) {
+  function rename() {
+    if (!onRename || stage === null) return;
+    const name = window.prompt("Rename phase:", stage)?.trim();
+    if (name && name !== stage) onRename(name);
   }
-  walk(null, 0);
-  return out;
+  return (
+    <div className="group/hdr sticky top-0 z-[1] -mx-1 mb-0.5 mt-3 flex items-center gap-2 bg-paper/95 px-1 py-1 backdrop-blur first:mt-0">
+      <button
+        onClick={rename}
+        disabled={!onRename}
+        className={`text-xs font-semibold uppercase tracking-wider ${onRename ? "hover:underline" : "cursor-default"}`}
+        style={{ color: stage ? ACCENT.solid : "#9ca3af" }}
+        title={onRename ? "Rename phase" : undefined}
+      >
+        {stage ?? "No phase"}
+      </button>
+      <span className="text-[11px] text-gray-400">
+        {count} {count === 1 ? "goal" : "goals"}
+      </span>
+      <span
+        className="h-px flex-1"
+        style={{ backgroundColor: stage ? ACCENT.line : "#e5e7eb" }}
+      />
+      <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover/hdr:opacity-100">
+        <button
+          onClick={onAddGoal}
+          className="rounded px-1.5 py-0.5 text-[11px] text-gray-500 hover:bg-gray-100 hover:text-gray-800"
+          title="Add a goal to this phase"
+        >
+          + goal
+        </button>
+        {onClear && (
+          <button
+            onClick={onClear}
+            className="rounded px-1.5 py-0.5 text-[11px] text-gray-400 hover:bg-red-50 hover:text-red-600"
+            title="Dissolve phase (unstage its goals)"
+          >
+            dissolve
+          </button>
+        )}
+      </div>
+    </div>
+  );
 }
 
 // Compute the drop target's projected (parentId, depth) given the current flat
