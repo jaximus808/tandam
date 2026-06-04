@@ -20,6 +20,20 @@ export async function handleTool(
         canvasId: session.canvasId,
         canvasName: session.canvasName,
         canvasCode: session.canvasCode,
+        url: gateway.canvasUrl(session.canvasCode),
+      };
+    }
+
+    case "canvas.create": {
+      const rawName = typeof args.name === "string" ? args.name.trim() : "";
+      const name = rawName || "Untitled canvas";
+      const session = await gateway.createCanvas(name);
+      return {
+        created: true,
+        canvasId: session.canvasId,
+        canvasName: session.canvasName,
+        canvasCode: session.canvasCode,
+        url: gateway.canvasUrl(session.canvasCode),
       };
     }
 
@@ -112,6 +126,7 @@ export async function handleTool(
         title: args.title,
         body: args.body ?? "",
         status: args.status ?? "todo",
+        stage: args.stage,
         sortOrder: args.sortOrder ?? 0,
         createdBy: "agent",
       });
@@ -201,6 +216,52 @@ export async function handleTool(
     case "canvas.pending_edits.complete":
       return gateway.del(`/api/canvas/pending-edits/${args.editId}`);
 
+    // ── Agents (v1 identity / provenance) ───────────────────────────────────────
+    case "agent.register": {
+      const res = (await gateway.post("/api/canvas/agents", {
+        name: args.name,
+        role: args.role,
+        model: args.model,
+      })) as { agentId: string };
+      if (res?.agentId) gateway.setAgentId(res.agentId);
+      return res;
+    }
+
+    // ── Actions (v1 execution primitive) ────────────────────────────────────────
+    case "canvas.action.propose":
+      return gateway.post("/api/canvas/actions", {
+        type: args.type ?? "navigate",
+        payload: args.payload ?? {},
+        proposedBy: gateway.getSession().agentId,
+        linkedPinIds: args.linkedPinIds,
+      });
+
+    case "canvas.action.list": {
+      const qs = args.state ? `?state=${encodeURIComponent(String(args.state))}` : "";
+      return gateway.get(`/api/canvas/actions${qs}`);
+    }
+
+    case "canvas.action.read":
+      return gateway.get(`/api/canvas/actions/${args.id}`);
+
+    case "canvas.action.approve":
+      return gateway.post(`/api/canvas/actions/${args.id}/approve`, {
+        approvedBy: gateway.getSession().agentId,
+      });
+
+    case "canvas.action.reject":
+      return gateway.post(`/api/canvas/actions/${args.id}/reject`, {
+        reason: args.reason,
+      });
+
+    case "canvas.action.update_state":
+      return gateway.patch(`/api/canvas/actions/${args.id}`, {
+        state: args.state,
+        result: args.result,
+        error: args.error,
+        payload: args.payload,
+      });
+
     default:
       throw new Error(`Unknown tool: ${toolName}`);
   }
@@ -210,14 +271,33 @@ export const TOOLS = [
   {
     name: "canvas.connect",
     description:
-      "Bind this MCP session to a canvas. MUST be called before any other canvas.* tool. " +
-      "Takes a canvas code (e.g. 'TOKYO7X3K'). Exchanges it for a JWT held in this gateway " +
-      "process; from then on, every other tool operates on that canvas with no ID needed. " +
-      "May be called again to switch the session to a different canvas.",
+      "Bind this MCP session to a canvas. MUST be called before any other canvas.* tool " +
+      "(unless you call canvas.create, which connects automatically). Takes a canvas code " +
+      "(e.g. 'TOKYO7X3K'). Exchanges it for a JWT held in this gateway process; from then on, " +
+      "every other tool operates on that canvas with no ID needed. Returns the shareable web " +
+      "`url`. May be called again to switch the session to a different canvas.",
     inputSchema: {
       type: "object" as const,
       properties: { code: { type: "string", description: "Canvas code given by the user." } },
       required: ["code"],
+    },
+  },
+  {
+    name: "canvas.create",
+    description:
+      "Create a NEW canvas and bind this session to it in one step — no human needs to make " +
+      "one in the browser first. Use this to start fresh (e.g. the user says 'put a plan on a " +
+      "canvas' and gave no code). Returns canvasCode and a shareable web `url`; surface the URL " +
+      "to the user so they can open and watch the canvas live. After this, all other canvas.* " +
+      "tools operate on the new canvas with no ID needed.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        name: {
+          type: "string",
+          description: "Human-readable canvas name (e.g. the project or plan title). Optional.",
+        },
+      },
     },
   },
   {
@@ -444,7 +524,9 @@ export const TOOLS = [
     description:
       "Add a roadmap item (goal / sub-goal / task) to the planning outline. " +
       "Pass parentId to nest under another item, or omit for a top-level entry. " +
-      "Also switches the canvas into roadmap mode if it was on the welcome screen.",
+      "Pass stage to file a top-level goal under a phase band (e.g. 'Now', " +
+      "'Next', 'Later', 'v1', 'v2'). Also switches the canvas into roadmap mode " +
+      "if it was on the welcome screen.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -452,6 +534,13 @@ export const TOOLS = [
         parentId: { type: "string", description: "Parent roadmap item ID for nesting." },
         body: { type: "string", description: "Optional longer description." },
         status: { type: "string", enum: ["todo", "in_progress", "done", "blocked"] },
+        stage: {
+          type: "string",
+          description:
+            "Phase label for grouping top-level goals into bands, e.g. 'Now' / " +
+            "'Next' / 'Later' or 'v1' / 'v2'. Free text — reuse an existing label " +
+            "to add to that band. Omit for unstaged. Only meaningful on top-level items.",
+        },
         sortOrder: { type: "number", description: "Position among siblings; higher = later." },
       },
       required: ["title"],
@@ -459,7 +548,9 @@ export const TOOLS = [
   },
   {
     name: "canvas.roadmap_item.update",
-    description: "Update a roadmap item by its ID.",
+    description:
+      "Update a roadmap item by its ID. Set stage to move a top-level goal " +
+      "between phase bands ('' clears the phase / unstages it).",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -468,6 +559,11 @@ export const TOOLS = [
         title: { type: "string" },
         body: { type: "string" },
         status: { type: "string", enum: ["todo", "in_progress", "done", "blocked"] },
+        stage: {
+          type: "string",
+          description:
+            "Phase label (e.g. 'Now', 'v2'). Pass '' to clear the phase (unstage).",
+        },
         sortOrder: { type: "number" },
       },
       required: ["id"],
@@ -669,6 +765,113 @@ export const TOOLS = [
       type: "object" as const,
       properties: { editId: { type: "string" } },
       required: ["editId"],
+    },
+  },
+  {
+    name: "agent.register",
+    description:
+      "Identify this agent to the canvas on connect. Returns an agentId that is " +
+      "recorded as the author (provenance) of actions this session proposes. v1 " +
+      "expects exactly one 'planner' and one 'executor' per canvas.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        name: { type: "string", description: "Human-readable agent name." },
+        role: { type: "string", enum: ["planner", "executor"] },
+        model: { type: "string", description: "Optional model id, e.g. 'claude-opus-4-8'." },
+      },
+      required: ["role"],
+    },
+  },
+  {
+    name: "canvas.action.propose",
+    description:
+      "Propose an action for human approval (the v1 execution primitive). The action " +
+      "enters state 'proposed' and does NOT execute until a human approves it. v1 " +
+      "supports type 'navigate' with payload { goalLabel?, goal?: {lat,lng}, " +
+      "waypoints?: {lat,lng}[] }. proposedBy is taken from the registered agent.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        type: { type: "string", enum: ["navigate"] },
+        payload: {
+          type: "object",
+          description: "navigate: { goalLabel?, goal?: {lat,lng}, waypoints?: [{lat,lng}] }",
+        },
+        linkedPinIds: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional pin ids this action references.",
+        },
+      },
+      required: ["payload"],
+    },
+  },
+  {
+    name: "canvas.action.list",
+    description:
+      "List actions on the canvas, optionally filtered by state. The executor polls " +
+      "this with state='approved' to pick up work the human has approved.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        state: {
+          type: "string",
+          enum: ["proposed", "approved", "rejected", "executing", "done", "failed"],
+        },
+      },
+    },
+  },
+  {
+    name: "canvas.action.read",
+    description: "Read a single action by id (poll for state changes / outcome).",
+    inputSchema: {
+      type: "object" as const,
+      properties: { id: { type: "string" } },
+      required: ["id"],
+    },
+  },
+  {
+    name: "canvas.action.approve",
+    description:
+      "Approve a proposed action (proposed → approved). Primarily a human action in " +
+      "the browser; exposed here for testing. Only then may the executor run it.",
+    inputSchema: {
+      type: "object" as const,
+      properties: { id: { type: "string" } },
+      required: ["id"],
+    },
+  },
+  {
+    name: "canvas.action.reject",
+    description: "Reject a proposed action (proposed → rejected), with an optional reason.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        id: { type: "string" },
+        reason: { type: "string" },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "canvas.action.update_state",
+    description:
+      "Executor-only: advance an approved action through execution. Legal targets: " +
+      "'executing' (approved → executing), 'done' / 'failed' (executing → …). Set " +
+      "`result` on done, `error` on failed. `payload` may be set to write computed " +
+      "waypoints back (e.g. before approval) — note that computing a path does not " +
+      "move the robot.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        id: { type: "string" },
+        state: { type: "string", enum: ["executing", "done", "failed"] },
+        result: { type: "string" },
+        error: { type: "string" },
+        payload: { type: "object" },
+      },
+      required: ["id", "state"],
     },
   },
 ];

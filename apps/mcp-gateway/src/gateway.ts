@@ -16,6 +16,9 @@ export interface CanvasSession {
   canvasId: string;
   canvasName: string;
   canvasCode: string;
+  // Set by the `agent.register` tool; used as `proposedBy` on action.propose so
+  // the canvas records which agent authored each action (v1 provenance).
+  agentId?: string;
 }
 
 export class Gateway {
@@ -60,8 +63,41 @@ export class Gateway {
     return this.session;
   }
 
+  /**
+   * Create a brand-new canvas and bind this session to it — the zero-setup
+   * path. Posts to the public create endpoint, then exchanges the returned
+   * code for a JWT via connectWithCode. Lets an agent stand up a canvas with
+   * no human needing to make one in the browser first.
+   */
+  async createCanvas(name: string): Promise<CanvasSession> {
+    const res = await this.safeFetch("/api/canvases", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`Create canvas failed (${res.status}): ${body}`);
+    }
+    const canvas = (await res.json()) as { code: string };
+    if (!canvas?.code) {
+      throw new Error("Create canvas returned no code");
+    }
+    return this.connectWithCode(canvas.code);
+  }
+
+  /** The shareable web URL for a canvas code (same origin as the API). */
+  canvasUrl(code: string): string {
+    return `${this.config.apiUrl}/c/${code}`;
+  }
+
   isConnected(): boolean {
     return this.session !== null;
+  }
+
+  /** Remember the registered agent id on the session (set by agent.register). */
+  setAgentId(agentId: string): void {
+    if (this.session) this.session.agentId = agentId;
   }
 
   getSession(): CanvasSession {
