@@ -169,6 +169,7 @@ type PendingEdit struct {
 type CanvasState struct {
 	Version       int                          `json:"version"`
 	Mode          string                       `json:"mode"`
+	EnabledModes  []string                     `json:"enabledModes"`
 	Pins          map[string]*Pin              `json:"pins"`
 	Events        map[string]*Event            `json:"events"`
 	Notes         map[string]*Note             `json:"notes"`
@@ -285,6 +286,7 @@ type Store interface {
 	GetCanvasByID(ctx context.Context, id uuid.UUID) (*Canvas, error)
 	GetCanvasState(ctx context.Context, canvasID uuid.UUID) (*Canvas, *CanvasState, []*PendingEdit, error)
 	SetMode(ctx context.Context, canvasID uuid.UUID, mode string) (int, error)
+	EnableMode(ctx context.Context, canvasID uuid.UUID, mode string) (int, error)
 	SetMapID(ctx context.Context, canvasID uuid.UUID, mapID string) (int, error)
 	ApplyTemplate(ctx context.Context, canvasID uuid.UUID, mode string, mapID *string) (int, error)
 	LeaveWelcomeIfNeeded(ctx context.Context, canvasID uuid.UUID, fallbackMode string) error

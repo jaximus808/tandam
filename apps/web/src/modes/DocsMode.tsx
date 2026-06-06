@@ -125,7 +125,10 @@ function NoteCard({
   }
 
   return (
-    <div className="group bg-white rounded-lg border border-gray-200 hover:border-gray-300 transition-colors">
+    <div
+      data-agent-target={note.id}
+      className="group bg-white rounded-lg border border-gray-200 hover:border-gray-300 transition-colors"
+    >
       <div className="flex items-center justify-between px-4 pt-3">
         {parent ? (
           <span className="text-xs bg-gray-100 text-gray-600 rounded-full px-2 py-0.5">

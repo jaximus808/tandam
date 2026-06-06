@@ -180,6 +180,10 @@ export interface Agent {
 export interface CanvasState {
   version: number;
   mode: CanvasMode;
+  // Modes a user explicitly turned on via the "+" tab, even before they hold
+  // content. The tab bar shows the union of these and content-derived modes;
+  // the agent sees them in state.read as "the user wants a tab here".
+  enabledModes: CanvasMode[];
   pins: Record<EntityId, Pin>;
   events: Record<EntityId, CanvasEvent>;
   notes: Record<EntityId, Note>;
@@ -243,6 +247,7 @@ export type WSClientMessage =
     }
   | { op: "chart.delete"; id: EntityId }
   | { op: "mode.set"; mode: CanvasMode }
+  | { op: "mode.enable"; mode: CanvasMode }
   | { op: "map.set"; mapId: string }
   | { op: "template.apply"; templateId: string; mode: CanvasMode; mapId?: string }
   | { op: "scoped_edit_request"; entityId: EntityId; instruction: string };

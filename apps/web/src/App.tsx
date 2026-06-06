@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import type { CanvasMeta, CanvasMode, CanvasState } from "./types";
-import { connectToCanvas, disconnectFromCanvas, onStateUpdate } from "./lib/ws";
+import { connectToCanvas, disconnectFromCanvas, onStateUpdate, sendOp, type ChangeActor } from "./lib/ws";
 import { ModeNavContext } from "./lib/modeNav";
 import MapMode from "./modes/MapMode";
 import ItineraryMode from "./modes/ItineraryMode";
@@ -15,6 +15,9 @@ import MCPSupport from "./pages/MCPSupport";
 import ConnectModal, { hasDismissedConnect } from "./components/ConnectModal";
 import TandemLogo from "./components/TandemLogo";
 import AccountMenu from "./components/AccountMenu";
+import AgentCursor from "./components/AgentCursor";
+import AgentPresence from "./components/AgentPresence";
+import { useAgentActivity } from "./lib/useAgentActivity";
 import { recordRecent } from "./lib/recentCanvases";
 import { MOCK_ENABLED, mockCanvas } from "./lib/mockFixture";
 import { modeTheme } from "./lib/modeTheme";
@@ -28,7 +31,12 @@ const MODES: { id: CanvasMode; label: string }[] = [
   { id: "charts", label: "Charts" },
 ];
 
-function availableModes(state: CanvasState, currentMode: CanvasMode): CanvasMode[] {
+// The tabs a canvas has: any mode that holds content, plus empty modes a user
+// turned on via "+" (persisted in enabledModes). `optimistic` is this viewer's
+// locally-selected mode, folded in so a just-clicked "+" tab shows instantly,
+// before the mode.enable round-trip lands. When this returns [], the canvas has
+// no tabs and the template homepage is shown instead.
+function canvasTabs(state: CanvasState, optimistic?: CanvasMode | null): CanvasMode[] {
   const has = {
     map: Object.keys(state.pins).length > 0,
     itinerary: Object.keys(state.events).length > 0,
@@ -38,23 +46,14 @@ function availableModes(state: CanvasState, currentMode: CanvasMode): CanvasMode
     charts: Object.keys(state.charts).length > 0,
   };
   const out = new Set<CanvasMode>();
-  // Always include the current mode so the user doesn't lose their tab.
-  if (
-    currentMode === "map" ||
-    currentMode === "itinerary" ||
-    currentMode === "docs" ||
-    currentMode === "roadmap" ||
-    currentMode === "sheets" ||
-    currentMode === "charts"
-  ) {
-    out.add(currentMode);
-  }
   if (has.map) out.add("map");
   if (has.itinerary) out.add("itinerary");
   if (has.docs) out.add("docs");
   if (has.roadmap) out.add("roadmap");
   if (has.sheets) out.add("sheets");
   if (has.charts) out.add("charts");
+  for (const m of state.enabledModes ?? []) out.add(m);
+  if (optimistic && optimistic !== "welcome") out.add(optimistic);
   return MODES.map((m) => m.id).filter((id) => out.has(id));
 }
 
@@ -91,6 +90,13 @@ export default function App() {
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [connectOpen, setConnectOpen] = useState(false);
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
+  const [addTabOpen, setAddTabOpen] = useState(false);
+  // Actor behind the latest state push ("agent" | "user"), read by the activity
+  // hook. A ref so it's set synchronously before the re-render it triggers.
+  const lastChangeByRef = useRef<ChangeActor | undefined>(undefined);
+  // Latest active mode, mirrored into a ref so the "user scrolled → stop
+  // following" listeners (set up before the mode is computed) can read it.
+  const effectiveModeRef = useRef<CanvasMode>("welcome");
   const [autoOpenedFor, setAutoOpenedFor] = useState<string | null>(null);
   // Keep-alive: once a mode has been opened, keep its subtree mounted and
   // toggle visibility instead of re-mounting on every tab switch. This avoids
@@ -105,6 +111,11 @@ export default function App() {
   //   - set  → the user took the wheel; their view is fully local and unaffected
   //     by what anyone else (or the agent) does.
   const [viewMode, setViewMode] = useState<CanvasMode | null>(null);
+  // While following, the tab to show — driven by where the agent last acted
+  // (an edit OR an explicit mode change), so a follower auto-jumps to the tab
+  // the agent is working in even when no mode.set was sent. Ignored once the
+  // user takes the wheel (viewMode set). null → fall back to canvasState.mode.
+  const [followMode, setFollowMode] = useState<CanvasMode | null>(null);
   const currentMode = (viewMode ?? (canvasState?.mode as CanvasMode | undefined)) as
     | CanvasMode
     | undefined;
@@ -128,7 +139,11 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    return onStateUpdate((c, _all, s) => {
+    return onStateUpdate((c, _all, s, _edits, lastChangeBy) => {
+      // Stash who triggered this update (agent vs user) before the state change
+      // re-renders — the activity hook reads it to drive the agent cursor.
+      // Undefined on the initial connect snapshot.
+      lastChangeByRef.current = lastChangeBy;
       setCanvas(c);
       setCanvasState(s);
     });
@@ -160,8 +175,10 @@ export default function App() {
     setSelectedEventId(null);
     setVisitedModes(new Set());
     setViewMode(null);
+    setFollowMode(null);
     setConnectOpen(false);
     setModeMenuOpen(false);
+    setAddTabOpen(false);
   }
 
   function handleJoin(code: string) {
@@ -185,6 +202,64 @@ export default function App() {
     setCodeInURL(code);
     resetPerCanvasState();
   }
+
+  // Live agent presence: detect agent-authored edits and surface a cursor +
+  // who's in the room. Safe to call with nulls before a canvas loads.
+  const { edit: agentEdit, agents: agentList } = useAgentActivity(canvas?.id, canvasState, lastChangeByRef);
+
+  // Auto-follow: while following, jump the view to wherever the agent acts.
+  // (1) An agent edit pulls the follower to that entity's tab — this is the bit
+  // mode.set alone couldn't do (adding a roadmap item never set the mode).
+  useEffect(() => {
+    if (viewMode === null && agentEdit) setFollowMode(agentEdit.mode);
+  }, [agentEdit, viewMode]);
+  // (2) An explicit agent mode change (template / map / mode.set) is also
+  // followed; this effect runs last so an explicit switch wins ties, and on
+  // resume-follow (viewMode→null) it re-baselines to the canvas mode.
+  useEffect(() => {
+    if (viewMode === null && canvasState) setFollowMode(canvasState.mode as CanvasMode);
+  }, [canvasState?.mode, viewMode]);
+
+  // While following, scroll the agent's just-edited element into view so its
+  // cursor is always on screen. The element may not be mounted yet (the tab is
+  // mid-switch), so retry across a few frames until it's present + visible.
+  useEffect(() => {
+    if (viewMode !== null || !agentEdit) return;
+    const id = agentEdit.entityId;
+    let raf = 0;
+    let tries = 0;
+    const tryScroll = () => {
+      const el = document.querySelector<HTMLElement>(`[data-agent-target="${id}"]`);
+      if (el && el.getClientRects().length > 0) {
+        // center on BOTH axes so nested scrollboxes (e.g. a roadmap column's own
+        // vertical scroll) AND the outer strip (horizontal column scroll) both
+        // move to put the edited line squarely in frame.
+        el.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+        return;
+      }
+      if (tries++ < 30) raf = requestAnimationFrame(tryScroll);
+    };
+    raf = requestAnimationFrame(tryScroll);
+    return () => cancelAnimationFrame(raf);
+  }, [agentEdit, viewMode]);
+
+  // Any user scroll/keyboard input while following = "I'm taking the wheel":
+  // pin to the current tab and stop following until they click Follow again.
+  // We listen for wheel/touch/keys (user intent) — NOT 'scroll', which the
+  // auto-scroll above fires programmatically and must not trip this.
+  useEffect(() => {
+    if (viewMode !== null) return;
+    const stop = () => setViewMode(effectiveModeRef.current);
+    const passive: AddEventListenerOptions = { passive: true };
+    window.addEventListener("wheel", stop, passive);
+    window.addEventListener("touchmove", stop, passive);
+    window.addEventListener("keydown", stop);
+    return () => {
+      window.removeEventListener("wheel", stop, passive);
+      window.removeEventListener("touchmove", stop, passive);
+      window.removeEventListener("keydown", stop);
+    };
+  }, [viewMode]);
 
   if (route === "mcp") {
     return (
@@ -222,29 +297,44 @@ export default function App() {
   // Local navigation only — switching tabs never touches the shared canvas or
   // other viewers. See viewMode above.
   const setMode = (mode: CanvasMode) => setViewMode(mode);
-  const effectiveMode = (viewMode ?? canvasState.mode) as CanvasMode;
-  // "Following" = no local override, so the view tracks the canvas mode the
-  // agent drives. Toggling off pins the view to whatever's showing right now.
-  const following = viewMode === null;
-  const toggleFollow = () => setViewMode(following ? effectiveMode : null);
-  const inWelcome = effectiveMode === "welcome";
-  const visibleModes = availableModes(canvasState, effectiveMode);
-  const theme = modeTheme(effectiveMode);
 
-  // In welcome mode, "Canvas →" returns the user to whichever existing
-  // content-bearing mode is most relevant. Preference: map > itinerary > docs.
-  const canvasReturnMode: CanvasMode | null =
-    Object.keys(canvasState.pins).length > 0
-      ? "map"
-      : Object.keys(canvasState.events).length > 0
-      ? "itinerary"
-      : Object.keys(canvasState.notes).length > 0
-      ? "docs"
-      : Object.keys(canvasState.roadmapItems).length > 0
-      ? "roadmap"
-      : Object.keys(canvasState.sheets).length > 0
-      ? "sheets"
-      : null;
+  // The canvas's tabs. Empty → no tabs yet → show the template "homepage".
+  const visibleModes = canvasTabs(canvasState, viewMode);
+  const hasTabs = visibleModes.length > 0;
+  // "Following" = no local override, so the view tracks the agent. While
+  // following, the target tab is followMode (where the agent last acted),
+  // falling back to the canvas mode.
+  const following = viewMode === null;
+  const followTarget = (followMode ?? (canvasState.mode as CanvasMode)) as CanvasMode;
+  // The active tab: when the user has taken the wheel, their pick; while
+  // following, the agent's tab; else the canvas mode; else the first tab. With
+  // no tabs at all we sit on "welcome" (the template homepage).
+  const effectiveMode: CanvasMode = !hasTabs
+    ? "welcome"
+    : !following && viewMode && visibleModes.includes(viewMode)
+    ? viewMode
+    : following && visibleModes.includes(followTarget)
+    ? followTarget
+    : visibleModes.includes(canvasState.mode as CanvasMode)
+    ? (canvasState.mode as CanvasMode)
+    : visibleModes[0];
+  effectiveModeRef.current = effectiveMode;
+  // The homepage shows iff the canvas has zero tabs.
+  const inWelcome = !hasTabs;
+  // Toggling off pins the view to whatever's showing right now.
+  const toggleFollow = () => setViewMode(following ? effectiveMode : null);
+  const theme = modeTheme(effectiveMode);
+  // Modes not yet shown as a tab — the "+" dropdown offers exactly these.
+  const addableModes = MODES.filter((m) => !visibleModes.includes(m.id));
+
+  // Add an empty tab: persist it (so it survives + the agent sees it in
+  // state.read) and locally switch this viewer to it.
+  function addTab(mode: CanvasMode) {
+    sendOp({ op: "mode.enable", mode });
+    setViewMode(mode);
+    setAddTabOpen(false);
+    setModeMenuOpen(false);
+  }
 
   return (
     <ModeNavContext.Provider value={setMode}>
@@ -278,21 +368,10 @@ export default function App() {
           </span>
         </div>
 
-        {inWelcome && canvasReturnMode && (
-          <>
-            <div className="w-px h-4 bg-gray-200 mx-1" />
-            <button
-              onClick={() => setMode(canvasReturnMode)}
-              className="px-3 py-1 rounded-lg text-sm font-medium text-gray-400 hover:bg-gray-900/5 hover:text-gray-700 transition-colors"
-              title="Back to canvas"
-            >
-              Canvas →
-            </button>
-          </>
-        )}
-
-        {!inWelcome && visibleModes.length > 0 && (
-          <>
+        {/* Tab bar — always present once a canvas is loaded. On the template
+            homepage (zero tabs) only the "+" shows, so you can create a tab
+            right from the homepage. */}
+        <>
             <div className="hidden w-px h-4 bg-gray-200 mx-1.5 shrink-0 sm:block" />
 
             {/* Desktop: all modes laid out inline as accent-tinted pills. */}
@@ -314,13 +393,49 @@ export default function App() {
                   </button>
                 );
               })}
-              <button
-                onClick={() => setMode("welcome")}
-                className="ml-0.5 rounded-lg px-3 py-1 text-sm font-medium text-gray-400 hover:bg-gray-900/5 hover:text-gray-700 transition-colors"
-                title="Back to templates"
-              >
-                ← Templates
-              </button>
+              {addableModes.length > 0 && (
+                <div className="relative">
+                  <button
+                    onClick={() => setAddTabOpen((o) => !o)}
+                    className="ml-0.5 rounded-lg px-2.5 py-1 text-sm font-medium text-gray-400 hover:bg-gray-900/5 hover:text-gray-700 transition-colors"
+                    title="Add a tab"
+                    aria-haspopup="menu"
+                    aria-expanded={addTabOpen}
+                  >
+                    +
+                  </button>
+                  {addTabOpen && (
+                    <>
+                      <div className="fixed inset-0 z-10" onClick={() => setAddTabOpen(false)} />
+                      <div
+                        role="menu"
+                        className="absolute left-0 mt-1.5 z-20 min-w-[11rem] rounded-xl bg-white border border-gray-900/10 shadow-lg shadow-gray-900/5 py-1"
+                      >
+                        <div className="px-3 py-1 text-[11px] font-medium uppercase tracking-wide text-gray-400">
+                          Add a tab
+                        </div>
+                        {addableModes.map((m) => {
+                          const t = modeTheme(m.id);
+                          return (
+                            <button
+                              key={m.id}
+                              role="menuitem"
+                              onClick={() => addTab(m.id)}
+                              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-medium text-gray-700 hover:bg-gray-100"
+                            >
+                              <span
+                                className="h-2 w-2 rounded-full shrink-0"
+                                style={{ backgroundColor: t.solid }}
+                              />
+                              {m.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Mobile: a dropdown so every mode is reachable regardless of count. */}
@@ -332,7 +447,7 @@ export default function App() {
                 aria-haspopup="menu"
                 aria-expanded={modeMenuOpen}
               >
-                {MODES.find((m) => m.id === effectiveMode)?.label ?? "Mode"}
+                {hasTabs ? MODES.find((m) => m.id === effectiveMode)?.label ?? "Mode" : "+ Tab"}
                 <ChevronDown
                   className={`w-3.5 h-3.5 transition-transform ${modeMenuOpen ? "rotate-180" : ""}`}
                   aria-hidden="true"
@@ -363,25 +478,41 @@ export default function App() {
                         </button>
                       );
                     })}
-                    <div className="my-1 border-t border-gray-100" />
-                    <button
-                      role="menuitem"
-                      onClick={() => {
-                        setMode("welcome");
-                        setModeMenuOpen(false);
-                      }}
-                      className="w-full text-left px-3 py-2 text-sm font-medium text-gray-500 hover:bg-gray-100"
-                    >
-                      ← Templates
-                    </button>
+                    {addableModes.length > 0 && (
+                      <>
+                        {visibleModes.length > 0 && (
+                          <div className="my-1 border-t border-gray-100" />
+                        )}
+                        <div className="px-3 py-1 text-[11px] font-medium uppercase tracking-wide text-gray-400">
+                          Add a tab
+                        </div>
+                        {addableModes.map((m) => {
+                          const t = modeTheme(m.id);
+                          return (
+                            <button
+                              key={m.id}
+                              role="menuitem"
+                              onClick={() => addTab(m.id)}
+                              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-medium text-gray-700 hover:bg-gray-100"
+                            >
+                              <span
+                                className="h-2 w-2 rounded-full shrink-0"
+                                style={{ backgroundColor: t.solid }}
+                              />
+                              {m.label}
+                            </button>
+                          );
+                        })}
+                      </>
+                    )}
                   </div>
                 </>
               )}
             </div>
-          </>
-        )}
+        </>
 
         <div className="ml-auto flex items-center gap-2 shrink-0">
+          <AgentPresence agents={agentList} edit={agentEdit} onJump={setViewMode} />
           <button
             onClick={toggleFollow}
             className={[
@@ -474,6 +605,8 @@ export default function App() {
           onSwitchCanvas={() => { setConnectOpen(false); handleJoin(""); }}
         />
       )}
+
+      <AgentCursor edit={agentEdit} name={agentList[0]?.name ?? "Claude"} />
     </div>
     </ModeNavContext.Provider>
   );

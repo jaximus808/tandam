@@ -72,6 +72,7 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 
 		r.Get("/api/canvas/state", h.GetState)
 		r.Post("/api/canvas/mode", h.SetMode)
+		r.Post("/api/canvas/mode/enable", h.EnableMode)
 		r.Post("/api/canvas/map", h.SetMap)
 		r.Post("/api/canvas/template", h.ApplyTemplate)
 

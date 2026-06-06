@@ -35,7 +35,8 @@
       "Bash(tr 'a-zA-Z' 'n-za-mN-ZA-M')",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5191/)",
       "Bash(curl -s -o /dev/null -w \"landing %{http_code}\\\\n\" http://localhost:5191/)",
-      "Bash(open \"http://localhost:5191/\")"
+      "Bash(open \"http://localhost:5191/\")",
+      "mcp__agentcanvas__canvas_sheet_row_update"
     ]
   }
 }

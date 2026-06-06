@@ -549,6 +549,7 @@ function SortableTableRow({ row, columns }: { row: SheetRow; columns: SheetColum
   return (
     <tr
       ref={setNodeRef}
+      data-agent-target={row.id}
       style={style}
       className="group border-b border-gray-100 last:border-b-0 hover:bg-blue-50/30"
     >

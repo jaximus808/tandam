@@ -35,14 +35,15 @@ func generateCode() string {
 // ── DB row types (snake_case = Supabase column names) ─────────────────────────
 
 type dbCanvas struct {
-	ID        string  `json:"id"`
-	Code      string  `json:"code"`
-	Name      string  `json:"name"`
-	Mode      string  `json:"mode"`
-	MapID     *string `json:"map_id"`
-	Version   int     `json:"version"`
-	CreatedAt string  `json:"created_at"`
-	UpdatedAt string  `json:"updated_at"`
+	ID           string          `json:"id"`
+	Code         string          `json:"code"`
+	Name         string          `json:"name"`
+	Mode         string          `json:"mode"`
+	MapID        *string         `json:"map_id"`
+	EnabledModes json.RawMessage `json:"enabled_modes"`
+	Version      int             `json:"version"`
+	CreatedAt    string          `json:"created_at"`
+	UpdatedAt    string          `json:"updated_at"`
 }
 
 type dbPin struct {
@@ -501,9 +502,15 @@ func (s *supabaseStore) GetCanvasState(_ context.Context, canvasID uuid.UUID) (*
 	row := rows[0]
 	canvas := toCanvas(row.dbCanvas)
 
+	enabledModes := []string{}
+	if len(row.EnabledModes) > 0 {
+		_ = json.Unmarshal(row.EnabledModes, &enabledModes)
+	}
+
 	state := &CanvasState{
 		Version:      canvas.Version,
 		Mode:         canvas.Mode,
+		EnabledModes: enabledModes,
 		Pins:         make(map[string]*Pin, len(row.Pins)),
 		Events:       make(map[string]*Event, len(row.Events)),
 		Notes:        make(map[string]*Note, len(row.Notes)),
@@ -563,6 +570,45 @@ func (s *supabaseStore) GetCanvasState(_ context.Context, canvasID uuid.UUID) (*
 func (s *supabaseStore) SetMode(ctx context.Context, canvasID uuid.UUID, mode string) (int, error) {
 	err := s.exec(s.client.From("canvases").
 		Update(map[string]string{"mode": mode}, "minimal", "").
+		Eq("id", canvasID.String()))
+	if err != nil {
+		return 0, err
+	}
+	return s.bumpVersion(ctx, canvasID)
+}
+
+// EnableMode adds a mode to the canvas's enabled_modes set (the user turning on
+// an empty tab). Idempotent: if the mode is already enabled it's a no-op and the
+// version is left untouched so we don't churn a needless broadcast.
+func (s *supabaseStore) EnableMode(ctx context.Context, canvasID uuid.UUID, mode string) (int, error) {
+	var rows []struct {
+		EnabledModes json.RawMessage `json:"enabled_modes"`
+		Version      int             `json:"version"`
+	}
+	_, err := s.client.From("canvases").
+		Select("enabled_modes,version", "", false).
+		Eq("id", canvasID.String()).
+		ExecuteTo(&rows)
+	if err != nil {
+		return 0, err
+	}
+	if len(rows) == 0 {
+		return 0, fmt.Errorf("canvas not found: %s", canvasID)
+	}
+
+	modes := []string{}
+	if len(rows[0].EnabledModes) > 0 {
+		_ = json.Unmarshal(rows[0].EnabledModes, &modes)
+	}
+	for _, m := range modes {
+		if m == mode {
+			return rows[0].Version, nil // already enabled — no write, no bump
+		}
+	}
+	modes = append(modes, mode)
+
+	err = s.exec(s.client.From("canvases").
+		Update(map[string]any{"enabled_modes": modes}, "minimal", "").
 		Eq("id", canvasID.String()))
 	if err != nil {
 		return 0, err

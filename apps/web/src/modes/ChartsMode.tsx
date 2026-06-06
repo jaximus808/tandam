@@ -133,7 +133,10 @@ function ChartCard({
   }
 
   return (
-    <div className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden flex flex-col">
+    <div
+      data-agent-target={chart.id}
+      className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden flex flex-col"
+    >
       <div className="flex items-center justify-between gap-2 px-4 py-2.5 border-b border-gray-100">
         <input
           value={chart.name}

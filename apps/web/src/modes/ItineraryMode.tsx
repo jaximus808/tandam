@@ -120,6 +120,7 @@ export default function ItineraryMode({
               return (
                 <div
                   key={ev.id}
+                  data-agent-target={ev.id}
                   onClick={() => onSelectEvent(isSelected ? null : ev.id)}
                   className={[
                     "bg-white rounded-lg border p-4 cursor-pointer transition-colors",

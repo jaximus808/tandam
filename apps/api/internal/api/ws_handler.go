@@ -92,6 +92,13 @@ func (wh *WSHandler) handleOp(canvasID uuid.UUID, raw []byte) {
 		}
 		_, mutErr = wh.store.SetMode(ctx, canvasID, msg.Mode)
 
+	case "mode.enable":
+		if !isEnableableMode(msg.Mode) {
+			log.Printf("ws op mode.enable: invalid mode %q", msg.Mode)
+			return
+		}
+		_, mutErr = wh.store.EnableMode(ctx, canvasID, msg.Mode)
+
 	case "map.set":
 		if msg.MapID == "" || wh.maps == nil || !wh.maps.Has(msg.MapID) {
 			log.Printf("ws op map.set: unknown mapId %q", msg.MapID)
@@ -460,5 +467,7 @@ func (wh *WSHandler) handleOp(canvasID uuid.UUID, raw []byte) {
 		log.Printf("ws op %s error: %v", msg.Op, mutErr)
 		return
 	}
-	broadcastState(ctx, wh.store, wh.hub, canvasID)
+	// WS ops come from a browser viewer — attribute to "user" so the agent
+	// cursor doesn't fire when a human edits (even an agent-created entity).
+	broadcastStateBy(ctx, wh.store, wh.hub, canvasID, "user")
 }

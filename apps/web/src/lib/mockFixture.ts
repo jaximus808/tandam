@@ -316,6 +316,7 @@ function toRecord<T extends { id: EntityId }>(arr: T[]): Record<EntityId, T> {
 const initialState: CanvasState = {
   version: 1,
   mode: "sheets",
+  enabledModes: [],
   pins: toRecord(pins),
   events: toRecord(events),
   notes: toRecord(notes),

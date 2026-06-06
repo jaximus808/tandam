@@ -85,6 +85,27 @@ func (h *Handler) SetMode(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
 }
 
+// EnableMode turns on a tab the user added via "+", even before it has content.
+// POST /api/canvas/mode/enable  (JWT required)
+func (h *Handler) EnableMode(w http.ResponseWriter, r *http.Request) {
+	var body struct{ Mode string `json:"mode"` }
+	if err := decode(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if !isEnableableMode(body.Mode) {
+		writeError(w, http.StatusBadRequest, "invalid mode")
+		return
+	}
+	canvasID := CanvasIDFromCtx(r.Context())
+	if _, err := h.store.EnableMode(r.Context(), canvasID, body.Mode); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	broadcastState(r.Context(), h.store, h.hub, canvasID)
+	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
+}
+
 // POST /api/canvas/map  (JWT required)
 func (h *Handler) SetMap(w http.ResponseWriter, r *http.Request) {
 	var body struct{ MapID string `json:"mapId"` }
@@ -139,6 +160,12 @@ func isValidMode(mode string) bool {
 		return true
 	}
 	return false
+}
+
+// isEnableableMode is isValidMode minus "welcome" — welcome is the template
+// picker, not a content tab a user can add.
+func isEnableableMode(mode string) bool {
+	return mode != "welcome" && isValidMode(mode)
 }
 
 func isValidSheetColumnType(t string) bool {

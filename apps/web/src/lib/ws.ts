@@ -2,7 +2,14 @@ import type { CanvasMeta, CanvasState, PendingEdit, WSClientMessage } from "../t
 import { MOCK_ENABLED } from "./mockFixture";
 import { mockConnect, mockOnStateUpdate, mockSendOp } from "./mockWS";
 
-type StateHandler = (canvas: CanvasMeta, canvases: CanvasMeta[], state: CanvasState, pendingEdits: PendingEdit[]) => void;
+export type ChangeActor = "agent" | "user";
+type StateHandler = (
+  canvas: CanvasMeta,
+  canvases: CanvasMeta[],
+  state: CanvasState,
+  pendingEdits: PendingEdit[],
+  lastChangeBy?: ChangeActor,
+) => void;
 
 let socket: WebSocket | null = null;
 let handlers: StateHandler[] = [];
@@ -94,7 +101,8 @@ function connect(code: string) {
             msg.canvas as CanvasMeta,
             [],
             msg.state as CanvasState,
-            msg.pendingEdits as PendingEdit[]
+            msg.pendingEdits as PendingEdit[],
+            msg.lastChangeBy as ChangeActor | undefined
           )
         );
       }

@@ -481,6 +481,7 @@ function SortableRow({
   return (
     <li
       ref={setNodeRef}
+      data-agent-target={flat.id}
       style={style}
       className={`relative ${isActive ? "z-10" : ""}`}
     >
@@ -894,6 +895,7 @@ function RoadmapColumn({
 
   return (
     <div
+      data-agent-target={root.id}
       className={`w-72 shrink-0 flex flex-col rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden ${
         compact ? "max-h-[26rem]" : "max-h-full"
       }`}
@@ -930,6 +932,7 @@ function BoardRow({ item, depth }: { item: RoadmapItem; depth: number }) {
   const status = item.status as RoadmapStatus;
   return (
     <div
+      data-agent-target={item.id}
       className="group flex items-start gap-1.5 py-1 pr-1.5 rounded hover:bg-gray-50"
       style={{ paddingLeft: 6 + depth * 16 }}
     >
