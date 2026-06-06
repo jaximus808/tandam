@@ -102,6 +102,9 @@ type dbSheet struct {
 	SortOrder int             `json:"sort_order"`
 	CreatedBy string          `json:"created_by"`
 	UpdatedAt string          `json:"updated_at"`
+	// sheet_rows is FK'd to sheets (no canvas_id), so PostgREST embeds rows
+	// nested here under each sheet — NOT as a top-level table on the canvas.
+	SheetRows []dbSheetRow `json:"sheet_rows"`
 }
 
 type dbSheetRow struct {
@@ -173,7 +176,8 @@ type dbCanvasWithChildren struct {
 	Notes         []dbNote         `json:"notes"`
 	RoadmapItems  []dbRoadmapItem  `json:"roadmap_items"`
 	Sheets        []dbSheet        `json:"sheets"`
-	SheetRows     []dbSheetRow     `json:"sheet_rows"`
+	// NOTE: sheet rows are NOT a top-level embed — they ride nested inside each
+	// dbSheet.SheetRows (sheet_rows is FK'd to sheets, not canvases).
 	Charts        []dbChart        `json:"charts"`
 	Actions       []dbAction       `json:"actions"`
 	Agents        []dbAgent        `json:"agents"`
@@ -505,7 +509,7 @@ func (s *supabaseStore) GetCanvasState(_ context.Context, canvasID uuid.UUID) (*
 		Notes:        make(map[string]*Note, len(row.Notes)),
 		RoadmapItems: make(map[string]*RoadmapItem, len(row.RoadmapItems)),
 		Sheets:       make(map[string]*Sheet, len(row.Sheets)),
-		SheetRows:    make(map[string]*SheetRow, len(row.SheetRows)),
+		SheetRows:    make(map[string]*SheetRow),
 		Charts:       make(map[string]*Chart, len(row.Charts)),
 		Actions:      make(map[string]*Action, len(row.Actions)),
 		Agents:       make(map[string]*Agent, len(row.Agents)),
@@ -529,10 +533,12 @@ func (s *supabaseStore) GetCanvasState(_ context.Context, canvasID uuid.UUID) (*
 	for _, d := range row.Sheets {
 		sh := toSheet(d)
 		state.Sheets[sh.ID.String()] = sh
-	}
-	for _, d := range row.SheetRows {
-		sr := toSheetRow(d)
-		state.SheetRows[sr.ID.String()] = sr
+		// Rows arrive nested under their sheet (see dbSheet.SheetRows); flatten
+		// them into the canvas-level SheetRows map the frontend expects.
+		for _, rd := range d.SheetRows {
+			sr := toSheetRow(rd)
+			state.SheetRows[sr.ID.String()] = sr
+		}
 	}
 	for _, d := range row.Charts {
 		ch := toChart(d)
