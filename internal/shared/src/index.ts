@@ -68,6 +68,10 @@ export interface CanvasEvent {
   // carry the tag; the renderer picks the first non-empty one (sorted by
   // start) so agents typically set it on the first event of each day.
   dayTag?: string;
+  // Optional cost of this event (flights, hotels, activities…), in the trip's
+  // currency. The itinerary sums these into live per-day + grand totals, so the
+  // total spend always tracks the plan without a separate sheet to maintain.
+  cost?: number;
   createdBy: "agent" | "user";
   updatedAt: number;
 }

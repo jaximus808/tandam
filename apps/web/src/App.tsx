@@ -243,21 +243,35 @@ export default function App() {
     return () => cancelAnimationFrame(raf);
   }, [agentEdit, viewMode]);
 
-  // Any user scroll/keyboard input while following = "I'm taking the wheel":
-  // pin to the current tab and stop following until they click Follow again.
-  // We listen for wheel/touch/keys (user intent) — NOT 'scroll', which the
-  // auto-scroll above fires programmatically and must not trip this.
+  // A user scroll/pan while following = "I'm taking the wheel": pin to the
+  // current tab and stop following until they click Follow again. We listen for
+  // wheel/touch (unambiguous scroll intent) and ONLY the keyboard keys that
+  // actually scroll the page — not every keypress. Typing in a field, hitting a
+  // shortcut, or cmd-tabbing must never silently drop follow. We also skip
+  // 'scroll' itself, which the auto-scroll above fires programmatically.
   useEffect(() => {
     if (viewMode !== null) return;
     const stop = () => setViewMode(effectiveModeRef.current);
     const passive: AddEventListenerOptions = { passive: true };
+    // The keys that move the viewport — only these hand off the wheel.
+    const SCROLL_KEYS = new Set([
+      "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+      "PageUp", "PageDown", "Home", "End", " ", "Spacebar",
+    ]);
+    const onKey = (e: KeyboardEvent) => {
+      if (!SCROLL_KEYS.has(e.key)) return;
+      // A scroll key aimed at a text field moves the caret, not the page — ignore.
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      stop();
+    };
     window.addEventListener("wheel", stop, passive);
     window.addEventListener("touchmove", stop, passive);
-    window.addEventListener("keydown", stop);
+    window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("wheel", stop, passive);
       window.removeEventListener("touchmove", stop, passive);
-      window.removeEventListener("keydown", stop);
+      window.removeEventListener("keydown", onKey);
     };
   }, [viewMode]);
 
@@ -305,6 +319,9 @@ export default function App() {
   // following, the target tab is followMode (where the agent last acted),
   // falling back to the canvas mode.
   const following = viewMode === null;
+  // Following is armed even before any agent shows up — distinguish "an agent is
+  // here" from "on, waiting for one" so the button reads as live, not dead.
+  const agentPresent = agentList.length > 0;
   const followTarget = (followMode ?? (canvasState.mode as CanvasMode)) as CanvasMode;
   // The active tab: when the user has taken the wheel, their pick; while
   // following, the agent's tab; else the canvas mode; else the first tab. With
@@ -522,7 +539,9 @@ export default function App() {
             style={following ? { backgroundColor: theme.soft, color: theme.solid } : undefined}
             title={
               following
-                ? "Following the agent — your view jumps to whatever it's working on. Click to pin your own view."
+                ? agentPresent
+                  ? "Following the agent — your view jumps to whatever it's working on. Click to pin your own view."
+                  : "Armed and waiting — the moment an agent connects and edits, your view jumps to it. Click to pin your own view."
                 : "Pinned to your own view. Click to follow the agent and track where it's working."
             }
             aria-pressed={following}
@@ -539,7 +558,9 @@ export default function App() {
                 style={{ backgroundColor: following ? theme.solid : "#9ca3af" }}
               />
             </span>
-            <span className="hidden sm:inline">{following ? "Following" : "Follow agent"}</span>
+            <span className="hidden sm:inline">
+              {following ? (agentPresent ? "Following" : "Following · waiting") : "Follow agent"}
+            </span>
           </button>
           <button
             onClick={() => setConnectOpen(true)}

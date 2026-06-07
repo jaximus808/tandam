@@ -90,6 +90,7 @@ export async function handleTool(
         toPinId: args.toPinId,
         travelMode: args.travelMode,
         dayTag: args.dayTag,
+        cost: args.cost,
         createdBy: "agent",
       });
 
@@ -388,7 +389,10 @@ export const TOOLS = [
       "polyline between the two pins with a mode icon at the midpoint, " +
       "and the itinerary will show the card as 'A → B'. Use end for the " +
       "arrival time on travel events.\n" +
-      "Pins left off every entry stay 'ungrouped' (fine for 'just pin some places' use).",
+      "Pins left off every entry stay 'ungrouped' (fine for 'just pin some places' use).\n" +
+      "Set `cost` for anything you priced (flights, hotels, activities) — the itinerary " +
+      "sums costs into live per-day + grand totals, so spend tracks the plan with no " +
+      "separate sheet to maintain. Keep the itinerary the source of truth for trip cost.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -435,6 +439,13 @@ export const TOOLS = [
             "typically set it on the FIRST event of each day. Keep it punchy: 'DAY 1', " +
             "'ARRIVAL', 'KYOTO'.",
         },
+        cost: {
+          type: "number",
+          description:
+            "Optional cost of this entry (flight/hotel/activity) in the trip's currency. " +
+            "The itinerary sums these into live per-day and grand totals — set it whenever " +
+            "you know a price so the running trip cost stays correct as the plan changes.",
+        },
       },
       required: ["title", "start"],
     },
@@ -475,6 +486,12 @@ export const TOOLS = [
           type: "string",
           description:
             "Short prefix for the map day label, e.g. 'DAY 1'. First non-empty tag on the day wins.",
+        },
+        cost: {
+          type: "number",
+          description:
+            "Cost of this entry in the trip's currency. Updating it re-totals the itinerary " +
+            "live (per-day + grand total) — keep it current so trip spend always matches the plan.",
         },
       },
       required: ["id"],

@@ -36,7 +36,16 @@
       "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5191/)",
       "Bash(curl -s -o /dev/null -w \"landing %{http_code}\\\\n\" http://localhost:5191/)",
       "Bash(open \"http://localhost:5191/\")",
-      "mcp__agentcanvas__canvas_sheet_row_update"
+      "mcp__agentcanvas__canvas_sheet_row_update",
+      "WebFetch(domain:www.kayak.com)",
+      "WebFetch(domain:www.google.com)",
+      "mcp__agentcanvas__canvas_roadmap_item_delete",
+      "WebFetch(domain:bwiairport.com)",
+      "mcp__agentcanvas__canvas_event_delete",
+      "mcp__agentcanvas__canvas_pin_update",
+      "mcp__agentcanvas__canvas_sheet_row_delete",
+      "mcp__agentcanvas__canvas_note_delete",
+      "mcp__agentcanvas__canvas_pin_delete"
     ]
   }
 }

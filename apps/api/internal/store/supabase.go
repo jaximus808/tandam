@@ -68,10 +68,11 @@ type dbEvent struct {
 	PinID      *string  `json:"pin_id"`
 	FromPinID  *string  `json:"from_pin_id"`
 	ToPinID    *string `json:"to_pin_id"`
-	TravelMode *string `json:"travel_mode"`
-	DayTag     *string `json:"day_tag"`
-	CreatedBy  string  `json:"created_by"`
-	UpdatedAt  string  `json:"updated_at"`
+	TravelMode *string  `json:"travel_mode"`
+	DayTag     *string  `json:"day_tag"`
+	Cost       *float64 `json:"cost"`
+	CreatedBy  string   `json:"created_by"`
+	UpdatedAt  string   `json:"updated_at"`
 }
 
 type dbNote struct {
@@ -223,6 +224,7 @@ func toEvent(d dbEvent) *Event {
 		Timezone:   d.Timezone,
 		TravelMode: d.TravelMode,
 		DayTag:     d.DayTag,
+		Cost:       d.Cost,
 		CreatedBy:  d.CreatedBy, UpdatedAt: parseTime(d.UpdatedAt)}
 	if d.EndTime != nil {
 		t := parseTime(*d.EndTime)
@@ -753,6 +755,9 @@ func (s *supabaseStore) CreateEvent(ctx context.Context, canvasID uuid.UUID, ev 
 	if ev.DayTag != nil {
 		row["day_tag"] = *ev.DayTag
 	}
+	if ev.Cost != nil {
+		row["cost"] = *ev.Cost
+	}
 	err := s.exec(s.client.From("events").Insert(row, false, "", "minimal", ""))
 	if err != nil {
 		return 0, err
@@ -773,6 +778,7 @@ func (s *supabaseStore) UpdateEvent(ctx context.Context, canvasID uuid.UUID, id 
 	if patch.ToPinID != nil    { m["to_pin_id"] = patch.ToPinID.String() }
 	if patch.TravelMode != nil { m["travel_mode"] = *patch.TravelMode }
 	if patch.DayTag != nil     { m["day_tag"] = *patch.DayTag }
+	if patch.Cost != nil       { m["cost"] = *patch.Cost }
 	if len(m) == 0 {
 		return 0, nil
 	}

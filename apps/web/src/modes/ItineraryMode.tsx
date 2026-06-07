@@ -30,6 +30,17 @@ function TravelIcon({ mode, className }: { mode: TravelMode; className?: string 
 
 const MARKDOWN_PLUGINS = [remarkGfm];
 
+// Trip costs are derived live from events, so the total always tracks the plan.
+const MONEY = new Intl.NumberFormat(undefined, {
+  style: "currency",
+  currency: "USD",
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 2,
+});
+const formatCost = (n: number) => MONEY.format(n);
+const sumCost = (events: CanvasEvent[]) =>
+  events.reduce((total, ev) => total + (typeof ev.cost === "number" ? ev.cost : 0), 0);
+
 function groupByDay(events: CanvasEvent[]): [string, CanvasEvent[]][] {
   const map = new Map<string, CanvasEvent[]>();
   for (const ev of events) {
@@ -52,6 +63,10 @@ export default function ItineraryMode({
 }: Props) {
   const events = Object.values(state.events);
   const days = groupByDay(events);
+  // Live grand total across the whole itinerary. Editing any event's cost (or
+  // adding/removing one) recomputes this on the next render — no sheet to sync.
+  const grandTotal = sumCost(events);
+  const hasCost = events.some((ev) => typeof ev.cost === "number");
 
   // Export URL doubles as a download (Content-Disposition forces it) AND a
   // calendar subscription URL (Google / Apple / Outlook can poll it). Same URL,
@@ -82,7 +97,15 @@ export default function ItineraryMode({
   return (
     <div className="tandem-scroll flex-1 overflow-y-auto bg-paper">
       <div className="max-w-2xl mx-auto w-full px-6 py-6">
-        <div className="flex items-center justify-end gap-3 mb-4 -mt-2">
+        <div className="flex items-center justify-between gap-3 mb-4 -mt-2">
+          {hasCost ? (
+            <span className="text-sm font-medium text-gray-900">
+              Total <span className="text-emerald-700">{formatCost(grandTotal)}</span>
+            </span>
+          ) : (
+            <span />
+          )}
+          <div className="flex items-center gap-3">
           <a
             href={icsPath}
             download={downloadFilename}
@@ -98,11 +121,15 @@ export default function ItineraryMode({
           >
             {copied ? "Copied!" : "Copy subscribe URL"}
           </button>
+          </div>
         </div>
         {days.map(([day, dayEvents]) => (
         <section key={day} className="mb-8">
-          <h2 className="font-display text-lg font-medium tracking-tight text-gray-900 mb-3 sticky top-0 bg-paper/90 backdrop-blur py-1.5 z-10">
-            {formatDay(day)}
+          <h2 className="font-display text-lg font-medium tracking-tight text-gray-900 mb-3 sticky top-0 bg-paper/90 backdrop-blur py-1.5 z-10 flex items-baseline justify-between gap-3">
+            <span>{formatDay(day)}</span>
+            {sumCost(dayEvents) > 0 && (
+              <span className="text-sm font-normal text-gray-400">{formatCost(sumCost(dayEvents))}</span>
+            )}
           </h2>
           <div className="space-y-3">
             {dayEvents.map((ev) => {
@@ -130,11 +157,18 @@ export default function ItineraryMode({
                 >
                   <div className="flex items-start justify-between gap-2">
                     <span className="font-medium text-gray-900">{ev.title}</span>
-                    <span className="text-sm text-gray-400 whitespace-nowrap">
-                      {formatTime(ev.start, ev.timezone)}
-                      {ev.end && ` – ${formatTime(ev.end, ev.timezone)}`}
-                      {tzAbbrev(ev.start, ev.timezone) && (
-                        <span className="ml-1 text-gray-300">{tzAbbrev(ev.start, ev.timezone)}</span>
+                    <span className="flex flex-col items-end shrink-0">
+                      <span className="text-sm text-gray-400 whitespace-nowrap">
+                        {formatTime(ev.start, ev.timezone)}
+                        {ev.end && ` – ${formatTime(ev.end, ev.timezone)}`}
+                        {tzAbbrev(ev.start, ev.timezone) && (
+                          <span className="ml-1 text-gray-300">{tzAbbrev(ev.start, ev.timezone)}</span>
+                        )}
+                      </span>
+                      {typeof ev.cost === "number" && (
+                        <span className="mt-0.5 text-xs font-semibold text-emerald-700 whitespace-nowrap">
+                          {formatCost(ev.cost)}
+                        </span>
                       )}
                     </span>
                   </div>

@@ -47,6 +47,7 @@ type Event struct {
 	ToPinID    *uuid.UUID `json:"toPinId,omitempty"`
 	TravelMode *string    `json:"travelMode,omitempty"`
 	DayTag     *string    `json:"dayTag,omitempty"`
+	Cost       *float64   `json:"cost,omitempty"`
 	CreatedBy  string     `json:"createdBy"`
 	UpdatedAt  time.Time  `json:"updatedAt"`
 }
@@ -203,6 +204,7 @@ type EventPatch struct {
 	ToPinID    *uuid.UUID `json:"toPinId"`
 	TravelMode *string    `json:"travelMode"`
 	DayTag     *string    `json:"dayTag"`
+	Cost       *float64   `json:"cost"`
 }
 
 type NotePatch struct {
