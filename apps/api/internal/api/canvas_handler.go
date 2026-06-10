@@ -49,6 +49,17 @@ func (h *Handler) GetCanvasByCode(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, canvas)
 }
 
+// GET /api/stats/canvas-count  (public) — total canvases created, for the
+// landing page's social-proof counter.
+func (h *Handler) CanvasCount(w http.ResponseWriter, r *http.Request) {
+	count, err := h.store.CanvasCount(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"count": count})
+}
+
 // GET /api/canvas/state  (JWT required)
 func (h *Handler) GetState(w http.ResponseWriter, r *http.Request) {
 	canvasID := CanvasIDFromCtx(r.Context())

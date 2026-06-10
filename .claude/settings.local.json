@@ -45,7 +45,16 @@
       "mcp__agentcanvas__canvas_pin_update",
       "mcp__agentcanvas__canvas_sheet_row_delete",
       "mcp__agentcanvas__canvas_note_delete",
-      "mcp__agentcanvas__canvas_pin_delete"
+      "mcp__agentcanvas__canvas_pin_delete",
+      "Bash(python3 *)",
+      "mcp__agentcanvas__canvas_sheet_column_add",
+      "mcp__agentcanvas__canvas_chart_add",
+      "Skill(office-hours)",
+      "Bash(echo \"BUILD_EXIT=$?\")",
+      "Bash(go test *)",
+      "WebFetch(domain:x.com)",
+      "WebFetch(domain:www.reddit.com)",
+      "WebFetch(domain:benenewton.com)"
     ]
   }
 }

@@ -39,6 +39,7 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 	r.Get("/ws", wsH.ServeWS)
 	r.Get("/api/maps", mapsH.List)
 	r.Get("/api/maps/{id}", mapsH.Get)
+	r.Get("/api/stats/canvas-count", h.CanvasCount)
 
 	// ── Auth (human login; cookie-based session) ─────────────────────────────────
 	r.Post("/api/auth/google", authH.GoogleLogin)

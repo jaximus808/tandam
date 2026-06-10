@@ -101,6 +101,10 @@ const SCENES: Scene[] = [
 
 const SCENE_MS = 3600;
 
+// Only show the public "N canvases created" counter once it's real social
+// proof — a tiny number reads as anti-proof. Bump down as adoption grows.
+const CANVAS_COUNT_FLOOR = 50;
+
 const MODE_TABS = ["Map", "Itinerary", "Docs", "Roadmap", "Sheets", "Charts"];
 
 const USE_CASES = [
@@ -726,6 +730,7 @@ export default function Landing({ onJoin, onOpenMCP }: Props) {
   const [recents, setRecents] = useState(() => listRecent());
   const [user, setUser] = useState<User | null>(null);
   const [signInOpen, setSignInOpen] = useState(false);
+  const [canvasCount, setCanvasCount] = useState<number | null>(null);
 
   const hasRecents = useMemo(() => recents.length > 0, [recents]);
   const scene = SCENES[sceneIdx];
@@ -739,6 +744,21 @@ export default function Landing({ onJoin, onOpenMCP }: Props) {
     fetchMe().then((u) => {
       if (!cancelled) setUser(u);
     });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Public social-proof counter. Degrades silently — no error UI, and the
+  // number only renders once it's worth showing (see threshold below).
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/stats/canvas-count")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!cancelled && d && typeof d.count === "number") setCanvasCount(d.count);
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -885,6 +905,11 @@ export default function Landing({ onJoin, onOpenMCP }: Props) {
                   </>
                 )}
               </span>
+              {canvasCount !== null && canvasCount >= CANVAS_COUNT_FLOOR && (
+                <span className="font-code tabular-nums text-gray-500">
+                  {canvasCount.toLocaleString()} canvases created
+                </span>
+              )}
             </div>
           </div>
 

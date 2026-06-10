@@ -456,6 +456,19 @@ func (s *supabaseStore) CreateCanvas(_ context.Context, name string) (*Canvas, e
 	return nil, fmt.Errorf("failed to generate unique canvas code after 10 attempts")
 }
 
+// CanvasCount returns the total number of canvases. Uses a count=exact HEAD
+// request (Select count="exact", head=true) so no rows are transferred — the
+// total comes back in the Content-Range header, surfaced as Execute's int64.
+func (s *supabaseStore) CanvasCount(_ context.Context) (int, error) {
+	_, count, err := s.client.From("canvases").
+		Select("id", "exact", true).
+		Execute()
+	if err != nil {
+		return 0, err
+	}
+	return int(count), nil
+}
+
 func (s *supabaseStore) GetCanvasByCode(_ context.Context, code string) (*Canvas, error) {
 	var rows []dbCanvas
 	_, err := s.client.From("canvases").

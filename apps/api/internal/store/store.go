@@ -284,6 +284,7 @@ type ActionStatePatch struct {
 type Store interface {
 	// Canvas
 	CreateCanvas(ctx context.Context, name string) (*Canvas, error)
+	CanvasCount(ctx context.Context) (int, error)
 	GetCanvasByCode(ctx context.Context, code string) (*Canvas, error)
 	GetCanvasByID(ctx context.Context, id uuid.UUID) (*Canvas, error)
 	GetCanvasState(ctx context.Context, canvasID uuid.UUID) (*Canvas, *CanvasState, []*PendingEdit, error)

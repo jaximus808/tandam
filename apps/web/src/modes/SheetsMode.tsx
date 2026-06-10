@@ -98,8 +98,8 @@ export default function SheetsMode({ state, canvasCode }: Props) {
   }
 
   return (
-    <div className="flex-1 flex flex-col min-h-0 bg-paper">
-      <div className="max-w-5xl mx-auto w-full px-6 py-6 flex-1 flex flex-col min-h-0">
+    <div className="flex-1 flex flex-col min-h-0 min-w-0 bg-paper">
+      <div className="max-w-5xl mx-auto w-full px-4 py-6 sm:px-6 flex-1 flex flex-col min-h-0 min-w-0">
         <div className="flex items-center justify-between mb-3 shrink-0">
           <h1 className="font-display text-xl font-medium tracking-tight text-gray-900">Sheets</h1>
           <div className="flex items-center gap-2">
@@ -338,8 +338,8 @@ function SheetTable({ sheet, rows }: { sheet: Sheet; rows: SheetRow[] }) {
   const rowIds = useMemo(() => orderedRows.map((r) => r.id), [orderedRows]);
 
   return (
-    <div className="flex-1 overflow-auto mt-3 border border-gray-200 rounded-md bg-white">
-      <table className="w-full border-collapse">
+    <div className="flex-1 overflow-auto mt-3 border border-gray-200 rounded-md bg-white [-webkit-overflow-scrolling:touch]">
+      <table className="min-w-full border-collapse">
         <thead className="bg-gray-50 sticky top-0 z-10">
           <tr>
             {/* drag-handle column header (empty) */}
