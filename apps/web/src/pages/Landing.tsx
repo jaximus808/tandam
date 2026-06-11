@@ -963,7 +963,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
   }
 
   return (
-    <div className="min-h-screen scroll-smooth bg-paper font-brand text-ink [text-rendering:optimizeLegibility] antialiased">
+    <div className="min-h-screen overflow-x-clip scroll-smooth bg-paper font-brand text-ink [text-rendering:optimizeLegibility] antialiased">
       {/* Nav */}
       <header className="sticky top-0 z-40 border-b border-ink/10 bg-paper/85 backdrop-blur">
         <div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-6">
@@ -1038,14 +1038,15 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
 
         <div className="relative mx-auto grid max-w-6xl items-start gap-14 px-6 pb-20 pt-16 lg:grid-cols-[1.02fr_1fr] lg:gap-10 lg:pb-24 lg:pt-20">
           {/* Left: copy + actions */}
-          <div className="max-w-xl lg:pt-4">
+          <div className="min-w-0 max-w-xl lg:pt-4">
             <div className="tandem-rise">
               <SysLabel>One surface · humans + agents · live</SysLabel>
             </div>
 
-            <div className="tandem-rise mt-8" style={{ animationDelay: "60ms" }}>
+            {/* mt-12 leaves headroom for the frame's "you" tag above the h1 */}
+            <div className="tandem-rise mt-12" style={{ animationDelay: "60ms" }}>
               <SelectionFrame tag="you" className="inline-block">
-                <h1 className="font-display text-[2.6rem] font-medium leading-[1.06] tracking-tight text-ink sm:text-[3.6rem]">
+                <h1 className="font-display text-[2.3rem] font-medium leading-[1.08] tracking-tight text-ink sm:text-[3.5rem] sm:leading-[1.06]">
                   Where teams and agents{" "}
                   <span className="relative inline-block">
                     <span
@@ -1136,7 +1137,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
           </div>
 
           {/* Right: the morphing canvas + its op feed */}
-          <div className="tandem-rise" style={{ animationDelay: "140ms" }}>
+          <div className="tandem-rise min-w-0" style={{ animationDelay: "140ms" }}>
             <MorphCanvas sceneIdx={sceneIdx} setSceneIdx={setSceneIdx} />
           </div>
         </div>
@@ -1276,10 +1277,11 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
             </button>
           </div>
 
-          {/* agents ⇄ canvas ⇄ people, with live wires */}
-          <div className="relative rounded-md border border-paper/15 bg-white/[0.03] p-7">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex flex-col gap-2.5">
+          {/* agents ⇄ canvas ⇄ people, with live wires. Row on sm+; stacked
+              vertically on phones so it can never force horizontal scroll. */}
+          <div className="relative rounded-md border border-paper/15 bg-white/[0.03] p-5 sm:p-7">
+            <div className="flex flex-col items-stretch gap-4 sm:flex-row sm:items-center sm:justify-between sm:gap-2">
+              <div className="flex flex-row flex-wrap justify-center gap-2 sm:flex-col sm:gap-2.5">
                 {["scout-agent", "planner", "reporter"].map((n) => (
                   <span
                     key={n}
@@ -1291,7 +1293,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
                 ))}
               </div>
 
-              <div className="flex min-w-0 flex-1 flex-col gap-1 px-2">
+              <div className="flex min-w-0 flex-col gap-1 px-2 sm:flex-1">
                 <span className="text-center font-code text-[9px] uppercase tracking-[0.18em] text-agent/80">
                   ops →
                 </span>
@@ -1310,7 +1312,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
                 </span>
               </div>
 
-              <div className="flex min-w-0 flex-1 flex-col gap-1 px-2">
+              <div className="flex min-w-0 flex-col gap-1 px-2 sm:flex-1">
                 <span className="text-center font-code text-[9px] uppercase tracking-[0.18em] text-paper/60">
                   edits →
                 </span>
@@ -1320,7 +1322,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
                 </span>
               </div>
 
-              <div className="flex flex-col gap-2.5">
+              <div className="flex flex-row flex-wrap justify-center gap-2 sm:flex-col sm:gap-2.5">
                 {["Priya", "Devin", "Sam"].map((n) => (
                   <span
                     key={n}
@@ -1331,7 +1333,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
                 ))}
               </div>
             </div>
-            <p className="mt-7 text-center font-code text-[10px] text-paper/40">
+            <p className="mt-6 text-center font-code text-[10px] text-paper/40 sm:mt-7">
               many agents · many people · one shared, persistent state
             </p>
           </div>
