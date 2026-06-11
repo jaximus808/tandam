@@ -374,10 +374,20 @@ export default function App() {
 
   if (!canvasState || !canvas) {
     return (
-      <div className="flex h-screen flex-col items-center justify-center bg-paper font-brand text-gray-900">
+      <div className="relative flex h-screen flex-col items-center justify-center overflow-hidden bg-paper font-brand text-ink">
+        <div
+          aria-hidden="true"
+          className="surface-grid-faint absolute inset-0"
+          style={{
+            maskImage: "radial-gradient(60% 60% at 50% 50%, black 30%, transparent 100%)",
+            WebkitMaskImage: "radial-gradient(60% 60% at 50% 50%, black 30%, transparent 100%)",
+          }}
+        />
         <TandemLogo size={56} />
-        <p className="mt-6 text-sm font-medium text-gray-600">Joining canvas</p>
-        <p className="mt-1 font-code text-xs tracking-[0.3em] text-gray-400">{canvasCode}</p>
+        <p className="relative mt-6 text-sm font-medium text-ink/70">Joining canvas</p>
+        <p className="relative mt-2 rounded-[4px] border border-ink/15 bg-white px-2.5 py-1 font-code text-xs tracking-[0.3em] text-ink/50">
+          {canvasCode}
+        </p>
       </div>
     );
   }
@@ -454,7 +464,7 @@ export default function App() {
           <span className="font-display text-[15px] font-medium leading-tight text-gray-900 truncate">
             {canvas.name}
           </span>
-          <span className="hidden font-code text-[11px] tracking-[0.15em] text-gray-300 shrink-0 sm:inline">
+          <span className="hidden rounded-[3px] border border-ink/10 bg-white px-1.5 py-px font-code text-[10px] tracking-[0.14em] text-ink/40 shrink-0 sm:inline">
             {canvas.code}
           </span>
         </div>
@@ -640,7 +650,7 @@ export default function App() {
             <button
               onClick={handleCopyToAccount}
               disabled={copying}
-              className="hidden rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-60 sm:inline-block"
+              className="hidden rounded-md border border-ink/20 px-3 py-1.5 text-sm font-medium text-ink/75 transition-colors hover:border-ink/50 hover:bg-white disabled:opacity-60 sm:inline-block"
               title="Save a copy of this canvas to your account so it shows up in My canvases on every device"
             >
               {copying ? "Copying…" : "Copy to my account"}
@@ -648,7 +658,7 @@ export default function App() {
           )}
           <button
             onClick={() => setConnectOpen(true)}
-            className="rounded-lg px-3.5 py-1.5 text-sm font-medium bg-gray-900 text-white shadow-sm transition-all hover:bg-gray-800 hover:shadow"
+            className="btn-press rounded-md px-3.5 py-1.5 text-sm font-medium bg-ink text-paper shadow-[2px_2px_0_#C75B39]"
           >
             Connect
           </button>

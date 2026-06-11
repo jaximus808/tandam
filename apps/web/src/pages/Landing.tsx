@@ -13,13 +13,18 @@ interface Props {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
-   The whole page rides one idea: Tandem becomes anything. A single shared canvas
-   that humans and agents co-edit, reshaping itself for whatever the team is doing.
-   So the hero IS a canvas that morphs through four real flows — Operations,
-   Builders, Life, Research — while the headline word and accent colour change in
-   lockstep. `sceneIdx` lives up here in the page so the canvas and the headline
-   stay in sync.
+   The whole page rides one idea: the site IS the worksurface. A dot-grid canvas
+   where the content itself is "selected objects" — frames, corner handles,
+   editor tags — and a live op feed shows agents speaking in operations while
+   humans speak in names. Humans are ink; agents are terracotta.
+
+   The hero canvas morphs through four real flows — Operations, Builders, Life,
+   Research — while the headline word, accent colour, and op feed change in
+   lockstep. `sceneIdx` lives up here in the page so everything stays in sync.
    ───────────────────────────────────────────────────────────────────────────── */
+
+const INK = "#1C1917";
+const AGENT = "#C75B39";
 
 interface Accent {
   solid: string;
@@ -34,6 +39,14 @@ interface Editor {
   drift: "a" | "b";
 }
 
+interface OpLine {
+  t: string; // wall-clock-ish timestamp
+  actor: string;
+  kind: "human" | "agent";
+  op: string; // the MCP-ish operation name
+  arg: string; // human-readable payload
+}
+
 interface Scene {
   key: "ops" | "build" | "life" | "research";
   tab: string; // scene switcher label
@@ -43,6 +56,7 @@ interface Scene {
   phrase: string; // the cycling headline phrase
   accent: Accent;
   editors: [Editor, Editor]; // the two drifting cursors
+  ops: OpLine[]; // the live feed under the canvas
 }
 
 const SCENES: Scene[] = [
@@ -58,6 +72,12 @@ const SCENES: Scene[] = [
       { name: "ops-agent", kind: "agent", at: { top: "30%", left: "53%" }, drift: "a" },
       { name: "Priya", kind: "human", at: { bottom: "10%", left: "20%" }, drift: "b" },
     ],
+    ops: [
+      { t: "14:02:31", actor: "ops-agent", kind: "agent", op: "sheet.row.add", arg: '"API 5xx spike"' },
+      { t: "14:02:34", actor: "ops-agent", kind: "agent", op: "row.update", arg: "status → mitigating" },
+      { t: "14:02:41", actor: "priya", kind: "human", op: "note.add", arg: '"rollback v2.3.1 first"' },
+      { t: "14:02:45", actor: "ops-agent", kind: "agent", op: "chart.update", arg: "error-rate / 5m" },
+    ],
   },
   {
     key: "build",
@@ -70,6 +90,12 @@ const SCENES: Scene[] = [
     editors: [
       { name: "Codex", kind: "agent", at: { top: "34%", right: "10%" }, drift: "a" },
       { name: "Devin", kind: "human", at: { top: "55%", right: "22%" }, drift: "b" },
+    ],
+    ops: [
+      { t: "09:41:02", actor: "codex", kind: "agent", op: "item.update", arg: '"Realtime cursors" → in_progress' },
+      { t: "09:41:18", actor: "devin", kind: "human", op: "item.add", arg: '"Billing webhooks"' },
+      { t: "09:41:26", actor: "codex", kind: "agent", op: "sheet.row.add", arg: "perf budget · p95 400ms" },
+      { t: "09:41:53", actor: "codex", kind: "agent", op: "item.update", arg: '"Charts mode" → done' },
     ],
   },
   {
@@ -84,6 +110,12 @@ const SCENES: Scene[] = [
       { name: "Claude", kind: "agent", at: { top: "26%", right: "12%" }, drift: "a" },
       { name: "Sam", kind: "human", at: { bottom: "14%", right: "16%" }, drift: "b" },
     ],
+    ops: [
+      { t: "19:12:08", actor: "claude", kind: "agent", op: "event.add", arg: '"Apartment tours" · Mar' },
+      { t: "19:12:15", actor: "sam", kind: "human", op: "pin.add", arg: '"Shinjuku hotel"' },
+      { t: "19:12:19", actor: "claude", kind: "agent", op: "event.update", arg: "Japan → flights held" },
+      { t: "19:12:31", actor: "claude", kind: "agent", op: "note.add", arg: '"no visa needed < 90 days"' },
+    ],
   },
   {
     key: "research",
@@ -97,10 +129,16 @@ const SCENES: Scene[] = [
       { name: "scout-agent", kind: "agent", at: { top: "30%", left: "30%" }, drift: "a" },
       { name: "Lee", kind: "human", at: { bottom: "12%", left: "12%" }, drift: "b" },
     ],
+    ops: [
+      { t: "11:23:44", actor: "scout-agent", kind: "agent", op: "pin.add", arg: '"Acme HQ" · 37.78,-122.41' },
+      { t: "11:23:52", actor: "scout-agent", kind: "agent", op: "note.update", arg: "Findings.md › pricing" },
+      { t: "11:24:07", actor: "lee", kind: "human", op: "row.update", arg: "Northwind → shortlist" },
+      { t: "11:24:19", actor: "scout-agent", kind: "agent", op: "pin.add", arg: '"Globex labs"' },
+    ],
   },
 ];
 
-const SCENE_MS = 3600;
+const SCENE_MS = 4200;
 
 // Only show the public "N canvases created" counter once it's real social
 // proof — a tiny number reads as anti-proof. Bump down as adoption grows.
@@ -244,20 +282,6 @@ function Icon({ name, className = "" }: { name: string; className?: string }) {
           <path d="M8 3v5h7M8 21v-7h8v7" />
         </svg>
       );
-    case "people":
-      return (
-        <svg {...c}>
-          <circle cx="9" cy="8" r="3" />
-          <path d="M3.5 20a5.5 5.5 0 0 1 11 0M16 5.5a3 3 0 0 1 0 5.8M16.5 14a5.5 5.5 0 0 1 4 5.8" />
-        </svg>
-      );
-    case "lock":
-      return (
-        <svg {...c}>
-          <rect x="4.5" y="10.5" width="15" height="10" rx="2" />
-          <path d="M8 10.5V7a4 4 0 0 1 8 0v3.5" />
-        </svg>
-      );
     case "devices":
       return (
         <svg {...c}>
@@ -279,28 +303,120 @@ function Icon({ name, className = "" }: { name: string; className?: string }) {
   }
 }
 
-/* ── the floating cursors that drift across the canvas ───────────────────────── */
+/* ── worksurface vocabulary: pointers, tags, frames, system labels ──────────── */
+
+function PointerGlyph({ color }: { color: string }) {
+  return (
+    <svg width="18" height="20" viewBox="0 0 20 22" aria-hidden="true">
+      <path
+        d="M2 1.5l13.5 6.2-5.6 1.6-2 5.7z"
+        fill={color}
+        stroke="#fff"
+        strokeWidth="1.4"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/** A multiplayer name tag — square corners, mono, agent vs human colour. */
+function NameTag({ name, kind, color }: { name: string; kind: "human" | "agent"; color?: string }) {
+  const bg = color ?? (kind === "agent" ? AGENT : INK);
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-[3px] px-1.5 py-0.5 font-code text-[10px] font-medium leading-none text-white"
+      style={{ backgroundColor: bg }}
+    >
+      {kind === "agent" && <Icon name="spark" className="h-2.5 w-2.5" />}
+      {name}
+    </span>
+  );
+}
+
+/** A cursor that wanders a section of the page — the site itself is multiplayer. */
+function RoamingCursor({
+  name,
+  kind,
+  roam,
+  className = "",
+  style,
+}: {
+  name: string;
+  kind: "human" | "agent";
+  roam: "a" | "b";
+  className?: string;
+  style?: React.CSSProperties;
+}) {
+  const color = kind === "agent" ? AGENT : INK;
+  return (
+    <div
+      aria-hidden="true"
+      className={`pointer-events-none absolute z-20 hidden lg:block ${className}`}
+      style={style}
+    >
+      <div className={roam === "a" ? "tandem-roam-a" : "tandem-roam-b"}>
+        <PointerGlyph color={color} />
+        <div className="ml-3 mt-0.5">
+          <NameTag name={name} kind={kind} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Selection frame: wraps content in a "selected object" rectangle w/ handles. */
+function SelectionFrame({
+  children,
+  tag,
+  tagKind = "human",
+  className = "",
+  color = INK,
+}: {
+  children: React.ReactNode;
+  tag?: string;
+  tagKind?: "human" | "agent";
+  className?: string;
+  color?: string;
+}) {
+  // The frame sits at -16px x / -12px y around the content; handles are 7px
+  // squares centred on each frame corner.
+  return (
+    <div className={`relative ${className}`} style={{ color }}>
+      <span aria-hidden="true" className="pointer-events-none absolute -inset-x-4 -inset-y-3 border-[1.5px] border-current opacity-25" />
+      <span aria-hidden="true" className="sel-handle" style={{ top: -15, left: -19 }} />
+      <span aria-hidden="true" className="sel-handle" style={{ top: -15, right: -19 }} />
+      <span aria-hidden="true" className="sel-handle" style={{ bottom: -15, left: -19 }} />
+      <span aria-hidden="true" className="sel-handle" style={{ bottom: -15, right: -19 }} />
+      {tag && (
+        <span className="pointer-events-none absolute -left-4 -top-3 -translate-y-[calc(100%+5px)]">
+          <NameTag name={tag} kind={tagKind} />
+        </span>
+      )}
+      <div className="text-ink">{children}</div>
+    </div>
+  );
+}
+
+/** Tiny mono system label — coordinates, section ids, telemetry. */
+function SysLabel({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+  return (
+    <span className={`font-code text-[11px] uppercase tracking-[0.22em] text-ink/40 ${className}`}>
+      {children}
+    </span>
+  );
+}
+
+/* ── the floating cursors inside the demo canvas ─────────────────────────────── */
 
 function Cursor({ editor, accent }: { editor: Editor; accent: Accent }) {
+  const color = editor.kind === "agent" ? AGENT : accent.solid;
   return (
     <div className="absolute z-30 pointer-events-none" style={editor.at}>
       <div className={editor.drift === "a" ? "tandem-drift-a" : "tandem-drift-b"}>
-        <svg width="20" height="22" viewBox="0 0 20 22" aria-hidden="true">
-          <path
-            d="M2 1.5l13.5 6.2-5.6 1.6-2 5.7z"
-            fill={accent.solid}
-            stroke="#fff"
-            strokeWidth="1.4"
-            strokeLinejoin="round"
-          />
-        </svg>
-        <span
-          className="mt-0.5 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold text-white shadow-sm"
-          style={{ backgroundColor: accent.solid }}
-        >
-          {editor.kind === "agent" && <Icon name="spark" className="w-2.5 h-2.5" />}
-          {editor.name}
-        </span>
+        <PointerGlyph color={color} />
+        <div className="mt-0.5">
+          <NameTag name={editor.name} kind={editor.kind} color={color} />
+        </div>
       </div>
     </div>
   );
@@ -311,25 +427,25 @@ function Cursor({ editor, accent }: { editor: Editor; accent: Accent }) {
 function Pill({ label, accent, tone }: { label: string; accent: Accent; tone: "accent" | "done" | "muted" }) {
   if (tone === "done") {
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-600">
+      <span className="inline-flex items-center gap-1 rounded-[3px] bg-emerald-50 px-2 py-0.5 font-code text-[9px] font-medium text-emerald-600">
         <Icon name="check" className="w-2.5 h-2.5" />
-        Done
+        done
       </span>
     );
   }
   if (tone === "muted") {
     return (
-      <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-400">
-        {label}
+      <span className="rounded-[3px] bg-ink/5 px-2 py-0.5 font-code text-[9px] font-medium text-ink/35">
+        {label.toLowerCase()}
       </span>
     );
   }
   return (
     <span
-      className="rounded-full px-2 py-0.5 text-[10px] font-semibold"
+      className="rounded-[3px] px-2 py-0.5 font-code text-[9px] font-medium"
       style={{ backgroundColor: accent.soft, color: accent.solid }}
     >
-      {label}
+      {label.toLowerCase()}
     </span>
   );
 }
@@ -364,24 +480,24 @@ function OpsBody() {
     <div className="grid h-full grid-cols-3 gap-2.5 p-4">
       {cols.map((col) => (
         <div key={col.title} className="flex flex-col gap-2">
-          <div className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+          <div className="font-code text-[9px] font-medium uppercase tracking-[0.14em] text-ink/35">
             {col.title}
           </div>
           {col.cards.map((card) => (
             <div
               key={card.name}
-              className="rounded-lg border border-gray-100 bg-white px-2.5 py-2 shadow-sm"
+              className="rounded-md border border-ink/10 bg-white px-2.5 py-2"
             >
               <div className="flex items-center gap-1.5">
                 <span
                   className="h-1.5 w-1.5 shrink-0 rounded-full"
                   style={{ backgroundColor: card.sev }}
                 />
-                <span className="truncate text-[10.5px] font-semibold text-gray-800">
+                <span className="truncate text-[10.5px] font-semibold text-ink/85">
                   {card.name}
                 </span>
               </div>
-              <div className="mt-0.5 text-[9.5px] text-gray-400">{card.meta}</div>
+              <div className="mt-0.5 font-code text-[8.5px] text-ink/35">{card.meta}</div>
             </div>
           ))}
         </div>
@@ -403,18 +519,18 @@ function BuildBody({ accent }: { accent: Accent }) {
       {rows.map((row) => (
         <div
           key={row.name}
-          className="flex items-center gap-2 rounded-lg border border-gray-100 bg-white px-3 py-2 shadow-sm"
+          className="flex items-center gap-2 rounded-md border border-ink/10 bg-white px-3 py-2"
         >
           <span
             className="h-2.5 w-2.5 shrink-0 rounded-[3px]"
             style={{
               backgroundColor:
-                row.tone === "done" ? "#10B981" : row.tone === "accent" ? accent.solid : "#D1D5DB",
+                row.tone === "done" ? "#10B981" : row.tone === "accent" ? accent.solid : "#D6D3D1",
             }}
           />
-          <span className="flex-1 truncate text-[12px] font-medium text-gray-800">{row.name}</span>
+          <span className="flex-1 truncate text-[12px] font-medium text-ink/85">{row.name}</span>
           {row.who && (
-            <span className="hidden rounded-full bg-gray-100 px-1.5 py-0.5 text-[9px] font-semibold text-gray-500 sm:inline">
+            <span className="hidden rounded-[3px] bg-ink/5 px-1.5 py-0.5 font-code text-[8.5px] font-medium text-ink/45 sm:inline">
               {row.who}
             </span>
           )}
@@ -426,6 +542,7 @@ function BuildBody({ accent }: { accent: Accent }) {
 }
 
 function LifeBody({ accent }: { accent: Accent }) {
+  void accent;
   const items = [
     { when: "Mar", what: "Apartment tours", note: "3 saved", color: "#0EA5E9" },
     { when: "Jun", what: "Japan — 2 weeks", note: "flights held", color: "#F59E0B" },
@@ -434,20 +551,20 @@ function LifeBody({ accent }: { accent: Accent }) {
   ];
   return (
     <div className="relative h-full p-4">
-      <div className="absolute bottom-5 left-[34px] top-5 w-px bg-gray-200" />
+      <div className="absolute bottom-5 left-[34px] top-5 w-px bg-ink/10" />
       <div className="flex h-full flex-col justify-between">
         {items.map((it) => (
           <div key={it.what} className="relative flex items-center gap-3">
-            <span className="w-6 shrink-0 text-right text-[10px] font-semibold text-gray-400">
+            <span className="w-6 shrink-0 text-right font-code text-[9px] font-medium text-ink/35">
               {it.when}
             </span>
             <span
               className="z-10 h-2.5 w-2.5 shrink-0 rounded-full ring-4 ring-white"
               style={{ backgroundColor: it.color }}
             />
-            <div className="flex-1 rounded-lg border border-gray-100 bg-white px-2.5 py-1.5 shadow-sm">
-              <div className="text-[11px] font-semibold text-gray-800">{it.what}</div>
-              <div className="text-[10px] text-gray-400">{it.note}</div>
+            <div className="flex-1 rounded-md border border-ink/10 bg-white px-2.5 py-1.5">
+              <div className="text-[11px] font-semibold text-ink/85">{it.what}</div>
+              <div className="font-code text-[8.5px] text-ink/35">{it.note}</div>
             </div>
           </div>
         ))}
@@ -465,7 +582,7 @@ function ResearchBody({ accent }: { accent: Accent }) {
   return (
     <div className="flex h-full gap-3 p-4">
       <div
-        className="relative flex-1 overflow-hidden rounded-lg border border-gray-100"
+        className="relative flex-1 overflow-hidden rounded-md border border-ink/10"
         style={{ background: "linear-gradient(135deg,#ecfdf5,#e0f2fe)" }}
       >
         <div
@@ -491,7 +608,7 @@ function ResearchBody({ accent }: { accent: Accent }) {
                 />
                 <circle cx="9" cy="9" r="3.2" fill="#fff" />
               </svg>
-              <span className="mt-0.5 rounded bg-white/90 px-1 py-0.5 text-[9px] font-semibold text-gray-700 shadow-sm">
+              <span className="mt-0.5 rounded-[3px] bg-white/90 px-1 py-0.5 font-code text-[8.5px] font-medium text-ink/70">
                 {p.label}
               </span>
             </div>
@@ -499,16 +616,16 @@ function ResearchBody({ accent }: { accent: Accent }) {
         ))}
       </div>
       <div className="flex w-28 shrink-0 flex-col gap-1.5">
-        <div className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">Docs</div>
+        <div className="font-code text-[9px] font-medium uppercase tracking-[0.14em] text-ink/35">Docs</div>
         {["Findings.md", "Shortlist", "Pricing grid"].map((d) => (
           <div
             key={d}
-            className="flex items-center gap-1.5 rounded-lg border border-gray-100 bg-white px-2 py-1.5 shadow-sm"
+            className="flex items-center gap-1.5 rounded-md border border-ink/10 bg-white px-2 py-1.5"
           >
             <span style={{ color: accent.solid }}>
               <Icon name="docs" className="h-3 w-3" />
             </span>
-            <span className="truncate text-[10px] font-medium text-gray-700">{d}</span>
+            <span className="truncate text-[10px] font-medium text-ink/70">{d}</span>
           </div>
         ))}
       </div>
@@ -529,6 +646,53 @@ function SceneBody({ scene }: { scene: Scene }) {
   }
 }
 
+/* ── the live op feed: agents speak in operations, humans in names ───────────── */
+
+function OpFeed({ scene }: { scene: Scene }) {
+  return (
+    <div
+      key={scene.key}
+      className="mt-3 overflow-hidden rounded-md border border-ink/15 bg-white"
+    >
+      <div className="flex items-center gap-2 border-b border-ink/10 bg-paper px-3 py-1.5">
+        <span className="relative flex h-1.5 w-1.5">
+          <span className="tandem-ping absolute inline-flex h-full w-full rounded-full bg-agent opacity-70" />
+          <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-agent" />
+        </span>
+        <span className="font-code text-[10px] font-medium text-ink/50">canvas.ops — live</span>
+        <span className="ml-auto font-code text-[10px] tracking-[0.14em] text-ink/30">
+          {scene.code}
+        </span>
+      </div>
+      <div className="px-3 py-2 font-code text-[10.5px] leading-[1.9]">
+        {scene.ops.map((line, i) => (
+          <div
+            key={`${scene.key}-${i}`}
+            className="tandem-op-in flex items-baseline gap-2 whitespace-nowrap"
+            style={{ animationDelay: `${180 + i * 340}ms` }}
+          >
+            <span className="text-ink/30">{line.t}</span>
+            <span
+              className="font-medium"
+              style={{ color: line.kind === "agent" ? AGENT : INK }}
+            >
+              {line.actor}
+            </span>
+            <span className="text-ink/45">{line.op}</span>
+            <span className="truncate text-ink/70">{line.arg}</span>
+          </div>
+        ))}
+        <div className="flex items-center gap-2 text-ink/30">
+          <span
+            className="tandem-caret inline-block h-3 w-[7px] translate-y-[1px] bg-agent/80"
+            style={{ animationDelay: "1.6s" }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ── the morphing canvas: chrome + body + cursors, driven by sceneIdx ────────── */
 
 function MorphCanvas({
@@ -543,14 +707,7 @@ function MorphCanvas({
 
   return (
     <div className="relative w-full">
-      {/* ambient glow, tinted to the active scene */}
-      <div
-        aria-hidden="true"
-        className="tandem-blob absolute -inset-8 -z-10 rounded-[3rem] blur-3xl transition-colors duration-700"
-        style={{ background: `radial-gradient(60% 60% at 60% 30%, ${accent.soft}, transparent 70%)` }}
-      />
-
-      {/* scene switcher */}
+      {/* scene switcher — mono, like view tabs on a surface */}
       <div className="mb-3 flex flex-wrap gap-1.5">
         {SCENES.map((s, i) => {
           const active = i === sceneIdx;
@@ -558,69 +715,79 @@ function MorphCanvas({
             <button
               key={s.key}
               onClick={() => setSceneIdx(i)}
-              className="rounded-full px-3 py-1 text-xs font-semibold transition-colors"
-              style={
+              className={[
+                "rounded-md border px-3 py-1 font-code text-[11px] font-medium transition-colors",
                 active
-                  ? { backgroundColor: s.accent.solid, color: "#fff" }
-                  : { backgroundColor: "rgba(0,0,0,0.04)", color: "#6b7280" }
-              }
+                  ? "border-ink bg-ink text-paper"
+                  : "border-ink/15 bg-white text-ink/50 hover:border-ink/35 hover:text-ink",
+              ].join(" ")}
             >
+              {active && (
+                <span
+                  className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full align-middle"
+                  style={{ backgroundColor: s.accent.solid }}
+                />
+              )}
               {s.tab}
             </button>
           );
         })}
       </div>
 
-      <div
-        className="relative overflow-hidden rounded-2xl border bg-white shadow-2xl shadow-gray-900/10 transition-colors duration-700"
-        style={{ borderColor: accent.line }}
-      >
+      <div className="relative overflow-hidden rounded-lg border-[1.5px] border-ink bg-white shadow-[8px_8px_0_rgba(28,25,23,0.10)]">
         {/* title bar */}
-        <div className="flex items-center gap-2 border-b border-gray-100 bg-gray-50/80 px-4 py-2.5">
-          <span className="h-2.5 w-2.5 rounded-full bg-gray-200" />
-          <span className="h-2.5 w-2.5 rounded-full bg-gray-200" />
-          <span className="h-2.5 w-2.5 rounded-full bg-gray-200" />
-          <span className="ml-2 truncate text-xs font-semibold text-gray-600">{scene.canvasName}</span>
-          <span className="ml-auto font-code text-[11px] tracking-widest text-gray-300">
+        <div className="flex items-center gap-2.5 border-b border-ink/10 bg-paper px-3.5 py-2">
+          <span className="truncate font-display text-[13px] font-medium text-ink">
+            {scene.canvasName}
+          </span>
+          <span className="rounded-[3px] border border-ink/10 px-1.5 py-px font-code text-[9.5px] tracking-[0.14em] text-ink/40">
             {scene.code}
           </span>
+          <div className="ml-auto flex items-center gap-1.5">
+            {/* who's on this surface, agent first */}
+            <span
+              className="grid h-5 w-5 place-items-center rounded-[4px] text-white"
+              style={{ backgroundColor: AGENT }}
+              title={scene.editors[0].name}
+            >
+              <Icon name="spark" className="h-2.5 w-2.5" />
+            </span>
+            <span className="grid h-5 w-5 place-items-center rounded-[4px] bg-ink font-code text-[9px] font-medium text-paper">
+              {scene.editors[1].name.slice(0, 1)}
+            </span>
+            <span className="ml-1 font-code text-[9.5px] text-ink/40">2 here</span>
+          </div>
         </div>
 
         {/* mode tabs */}
-        <div className="flex items-center gap-1 overflow-x-auto border-b border-gray-100 px-3 py-1.5">
+        <div className="flex items-center gap-0.5 overflow-x-auto border-b border-ink/10 px-2.5 py-1.5">
           {MODE_TABS.map((m) => {
             const active = m === scene.mode;
             return (
               <span
                 key={m}
-                className="shrink-0 rounded-md px-2 py-1 text-[11px] font-medium transition-colors"
+                className="shrink-0 rounded-[4px] px-2 py-0.5 font-code text-[10px] font-medium transition-colors"
                 style={
                   active
-                    ? { backgroundColor: accent.soft, color: accent.solid }
-                    : { color: "#9ca3af" }
+                    ? { backgroundColor: accent.soft, color: accent.solid, boxShadow: `inset 0 0 0 1px ${accent.line}` }
+                    : { color: "rgba(28,25,23,0.35)" }
                 }
               >
-                {m}
+                {m.toLowerCase()}
               </span>
             );
           })}
         </div>
 
         {/* body — re-keyed on scene so it replays the entrance animation */}
-        <div className="relative h-[300px]">
+        <div className="surface-grid-faint relative h-[300px]">
           {/* "editing" pill */}
-          <div className="absolute left-3 top-3 z-30 flex items-center gap-2 rounded-full border border-gray-100 bg-white/90 px-2.5 py-1 shadow-sm backdrop-blur">
-            <span className="relative flex h-2 w-2">
-              <span
-                className="tandem-ping absolute inline-flex h-full w-full rounded-full opacity-70"
-                style={{ backgroundColor: accent.solid }}
-              />
-              <span
-                className="relative inline-flex h-2 w-2 rounded-full"
-                style={{ backgroundColor: accent.solid }}
-              />
+          <div className="absolute left-3 top-3 z-30 flex items-center gap-2 rounded-[4px] border border-ink/10 bg-white/95 px-2 py-1 backdrop-blur">
+            <span className="relative flex h-1.5 w-1.5">
+              <span className="tandem-ping absolute inline-flex h-full w-full rounded-full bg-agent opacity-70" />
+              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-agent" />
             </span>
-            <span key={scene.key} className="tandem-fade-in text-[11px] font-medium text-gray-600">
+            <span key={scene.key} className="tandem-fade-in font-code text-[10px] text-ink/55">
               {scene.editors[0].name} is editing…
             </span>
           </div>
@@ -634,47 +801,50 @@ function MorphCanvas({
           </div>
         </div>
       </div>
+
+      {/* the op feed: same edits, as the agents see them */}
+      <OpFeed scene={scene} />
     </div>
   );
 }
 
 /* ── content data for the lower sections ─────────────────────────────────────── */
 
-const MODE_DOCS: { kind: string; name: string; tint: string; desc: string }[] = [
+const MODE_DOCS: { kind: string; name: string; color: string; desc: string }[] = [
   {
     kind: "map",
     name: "Map",
-    tint: "text-sky-600 bg-sky-50",
+    color: "#0EA5E9",
     desc: "Pins with labels, notes, and colours on a real map. Switch base maps — or just ask your agent to.",
   },
   {
     kind: "itinerary",
     name: "Itinerary",
-    tint: "text-amber-600 bg-amber-50",
+    color: "#F59E0B",
     desc: "A day-by-day schedule. Events link back to their pins, so the plan and the place stay in sync.",
   },
   {
     kind: "docs",
     name: "Docs",
-    tint: "text-violet-600 bg-violet-50",
+    color: "#7C3AED",
     desc: "Free-form markdown — briefs, research, checklists, anything that doesn't belong on the map.",
   },
   {
     kind: "sheets",
     name: "Sheets",
-    tint: "text-emerald-600 bg-emerald-50",
+    color: "#10B981",
     desc: "Typed columns and drag-to-reorder rows. Budgets, comparisons, trackers, triage boards.",
   },
   {
     kind: "roadmap",
     name: "Roadmap",
-    tint: "text-rose-600 bg-rose-50",
+    color: "#F43F5E",
     desc: "Nested, draggable items with status — todo, in progress, done, blocked. Plan and track in one place.",
   },
   {
     kind: "charts",
     name: "Charts",
-    tint: "text-indigo-600 bg-indigo-50",
+    color: "#6366F1",
     desc: "Turn the numbers on your canvas into live charts the whole team — and every agent — can read.",
   },
 ];
@@ -691,13 +861,14 @@ const STEPS: { title: string; body: string }[] = [
   },
 ];
 
-const AUDIENCES: { title: string; blurb: string; tags: string[]; accent: string }[] = [
+const AUDIENCES: { title: string; blurb: string; tags: string[]; accent: string; tilt: string }[] = [
   {
     title: "Operations",
     blurb:
       "Stand up an incident bridge, a launch checklist, or a daily ops board. Agents triage and update while the room watches.",
     tags: ["Incidents", "Launches", "Logistics"],
     accent: "#F43F5E",
+    tilt: "lg:-rotate-1",
   },
   {
     title: "Builders",
@@ -705,6 +876,7 @@ const AUDIENCES: { title: string; blurb: string; tags: string[]; accent: string 
       "Plan the quarter, split work across coding agents, and watch the roadmap move from todo to done in real time.",
     tags: ["Roadmaps", "Sprints", "Research"],
     accent: "#0EA5E9",
+    tilt: "lg:rotate-[0.5deg] lg:translate-y-3",
   },
   {
     title: "Teams & life",
@@ -712,6 +884,7 @@ const AUDIENCES: { title: string; blurb: string; tags: string[]; accent: string 
       "A trip, a move, a wedding, a whole year. Bring the people who matter and an agent to do the legwork.",
     tags: ["Trips", "Plans", "Budgets"],
     accent: "#F59E0B",
+    tilt: "lg:rotate-1",
   },
 ];
 
@@ -790,24 +963,31 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
   }
 
   return (
-    <div className="min-h-screen scroll-smooth bg-[#FBFAF8] font-brand text-gray-900 [text-rendering:optimizeLegibility] antialiased">
+    <div className="min-h-screen scroll-smooth bg-paper font-brand text-ink [text-rendering:optimizeLegibility] antialiased">
       {/* Nav */}
-      <header className="sticky top-0 z-40 border-b border-gray-900/5 bg-[#FBFAF8]/80 backdrop-blur">
-        <div className="mx-auto flex h-16 max-w-6xl items-center gap-3 px-6">
-          <div className="flex items-center gap-2 text-[17px] font-semibold tracking-tight">
-            <TandemLogo size={26} />
+      <header className="sticky top-0 z-40 border-b border-ink/10 bg-paper/85 backdrop-blur">
+        <div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-6">
+          <div className="flex items-center gap-2 text-[16px] font-semibold tracking-tight">
+            <TandemLogo size={24} />
             <span>Tandem</span>
+            <span className="ml-1 hidden items-center gap-1.5 rounded-[3px] border border-ink/10 px-1.5 py-0.5 font-code text-[9px] uppercase tracking-[0.14em] text-ink/40 md:inline-flex">
+              <span className="relative flex h-1 w-1">
+                <span className="tandem-ping absolute inline-flex h-full w-full rounded-full bg-agent opacity-70" />
+                <span className="relative inline-flex h-1 w-1 rounded-full bg-agent" />
+              </span>
+              multiplayer
+            </span>
           </div>
-          <nav className="ml-auto flex items-center gap-1 text-sm sm:gap-2">
+          <nav className="ml-auto flex items-center gap-1 text-sm sm:gap-1.5">
             <a
               href="#use-cases"
-              className="hidden rounded-lg px-3 py-1.5 text-gray-500 transition-colors hover:bg-gray-900/5 hover:text-gray-900 sm:inline"
+              className="hidden rounded-md px-3 py-1.5 text-ink/55 transition-colors hover:bg-ink/5 hover:text-ink sm:inline"
             >
               Use cases
             </a>
             <a
               href="#modes"
-              className="hidden rounded-lg px-3 py-1.5 text-gray-500 transition-colors hover:bg-gray-900/5 hover:text-gray-900 sm:inline"
+              className="hidden rounded-md px-3 py-1.5 text-ink/55 transition-colors hover:bg-ink/5 hover:text-ink sm:inline"
             >
               Modes
             </a>
@@ -815,13 +995,13 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
               href="https://github.com/jaximus808/tandam"
               target="_blank"
               rel="noopener noreferrer"
-              className="hidden rounded-lg px-3 py-1.5 text-gray-500 transition-colors hover:bg-gray-900/5 hover:text-gray-900 sm:inline"
+              className="hidden rounded-md px-3 py-1.5 text-ink/55 transition-colors hover:bg-ink/5 hover:text-ink sm:inline"
             >
               GitHub
             </a>
             <button
               onClick={onOpenMCP}
-              className="rounded-lg px-3 py-1.5 font-medium text-gray-700 transition-colors hover:bg-gray-900/5"
+              className="rounded-md px-3 py-1.5 font-medium text-ink/80 transition-colors hover:bg-ink/5"
             >
               Connect an agent
             </button>
@@ -830,42 +1010,70 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
         </div>
       </header>
 
-      {/* Hero */}
+      {/* Hero — the worksurface */}
       <section className="relative overflow-hidden">
         <div
           aria-hidden="true"
-          className="tandem-blob absolute -right-40 -top-40 h-[34rem] w-[34rem] rounded-full blur-3xl transition-colors duration-700"
-          style={{ background: `radial-gradient(circle, ${scene.accent.soft}, transparent 70%)` }}
+          className="surface-grid absolute inset-0"
+          style={{
+            maskImage: "radial-gradient(120% 90% at 50% 0%, black 55%, transparent 100%)",
+            WebkitMaskImage: "radial-gradient(120% 90% at 50% 0%, black 55%, transparent 100%)",
+          }}
         />
-        <div className="relative mx-auto grid max-w-6xl items-center gap-12 px-6 pb-20 pt-14 lg:grid-cols-[1.05fr_1fr] lg:gap-10 lg:pb-28 lg:pt-20">
-          {/* Left: copy + actions */}
-          <div className="max-w-xl">
-            <span className="tandem-rise inline-flex items-center gap-2 rounded-full border border-gray-900/10 bg-white px-3 py-1 text-xs font-medium text-gray-600 shadow-sm">
-              <span className="text-amber-500">
-                <Icon name="spark" className="h-3 w-3" />
-              </span>
-              The shared canvas for humans <span className="text-gray-300">+</span> agents
-            </span>
+        {/* viewport telemetry in the corners */}
+        <span aria-hidden="true" className="absolute left-4 top-3 hidden font-code text-[10px] text-ink/25 lg:block">
+          + 0,0
+        </span>
+        <span aria-hidden="true" className="absolute right-4 top-3 hidden font-code text-[10px] text-ink/25 lg:block">
+          zoom 100% +
+        </span>
 
-            <h1
-              className="tandem-rise mt-5 font-display text-[2.7rem] font-medium leading-[1.04] tracking-tight text-gray-900 sm:text-6xl"
-              style={{ animationDelay: "60ms" }}
-            >
-              Where teams and agents{" "}
-              <span className="relative inline-block">
-                <span
-                  key={scene.key}
-                  className="tandem-word-in italic"
-                  style={{ color: scene.accent.solid }}
-                >
-                  {scene.phrase}
-                </span>
-              </span>{" "}
-              together.
-            </h1>
+        {/* a third presence, wandering the page itself */}
+        <RoamingCursor
+          name="claude"
+          kind="agent"
+          roam="a"
+          style={{ top: "16%", left: "44%" }}
+        />
+
+        <div className="relative mx-auto grid max-w-6xl items-start gap-14 px-6 pb-20 pt-16 lg:grid-cols-[1.02fr_1fr] lg:gap-10 lg:pb-24 lg:pt-20">
+          {/* Left: copy + actions */}
+          <div className="max-w-xl lg:pt-4">
+            <div className="tandem-rise">
+              <SysLabel>One surface · humans + agents · live</SysLabel>
+            </div>
+
+            <div className="tandem-rise mt-8" style={{ animationDelay: "60ms" }}>
+              <SelectionFrame tag="you" className="inline-block">
+                <h1 className="font-display text-[2.6rem] font-medium leading-[1.06] tracking-tight text-ink sm:text-[3.6rem]">
+                  Where teams and agents{" "}
+                  <span className="relative inline-block">
+                    <span
+                      key={scene.key}
+                      className="tandem-word-in inline-block px-1 italic"
+                      style={{
+                        color: scene.accent.solid,
+                        backgroundColor: scene.accent.soft,
+                        boxShadow: `inset 0 0 0 1.5px ${scene.accent.line}`,
+                      }}
+                    >
+                      {scene.phrase}
+                    </span>
+                    {/* the agent has this word selected — its flag rides along */}
+                    <span
+                      key={`${scene.key}-flag`}
+                      className="tandem-fade-in pointer-events-none absolute -top-1 right-0 -translate-y-full"
+                    >
+                      <NameTag name={scene.editors[0].name} kind="agent" />
+                    </span>
+                  </span>{" "}
+                  together.
+                </h1>
+              </SelectionFrame>
+            </div>
 
             <p
-              className="tandem-rise mt-5 text-[1.05rem] leading-relaxed text-gray-600"
+              className="tandem-rise mt-7 text-[1.05rem] leading-relaxed text-ink/65"
               style={{ animationDelay: "120ms" }}
             >
               Tandem is a shared agent artifact — one live canvas, with shared memory, that any
@@ -876,41 +1084,43 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
 
             {/* Primary actions — the create / join forms live in the launcher modal */}
             <div
-              className="tandem-rise mt-8 flex flex-wrap items-center gap-3"
+              className="tandem-rise mt-9 flex flex-wrap items-center gap-4"
               style={{ animationDelay: "180ms" }}
             >
               <button
                 onClick={() => setLauncher("create")}
-                className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-gray-900 px-6 py-3 font-medium text-white shadow-sm transition-all hover:bg-gray-800 hover:shadow-md"
+                className="btn-press inline-flex items-center justify-center gap-2 rounded-md bg-ink px-6 py-3 font-medium text-paper shadow-[4px_4px_0_#C75B39]"
               >
                 Create a canvas
                 <Icon name="arrow" className="h-4 w-4" />
               </button>
               <button
                 onClick={() => setLauncher("join")}
-                className="rounded-xl border border-gray-300 bg-white px-6 py-3 font-medium text-gray-700 transition-colors hover:bg-gray-50"
+                className="btn-press rounded-md border-[1.5px] border-ink bg-white px-6 py-3 font-medium text-ink shadow-[4px_4px_0_rgba(28,25,23,0.15)]"
               >
                 Join with a code
               </button>
             </div>
 
-            <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-gray-400">
+            <div
+              className="tandem-rise mt-6 flex flex-wrap items-center gap-x-4 gap-y-2 font-code text-[11px] text-ink/40"
+              style={{ animationDelay: "220ms" }}
+            >
               <button
                 onClick={onOpenMCP}
-                className="inline-flex items-center gap-1.5 font-medium text-sky-600 transition-colors hover:text-sky-700"
+                className="inline-flex items-center gap-1.5 font-medium text-agent transition-colors hover:text-ink"
               >
-                <Icon name="spark" className="h-3.5 w-3.5" />
-                Connect an AI agent
-                <Icon name="arrow" className="h-3.5 w-3.5" />
+                <Icon name="spark" className="h-3 w-3" />
+                connect an AI agent →
               </button>
               <span>
-                No sign-up to start
+                no sign-up to start
                 {showSignUp && (
                   <>
                     {" · "}
                     <button
                       onClick={() => setSignInOpen(true)}
-                      className="font-medium text-gray-500 underline underline-offset-2 transition-colors hover:text-gray-700"
+                      className="underline underline-offset-2 transition-colors hover:text-ink"
                     >
                       free account to do more
                     </button>
@@ -918,33 +1128,33 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
                 )}
               </span>
               {canvasCount !== null && canvasCount >= CANVAS_COUNT_FLOOR && (
-                <span className="font-code tabular-nums text-gray-500">
+                <span className="tabular-nums">
                   {canvasCount.toLocaleString()} canvases created
                 </span>
               )}
             </div>
           </div>
 
-          {/* Right: the morphing canvas */}
-          <div className="tandem-rise lg:pl-2" style={{ animationDelay: "140ms" }}>
+          {/* Right: the morphing canvas + its op feed */}
+          <div className="tandem-rise" style={{ animationDelay: "140ms" }}>
             <MorphCanvas sceneIdx={sceneIdx} setSceneIdx={setSceneIdx} />
           </div>
         </div>
       </section>
 
       {/* "Becomes anything" marquee */}
-      <section className="border-y border-gray-900/5 bg-white py-5">
+      <section className="border-y border-ink/10 bg-white py-5">
         <div className="mx-auto mb-3 max-w-6xl px-6">
-          <span className="font-code text-[11px] uppercase tracking-[0.2em] text-gray-400">
-            One canvas → anything your team and agents do
-          </span>
+          <SysLabel>One canvas → anything your team and agents do</SysLabel>
         </div>
         <div className="relative flex overflow-hidden [mask-image:linear-gradient(to_right,transparent,black_8%,black_92%,transparent)]">
-          <div className="tandem-marquee flex shrink-0 gap-3 pr-3">
+          <div className="tandem-marquee flex shrink-0 items-center gap-3 pr-3">
             {[...USE_CASES, ...USE_CASES].map((u, i) => (
               <span
                 key={`${u}-${i}`}
-                className="whitespace-nowrap rounded-full border border-gray-200 bg-[#FBFAF8] px-4 py-1.5 text-sm font-medium text-gray-600"
+                className={`whitespace-nowrap rounded-md border border-ink/15 bg-paper px-4 py-1.5 text-sm font-medium text-ink/70 ${
+                  i % 3 === 0 ? "rotate-1" : i % 3 === 1 ? "-rotate-1" : ""
+                }`}
               >
                 {u}
               </span>
@@ -957,30 +1167,32 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
       {hasRecents && (
         <section className="mx-auto max-w-6xl px-6 pt-10">
           <div className="max-w-md">
-            <h2 className="mb-2 font-code text-[11px] uppercase tracking-[0.2em] text-gray-400">
-              Jump back in
+            <h2 className="mb-2">
+              <SysLabel>Jump back in</SysLabel>
             </h2>
-            <ul className="space-y-1.5">
-              {recents.map((r) => (
+            <ul className="overflow-hidden rounded-md border border-ink/15 bg-white">
+              {recents.map((r, i) => (
                 <li
                   key={r.code}
-                  className="group flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 transition-colors hover:border-sky-400"
+                  className={`group flex items-center gap-2 px-3 py-2 transition-colors hover:bg-paper ${
+                    i > 0 ? "border-t border-ink/10" : ""
+                  }`}
                 >
                   <button
                     onClick={() => onJoin(r.code)}
                     className="flex min-w-0 flex-1 items-center gap-3 text-left"
                   >
                     <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-medium text-gray-900">{r.name}</div>
-                      <div className="text-xs text-gray-400">{relativeTime(r.lastOpenedAt)}</div>
+                      <div className="truncate text-sm font-medium text-ink">{r.name}</div>
+                      <div className="font-code text-[10px] text-ink/35">{relativeTime(r.lastOpenedAt)}</div>
                     </div>
-                    <span className="font-code text-xs tracking-widest text-gray-400">{r.code}</span>
+                    <span className="font-code text-[11px] tracking-[0.14em] text-ink/35">{r.code}</span>
                   </button>
                   <button
                     onClick={() => handleForgetRecent(r.code)}
                     aria-label={`Remove ${r.name} from recents`}
                     title="Remove from recents"
-                    className="text-gray-300 opacity-0 transition-opacity hover:text-gray-500 group-hover:opacity-100"
+                    className="text-ink/25 opacity-0 transition-opacity hover:text-ink/60 group-hover:opacity-100"
                   >
                     ✕
                   </button>
@@ -991,87 +1203,87 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
         </section>
       )}
 
-      {/* Use cases / audiences */}
-      <section id="use-cases" className="mx-auto max-w-6xl px-6 py-20">
-        <div className="max-w-2xl">
-          <h2 className="font-display text-3xl font-medium tracking-tight text-gray-900 sm:text-4xl">
-            Bring your team. Bring your agents.
-          </h2>
-          <p className="mt-3 leading-relaxed text-gray-600">
-            The same canvas reshapes itself for whoever shows up and whatever they're trying to
-            create. A few of the rooms people open every day:
-          </p>
-        </div>
+      {/* Use cases / audiences — three boards pinned to the surface */}
+      <section id="use-cases" className="relative overflow-hidden">
+        <div aria-hidden="true" className="surface-grid-faint absolute inset-0" />
+        <div className="relative mx-auto max-w-6xl px-6 py-24">
+          <div className="max-w-2xl">
+            <SysLabel>Who shows up</SysLabel>
+            <h2 className="mt-3 font-display text-3xl font-medium tracking-tight text-ink sm:text-4xl">
+              Bring your team. Bring your agents.
+            </h2>
+            <p className="mt-3 leading-relaxed text-ink/65">
+              The same canvas reshapes itself for whoever shows up and whatever they're trying to
+              create. A few of the rooms people open every day:
+            </p>
+          </div>
 
-        <div className="mt-10 grid gap-4 sm:grid-cols-3">
-          {AUDIENCES.map((a) => (
-            <div
-              key={a.title}
-              className="group relative overflow-hidden rounded-2xl border border-gray-200 bg-white p-6 transition-all hover:-translate-y-0.5 hover:shadow-lg"
-            >
+          <div className="mt-14 grid gap-6 sm:grid-cols-3">
+            {AUDIENCES.map((a) => (
               <div
-                aria-hidden="true"
-                className="absolute -right-10 -top-10 h-28 w-28 rounded-full opacity-0 blur-2xl transition-opacity duration-500 group-hover:opacity-100"
-                style={{ backgroundColor: a.accent }}
-              />
-              <span
-                className="inline-block h-2.5 w-2.5 rounded-full"
-                style={{ backgroundColor: a.accent }}
-              />
-              <h3 className="mt-3 text-lg font-semibold text-gray-900">{a.title}</h3>
-              <p className="mt-2 text-sm leading-relaxed text-gray-600">{a.blurb}</p>
-              <div className="mt-4 flex flex-wrap gap-1.5">
-                {a.tags.map((t) => (
-                  <span
-                    key={t}
-                    className="rounded-full bg-gray-100 px-2.5 py-0.5 text-[11px] font-medium text-gray-500"
-                  >
-                    {t}
-                  </span>
-                ))}
+                key={a.title}
+                className={`group relative rounded-md border-[1.5px] border-ink/80 bg-white p-6 transition-all duration-300 lg:hover:rotate-0 lg:hover:translate-y-0 hover:shadow-[6px_6px_0_rgba(28,25,23,0.12)] ${a.tilt}`}
+              >
+                <span
+                  aria-hidden="true"
+                  className="absolute inset-x-0 top-0 h-1 rounded-t-[3px]"
+                  style={{ backgroundColor: a.accent }}
+                />
+                <h3 className="mt-1 font-display text-xl font-medium text-ink">{a.title}</h3>
+                <p className="mt-2 text-sm leading-relaxed text-ink/65">{a.blurb}</p>
+                <div className="mt-4 flex flex-wrap gap-1.5">
+                  {a.tags.map((t) => (
+                    <span
+                      key={t}
+                      className="rounded-[3px] border border-ink/10 bg-paper px-2 py-0.5 font-code text-[10px] font-medium text-ink/50"
+                    >
+                      {t}
+                    </span>
+                  ))}
+                </div>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       </section>
 
-      {/* Shared memory / multi-agent */}
-      <section className="border-y border-gray-900/5 bg-gradient-to-b from-white to-[#FBFAF8]">
-        <div className="mx-auto grid max-w-6xl items-center gap-12 px-6 py-20 lg:grid-cols-2">
+      {/* Shared memory / multi-agent — the wire. Dark room. */}
+      <section className="bg-ink text-paper">
+        <div className="mx-auto grid max-w-6xl items-center gap-14 px-6 py-24 lg:grid-cols-2">
           <div>
-            <span className="font-code text-[11px] uppercase tracking-[0.2em] text-sky-600">
+            <span className="font-code text-[11px] uppercase tracking-[0.22em] text-agent">
               Shared memory
             </span>
-            <h2 className="mt-3 font-display text-3xl font-medium tracking-tight text-gray-900 sm:text-4xl">
+            <h2 className="mt-4 font-display text-3xl font-medium tracking-tight sm:text-4xl">
               The canvas is the blackboard.
             </h2>
-            <p className="mt-4 leading-relaxed text-gray-600">
+            <p className="mt-5 leading-relaxed text-paper/65">
               Every pin, row, note, and roadmap item is shared state — broadcast over the wire to
               every browser and every agent on the code. Hand-offs happen through the canvas, not
               through a copied prompt, so you can split work across specialised agents and mix
               vendors without rewriting the orchestration.
             </p>
-            <p className="mt-4 leading-relaxed text-gray-600">
+            <p className="mt-4 leading-relaxed text-paper/65">
               Reopen it next week and the whole plan is still there, with everything the team and the
               agents have added since. The work and the deliverable are the same thing.
             </p>
             <button
               onClick={onOpenMCP}
-              className="mt-6 inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+              className="btn-press mt-8 inline-flex items-center gap-2 rounded-md border-[1.5px] border-paper/30 bg-transparent px-4 py-2.5 text-sm font-medium text-paper shadow-[4px_4px_0_rgba(199,91,57,0.55)] transition-colors hover:border-paper/60"
             >
               See how multi-agent flows work
               <Icon name="arrow" className="h-4 w-4" />
             </button>
           </div>
 
-          {/* simple agents → canvas → people diagram */}
-          <div className="relative rounded-2xl border border-gray-200 bg-white p-8 shadow-sm">
-            <div className="flex items-center justify-between gap-4">
-              <div className="flex flex-col gap-2">
+          {/* agents ⇄ canvas ⇄ people, with live wires */}
+          <div className="relative rounded-md border border-paper/15 bg-white/[0.03] p-7">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex flex-col gap-2.5">
                 {["scout-agent", "planner", "reporter"].map((n) => (
                   <span
                     key={n}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-sky-100 bg-sky-50 px-2.5 py-1 text-[11px] font-semibold text-sky-700"
+                    className="inline-flex items-center gap-1.5 rounded-[4px] border border-agent/50 bg-agent/15 px-2.5 py-1 font-code text-[10.5px] font-medium text-[#E89277]"
                   >
                     <Icon name="spark" className="h-3 w-3" />
                     {n}
@@ -1079,52 +1291,70 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
                 ))}
               </div>
 
-              <div className="flex flex-col items-center gap-1">
-                <div className="flex h-20 w-20 items-center justify-center rounded-2xl border-2 border-gray-900/10 bg-[#FBFAF8] shadow-inner">
+              <div className="flex min-w-0 flex-1 flex-col gap-1 px-2">
+                <span className="text-center font-code text-[9px] uppercase tracking-[0.18em] text-agent/80">
+                  ops →
+                </span>
+                <div className="tandem-wire text-agent/60" />
+                <span className="text-center font-code text-[9px] uppercase tracking-[0.18em] text-paper/40">
+                  ← state
+                </span>
+              </div>
+
+              <div className="flex flex-col items-center gap-1.5">
+                <div className="grid h-20 w-20 place-items-center rounded-md border-[1.5px] border-paper/25 bg-paper shadow-[5px_5px_0_rgba(199,91,57,0.4)]">
                   <TandemLogo size={40} animate={false} />
                 </div>
-                <span className="font-code text-[10px] uppercase tracking-widest text-gray-400">
+                <span className="font-code text-[9px] uppercase tracking-[0.18em] text-paper/40">
                   canvas
                 </span>
               </div>
 
-              <div className="flex flex-col gap-2">
+              <div className="flex min-w-0 flex-1 flex-col gap-1 px-2">
+                <span className="text-center font-code text-[9px] uppercase tracking-[0.18em] text-paper/60">
+                  edits →
+                </span>
+                <div className="tandem-wire text-paper/40" style={{ animationDirection: "reverse" }} />
+                <span className="text-center font-code text-[9px] uppercase tracking-[0.18em] text-paper/40">
+                  ← live
+                </span>
+              </div>
+
+              <div className="flex flex-col gap-2.5">
                 {["Priya", "Devin", "Sam"].map((n) => (
                   <span
                     key={n}
-                    className="inline-flex items-center justify-end gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-gray-700"
+                    className="inline-flex items-center justify-end gap-1.5 rounded-[4px] border border-paper/25 bg-paper/10 px-2.5 py-1 font-code text-[10.5px] font-medium text-paper/85"
                   >
                     {n}
                   </span>
                 ))}
               </div>
             </div>
-            <p className="mt-6 text-center text-xs text-gray-400">
-              Many agents, many people — one shared, persistent state.
+            <p className="mt-7 text-center font-code text-[10px] text-paper/40">
+              many agents · many people · one shared, persistent state
             </p>
           </div>
         </div>
       </section>
 
       {/* How it works */}
-      <section className="mx-auto max-w-6xl px-6 py-20">
-        <div className="grid gap-8 sm:grid-cols-3">
+      <section className="mx-auto max-w-6xl px-6 py-24">
+        <div className="grid gap-10 sm:grid-cols-3">
           {STEPS.map((step, i) => (
-            <div key={step.title}>
-              <div className="flex items-center gap-2.5">
-                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-gray-900 font-code text-sm font-semibold text-white">
-                  {i + 1}
-                </span>
-                <h3 className="font-semibold text-gray-900">{step.title}</h3>
-              </div>
-              <p className="mt-2 text-sm leading-relaxed text-gray-600">
+            <div key={step.title} className="border-t-2 border-ink pt-5">
+              <span className="font-code text-[11px] font-medium tracking-[0.18em] text-ink/35">
+                0{i + 1}
+              </span>
+              <h3 className="mt-2 font-display text-xl font-medium text-ink">{step.title}</h3>
+              <p className="mt-2 text-sm leading-relaxed text-ink/65">
                 {step.body}
                 {i === 1 && (
                   <>
                     {" "}
                     <button
                       onClick={onOpenMCP}
-                      className="text-sky-600 underline transition-colors hover:text-sky-700"
+                      className="font-medium text-agent underline underline-offset-2 transition-colors hover:text-ink"
                     >
                       Setup guide
                     </button>
@@ -1138,53 +1368,71 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
       </section>
 
       {/* Modes */}
-      <section id="modes" className="border-y border-gray-900/5 bg-white">
-        <div className="mx-auto max-w-6xl px-6 py-20">
+      <section id="modes" className="relative overflow-hidden border-y border-ink/10 bg-white">
+        <div aria-hidden="true" className="surface-grid-faint absolute inset-0 opacity-60" />
+        <div className="relative mx-auto max-w-6xl px-6 py-24">
           <div className="max-w-2xl">
-            <h2 className="font-display text-3xl font-medium tracking-tight text-gray-900 sm:text-4xl">
+            <SysLabel>The surface, six ways</SysLabel>
+            <h2 className="mt-3 font-display text-3xl font-medium tracking-tight text-ink sm:text-4xl">
               One canvas, six ways to see it.
             </h2>
-            <p className="mt-3 leading-relaxed text-gray-600">
+            <p className="mt-3 leading-relaxed text-ink/65">
               Switch views from the top of any canvas. Every mode is fully editable by you and your
               agents alike — they read and write the same entities you do.
             </p>
           </div>
 
-          <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {MODE_DOCS.map((m) => (
               <div
                 key={m.kind}
-                className="rounded-2xl border border-gray-200 bg-[#FBFAF8] p-5 transition-all hover:-translate-y-0.5 hover:border-gray-300 hover:shadow-sm"
+                className="group rounded-md border border-ink/15 bg-paper p-5 transition-all hover:-translate-y-0.5 hover:shadow-[5px_5px_0_rgba(28,25,23,0.10)]"
+                style={{ ["--mode" as string]: m.color }}
               >
-                <div
-                  className={`inline-flex h-10 w-10 items-center justify-center rounded-xl ${m.tint}`}
-                >
-                  <Icon name={m.kind} className="h-5 w-5" />
+                <div className="flex items-center gap-2">
+                  <span
+                    className="grid h-8 w-8 place-items-center rounded-[5px] border border-ink/10 bg-white"
+                    style={{ color: m.color }}
+                  >
+                    <Icon name={m.kind} className="h-4 w-4" />
+                  </span>
+                  <span className="font-code text-[10px] text-ink/35">
+                    mode:<span style={{ color: m.color }}>{m.kind}</span>
+                  </span>
                 </div>
-                <h3 className="mt-3 font-semibold text-gray-900">{m.name}</h3>
-                <p className="mt-1.5 text-sm leading-relaxed text-gray-600">{m.desc}</p>
+                <h3 className="mt-3 font-display text-lg font-medium text-ink">{m.name}</h3>
+                <p className="mt-1.5 text-sm leading-relaxed text-ink/65">{m.desc}</p>
               </div>
             ))}
 
-            {/* Bring-your-own-agent card */}
-            <div className="flex flex-col rounded-2xl bg-gray-900 p-5 text-white">
-              <div className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-white/10 text-sky-300">
-                <TandemLogo size={22} animate={false} />
+            {/* Bring-your-own-agent card — a terminal on the surface */}
+            <div className="flex flex-col overflow-hidden rounded-md border-[1.5px] border-ink bg-ink text-paper shadow-[5px_5px_0_rgba(199,91,57,0.5)]">
+              <div className="flex items-center gap-2 border-b border-paper/10 px-4 py-2.5">
+                <span className="h-2 w-2 rounded-full bg-paper/20" />
+                <span className="h-2 w-2 rounded-full bg-paper/20" />
+                <span className="font-code text-[10px] text-paper/45">bring-your-own-agent</span>
               </div>
-              <h3 className="mt-3 font-semibold">Bring your own agent</h3>
-              <p className="mt-1.5 text-sm leading-relaxed text-gray-300">
-                Tandem speaks the Model Context Protocol — it isn't locked to any one assistant.
-                Claude, Codex, Cursor, the OpenAI Agents SDK, or an orchestrator you wrote yourself.
-              </p>
-              <code className="mt-3 block overflow-x-auto rounded-lg bg-black/40 px-3 py-2 font-code text-xs text-sky-200">
-                npx -y @jaximus/tandem-mcp
-              </code>
-              <button
-                onClick={onOpenMCP}
-                className="mt-3 text-left text-sm font-medium text-sky-300 transition-colors hover:text-sky-200"
-              >
-                Read the setup guide →
-              </button>
+              <div className="flex-1 px-4 py-3 font-code text-[11.5px] leading-relaxed">
+                <div className="text-paper/55">
+                  <span className="text-agent">$</span> npx -y @jaximus/tandem-mcp
+                </div>
+                <div className="mt-1 text-emerald-400/90">✓ connected · canvas TOKYO7X3K</div>
+                <div className="mt-1 text-paper/45">
+                  watching for ops<span className="tandem-caret ml-1 inline-block h-3 w-[7px] translate-y-[2px] bg-agent" />
+                </div>
+              </div>
+              <div className="px-4 pb-4">
+                <p className="text-xs leading-relaxed text-paper/60">
+                  Tandem speaks MCP — not locked to any one assistant. Claude, Codex, Cursor, or an
+                  orchestrator you wrote yourself.
+                </p>
+                <button
+                  onClick={onOpenMCP}
+                  className="mt-2.5 text-left font-code text-[11px] font-medium text-agent transition-colors hover:text-paper"
+                >
+                  read the setup guide →
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1192,57 +1440,47 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
 
       {/* Sign-up pitch — only for visitors who aren't already signed in */}
       {showSignUp && (
-        <section className="mx-auto max-w-6xl px-6 py-20">
-          <div className="relative overflow-hidden rounded-3xl bg-gray-900 px-8 py-12 text-white sm:px-12">
-            <div
-              aria-hidden="true"
-              className="tandem-blob absolute -right-20 -top-24 h-80 w-80 rounded-full bg-sky-500/20 blur-3xl"
-            />
-            <div
-              aria-hidden="true"
-              className="tandem-blob absolute -bottom-24 -left-16 h-72 w-72 rounded-full bg-amber-400/10 blur-3xl"
-            />
-            <div className="relative grid items-center gap-10 lg:grid-cols-[1fr_1.1fr]">
+        <section className="mx-auto max-w-6xl px-6 py-24">
+          <div className="relative rounded-md border-[1.5px] border-ink bg-ink px-8 py-12 text-paper shadow-[8px_8px_0_rgba(28,25,23,0.15)] sm:px-12">
+            <div className="grid items-center gap-10 lg:grid-cols-[1fr_1.1fr]">
               <div>
-                <span className="font-code text-[11px] uppercase tracking-[0.2em] text-sky-300">
+                <span className="font-code text-[11px] uppercase tracking-[0.22em] text-agent">
                   Free account
                 </span>
                 <h2 className="mt-3 font-display text-3xl font-medium tracking-tight sm:text-4xl">
                   Start free. Sign up to unlock more.
                 </h2>
-                <p className="mt-4 leading-relaxed text-gray-300">
+                <p className="mt-4 leading-relaxed text-paper/65">
                   Anyone can spin up a canvas and share the code. Create a free account to keep
                   your canvases, get to them from any device, and copy any shared canvas to make it
                   your own.
                 </p>
-                <div className="mt-7 flex flex-wrap items-center gap-3">
+                <div className="mt-8 flex flex-wrap items-center gap-4">
                   <button
                     onClick={() => setSignInOpen(true)}
-                    className="inline-flex items-center gap-2 rounded-xl bg-white px-6 py-3 font-medium text-gray-900 shadow-sm transition-all hover:shadow-md"
+                    className="btn-press inline-flex items-center gap-2 rounded-md bg-paper px-6 py-3 font-medium text-ink shadow-[4px_4px_0_#C75B39]"
                   >
-                    <Icon name="spark" className="h-4 w-4 text-amber-500" />
                     Create your free account
                   </button>
                   <button
                     onClick={() => setLauncher("create")}
-                    className="rounded-xl border border-white/20 px-6 py-3 font-medium text-white transition-colors hover:bg-white/10"
+                    className="rounded-md border border-paper/25 px-6 py-3 font-medium text-paper transition-colors hover:bg-paper/10"
                   >
                     Try it without signing up
                   </button>
                 </div>
               </div>
 
-              <div className="grid gap-3 sm:grid-cols-3">
+              <div className="divide-y divide-paper/10 rounded-md border border-paper/15">
                 {ACCOUNT_PERKS.map((perk) => (
-                  <div
-                    key={perk.title}
-                    className="rounded-2xl border border-white/10 bg-white/5 p-5 backdrop-blur"
-                  >
-                    <div className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-white/10 text-sky-300">
-                      <Icon name={perk.icon} className="h-5 w-5" />
+                  <div key={perk.title} className="flex gap-4 p-5">
+                    <div className="grid h-9 w-9 shrink-0 place-items-center rounded-[5px] border border-agent/40 bg-agent/15 text-[#E89277]">
+                      <Icon name={perk.icon} className="h-[18px] w-[18px]" />
                     </div>
-                    <h3 className="mt-3 text-sm font-semibold text-white">{perk.title}</h3>
-                    <p className="mt-1 text-xs leading-relaxed text-gray-400">{perk.desc}</p>
+                    <div>
+                      <h3 className="text-sm font-semibold text-paper">{perk.title}</h3>
+                      <p className="mt-1 text-xs leading-relaxed text-paper/55">{perk.desc}</p>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1251,33 +1489,43 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
         </section>
       )}
 
-      {/* Manifesto / closing CTA */}
+      {/* Manifesto / closing CTA — back on the open surface */}
       <section className="relative overflow-hidden">
         <div
           aria-hidden="true"
-          className="tandem-blob absolute -left-32 bottom-0 h-96 w-96 rounded-full bg-sky-100/60 blur-3xl"
+          className="surface-grid absolute inset-0"
+          style={{
+            maskImage: "radial-gradient(100% 100% at 50% 100%, black 40%, transparent 95%)",
+            WebkitMaskImage: "radial-gradient(100% 100% at 50% 100%, black 40%, transparent 95%)",
+          }}
         />
-        <div className="relative mx-auto max-w-3xl px-6 py-24 text-center">
+        <RoamingCursor name="scout-agent" kind="agent" roam="b" style={{ bottom: "30%", left: "12%" }} />
+        <RoamingCursor name="Priya" kind="human" roam="a" style={{ top: "22%", right: "10%" }} />
+        <div className="relative mx-auto max-w-3xl px-6 py-28 text-center">
           <TandemLogo size={44} />
-          <h2 className="mt-6 font-display text-3xl font-medium leading-tight tracking-tight text-gray-900 sm:text-[2.6rem]">
-            The place to bring your team and your agents, to create what's truly envisioned in
-            everyone's mind.
-          </h2>
-          <p className="mx-auto mt-5 max-w-xl leading-relaxed text-gray-600">
+          <div className="mt-10 inline-block">
+            <SelectionFrame tag="everyone" tagKind="human" className="inline-block">
+              <h2 className="font-display text-3xl font-medium leading-tight tracking-tight text-ink sm:text-[2.5rem]">
+                The place to bring your team and your agents, to create what's{" "}
+                <em className="text-agent">truly envisioned</em> in everyone's mind.
+              </h2>
+            </SelectionFrame>
+          </div>
+          <p className="mx-auto mt-8 max-w-xl leading-relaxed text-ink/65">
             Stop copy-pasting plans out of a chat window. Open one canvas, share one link, and let
             everyone — human and AI — build the thing together.
           </p>
-          <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
+          <div className="mt-10 flex flex-wrap items-center justify-center gap-4">
             <button
               onClick={() => setLauncher("create")}
-              className="inline-flex items-center gap-2 rounded-xl bg-gray-900 px-6 py-3 font-medium text-white shadow-sm transition-all hover:bg-gray-800 hover:shadow-md"
+              className="btn-press inline-flex items-center gap-2 rounded-md bg-ink px-6 py-3 font-medium text-paper shadow-[4px_4px_0_#C75B39]"
             >
               Start a canvas
               <Icon name="arrow" className="h-4 w-4" />
             </button>
             <button
               onClick={onOpenMCP}
-              className="rounded-xl border border-gray-300 bg-white px-6 py-3 font-medium text-gray-700 transition-colors hover:bg-gray-50"
+              className="btn-press rounded-md border-[1.5px] border-ink bg-white px-6 py-3 font-medium text-ink shadow-[4px_4px_0_rgba(28,25,23,0.15)]"
             >
               Connect an agent
             </button>
@@ -1286,8 +1534,8 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
       </section>
 
       {/* Footer */}
-      <footer className="border-t border-gray-900/5 bg-white">
-        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-6 py-8 text-xs text-gray-400 sm:flex-row">
+      <footer className="border-t border-ink/10 bg-white">
+        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-6 py-8 font-code text-[11px] text-ink/40 sm:flex-row">
           <div className="flex items-center gap-2">
             <TandemLogo size={18} animate={false} />
             <span>Tandem — you and your agents, in tandem.</span>
@@ -1297,18 +1545,18 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
               href="https://github.com/jaximus808/tandam"
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 transition-colors hover:text-gray-600"
+              className="inline-flex items-center gap-1.5 transition-colors hover:text-ink"
             >
               <Icon name="github" className="h-4 w-4" />
               GitHub
             </a>
             <p>
-              Made with <span className="text-rose-400">♥</span> by{" "}
+              made with <span className="text-agent">♥</span> by{" "}
               <a
                 href="https://www.jaxonp.com/"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="underline transition-colors hover:text-gray-600"
+                className="underline transition-colors hover:text-ink"
               >
                 Jaxon
               </a>

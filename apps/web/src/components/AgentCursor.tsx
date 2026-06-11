@@ -102,7 +102,7 @@ export default function AgentCursor({ edit, name }: Props) {
 
         {/* Name pill, offset to sit beside the arrow. */}
         <div
-          className="absolute left-[15px] top-[13px] flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold text-white shadow-sm"
+          className="absolute left-[15px] top-[13px] flex items-center gap-1 whitespace-nowrap rounded-[3px] px-1.5 py-0.5 font-code text-[10px] font-medium text-white shadow-sm"
           style={{ background: "var(--agent-accent)" }}
         >
           <SparkleGlyph />

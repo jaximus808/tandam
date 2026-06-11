@@ -63,7 +63,12 @@
       "Bash(sed -n '1,90p' internal/auth/jwt.go)",
       "Bash(sed -n '17,38p' 0007_add_sheets.sql)",
       "Bash(sed -n '8,21p' 0005_add_roadmap_items.sql)",
-      "Bash(sed -n '16,30p' 0012_add_charts.sql)"
+      "Bash(sed -n '16,30p' 0012_add_charts.sql)",
+      "Bash(curl -s -m 8 https://tandemcanvas.com/api/stats)",
+      "Bash(curl -s -m 8 https://tandemcanvas.com/api/stats/canvas-count)",
+      "Bash(curl -s -m 8 -o /dev/null -w \"%{http_code}\\\\n\" https://tandemcanvas.com/api/me/canvases)",
+      "Bash(curl -s -m 8 https://registry.npmjs.org/@jaximus/tandem-mcp/latest)",
+      "Bash('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' --headless --disable-gpu --hide-scrollbars --screenshot=/tmp/landing-hero.png --window-size=1440,950 --virtual-time-budget=6000 http://localhost:5175)"
     ]
   }
 }

@@ -15,6 +15,12 @@ module.exports = {
       },
       colors: {
         paper: "#FBFAF8",
+        // Warm near-black — the "human" ink of the worksurface. Borders use
+        // ink at low alpha (ink/10, ink/15) so hairlines stay warm, not gray.
+        ink: "#1C1917",
+        // The agent signature colour. Humans are ink, agents are terracotta —
+        // every agent-authored thing on a surface carries this.
+        agent: "#C75B39",
       },
     },
   },

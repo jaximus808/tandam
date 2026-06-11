@@ -28,17 +28,15 @@ export default function AgentPresence({ agents, edit, onJump }: Props) {
 
   return (
     <div className="hidden items-center gap-2 sm:flex">
-      {/* Avatar cluster. */}
-      <div className="flex -space-x-1.5">
+      {/* Avatar cluster — agents are square terracotta chips, like their tags. */}
+      <div className="flex -space-x-1">
         {agents.map((a, i) => (
           <span
             key={`${a.name}-${i}`}
             title={a.isClaude ? `${a.name} (Claude)` : a.name}
-            className="relative grid h-6 w-6 place-items-center rounded-full ring-2 ring-paper"
+            className="relative grid h-6 w-6 place-items-center rounded-[5px] ring-2 ring-paper"
             style={{
-              background: a.isClaude
-                ? "linear-gradient(135deg, #C2603D 0%, #D97757 100%)"
-                : "linear-gradient(135deg, #475569 0%, #64748B 100%)",
+              background: a.isClaude ? "#C75B39" : "#1C1917",
             }}
           >
             <Sparkle />
@@ -50,8 +48,8 @@ export default function AgentPresence({ agents, edit, onJump }: Props) {
       {edit && t ? (
         <button
           onClick={() => onJump(edit.mode)}
-          className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-colors"
-          style={{ backgroundColor: t.soft, color: t.solid }}
+          className="inline-flex items-center gap-1.5 rounded-[4px] px-2 py-1 font-code text-[10.5px] font-medium transition-colors"
+          style={{ backgroundColor: t.soft, color: t.solid, boxShadow: `inset 0 0 0 1px ${t.line}` }}
           title={`Jump to ${MODE_LABEL[edit.mode]} — where it's writing`}
         >
           <span className="relative flex h-1.5 w-1.5">
@@ -61,10 +59,10 @@ export default function AgentPresence({ agents, edit, onJump }: Props) {
             />
             <span className="relative inline-flex h-1.5 w-1.5 rounded-full" style={{ backgroundColor: t.solid }} />
           </span>
-          editing {MODE_LABEL[edit.mode]}
+          editing {MODE_LABEL[edit.mode].toLowerCase()}
         </button>
       ) : (
-        <span className="text-xs font-medium text-gray-400">here</span>
+        <span className="font-code text-[10.5px] font-medium text-ink/35">here</span>
       )}
     </div>
   );

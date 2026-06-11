@@ -111,6 +111,94 @@
 }
 
 /* ───────────────────────────────────────────────────────────────────────────
+   The worksurface design language. The whole site is "one shared canvas":
+   a dot-grid surface, content treated as selected objects (frames + handles
+   + editor tags), hard offset shadows instead of blur, mono system labels,
+   and a live op feed. Humans are ink (#1C1917); agents are terracotta.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/* The dot-grid worksurface itself. Layer over bg-paper. */
+.surface-grid {
+  background-image: radial-gradient(rgba(28, 25, 23, 0.13) 1.1px, transparent 1.1px);
+  background-size: 22px 22px;
+}
+.surface-grid-faint {
+  background-image: radial-gradient(rgba(28, 25, 23, 0.08) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+
+/* Selection-frame corner handles: little white squares with ink borders,
+   like a selected object on a design canvas. Place inside a relative box. */
+.sel-handle {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  background: #fff;
+  border: 1.5px solid currentColor;
+  z-index: 2;
+}
+/* Pressable "object" buttons: a hard offset shadow you physically push into. */
+.btn-press {
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.btn-press:hover { transform: translate(1px, 1px); }
+.btn-press:active { transform: translate(3px, 3px); box-shadow: 0 0 0 0 transparent !important; }
+
+/* Op-feed rows tick in from below, like a tailing log. */
+@keyframes tandem-op-in {
+  from { opacity: 0; transform: translateY(7px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.tandem-op-in { animation: tandem-op-in 0.4s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+/* Terminal block-cursor blink. */
+@keyframes tandem-caret {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+.tandem-caret { animation: tandem-caret 1.1s step-end infinite; }
+
+/* Free-roaming cursors that wander the page surface (not just the demo). */
+@keyframes tandem-roam-a {
+  0%   { transform: translate(0, 0); }
+  25%  { transform: translate(-60px, 90px); }
+  50%  { transform: translate(40px, 170px); }
+  75%  { transform: translate(110px, 60px); }
+  100% { transform: translate(0, 0); }
+}
+@keyframes tandem-roam-b {
+  0%   { transform: translate(0, 0); }
+  30%  { transform: translate(90px, -50px); }
+  60%  { transform: translate(-50px, -110px); }
+  100% { transform: translate(0, 0); }
+}
+.tandem-roam-a { animation: tandem-roam-a 26s ease-in-out infinite; }
+.tandem-roam-b { animation: tandem-roam-b 31s ease-in-out infinite; }
+
+/* Dashed "wire" between agents ⇄ canvas ⇄ humans: marching ants. */
+@keyframes tandem-wire {
+  from { background-position: 0 0; }
+  to   { background-position: 16px 0; }
+}
+.tandem-wire {
+  height: 2px;
+  background-image: repeating-linear-gradient(
+    to right,
+    currentColor 0 7px,
+    transparent 7px 16px
+  );
+  animation: tandem-wire 0.9s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tandem-op-in,
+  .tandem-caret,
+  .tandem-roam-a,
+  .tandem-roam-b,
+  .tandem-wire { animation: none; }
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
    Landing page (pages/Landing.tsx): on-load reveals, the shape-shifting hero
    canvas, the use-case marquee, floating cursors, and ambient blobs. Every
    animation is disabled under prefers-reduced-motion at the bottom.
