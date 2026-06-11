@@ -12,6 +12,10 @@ import ChartsMode from "./modes/ChartsMode";
 import WelcomeMode from "./modes/WelcomeMode";
 import Landing from "./pages/Landing";
 import MCPSupport from "./pages/MCPSupport";
+import MyCanvases from "./pages/MyCanvases";
+import StatsPage from "./pages/StatsPage";
+import { fetchMe, type User } from "./lib/auth";
+import { copyCanvas } from "./lib/api";
 import ConnectModal, { hasDismissedConnect } from "./components/ConnectModal";
 import TandemLogo from "./components/TandemLogo";
 import AccountMenu from "./components/AccountMenu";
@@ -65,6 +69,16 @@ function getCodeFromURL(): string | null {
   return new URLSearchParams(window.location.search).get("code")?.toUpperCase() ?? null;
 }
 
+type Route = "home" | "mcp" | "me" | "stats";
+
+function routeFromPath(): Route {
+  const p = window.location.pathname.replace(/\/$/, "");
+  if (p === "/mcp") return "mcp";
+  if (p === "/me") return "me";
+  if (p === "/stats") return "stats";
+  return "home";
+}
+
 function isMCPRoute(): boolean {
   return window.location.pathname.replace(/\/$/, "") === "/mcp";
 }
@@ -82,7 +96,7 @@ function setMCPInURL() {
 }
 
 export default function App() {
-  const [route, setRoute] = useState<"home" | "mcp">(() => (isMCPRoute() ? "mcp" : "home"));
+  const [route, setRoute] = useState<Route>(routeFromPath);
   const [canvasCode, setCanvasCode] = useState<string | null>(getCodeFromURL);
   const [canvas, setCanvas] = useState<CanvasMeta | null>(null);
   const [canvasState, setCanvasState] = useState<CanvasState | null>(null);
@@ -91,6 +105,10 @@ export default function App() {
   const [connectOpen, setConnectOpen] = useState(false);
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [addTabOpen, setAddTabOpen] = useState(false);
+  // The signed-in user (or null). Drives the "Copy to my account" button —
+  // shown when this canvas isn't already owned by me.
+  const [me, setMe] = useState<User | null>(null);
+  const [copying, setCopying] = useState(false);
   // Actor behind the latest state push ("agent" | "user"), read by the activity
   // hook. A ref so it's set synchronously before the re-render it triggers.
   const lastChangeByRef = useRef<ChangeActor | undefined>(undefined);
@@ -131,8 +149,18 @@ export default function App() {
   }, [canvasCode]);
 
   useEffect(() => {
+    let cancelled = false;
+    fetchMe().then((u) => {
+      if (!cancelled) setMe(u);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     function onPop() {
-      setRoute(isMCPRoute() ? "mcp" : "home");
+      setRoute(routeFromPath());
     }
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
@@ -201,6 +229,25 @@ export default function App() {
     setCanvasCode(code);
     setCodeInURL(code);
     resetPerCanvasState();
+  }
+
+  function showMyCanvases() {
+    window.history.pushState(null, "", "/me");
+    setRoute("me");
+  }
+
+  // Deep-copy the current canvas into my account, then open the owned copy.
+  async function handleCopyToAccount() {
+    if (!canvas || copying) return;
+    setCopying(true);
+    try {
+      const copy = await copyCanvas(canvas.code);
+      handleJoin(copy.code);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Copy failed");
+    } finally {
+      setCopying(false);
+    }
   }
 
   // Live agent presence: detect agent-authored edits and surface a cursor +
@@ -286,6 +333,32 @@ export default function App() {
     );
   }
 
+  if (route === "stats") {
+    return (
+      <StatsPage
+        onHome={() => {
+          window.history.pushState(null, "", "/");
+          setRoute("home");
+        }}
+      />
+    );
+  }
+
+  if (route === "me") {
+    return (
+      <MyCanvases
+        onOpenCanvas={(code) => {
+          setRoute("home");
+          handleJoin(code);
+        }}
+        onHome={() => {
+          setRoute("home");
+          handleJoin("");
+        }}
+      />
+    );
+  }
+
   if (!canvasCode) {
     return (
       <Landing
@@ -294,6 +367,7 @@ export default function App() {
           setMCPInURL();
           setRoute("mcp");
         }}
+        onShowCanvases={showMyCanvases}
       />
     );
   }
@@ -562,13 +636,23 @@ export default function App() {
               {following ? (agentPresent ? "Following" : "Following · waiting") : "Follow agent"}
             </span>
           </button>
+          {me && canvas.ownerUserId !== me.id && (
+            <button
+              onClick={handleCopyToAccount}
+              disabled={copying}
+              className="hidden rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-60 sm:inline-block"
+              title="Save a copy of this canvas to your account so it shows up in My canvases on every device"
+            >
+              {copying ? "Copying…" : "Copy to my account"}
+            </button>
+          )}
           <button
             onClick={() => setConnectOpen(true)}
             className="rounded-lg px-3.5 py-1.5 text-sm font-medium bg-gray-900 text-white shadow-sm transition-all hover:bg-gray-800 hover:shadow"
           >
             Connect
           </button>
-          <AccountMenu />
+          <AccountMenu onShowCanvases={showMyCanvases} />
         </div>
       </header>
 

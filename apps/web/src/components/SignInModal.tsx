@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { Sparkles, Bot, Share2, Lock, type LucideIcon } from "lucide-react";
+import { Sparkles, Save, MonitorSmartphone, Copy, type LucideIcon } from "lucide-react";
 import { loadGoogleId, loginWithGoogle, GOOGLE_CLIENT_ID, type User } from "../lib/auth";
 import TandemLogo from "./TandemLogo";
 
@@ -119,7 +119,7 @@ export default function SignInModal({ onClose, onSignedIn }: Props) {
             <TandemLogo size={52} />
             <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-white/80 text-[11px] font-semibold text-blue-700 shadow-sm backdrop-blur">
               <Sparkles className="w-3 h-3" />
-              Access Tandem agents
+              Your canvases, saved
             </span>
           </div>
         </div>
@@ -130,27 +130,27 @@ export default function SignInModal({ onClose, onSignedIn }: Props) {
             Sign in to Tandem
           </h2>
           <p className="mt-1 text-sm text-gray-600 leading-relaxed">
-            Create a free account to do more with your canvases:
+            Create a free account to keep your canvases:
           </p>
 
           <div className="mt-4 space-y-3">
             <FeatureRow
-              icon={Bot}
+              icon={Save}
               tint="bg-blue-50 text-blue-600"
-              title="Tandem agents"
-              desc="Chat with a built-in agent — no setup of your own."
+              title="Keep your canvases"
+              desc="Saved to your account — not just a link you might lose."
             />
             <FeatureRow
-              icon={Share2}
+              icon={MonitorSmartphone}
               tint="bg-emerald-50 text-emerald-600"
-              title="Share with people"
-              desc="Invite specific teammates to a canvas."
+              title="On every device"
+              desc="Sign in on your laptop or phone — they're all here."
             />
             <FeatureRow
-              icon={Lock}
+              icon={Copy}
               tint="bg-violet-50 text-violet-600"
-              title="Private canvases"
-              desc="Keep canvases only your account can open."
+              title="Make any canvas yours"
+              desc="Copy a canvas you have the code to into your account."
             />
           </div>
 

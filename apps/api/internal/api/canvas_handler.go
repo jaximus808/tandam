@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/agentcanvas/api/internal/maps"
@@ -30,7 +31,13 @@ func (h *Handler) CreateCanvas(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	canvas, err := h.store.CreateCanvas(r.Context(), body.Name)
+	// Owned only when a logged-in human creates it (OptionalUser middleware).
+	// MCP/gateway creates have no session cookie → anonymous, as intended.
+	var owner *uuid.UUID
+	if uid, ok := UserIDFromCtx(r.Context()); ok {
+		owner = &uid
+	}
+	canvas, err := h.store.CreateCanvas(r.Context(), body.Name, owner)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -49,15 +56,81 @@ func (h *Handler) GetCanvasByCode(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, canvas)
 }
 
-// GET /api/stats/canvas-count  (public) — total canvases created, for the
-// landing page's social-proof counter.
-func (h *Handler) CanvasCount(w http.ResponseWriter, r *http.Request) {
-	count, err := h.store.CanvasCount(r.Context())
+// GET /api/me/canvases  (RequireUser) — the signed-in user's owned canvases.
+func (h *Handler) MeCanvases(w http.ResponseWriter, r *http.Request) {
+	uid, ok := UserIDFromCtx(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "not signed in")
+		return
+	}
+	canvases, err := h.store.ListCanvasesByOwner(r.Context(), uid)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]int{"count": count})
+	writeJSON(w, http.StatusOK, canvases)
+}
+
+// POST /api/canvases/{code}/copy  (RequireUser) — deep-copy a canvas into one
+// owned by the signed-in user. This is how you "own" an anonymous canvas.
+func (h *Handler) CopyCanvas(w http.ResponseWriter, r *http.Request) {
+	uid, ok := UserIDFromCtx(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "not signed in")
+		return
+	}
+	src, err := h.store.GetCanvasByCode(r.Context(), chi.URLParam(r, "code"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "canvas not found")
+		return
+	}
+	var body struct {
+		Name string `json:"name"`
+	}
+	_ = decode(r, &body)
+	name := strings.TrimSpace(body.Name)
+	if name == "" {
+		name = src.Name
+	}
+	canvas, err := h.store.CopyCanvas(r.Context(), src.ID, uid, name)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, canvas)
+}
+
+// GET /api/stats  (public) — total canvases + user accounts created. The
+// canvas count feeds the landing social-proof number; the user count is for
+// tracking adoption (not displayed on the landing).
+func (h *Handler) Stats(w http.ResponseWriter, r *http.Request) {
+	canvases, err := h.store.CanvasCount(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	users, err := h.store.UserCount(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	recurring, _, err := h.store.CanvasRecurrence(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// % of canvases touched again on a later day — the recurrence proxy. Integer
+	// round-half-up so we don't drag in math just for one percentage.
+	pct := 0
+	if canvases > 0 {
+		pct = (recurring*100 + canvases/2) / canvases
+	}
+	writeJSON(w, http.StatusOK, map[string]int{
+		"canvases":     canvases,
+		"users":        users,
+		"recurring":    recurring,
+		"recurringPct": pct,
+	})
 }
 
 // GET /api/canvas/state  (JWT required)

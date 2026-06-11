@@ -9,6 +9,7 @@ import SignInModal from "../components/SignInModal";
 interface Props {
   onJoin: (code: string) => void;
   onOpenMCP: () => void;
+  onShowCanvases: () => void;
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -255,6 +256,22 @@ function Icon({ name, className = "" }: { name: string; className?: string }) {
         <svg {...c}>
           <rect x="4.5" y="10.5" width="15" height="10" rx="2" />
           <path d="M8 10.5V7a4 4 0 0 1 8 0v3.5" />
+        </svg>
+      );
+    case "devices":
+      return (
+        <svg {...c}>
+          <rect x="2.5" y="5" width="13" height="9" rx="1.5" />
+          <path d="M1.5 17h13" />
+          <rect x="16.5" y="9" width="6" height="11" rx="1.5" />
+          <path d="M18.5 17.5h2" />
+        </svg>
+      );
+    case "copy":
+      return (
+        <svg {...c}>
+          <rect x="8.5" y="8.5" width="11" height="11" rx="2" />
+          <path d="M5.5 15.5H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8.5a2 2 0 0 1 2 2v.5" />
         </svg>
       );
     default:
@@ -702,28 +719,23 @@ const ACCOUNT_PERKS: { icon: string; title: string; desc: string }[] = [
   {
     icon: "save",
     title: "Keep your canvases",
-    desc: "Sign up and your canvases are tied to your account — yours to come back to, not just a link you hope you didn't lose.",
+    desc: "Sign in and the canvases you create are saved to your account — yours to come back to, not just a link you hope you didn't lose.",
   },
   {
-    icon: "spark",
-    title: "Built-in Tandem agents",
-    desc: "Chat with an agent that already lives on the canvas — no MCP setup of your own to wire up.",
+    icon: "devices",
+    title: "On every device",
+    desc: "Open Tandem on your laptop or your phone and every canvas you own is right there — no more digging through a chat for the code.",
   },
   {
-    icon: "people",
-    title: "Share with your team",
-    desc: "Invite specific teammates to a canvas so the right people — and their agents — are in the room.",
-  },
-  {
-    icon: "lock",
-    title: "Private canvases",
-    desc: "Keep work that matters locked to your account, not open to anyone with the code.",
+    icon: "copy",
+    title: "Make any canvas yours",
+    desc: "Got a canvas by its code? Copy it into your account in one click to keep your own editable version.",
   },
 ];
 
 /* ── the page ────────────────────────────────────────────────────────────────── */
 
-export default function Landing({ onJoin, onOpenMCP }: Props) {
+export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
   const reduced = usePrefersReducedMotion();
   const [sceneIdx, setSceneIdx] = useState(0);
   const [launcher, setLauncher] = useState<null | "create" | "join">(null);
@@ -753,10 +765,10 @@ export default function Landing({ onJoin, onOpenMCP }: Props) {
   // number only renders once it's worth showing (see threshold below).
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/stats/canvas-count")
+    fetch("/api/stats")
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        if (!cancelled && d && typeof d.count === "number") setCanvasCount(d.count);
+        if (!cancelled && d && typeof d.canvases === "number") setCanvasCount(d.canvases);
       })
       .catch(() => {});
     return () => {
@@ -813,7 +825,7 @@ export default function Landing({ onJoin, onOpenMCP }: Props) {
             >
               Connect an agent
             </button>
-            <AccountMenu />
+            <AccountMenu onShowCanvases={onShowCanvases} />
           </nav>
         </div>
       </header>
@@ -1199,9 +1211,9 @@ export default function Landing({ onJoin, onOpenMCP }: Props) {
                   Start free. Sign up to unlock more.
                 </h2>
                 <p className="mt-4 leading-relaxed text-gray-300">
-                  Anyone can spin up a canvas and share the code. Create a free account to unlock
-                  more — keep your canvases, make them private, and bring built-in agents and real
-                  teammates into the room.
+                  Anyone can spin up a canvas and share the code. Create a free account to keep
+                  your canvases, get to them from any device, and copy any shared canvas to make it
+                  your own.
                 </p>
                 <div className="mt-7 flex flex-wrap items-center gap-3">
                   <button
@@ -1220,7 +1232,7 @@ export default function Landing({ onJoin, onOpenMCP }: Props) {
                 </div>
               </div>
 
-              <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid gap-3 sm:grid-cols-3">
                 {ACCOUNT_PERKS.map((perk) => (
                   <div
                     key={perk.title}

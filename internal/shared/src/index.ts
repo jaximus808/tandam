@@ -25,6 +25,7 @@ export interface CanvasMeta {
   name: string;
   mode: string;
   mapId?: string;    // Phase 3: active map preset (only meaningful in map mode)
+  ownerUserId?: string; // set when a logged-in user owns the canvas; absent = anonymous
   version: number;
   createdAt: string; // ISO timestamp (Go API returns strings)
   updatedAt: string;

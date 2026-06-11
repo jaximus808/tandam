@@ -54,7 +54,16 @@
       "Bash(go test *)",
       "WebFetch(domain:x.com)",
       "WebFetch(domain:www.reddit.com)",
-      "WebFetch(domain:benenewton.com)"
+      "WebFetch(domain:benenewton.com)",
+      "Bash(echo \"GO_BUILD_EXIT=$?\")",
+      "Bash(sed -n '12,46p;200,210p;405,495p' internal/store/supabase.go)",
+      "Bash(sed -n '/func toCanvas/,/^}/p' internal/store/supabase.go)",
+      "Bash(sed -n '1560,1625p' internal/store/supabase.go)",
+      "Bash(sed -n '/func \\(h \\\\*Handler\\) CreateCanvas/,/^}/p;/func \\(h \\\\*Handler\\) GetCanvasByCode/,/^}/p' internal/api/canvas_handler.go)",
+      "Bash(sed -n '1,90p' internal/auth/jwt.go)",
+      "Bash(sed -n '17,38p' 0007_add_sheets.sql)",
+      "Bash(sed -n '8,21p' 0005_add_roadmap_items.sql)",
+      "Bash(sed -n '16,30p' 0012_add_charts.sql)"
     ]
   }
 }

@@ -11,14 +11,15 @@ import (
 // ── Domain types ──────────────────────────────────────────────────────────────
 
 type Canvas struct {
-	ID        uuid.UUID `json:"id"`
-	Code      string    `json:"code"`
-	Name      string    `json:"name"`
-	Mode      string    `json:"mode"`
-	MapID     *string   `json:"mapId,omitempty"`
-	Version   int       `json:"version"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	ID          uuid.UUID  `json:"id"`
+	Code        string     `json:"code"`
+	Name        string     `json:"name"`
+	Mode        string     `json:"mode"`
+	MapID       *string    `json:"mapId,omitempty"`
+	OwnerUserID *uuid.UUID `json:"ownerUserId,omitempty"`
+	Version     int        `json:"version"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	UpdatedAt   time.Time  `json:"updatedAt"`
 }
 
 type Pin struct {
@@ -283,8 +284,12 @@ type ActionStatePatch struct {
 
 type Store interface {
 	// Canvas
-	CreateCanvas(ctx context.Context, name string) (*Canvas, error)
+	CreateCanvas(ctx context.Context, name string, ownerUserID *uuid.UUID) (*Canvas, error)
+	ListCanvasesByOwner(ctx context.Context, ownerUserID uuid.UUID) ([]*Canvas, error)
+	CopyCanvas(ctx context.Context, srcID, ownerUserID uuid.UUID, name string) (*Canvas, error)
 	CanvasCount(ctx context.Context) (int, error)
+	UserCount(ctx context.Context) (int, error)
+	CanvasRecurrence(ctx context.Context) (revisited int, total int, err error)
 	GetCanvasByCode(ctx context.Context, code string) (*Canvas, error)
 	GetCanvasByID(ctx context.Context, id uuid.UUID) (*Canvas, error)
 	GetCanvasState(ctx context.Context, canvasID uuid.UUID) (*Canvas, *CanvasState, []*PendingEdit, error)

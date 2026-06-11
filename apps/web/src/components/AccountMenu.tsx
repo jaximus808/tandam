@@ -6,7 +6,7 @@ import SignInModal from "./SignInModal";
 // "Sign in" button that opens SignInModal when signed out. Renders nothing if
 // sign-in isn't configured (no VITE_GOOGLE_CLIENT_ID) so the header degrades
 // cleanly.
-export default function AccountMenu() {
+export default function AccountMenu({ onShowCanvases }: { onShowCanvases?: () => void } = {}) {
   const [user, setUser] = useState<User | null>(null);
   const [ready, setReady] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -91,6 +91,18 @@ export default function AccountMenu() {
               </div>
               <div className="text-xs text-gray-400 truncate">{user.email}</div>
             </div>
+            {onShowCanvases && (
+              <button
+                role="menuitem"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onShowCanvases();
+                }}
+                className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
+              >
+                My canvases
+              </button>
+            )}
             <button
               role="menuitem"
               onClick={handleLogout}

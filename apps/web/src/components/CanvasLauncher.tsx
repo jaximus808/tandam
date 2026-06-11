@@ -49,6 +49,8 @@ export default function CanvasLauncher({ initialMode, onJoin, onClose, onOpenMCP
       const res = await fetch("/api/canvases", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        // Send the session cookie so a logged-in create is owned by the account.
+        credentials: "same-origin",
         body: JSON.stringify({ name: trimmed }),
       });
       if (!res.ok) {

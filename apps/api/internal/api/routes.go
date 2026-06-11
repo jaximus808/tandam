@@ -33,18 +33,26 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 	authH := NewAuthHandler(s, authSvc, googleVerifier, cookieSecure)
 
 	// ── Public ─────────────────────────────────────────────────────────────────
-	r.Post("/api/canvases", h.CreateCanvas)
+	// OptionalUser: a logged-in create gets owned; anonymous/MCP creates don't.
+	r.With(OptionalUser(authSvc)).Post("/api/canvases", h.CreateCanvas)
 	r.Get("/api/canvases/{code}", h.GetCanvasByCode)
 	r.Post("/api/mcp/auth", mcpAuthHandlerFunc(h, authSvc))
 	r.Get("/ws", wsH.ServeWS)
 	r.Get("/api/maps", mapsH.List)
 	r.Get("/api/maps/{id}", mapsH.Get)
-	r.Get("/api/stats/canvas-count", h.CanvasCount)
+	r.Get("/api/stats", h.Stats)
 
 	// ── Auth (human login; cookie-based session) ─────────────────────────────────
 	r.Post("/api/auth/google", authH.GoogleLogin)
 	r.Get("/api/auth/me", authH.Me)
 	r.Post("/api/auth/logout", authH.Logout)
+
+	// ── Account-scoped (user session required) ───────────────────────────────────
+	r.Group(func(r chi.Router) {
+		r.Use(RequireUser(authSvc))
+		r.Get("/api/me/canvases", h.MeCanvases)
+		r.Post("/api/canvases/{code}/copy", h.CopyCanvas)
+	})
 
 	// Sheet export — public by canvas code (matches WS auth model).
 	r.Get("/api/canvas/sheets/{id}/export", h.ExportSheet)

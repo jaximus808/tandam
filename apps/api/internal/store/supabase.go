@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -40,6 +41,7 @@ type dbCanvas struct {
 	Name         string          `json:"name"`
 	Mode         string          `json:"mode"`
 	MapID        *string         `json:"map_id"`
+	OwnerUserID  *string         `json:"owner_user_id"`
 	EnabledModes json.RawMessage `json:"enabled_modes"`
 	Version      int             `json:"version"`
 	CreatedAt    string          `json:"created_at"`
@@ -207,7 +209,13 @@ func parseTime(s string) time.Time {
 
 func toCanvas(d dbCanvas) *Canvas {
 	id, _ := uuid.Parse(d.ID)
-	return &Canvas{ID: id, Code: d.Code, Name: d.Name, Mode: d.Mode, MapID: d.MapID, Version: d.Version,
+	var owner *uuid.UUID
+	if d.OwnerUserID != nil && *d.OwnerUserID != "" {
+		if oid, err := uuid.Parse(*d.OwnerUserID); err == nil {
+			owner = &oid
+		}
+	}
+	return &Canvas{ID: id, Code: d.Code, Name: d.Name, Mode: d.Mode, MapID: d.MapID, OwnerUserID: owner, Version: d.Version,
 		CreatedAt: parseTime(d.CreatedAt), UpdatedAt: parseTime(d.UpdatedAt)}
 }
 
@@ -435,12 +443,16 @@ func (s *supabaseStore) exec(b interface{ Execute() ([]byte, int64, error) }) er
 
 // ── Canvas ────────────────────────────────────────────────────────────────────
 
-func (s *supabaseStore) CreateCanvas(_ context.Context, name string) (*Canvas, error) {
+func (s *supabaseStore) CreateCanvas(_ context.Context, name string, ownerUserID *uuid.UUID) (*Canvas, error) {
 	for range 10 {
 		code := generateCode()
+		row := map[string]any{"code": code, "name": name}
+		if ownerUserID != nil {
+			row["owner_user_id"] = ownerUserID.String()
+		}
 		var rows []dbCanvas
 		_, err := s.client.From("canvases").
-			Insert(map[string]string{"code": code, "name": name}, false, "", "representation", "").
+			Insert(row, false, "", "representation", "").
 			ExecuteTo(&rows)
 		if err != nil {
 			if strings.Contains(err.Error(), "23505") {
@@ -456,6 +468,52 @@ func (s *supabaseStore) CreateCanvas(_ context.Context, name string) (*Canvas, e
 	return nil, fmt.Errorf("failed to generate unique canvas code after 10 attempts")
 }
 
+// ListCanvasesByOwner returns a user's owned canvases, newest-edited first.
+func (s *supabaseStore) ListCanvasesByOwner(_ context.Context, ownerUserID uuid.UUID) ([]*Canvas, error) {
+	var rows []dbCanvas
+	_, err := s.client.From("canvases").
+		Select("*", "", false).
+		Eq("owner_user_id", ownerUserID.String()).
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*Canvas, 0, len(rows))
+	for _, d := range rows {
+		out = append(out, toCanvas(d))
+	}
+	// Newest-edited first. Sorted here (small per-user list) to avoid depending
+	// on the client's order-option surface.
+	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
+	return out, nil
+}
+
+// CopyCanvas deep-copies srcID into a new canvas owned by ownerUserID via the
+// copy_canvas RPC (atomic). The code is generated here (canonical alphabet) and
+// retried on unique-violation, matching CreateCanvas.
+func (s *supabaseStore) CopyCanvas(ctx context.Context, srcID, ownerUserID uuid.UUID, name string) (*Canvas, error) {
+	for range 10 {
+		code := generateCode()
+		result := s.client.Rpc("copy_canvas", "", map[string]string{
+			"p_src":   srcID.String(),
+			"p_owner": ownerUserID.String(),
+			"p_name":  name,
+			"p_code":  code,
+		})
+		if result == "" {
+			return nil, fmt.Errorf("copy_canvas: empty response — verify migration 0018 is applied")
+		}
+		if isRpcError(result) {
+			if strings.Contains(result, "23505") {
+				continue // code collision — try another
+			}
+			return nil, fmt.Errorf("copy_canvas RPC error: %s", result)
+		}
+		return s.GetCanvasByCode(ctx, code)
+	}
+	return nil, fmt.Errorf("failed to generate unique canvas code after 10 attempts")
+}
+
 // CanvasCount returns the total number of canvases. Uses a count=exact HEAD
 // request (Select count="exact", head=true) so no rows are transferred — the
 // total comes back in the Content-Range header, surfaced as Execute's int64.
@@ -467,6 +525,42 @@ func (s *supabaseStore) CanvasCount(_ context.Context) (int, error) {
 		return 0, err
 	}
 	return int(count), nil
+}
+
+// UserCount returns the total number of registered user accounts. Same
+// count=exact HEAD trick as CanvasCount — no rows transferred.
+func (s *supabaseStore) UserCount(_ context.Context) (int, error) {
+	_, count, err := s.client.From("users").
+		Select("id", "exact", true).
+		Execute()
+	if err != nil {
+		return 0, err
+	}
+	return int(count), nil
+}
+
+// CanvasRecurrence returns how many canvases saw activity on a later calendar
+// day than they were created (revisited), alongside the total. It's a proxy
+// for "someone came back" — canvas-level, since edits carry no per-user
+// identity yet, and updated_at is last-touch only, so it UNDERcounts (stays
+// conservative). A full scan of created_at/updated_at, fine at current scale.
+func (s *supabaseStore) CanvasRecurrence(_ context.Context) (revisited int, total int, err error) {
+	var rows []struct {
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+	}
+	if _, err = s.client.From("canvases").
+		Select("created_at,updated_at", "", false).
+		ExecuteTo(&rows); err != nil {
+		return 0, 0, err
+	}
+	for _, row := range rows {
+		total++
+		if row.UpdatedAt.UTC().Format("2006-01-02") != row.CreatedAt.UTC().Format("2006-01-02") {
+			revisited++
+		}
+	}
+	return revisited, total, nil
 }
 
 func (s *supabaseStore) GetCanvasByCode(_ context.Context, code string) (*Canvas, error) {
