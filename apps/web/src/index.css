@@ -175,6 +175,13 @@
 .tandem-roam-a { animation: tandem-roam-a 26s ease-in-out infinite; }
 .tandem-roam-b { animation: tandem-roam-b 31s ease-in-out infinite; }
 
+/* A tiny idle bob for a cursor hovering in place — alive, not pasted. */
+@keyframes tandem-hover {
+  0%, 100% { transform: translate(0, 0); }
+  50%      { transform: translate(4px, 3px); }
+}
+.tandem-hover { animation: tandem-hover 3.4s ease-in-out infinite; }
+
 /* Dashed "wire" between agents ⇄ canvas ⇄ humans: marching ants. */
 @keyframes tandem-wire {
   from { background-position: 0 0; }
@@ -195,6 +202,7 @@
   .tandem-caret,
   .tandem-roam-a,
   .tandem-roam-b,
+  .tandem-hover,
   .tandem-wire { animation: none; }
 }
 

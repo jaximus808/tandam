@@ -54,6 +54,7 @@ interface Scene {
   code: string; // cosmetic 8-char code
   mode: string; // highlighted mode tab
   phrase: string; // the cycling headline phrase
+  heroAgent: string; // the cursor by the headline — distinct from the canvas editors
   accent: Accent;
   editors: [Editor, Editor]; // the two drifting cursors
   ops: OpLine[]; // the live feed under the canvas
@@ -67,6 +68,7 @@ const SCENES: Scene[] = [
     code: "OPS5K3R7",
     mode: "Sheets",
     phrase: "run operations",
+    heroAgent: "Claude",
     accent: { solid: "#F43F5E", soft: "rgba(244,63,94,0.10)", line: "rgba(244,63,94,0.24)" },
     editors: [
       { name: "ops-agent", kind: "agent", at: { top: "30%", left: "53%" }, drift: "a" },
@@ -86,6 +88,7 @@ const SCENES: Scene[] = [
     code: "BUILD8QX",
     mode: "Roadmap",
     phrase: "ship the build",
+    heroAgent: "Cursor",
     accent: { solid: "#0EA5E9", soft: "rgba(14,165,233,0.10)", line: "rgba(14,165,233,0.24)" },
     editors: [
       { name: "Codex", kind: "agent", at: { top: "34%", right: "10%" }, drift: "a" },
@@ -105,6 +108,7 @@ const SCENES: Scene[] = [
     code: "YEAR42KP",
     mode: "Itinerary",
     phrase: "plan the year",
+    heroAgent: "Codex",
     accent: { solid: "#F59E0B", soft: "rgba(245,158,11,0.12)", line: "rgba(245,158,11,0.26)" },
     editors: [
       { name: "Claude", kind: "agent", at: { top: "26%", right: "12%" }, drift: "a" },
@@ -124,6 +128,7 @@ const SCENES: Scene[] = [
     code: "SCOUT9WZ",
     mode: "Map",
     phrase: "map the unknown",
+    heroAgent: "Claude Code",
     accent: { solid: "#10B981", soft: "rgba(16,185,129,0.10)", line: "rgba(16,185,129,0.24)" },
     editors: [
       { name: "scout-agent", kind: "agent", at: { top: "30%", left: "30%" }, drift: "a" },
@@ -306,8 +311,10 @@ function Icon({ name, className = "" }: { name: string; className?: string }) {
 /* ── worksurface vocabulary: pointers, tags, frames, system labels ──────────── */
 
 function PointerGlyph({ color }: { color: string }) {
+  // display:block so it never picks up the line-height of big surrounding
+  // type (inside the h1 an inline svg sits in a ~60px line box).
   return (
-    <svg width="18" height="20" viewBox="0 0 20 22" aria-hidden="true">
+    <svg width="18" height="20" viewBox="0 0 20 22" className="block" aria-hidden="true">
       <path
         d="M2 1.5l13.5 6.2-5.6 1.6-2 5.7z"
         fill={color}
@@ -351,7 +358,7 @@ function RoamingCursor({
   return (
     <div
       aria-hidden="true"
-      className={`pointer-events-none absolute z-20 hidden lg:block ${className}`}
+      className={`pointer-events-none absolute z-20 hidden xl:block ${className}`}
       style={style}
     >
       <div className={roam === "a" ? "tandem-roam-a" : "tandem-roam-b"}>
@@ -781,8 +788,8 @@ function MorphCanvas({
 
         {/* body — re-keyed on scene so it replays the entrance animation */}
         <div className="surface-grid-faint relative h-[300px]">
-          {/* "editing" pill */}
-          <div className="absolute left-3 top-3 z-30 flex items-center gap-2 rounded-[4px] border border-ink/10 bg-white/95 px-2 py-1 backdrop-blur">
+          {/* "editing" pill — bottom corner so it never covers the first row */}
+          <div className="absolute bottom-3 left-3 z-30 flex items-center gap-2 rounded-[4px] border border-ink/10 bg-white/95 px-2 py-1 backdrop-blur">
             <span className="relative flex h-1.5 w-1.5">
               <span className="tandem-ping absolute inline-flex h-full w-full rounded-full bg-agent opacity-70" />
               <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-agent" />
@@ -1028,14 +1035,6 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
           zoom 100% +
         </span>
 
-        {/* a third presence, wandering the page itself */}
-        <RoamingCursor
-          name="claude"
-          kind="agent"
-          roam="a"
-          style={{ top: "16%", left: "44%" }}
-        />
-
         <div className="relative mx-auto grid max-w-6xl items-start gap-14 px-6 pb-20 pt-16 lg:grid-cols-[1.02fr_1fr] lg:gap-10 lg:pb-24 lg:pt-20">
           {/* Left: copy + actions */}
           <div className="min-w-0 max-w-xl lg:pt-4">
@@ -1043,32 +1042,59 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
               <SysLabel>One surface · humans + agents · live</SysLabel>
             </div>
 
-            {/* mt-12 leaves headroom for the frame's "you" tag above the h1 */}
-            <div className="tandem-rise mt-12" style={{ animationDelay: "60ms" }}>
+            {/* mt-12 leaves headroom for the frame's "you" tag above the h1.
+                z-10: tandem-rise's lingering transform makes this and the demo
+                canvas column stacking contexts; without it the hero cursor
+                paints behind the canvas when it overhangs the column gap. */}
+            <div className="tandem-rise relative z-10 mt-12" style={{ animationDelay: "60ms" }}>
+              {/* All four scene headlines render stacked in one grid cell, the
+                  inactive ones invisible — so this block is always as tall as
+                  the tallest phrase and the page below never shifts when the
+                  cycling word changes line count. */}
               <SelectionFrame tag="you" className="inline-block">
-                <h1 className="font-display text-[2.3rem] font-medium leading-[1.08] tracking-tight text-ink sm:text-[3.5rem] sm:leading-[1.06]">
-                  Where teams and agents{" "}
-                  <span className="relative inline-block">
-                    <span
-                      key={scene.key}
-                      className="tandem-word-in inline-block px-1 italic"
-                      style={{
-                        color: scene.accent.solid,
-                        backgroundColor: scene.accent.soft,
-                        boxShadow: `inset 0 0 0 1.5px ${scene.accent.line}`,
-                      }}
-                    >
-                      {scene.phrase}
-                    </span>
-                    {/* the agent has this word selected — its flag rides along */}
-                    <span
-                      key={`${scene.key}-flag`}
-                      className="tandem-fade-in pointer-events-none absolute -top-1 right-0 -translate-y-full"
-                    >
-                      <NameTag name={scene.editors[0].name} kind="agent" />
-                    </span>
-                  </span>{" "}
-                  together.
+                <h1 className="grid font-display text-[2.3rem] font-medium leading-[1.08] tracking-tight text-ink sm:text-[3.5rem] sm:leading-[1.06]">
+                  {SCENES.map((s, i) => {
+                    const active = i === sceneIdx;
+                    return (
+                      <span
+                        key={s.key}
+                        aria-hidden={!active}
+                        className={`col-start-1 row-start-1 block ${active ? "" : "invisible"}`}
+                      >
+                        Where teams and agents{" "}
+                        <span className="relative inline-block">
+                          <span
+                            key={active ? `${s.key}-on` : s.key}
+                            className={`inline-block px-1 italic ${active ? "tandem-word-in" : ""}`}
+                            style={{
+                              color: s.accent.solid,
+                              backgroundColor: s.accent.soft,
+                              boxShadow: `inset 0 0 0 1.5px ${s.accent.line}`,
+                            }}
+                          >
+                            {s.phrase}
+                          </span>
+                          {/* the agent's cursor hovers in the free space right
+                              of the phrase, arrow tip aimed back at the word */}
+                          {active && (
+                            <span className="pointer-events-none absolute left-full top-1/2 ml-1.5 hidden -translate-y-1/2 sm:block">
+                              <span key={s.key} className="tandem-fade-in block">
+                                <span className="tandem-hover block leading-none">
+                                  <PointerGlyph color={AGENT} />
+                                  {/* flex: keeps the tiny tag out of the h1's
+                                      ~56px inline line box, snug under the arrow */}
+                                  <span className="ml-2.5 mt-px flex w-max">
+                                    <NameTag name={s.heroAgent} kind="agent" />
+                                  </span>
+                                </span>
+                              </span>
+                            </span>
+                          )}
+                        </span>{" "}
+                        together.
+                      </span>
+                    );
+                  })}
                 </h1>
               </SelectionFrame>
             </div>
@@ -1501,8 +1527,9 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
             WebkitMaskImage: "radial-gradient(100% 100% at 50% 100%, black 40%, transparent 95%)",
           }}
         />
-        <RoamingCursor name="scout-agent" kind="agent" roam="b" style={{ bottom: "30%", left: "12%" }} />
-        <RoamingCursor name="Priya" kind="human" roam="a" style={{ top: "22%", right: "10%" }} />
+        {/* kept to the far margins so their roam radius never reaches the copy */}
+        <RoamingCursor name="scout-agent" kind="agent" roam="b" style={{ bottom: "14%", left: "3%" }} />
+        <RoamingCursor name="Priya" kind="human" roam="a" style={{ top: "12%", right: "3%" }} />
         <div className="relative mx-auto max-w-3xl px-6 py-28 text-center">
           <TandemLogo size={44} />
           <div className="mt-10 inline-block">
