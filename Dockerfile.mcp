@@ -1,0 +1,41 @@
+# syntax=docker/dockerfile:1.7
+#
+# Tandem MCP — hosted Streamable HTTP sidecar.
+#
+# A small Node service that exposes the SAME tool surface as the published
+# `@jaximus/tandem-mcp` stdio CLI, but over the MCP Streamable HTTP transport so
+# zero-install clients (Claude.ai custom connector, desktop, web) can connect by
+# URL. It proxies every tool call to the Go API over the internal docker network
+# (API_URL=http://tandem:7891) — see docker-compose.yml and the Caddy route.
+#
+# Built and run on the same VM as the main `tandem` image.
+
+FROM node:22-alpine
+ENV PNPM_HOME=/pnpm
+ENV PATH=$PNPM_HOME:$PATH
+RUN corepack enable && corepack prepare pnpm@10.4.1 --activate
+
+WORKDIR /repo
+
+# Install with the full workspace graph cached separately from sources. pnpm
+# --frozen-lockfile needs every workspace member's package.json present, even
+# the ones this image doesn't build.
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY apps/web/package.json apps/web/package.json
+COPY apps/mcp-gateway/package.json apps/mcp-gateway/package.json
+COPY apps/server/package.json apps/server/package.json
+COPY internal/shared/package.json internal/shared/package.json
+RUN pnpm install --frozen-lockfile --filter @jaximus/tandem-mcp...
+
+# Build the sidecar (produces dist/http.js alongside dist/index.js).
+COPY apps/mcp-gateway apps/mcp-gateway
+RUN pnpm --filter @jaximus/tandem-mcp build
+
+WORKDIR /repo/apps/mcp-gateway
+
+# Internal-only: Caddy reverse-proxies the public /api/mcp to this port. The
+# API_URL is set by docker-compose to the in-cluster Go API service.
+ENV PORT=8970
+EXPOSE 8970
+
+CMD ["node", "dist/http.js"]

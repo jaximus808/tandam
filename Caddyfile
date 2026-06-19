@@ -1,3 +1,14 @@
 {$DOMAIN_NAME} {
-    reverse_proxy tandem:7891
+	# Hosted MCP Streamable HTTP endpoint → the Node sidecar. Exact-path match so
+	# /api/mcp/auth (the Go token-exchange endpoint used by the stdio CLI) still
+	# falls through to the API below.
+	@mcp path /api/mcp
+	handle @mcp {
+		reverse_proxy mcp:8970
+	}
+
+	# Everything else (web bundle, REST API, WebSocket hub) → the Go server.
+	handle {
+		reverse_proxy tandem:7891
+	}
 }

@@ -31,21 +31,46 @@ services:
       retries: 5
       start_period: 10s
 
+  # Hosted MCP endpoint (Streamable HTTP). Exposes the same tool surface as the
+  # published @jaximus/tandem-mcp stdio CLI so zero-install clients can connect
+  # to https://tandemcanvas.com/api/mcp by URL. Talks to the Go API over the
+  # internal compose network — never back out through the public domain.
+  mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp
+    image: tandem-mcp:latest
+    container_name: tandem-mcp
+    restart: unless-stopped
+    environment:
+      # Internal docker DNS: the Go API service is `tandem` on port 7891.
+      API_URL: "http://tandem:7891"
+      PORT: "8970"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8970/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      - tandem
+
   caddy:
     image: caddy:2
     container_name: caddy
     restart: unless-stopped
     ports:
-      - "80:80"     
-      - "443:443"   
+      - "80:80"
+      - "443:443"
     environment:
       - DOMAIN_NAME=${DOMAIN_NAME:?set DOMAIN_NAME in .env}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile
-      - caddy_data:/data    
+      - caddy_data:/data
       - caddy_config:/config
     depends_on:
       - tandem
+      - mcp
 
 volumes:
   canvas-images:

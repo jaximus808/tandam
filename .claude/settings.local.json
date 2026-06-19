@@ -68,7 +68,11 @@
       "Bash(curl -s -m 8 https://tandemcanvas.com/api/stats/canvas-count)",
       "Bash(curl -s -m 8 -o /dev/null -w \"%{http_code}\\\\n\" https://tandemcanvas.com/api/me/canvases)",
       "Bash(curl -s -m 8 https://registry.npmjs.org/@jaximus/tandem-mcp/latest)",
-      "Bash('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' --headless --disable-gpu --hide-scrollbars --screenshot=/tmp/landing-hero.png --window-size=1440,950 --virtual-time-budget=6000 http://localhost:5175)"
+      "Bash('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' --headless --disable-gpu --hide-scrollbars --screenshot=/tmp/landing-hero.png --window-size=1440,950 --virtual-time-budget=6000 http://localhost:5175)",
+      "Bash(grep -rhoE '\\(becomes anything|any agent|shared|canvas|plan\\)[^<>{}]{0,60}' apps/web/src/pages/Landing.tsx)",
+      "Bash(node *)",
+      "Bash(grep -oE '\"[A-Z][^\"]{15,90}\"' apps/web/src/pages/Landing.tsx)",
+      "Bash(pnpm dev:mock *)"
     ]
   }
 }

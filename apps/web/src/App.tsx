@@ -21,6 +21,7 @@ import TandemLogo from "./components/TandemLogo";
 import AccountMenu from "./components/AccountMenu";
 import AgentCursor from "./components/AgentCursor";
 import AgentPresence from "./components/AgentPresence";
+import QuickLog from "./components/QuickLog";
 import { useAgentActivity } from "./lib/useAgentActivity";
 import { recordRecent } from "./lib/recentCanvases";
 import { MOCK_ENABLED, mockCanvas } from "./lib/mockFixture";
@@ -666,7 +667,7 @@ export default function App() {
         </div>
       </header>
 
-      <div className="flex flex-1 min-h-0">
+      <div className="relative flex flex-1 min-h-0">
         {(["welcome", "map", "itinerary", "docs", "roadmap", "sheets", "charts"] as CanvasMode[]).map((m) => {
           const active = effectiveMode === m;
           // Lazy-mount: only render a mode after the user has visited it at
@@ -710,6 +711,10 @@ export default function App() {
             </div>
           );
         })}
+
+        {/* Direct-input layer (prototype): quick-log rail + mobile FAB, overlaid
+            on whatever mode is showing. Self-contained mock data for now. */}
+        <QuickLog />
       </div>
 
       {connectOpen && (
