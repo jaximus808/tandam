@@ -20,7 +20,7 @@ export const SERVER_NAME = "tandem";
 
 // Keep in sync with package.json `version`. Surfaced via `--version` and the
 // MCP server's self-identification over both transports.
-export const VERSION = "2.0.4";
+export const VERSION = "2.1.0";
 
 // Hosted backend. Override with the API_URL env var to point at a local or
 // self-hosted instance (the HTTP sidecar sets this to the in-cluster Go API).
@@ -40,14 +40,16 @@ export function createTandemServer(gateway: Gateway, version: string): Server {
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const { name, arguments: args } = request.params;
-    const a = (args ?? {}) as Record<string, unknown>;
+    // Normalize legacy dotted tool names (canvas.connect) to the underscore
+    // form we now advertise (canvas_connect) — see handleTool for why.
+    const name = request.params.name.replace(/\./g, "_");
+    const a = (request.params.arguments ?? {}) as Record<string, unknown>;
 
     try {
       const result = await handleTool(gateway, name, a);
 
       // For state.read, decorate with the active canvas so the agent always knows where it is.
-      if (name === "canvas.state.read" && gateway.isConnected()) {
+      if (name === "canvas_state_read" && gateway.isConnected()) {
         const session = gateway.getSession();
         return {
           content: [{

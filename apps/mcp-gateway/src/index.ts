@@ -3,7 +3,7 @@
  *
  * Spawned by an MCP-aware agent (Claude Code, Cursor, Codex, OpenAI Agents
  * SDK, custom orchestrators) as a stdio process. The canvas binding is
- * established at runtime: the agent calls the `canvas.connect` tool with a
+ * established at runtime: the agent calls the `canvas_connect` tool with a
  * canvas code, the gateway exchanges it for a JWT, then proxies all
  * subsequent tool calls to the Tandem HTTP API.
  *

@@ -2,7 +2,7 @@
  * Gateway — holds the JWT and proxies all tool calls to the Tandem API.
  * One instance per MCP session (per agent client process).
  *
- * The canvas binding is established at runtime via `canvas.connect`,
+ * The canvas binding is established at runtime via `canvas_connect`,
  * not from process env. Until that tool is called, all other tools
  * fail with a "not connected" error.
  */
@@ -16,7 +16,7 @@ export interface CanvasSession {
   canvasId: string;
   canvasName: string;
   canvasCode: string;
-  // Set by the `agent.register` tool; used as `proposedBy` on action.propose so
+  // Set by the `agent_register` tool; used as `proposedBy` on action.propose so
   // the canvas records which agent authored each action (v1 provenance).
   agentId?: string;
 }
@@ -29,7 +29,7 @@ export class Gateway {
     this.config = config;
   }
 
-  /** Exchange canvas code for JWT. Called by the `canvas.connect` tool. */
+  /** Exchange canvas code for JWT. Called by the `canvas_connect` tool. */
   async connectWithCode(code: string): Promise<CanvasSession> {
     const res = await this.safeFetch("/api/mcp/auth", {
       method: "POST",
@@ -83,7 +83,7 @@ export class Gateway {
     if (!canvas?.code) {
       throw new Error("Create canvas returned no code");
     }
-    return this.connectWithCode(canvas.code);
+    return this.connectWithCode(canvas_code);
   }
 
   /** The shareable web URL for a canvas code (same origin as the API). */
@@ -95,7 +95,7 @@ export class Gateway {
     return this.session !== null;
   }
 
-  /** Remember the registered agent id on the session (set by agent.register). */
+  /** Remember the registered agent id on the session (set by agent_register). */
   setAgentId(agentId: string): void {
     if (this.session) this.session.agentId = agentId;
   }
@@ -103,7 +103,7 @@ export class Gateway {
   getSession(): CanvasSession {
     if (!this.session) {
       throw new Error(
-        "Not connected to a canvas. Call the `canvas.connect` tool with a canvas code first."
+        "Not connected to a canvas. Call the `canvas_connect` tool with a canvas code first."
       );
     }
     return this.session;

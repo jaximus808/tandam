@@ -22,10 +22,10 @@ When you make meaningful progress (finish a feature, fix a notable bug, change
 direction, start a new initiative), reflect it on that canvas using the `agentcanvas`
 MCP tools — as you go, not just at the end:
 
-1. `canvas.connect` with code `PKMLR67T` (once per session).
-2. `canvas.state.read` to see the current roadmap / sheets / notes.
+1. `canvas_connect` with code `PKMLR67T` (once per session).
+2. `canvas_state_read` to see the current roadmap / sheets / notes.
 3. Update it to match reality: move roadmap items between `todo` / `in_progress` /
-   `done` (`canvas.roadmap_item.update`), add new goals (`canvas.roadmap_item.add`),
+   `done` (`canvas_roadmap_item_update`), add new goals (`canvas_roadmap_item_add`),
    or add a note / sheet row for context.
 
 Treat the canvas as the source of truth for "where the project is." Also note any
