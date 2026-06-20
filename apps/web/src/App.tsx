@@ -22,6 +22,7 @@ import AccountMenu from "./components/AccountMenu";
 import AgentCursor from "./components/AgentCursor";
 import AgentPresence from "./components/AgentPresence";
 import QuickLog from "./components/QuickLog";
+import ErrorBoundary from "./components/ErrorBoundary";
 import { useAgentActivity } from "./lib/useAgentActivity";
 import { recordRecent } from "./lib/recentCanvases";
 import { MOCK_ENABLED, mockCanvas } from "./lib/mockFixture";
@@ -668,12 +669,16 @@ export default function App() {
       </header>
 
       <div className="relative flex flex-1 min-h-0">
+        <ErrorBoundary resetKey={`${canvas.id}:${effectiveMode}`}>
         {(["welcome", "map", "itinerary", "docs", "roadmap", "sheets", "charts"] as CanvasMode[]).map((m) => {
           const active = effectiveMode === m;
           // Lazy-mount: only render a mode after the user has visited it at
           // least once. After that, keep it mounted and hide with CSS.
           if (!active && !visitedModes.has(m)) return null;
-          const wrapperClass = active ? "flex flex-1 min-h-0 min-w-0" : "hidden";
+          // `isolate` gives each mode its own stacking context so a mode's
+          // internal z-indexes (notably Leaflet's panes/controls, which go up to
+          // ~1000) can't escape and paint over the QuickLog dock beside it.
+          const wrapperClass = active ? "relative isolate flex flex-1 min-h-0 min-w-0" : "hidden";
           return (
             <div key={m} className={wrapperClass}>
               {m === "welcome" && (
@@ -711,10 +716,11 @@ export default function App() {
             </div>
           );
         })}
+        </ErrorBoundary>
 
-        {/* Direct-input layer (prototype): quick-log rail + mobile FAB, overlaid
-            on whatever mode is showing. Self-contained mock data for now. */}
-        <QuickLog />
+        {/* Direct-input layer: quick-log rail + mobile FAB, overlaid on whatever
+            mode is showing. Renders the canvas's agent-defined forms. */}
+        <QuickLog code={canvas.code} forms={canvasState.forms} />
       </div>
 
       {connectOpen && (

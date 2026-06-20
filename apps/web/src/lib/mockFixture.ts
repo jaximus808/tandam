@@ -324,6 +324,7 @@ const initialState: CanvasState = {
   sheets: toRecord(sheets),
   sheetRows: toRecord(sheetRows),
   charts: {},
+  forms: {},
   actions: {},
   agents: {},
 };

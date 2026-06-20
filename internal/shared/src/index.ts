@@ -182,6 +182,44 @@ export interface Agent {
   lastSeen: string;
 }
 
+// ── Forms (direct-input layer) ───────────────────────────────────────────────
+// A Form is an agent-defined recipe a human fills from a lightweight surface to
+// mutate the canvas directly (no agent in the submit loop). `fields` is the input
+// schema the dock renders; `actions` is the compiled fan-out the server runs at
+// submit (opaque to the web — the dock only needs `fields`). See
+// docs/DESIGN_DIRECT_INPUT.md.
+export type FormFieldType = "text" | "number" | "date" | "select" | "checkbox";
+
+export interface FormField {
+  key: string;
+  label: string;
+  type: FormFieldType;
+  required?: boolean;
+  options?: string[];
+  default?: string | number | boolean;
+  placeholder?: string;
+}
+
+export interface FormAction {
+  op: "sheet.row.append" | "sheet.row.upsert" | "pin.patch";
+  target: { sheet?: string; pin?: string };
+  set: { column: string; value: unknown }[];
+  match?: { column: string; value: unknown }[];
+  inc?: string[];
+}
+
+export interface Form {
+  id: EntityId;
+  kind: "form";
+  name: string;
+  description: string;
+  fields: FormField[];
+  actions: FormAction[];
+  sortOrder: number;
+  createdBy: "agent" | "user";
+  updatedAt: number;
+}
+
 export interface CanvasState {
   version: number;
   mode: CanvasMode;
@@ -196,6 +234,7 @@ export interface CanvasState {
   sheets: Record<EntityId, Sheet>;
   sheetRows: Record<EntityId, SheetRow>;
   charts: Record<EntityId, Chart>;
+  forms: Record<EntityId, Form>;
   actions: Record<EntityId, Action>;
   agents: Record<EntityId, Agent>;
 }

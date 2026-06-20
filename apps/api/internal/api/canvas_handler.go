@@ -1,6 +1,8 @@
 package api
 
 import (
+	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -11,6 +13,25 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
+
+// validateLatLng rejects coordinates Leaflet can't place — non-finite values or
+// values out of the geographic range. The message is written for the agent: a
+// pin.add/pin.update over MCP fails loudly with what's wrong and how to fix it
+// (the #1 real case is swapping lat/lng — a longitude in the latitude slot is
+// out of [-90,90], and Web-Mercator can't project it, which yields NaN). Returns
+// "" when valid.
+func validateLatLng(lat, lng float64) string {
+	if math.IsNaN(lat) || math.IsInf(lat, 0) || math.IsNaN(lng) || math.IsInf(lng, 0) {
+		return fmt.Sprintf("pin coordinates must be finite numbers (got lat=%v, lng=%v). Please set a valid lat/lng and try again.", lat, lng)
+	}
+	if lat < -90 || lat > 90 {
+		return fmt.Sprintf("pin latitude %v is out of range — it must be between -90 and 90. Did you swap lat and lng? Please correct the coordinates.", lat)
+	}
+	if lng < -180 || lng > 180 {
+		return fmt.Sprintf("pin longitude %v is out of range — it must be between -180 and 180. Did you swap lat and lng? Please correct the coordinates.", lng)
+	}
+	return ""
+}
 
 type Handler struct {
 	store store.Store
@@ -151,7 +172,9 @@ func (h *Handler) GetState(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/canvas/mode  (JWT required)
 func (h *Handler) SetMode(w http.ResponseWriter, r *http.Request) {
-	var body struct{ Mode string `json:"mode"` }
+	var body struct {
+		Mode string `json:"mode"`
+	}
 	if err := decode(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
@@ -172,7 +195,9 @@ func (h *Handler) SetMode(w http.ResponseWriter, r *http.Request) {
 // EnableMode turns on a tab the user added via "+", even before it has content.
 // POST /api/canvas/mode/enable  (JWT required)
 func (h *Handler) EnableMode(w http.ResponseWriter, r *http.Request) {
-	var body struct{ Mode string `json:"mode"` }
+	var body struct {
+		Mode string `json:"mode"`
+	}
 	if err := decode(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
@@ -192,7 +217,9 @@ func (h *Handler) EnableMode(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/canvas/map  (JWT required)
 func (h *Handler) SetMap(w http.ResponseWriter, r *http.Request) {
-	var body struct{ MapID string `json:"mapId"` }
+	var body struct {
+		MapID string `json:"mapId"`
+	}
 	if err := decode(r, &body); err != nil || body.MapID == "" {
 		writeError(w, http.StatusBadRequest, "mapId is required")
 		return
@@ -276,9 +303,15 @@ func (h *Handler) CreatePin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if msg := validateLatLng(pin.Lat, pin.Lng); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
 	pin.ID = uuid.New()
 	pin.Kind = "pin"
-	if pin.CreatedBy == "" { pin.CreatedBy = "agent" }
+	if pin.CreatedBy == "" {
+		pin.CreatedBy = "agent"
+	}
 	if _, err := h.store.CreatePin(r.Context(), canvasID, &pin); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -299,6 +332,22 @@ func (h *Handler) UpdatePin(w http.ResponseWriter, r *http.Request) {
 	if err := decode(r, &patch); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	// Validate any coordinate the patch touches (lat/lng are independently
+	// optional in a patch, so check whichever is present, defaulting the other to
+	// an in-range value so a single-field update isn't blocked by the absent one).
+	if patch.Lat != nil || patch.Lng != nil {
+		lat, lng := 0.0, 0.0
+		if patch.Lat != nil {
+			lat = *patch.Lat
+		}
+		if patch.Lng != nil {
+			lng = *patch.Lng
+		}
+		if msg := validateLatLng(lat, lng); msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
+			return
+		}
 	}
 	if _, err := h.store.UpdatePin(r.Context(), canvasID, id, patch); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -345,12 +394,14 @@ func (h *Handler) CreateEvent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if body.CreatedBy == "" { body.CreatedBy = "agent" }
+	if body.CreatedBy == "" {
+		body.CreatedBy = "agent"
+	}
 	ev := &store.Event{
 		ID: uuid.New(), Kind: "event",
 		Title: body.Title, Start: body.Start, End: body.End,
 		Timezone: body.Timezone,
-		PinIDs: body.PinIDs, PinID: body.PinID,
+		PinIDs:   body.PinIDs, PinID: body.PinID,
 		FromPinID: body.FromPinID, ToPinID: body.ToPinID,
 		TravelMode: body.TravelMode, DayTag: body.DayTag,
 		Cost:      body.Cost,
@@ -411,7 +462,9 @@ func (h *Handler) CreateNote(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if body.CreatedBy == "" { body.CreatedBy = "agent" }
+	if body.CreatedBy == "" {
+		body.CreatedBy = "agent"
+	}
 	n := &store.Note{
 		ID: uuid.New(), Kind: "note",
 		Body: body.Body, ImageRefs: body.ImageRefs,
@@ -471,8 +524,12 @@ func (h *Handler) CreateRoadmapItem(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if body.CreatedBy == "" { body.CreatedBy = "agent" }
-	if body.Status == "" { body.Status = "todo" }
+	if body.CreatedBy == "" {
+		body.CreatedBy = "agent"
+	}
+	if body.Status == "" {
+		body.Status = "todo"
+	}
 	item := &store.RoadmapItem{
 		ID: uuid.New(), Kind: "roadmap",
 		ParentID: body.ParentID, Title: body.Title, Body: body.Body,
@@ -534,16 +591,24 @@ func (h *Handler) CreateSheet(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if body.CreatedBy == "" { body.CreatedBy = "agent" }
-	if body.Name == "" { body.Name = "Untitled sheet" }
+	if body.CreatedBy == "" {
+		body.CreatedBy = "agent"
+	}
+	if body.Name == "" {
+		body.Name = "Untitled sheet"
+	}
 	cols := make([]store.SheetColumn, 0, len(body.Columns))
 	for _, c := range body.Columns {
-		if c.Type == "" { c.Type = "text" }
+		if c.Type == "" {
+			c.Type = "text"
+		}
 		if !isValidSheetColumnType(c.Type) {
 			writeError(w, http.StatusBadRequest, "invalid column type: "+c.Type)
 			return
 		}
-		if c.ID == "" { c.ID = uuid.New().String() }
+		if c.ID == "" {
+			c.ID = uuid.New().String()
+		}
 		cols = append(cols, c)
 	}
 	sh := &store.Sheet{
@@ -563,7 +628,10 @@ func (h *Handler) CreateSheet(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) UpdateSheet(w http.ResponseWriter, r *http.Request) {
 	canvasID := CanvasIDFromCtx(r.Context())
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil { writeError(w, http.StatusBadRequest, "invalid id"); return }
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
 	var patch store.SheetPatch
 	if err := decode(r, &patch); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -593,18 +661,25 @@ func (h *Handler) DeleteSheet(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) AddSheetColumn(w http.ResponseWriter, r *http.Request) {
 	canvasID := CanvasIDFromCtx(r.Context())
 	sheetID, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil { writeError(w, http.StatusBadRequest, "invalid sheet id"); return }
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid sheet id")
+		return
+	}
 	var body store.SheetColumn
 	if err := decode(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if body.Type == "" { body.Type = "text" }
+	if body.Type == "" {
+		body.Type = "text"
+	}
 	if !isValidSheetColumnType(body.Type) {
 		writeError(w, http.StatusBadRequest, "invalid column type")
 		return
 	}
-	if body.ID == "" { body.ID = uuid.New().String() }
+	if body.ID == "" {
+		body.ID = uuid.New().String()
+	}
 	if _, err := h.store.AddSheetColumn(r.Context(), canvasID, sheetID, body); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -617,7 +692,10 @@ func (h *Handler) AddSheetColumn(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) UpdateSheetColumn(w http.ResponseWriter, r *http.Request) {
 	canvasID := CanvasIDFromCtx(r.Context())
 	sheetID, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil { writeError(w, http.StatusBadRequest, "invalid sheet id"); return }
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid sheet id")
+		return
+	}
 	columnID := chi.URLParam(r, "columnId")
 	var patch store.SheetColumnPatch
 	if err := decode(r, &patch); err != nil {
@@ -640,7 +718,10 @@ func (h *Handler) UpdateSheetColumn(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) DeleteSheetColumn(w http.ResponseWriter, r *http.Request) {
 	canvasID := CanvasIDFromCtx(r.Context())
 	sheetID, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil { writeError(w, http.StatusBadRequest, "invalid sheet id"); return }
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid sheet id")
+		return
+	}
 	columnID := chi.URLParam(r, "columnId")
 	if _, err := h.store.DeleteSheetColumn(r.Context(), canvasID, sheetID, columnID); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -663,8 +744,12 @@ func (h *Handler) CreateSheetRow(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if body.CreatedBy == "" { body.CreatedBy = "agent" }
-	if body.Data == nil { body.Data = map[string]any{} }
+	if body.CreatedBy == "" {
+		body.CreatedBy = "agent"
+	}
+	if body.Data == nil {
+		body.Data = map[string]any{}
+	}
 	row := &store.SheetRow{
 		ID: uuid.New(), Kind: "sheetRow", SheetID: body.SheetID,
 		Data: body.Data, SortOrder: body.SortOrder, CreatedBy: body.CreatedBy,
@@ -681,7 +766,10 @@ func (h *Handler) CreateSheetRow(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) UpdateSheetRow(w http.ResponseWriter, r *http.Request) {
 	canvasID := CanvasIDFromCtx(r.Context())
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil { writeError(w, http.StatusBadRequest, "invalid id"); return }
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
 	var patch store.SheetRowPatch
 	if err := decode(r, &patch); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())

@@ -115,6 +115,13 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 		r.Patch("/api/canvas/charts/{id}", h.UpdateChart)
 		r.Delete("/api/canvas/charts/{id}", h.DeleteChart)
 
+		// Forms (direct-input layer). scaffold is read-only; submit is the human path.
+		r.Post("/api/canvas/forms/scaffold", h.ScaffoldForm)
+		r.Post("/api/canvas/forms", h.DefineForm)
+		r.Patch("/api/canvas/forms/{id}", h.UpdateForm)
+		r.Delete("/api/canvas/forms/{id}", h.DeleteForm)
+		r.Post("/api/canvas/forms/{id}/submit", h.SubmitForm)
+
 		// Agents + actions (v1 execution primitive)
 		r.Post("/api/canvas/agents", h.RegisterAgent)
 		r.Post("/api/canvas/actions", h.ProposeAction)

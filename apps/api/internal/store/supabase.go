@@ -132,6 +132,17 @@ type dbChart struct {
 	UpdatedAt string          `json:"updated_at"`
 }
 
+type dbForm struct {
+	ID          string          `json:"id"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Fields      json.RawMessage `json:"fields"`
+	Actions     json.RawMessage `json:"actions"`
+	SortOrder   int             `json:"sort_order"`
+	CreatedBy   string          `json:"created_by"`
+	UpdatedAt   string          `json:"updated_at"`
+}
+
 type dbAction struct {
 	ID           string          `json:"id"`
 	Type         string          `json:"type"`
@@ -183,6 +194,7 @@ type dbCanvasWithChildren struct {
 	// NOTE: sheet rows are NOT a top-level embed — they ride nested inside each
 	// dbSheet.SheetRows (sheet_rows is FK'd to sheets, not canvases).
 	Charts        []dbChart        `json:"charts"`
+	Forms         []dbForm         `json:"forms"`
 	Actions       []dbAction       `json:"actions"`
 	Agents        []dbAgent        `json:"agents"`
 	PendingEdits  []dbPendingEdit  `json:"pending_edits"`
@@ -329,6 +341,22 @@ func toChart(d dbChart) *Chart {
 		_ = json.Unmarshal(d.YColumns, &c.YColumns)
 	}
 	return c
+}
+
+func toForm(d dbForm) *Form {
+	id, _ := uuid.Parse(d.ID)
+	f := &Form{ID: id, Kind: "form",
+		Name: d.Name, Description: d.Description, SortOrder: d.SortOrder,
+		CreatedBy: d.CreatedBy, UpdatedAt: parseTime(d.UpdatedAt),
+		Fields: []FormField{}, Actions: []FormAction{},
+	}
+	if len(d.Fields) > 0 {
+		_ = json.Unmarshal(d.Fields, &f.Fields)
+	}
+	if len(d.Actions) > 0 {
+		_ = json.Unmarshal(d.Actions, &f.Actions)
+	}
+	return f
 }
 
 func toAction(d dbAction) *Action {
@@ -598,7 +626,7 @@ func (s *supabaseStore) GetCanvasState(_ context.Context, canvasID uuid.UUID) (*
 	var rows []dbCanvasWithChildren
 
 	_, err := s.client.From("canvases").
-		Select("*,pins(*),events(*),notes(*),roadmap_items(*),sheets(*, sheet_rows(*)),charts(*),actions(*),agents(*),pending_edits(*)", "", false).
+		Select("*,pins(*),events(*),notes(*),roadmap_items(*),sheets(*, sheet_rows(*)),charts(*),forms(*),actions(*),agents(*),pending_edits(*)", "", false).
 		Eq("id", canvasID.String()).
 		ExecuteTo(&rows)
 	if err != nil {
@@ -627,6 +655,7 @@ func (s *supabaseStore) GetCanvasState(_ context.Context, canvasID uuid.UUID) (*
 		Sheets:       make(map[string]*Sheet, len(row.Sheets)),
 		SheetRows:    make(map[string]*SheetRow),
 		Charts:       make(map[string]*Chart, len(row.Charts)),
+		Forms:        make(map[string]*Form, len(row.Forms)),
 		Actions:      make(map[string]*Action, len(row.Actions)),
 		Agents:       make(map[string]*Agent, len(row.Agents)),
 	}
@@ -659,6 +688,10 @@ func (s *supabaseStore) GetCanvasState(_ context.Context, canvasID uuid.UUID) (*
 	for _, d := range row.Charts {
 		ch := toChart(d)
 		state.Charts[ch.ID.String()] = ch
+	}
+	for _, d := range row.Forms {
+		f := toForm(d)
+		state.Forms[f.ID.String()] = f
 	}
 	for _, d := range row.Actions {
 		a := toAction(d)
@@ -1648,6 +1681,136 @@ func (s *supabaseStore) DeleteChart(ctx context.Context, canvasID uuid.UUID, id 
 		return 0, err
 	}
 	return s.bumpVersion(ctx, canvasID)
+}
+
+// ── Forms (direct-input layer) ──────────────────────────────────────────────
+
+func (s *supabaseStore) CreateForm(ctx context.Context, canvasID uuid.UUID, f *Form) (int, error) {
+	if f.Fields == nil {
+		f.Fields = []FormField{}
+	}
+	if f.Actions == nil {
+		f.Actions = []FormAction{}
+	}
+	fieldsJSON, err := json.Marshal(f.Fields)
+	if err != nil {
+		return 0, err
+	}
+	actionsJSON, err := json.Marshal(f.Actions)
+	if err != nil {
+		return 0, err
+	}
+	now := time.Now().UTC()
+	f.UpdatedAt = now
+	row := map[string]any{
+		"id":          f.ID.String(),
+		"canvas_id":   canvasID.String(),
+		"name":        f.Name,
+		"description": f.Description,
+		"fields":      json.RawMessage(fieldsJSON),
+		"actions":     json.RawMessage(actionsJSON),
+		"sort_order":  f.SortOrder,
+		"created_by":  f.CreatedBy,
+		"updated_at":  now.Format(time.RFC3339),
+	}
+	if err := s.exec(s.client.From("forms").Insert(row, false, "", "minimal", "")); err != nil {
+		return 0, err
+	}
+	return s.bumpVersion(ctx, canvasID)
+}
+
+func (s *supabaseStore) GetForm(_ context.Context, canvasID, id uuid.UUID) (*Form, error) {
+	var rows []dbForm
+	_, err := s.client.From("forms").
+		Select("*", "", false).
+		Eq("id", id.String()).
+		Eq("canvas_id", canvasID.String()).
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("form %s not found in canvas %s", id, canvasID)
+	}
+	return toForm(rows[0]), nil
+}
+
+func (s *supabaseStore) UpdateForm(ctx context.Context, canvasID uuid.UUID, id uuid.UUID, patch FormPatch) (int, error) {
+	m := map[string]any{}
+	if patch.Name != nil {
+		m["name"] = *patch.Name
+	}
+	if patch.Description != nil {
+		m["description"] = *patch.Description
+	}
+	if patch.Fields != nil {
+		j, err := json.Marshal(*patch.Fields)
+		if err != nil {
+			return 0, err
+		}
+		m["fields"] = json.RawMessage(j)
+	}
+	if patch.Actions != nil {
+		j, err := json.Marshal(*patch.Actions)
+		if err != nil {
+			return 0, err
+		}
+		m["actions"] = json.RawMessage(j)
+	}
+	if patch.SortOrder != nil {
+		m["sort_order"] = *patch.SortOrder
+	}
+	if len(m) == 0 {
+		return 0, nil
+	}
+	err := s.exec(s.client.From("forms").
+		Update(m, "minimal", "").
+		Eq("id", id.String()).
+		Eq("canvas_id", canvasID.String()))
+	if err != nil {
+		return 0, err
+	}
+	return s.bumpVersion(ctx, canvasID)
+}
+
+func (s *supabaseStore) DeleteForm(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error) {
+	err := s.exec(s.client.From("forms").
+		Delete("minimal", "").
+		Eq("id", id.String()).
+		Eq("canvas_id", canvasID.String()))
+	if err != nil {
+		return 0, err
+	}
+	return s.bumpVersion(ctx, canvasID)
+}
+
+// SubmitForm applies a resolved batch via the submit_canvas_form RPC, which
+// re-validates every target's canvas_id, dedupes by submissionID, applies the
+// fan-out, and bumps the version — all in one transaction. Returns the version.
+func (s *supabaseStore) SubmitForm(_ context.Context, canvasID uuid.UUID, batch Batch, submissionID string) (int, error) {
+	batchJSON, err := json.Marshal(batch)
+	if err != nil {
+		return 0, err
+	}
+	params := map[string]any{
+		"p_canvas_id": canvasID.String(),
+		"p_batch":     json.RawMessage(batchJSON),
+	}
+	if submissionID != "" {
+		params["p_submission_id"] = submissionID
+	}
+	result := s.client.Rpc("submit_canvas_form", "", params)
+	if result == "" {
+		return 0, fmt.Errorf("submitForm: empty response — verify migration 0019 is applied")
+	}
+	if isRpcError(result) {
+		return 0, fmt.Errorf("submitForm RPC error: %s", result)
+	}
+	var v int
+	if err := json.Unmarshal([]byte(result), &v); err != nil {
+		return 0, fmt.Errorf("submitForm parse: %w (response: %s)", err, result)
+	}
+	return v, nil
 }
 
 // ── Users ─────────────────────────────────────────────────────────────────────

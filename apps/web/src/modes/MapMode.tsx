@@ -50,6 +50,19 @@ interface Props {
 
 type LatLng = [number, number];
 
+// A pin only reaches Leaflet if it has real, finite coordinates. The agent can
+// momentarily create a pin before its lat/lng land (or send a null coord), and
+// L.latLng(null, null) → (NaN, NaN), which throws inside flyTo/latLngBounds and
+// crashes the whole map render. Guarding here keeps that data out of Leaflet.
+function hasValidCoords(p: { lat: number; lng: number }): boolean {
+  return (
+    typeof p.lat === "number" &&
+    typeof p.lng === "number" &&
+    Number.isFinite(p.lat) &&
+    Number.isFinite(p.lng)
+  );
+}
+
 interface ResolvedTravel {
   event: CanvasEvent;
   from: Pin;
@@ -303,10 +316,34 @@ function MapController({
   const prevPinIdsRef = useRef<Set<string>>(new Set());
   const prevAutoFollowRef = useRef(autoFollow);
 
+  // Leaflet's projection math divides by the container size, so flyTo/flyToBounds
+  // on a zero-size viewport (mid-creation, or a backgrounded tab that hasn't
+  // re-laid-out yet) yields (NaN, NaN) and throws — which used to white-screen the
+  // whole canvas. We track readiness as state (not just a getSize() peek) so the
+  // moment the map gains a real size, the camera effects below re-run and the
+  // deferred recenter/flyTo actually happens instead of being silently dropped.
+  const [mapReady, setMapReady] = useState(() => {
+    const s = map.getSize();
+    return s.x > 0 && s.y > 0;
+  });
   useEffect(() => {
-    if (!selectedPinId) return;
+    if (mapReady) return;
+    const check = () => {
+      const s = map.getSize();
+      if (s.x > 0 && s.y > 0) setMapReady(true);
+    };
+    map.on("resize load", check);
+    const id = requestAnimationFrame(check);
+    return () => {
+      map.off("resize load", check);
+      cancelAnimationFrame(id);
+    };
+  }, [map, mapReady]);
+
+  useEffect(() => {
+    if (!mapReady || !selectedPinId) return;
     const pin = pins.find((p) => p.id === selectedPinId);
-    if (!pin) return;
+    if (!pin || !hasValidCoords(pin)) return;
     const targetZoom = Math.max(map.getZoom(), 14);
     map.flyTo([pin.lat, pin.lng], targetZoom, { duration: 0.6 });
     // Open the popup once the fly settles. Leaflet ignores openPopup if the
@@ -315,10 +352,10 @@ function MapController({
       markerRefs.current.get(selectedPinId)?.openPopup();
     }, 350);
     return () => clearTimeout(t);
-  }, [selectedPinId, pins, map, markerRefs]);
+  }, [selectedPinId, pins, map, markerRefs, mapReady]);
 
   useEffect(() => {
-    if (!selectedEventId) return;
+    if (!mapReady || !selectedEventId) return;
     const travel = travels.find((t) => t.event.id === selectedEventId);
     if (!travel) return;
     const bounds = L.latLngBounds([
@@ -326,9 +363,15 @@ function MapController({
       [travel.to.lat, travel.to.lng],
     ]);
     map.flyToBounds(bounds, { padding: [80, 80], maxZoom: 11, duration: 0.6 });
-  }, [selectedEventId, travels, map]);
+  }, [selectedEventId, travels, map, mapReady]);
 
   useEffect(() => {
+    // Don't touch the refs until the map can actually be flown — otherwise a
+    // recenter skipped while unsized would be "forgotten" (the pins would look
+    // already-seen next run), and live-created pins wouldn't auto-center until
+    // the next change. Returning early keeps them pending until mapReady flips.
+    if (!mapReady) return;
+
     const currentIds = new Set(pins.map((p) => p.id));
     let newPinCount = 0;
     for (const id of currentIds) {
@@ -352,7 +395,7 @@ function MapController({
 
     prevPinIdsRef.current = currentIds;
     prevAutoFollowRef.current = autoFollow;
-  }, [pins, autoFollow, map]);
+  }, [pins, autoFollow, map, mapReady]);
 
   return null;
 }
@@ -379,14 +422,18 @@ export default function MapMode({
   selectedEventId,
   onSelectEvent,
 }: Props) {
-  const pins = useMemo(() => Object.values(state.pins), [state.pins]);
+  // Only pins with finite coordinates ever reach Leaflet (see hasValidCoords).
+  const pins = useMemo(
+    () => Object.values(state.pins).filter(hasValidCoords),
+    [state.pins]
+  );
   const travels = useMemo<ResolvedTravel[]>(() => {
     const out: ResolvedTravel[] = [];
     for (const ev of Object.values(state.events)) {
       if (!ev.fromPinId || !ev.toPinId || !ev.travelMode) continue;
       const from = state.pins[ev.fromPinId];
       const to = state.pins[ev.toPinId];
-      if (!from || !to) continue;
+      if (!from || !to || !hasValidCoords(from) || !hasValidCoords(to)) continue;
       out.push({ event: ev, from, to, mode: ev.travelMode });
     }
     return out;

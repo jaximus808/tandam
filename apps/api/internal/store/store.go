@@ -119,6 +119,91 @@ type Chart struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
+// ── Forms (direct-input layer) ────────────────────────────────────────────────
+// A Form is an agent-defined recipe a human fills from a lightweight surface to
+// mutate the canvas directly (no agent in the submit loop). Fields is the input
+// schema; Actions is the compiled, canonical DSL the resolver runs at submit.
+// See docs/DESIGN_DIRECT_INPUT.md.
+
+type Form struct {
+	ID          uuid.UUID    `json:"id"`
+	Kind        string       `json:"kind"` // always "form"
+	Name        string       `json:"name"`
+	Description string       `json:"description"`
+	Fields      []FormField  `json:"fields"`
+	Actions     []FormAction `json:"actions"`
+	SortOrder   int          `json:"sortOrder"`
+	CreatedBy   string       `json:"createdBy"`
+	UpdatedAt   time.Time    `json:"updatedAt"`
+}
+
+// FormField is one input the human fills. Type ∈ text|number|date|select|checkbox.
+type FormField struct {
+	Key         string   `json:"key"`
+	Label       string   `json:"label"`
+	Type        string   `json:"type"`
+	Required    bool     `json:"required,omitempty"`
+	Options     []string `json:"options,omitempty"`     // required iff select
+	Default     any      `json:"default,omitempty"`     // type-compatible default
+	Placeholder string   `json:"placeholder,omitempty"` // text/number only
+}
+
+// FormAction is one entry of the canonical DSL (forms.actions). The agent never
+// writes this directly — compile() expands the authoring Intent into it.
+// Op ∈ sheet.row.append | sheet.row.upsert | pin.patch. Columns are referenced
+// by NAME and resolved name→id at submit (so they survive column recreation).
+type FormAction struct {
+	Op     string     `json:"op"`
+	Target FormTarget `json:"target"`
+	Set    []Binding  `json:"set"`
+	Match  []Binding  `json:"match,omitempty"` // upsert only
+	Inc    []string   `json:"inc,omitempty"`   // upsert only: column names to increment
+}
+
+// FormTarget is a discriminated target: exactly one of Sheet (by name) or Pin (by id).
+type FormTarget struct {
+	Sheet string `json:"sheet,omitempty"`
+	Pin   string `json:"pin,omitempty"`
+}
+
+// Binding maps a target column (by name) to a value expression.
+type Binding struct {
+	Column string    `json:"column"`
+	Value  ValueExpr `json:"value"`
+}
+
+// ValueExpr is exactly one of: From (a submitted field key), Computed
+// ("today"|"now"), or Literal (a raw scalar). Presence is detected by which is
+// non-empty; the exactly-one-key invariant is enforced by compile().
+type ValueExpr struct {
+	From     string          `json:"from,omitempty"`
+	Computed string          `json:"computed,omitempty"`
+	Literal  json.RawMessage `json:"literal,omitempty"`
+}
+
+// Batch is the concrete, scope-checked result of resolving a form submission —
+// the input to the submit_canvas_form RPC. Every name is already a uuid and
+// every value concrete by the time a Batch exists.
+type Batch struct {
+	Inserts []RowInsert `json:"inserts"`
+	Patches []Patch     `json:"patches"`
+}
+
+// RowInsert appends a new sheet row. Data is keyed by SheetColumn.id.
+type RowInsert struct {
+	SheetID string         `json:"sheet_id"`
+	Data    map[string]any `json:"data"`
+}
+
+// Patch is either a sheet-row patch (RowID + Set/Inc, keyed by column id) or a
+// pin patch (PinID + Set, keyed by whitelisted column). Exactly one id is set.
+type Patch struct {
+	RowID *string            `json:"row_id,omitempty"`
+	PinID *string            `json:"pin_id,omitempty"`
+	Set   map[string]any     `json:"set,omitempty"`
+	Inc   map[string]float64 `json:"inc,omitempty"`
+}
+
 // Action is the v1 execution primitive: the unit two agents coordinate on and
 // a human approves before anything moves. Payload shape depends on Type; for
 // "navigate" it is { goalLabel?, goal?{lat,lng}, waypoints?[{lat,lng}] }.
@@ -179,6 +264,7 @@ type CanvasState struct {
 	Sheets        map[string]*Sheet            `json:"sheets"`
 	SheetRows     map[string]*SheetRow         `json:"sheetRows"`
 	Charts        map[string]*Chart            `json:"charts"`
+	Forms         map[string]*Form             `json:"forms"`
 	Actions       map[string]*Action           `json:"actions"`
 	Agents        map[string]*Agent            `json:"agents"`
 }
@@ -255,6 +341,16 @@ type SheetRowPatch struct {
 type SheetRowReorder struct {
 	ID        uuid.UUID `json:"id"`
 	SortOrder int       `json:"sortOrder"`
+}
+
+// FormPatch replaces a form's authoring surface wholesale (the compiler always
+// re-expands the full intent). nil fields are left unchanged.
+type FormPatch struct {
+	Name        *string       `json:"name"`
+	Description *string       `json:"description"`
+	Fields      *[]FormField  `json:"fields"`
+	Actions     *[]FormAction `json:"actions"`
+	SortOrder   *int          `json:"sortOrder"`
 }
 
 type ChartPatch struct {
@@ -336,6 +432,15 @@ type Store interface {
 	CreateChart(ctx context.Context, canvasID uuid.UUID, c *Chart) (int, error)
 	UpdateChart(ctx context.Context, canvasID uuid.UUID, id uuid.UUID, patch ChartPatch) (int, error)
 	DeleteChart(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error)
+
+	// Forms (direct-input layer)
+	CreateForm(ctx context.Context, canvasID uuid.UUID, f *Form) (int, error)
+	GetForm(ctx context.Context, canvasID, id uuid.UUID) (*Form, error)
+	UpdateForm(ctx context.Context, canvasID uuid.UUID, id uuid.UUID, patch FormPatch) (int, error)
+	DeleteForm(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error)
+	// SubmitForm applies a resolved batch atomically (submit_canvas_form RPC),
+	// deduping by submissionID when non-empty, and returns the new version.
+	SubmitForm(ctx context.Context, canvasID uuid.UUID, batch Batch, submissionID string) (int, error)
 
 	// Agents (v1 identity / provenance)
 	RegisterAgent(ctx context.Context, canvasID uuid.UUID, a *Agent) (int, error)

@@ -75,14 +75,27 @@ jobs:
             --zone=${{ secrets.GCP_ZONE }} \
             --project=${{ secrets.GCP_PROJECT }} \
             --command="
+              # Fail the deploy if any step fails — without this the SSH exit
+              # code comes from the final command (prune, always 0), masking a
+              # failed build/up and reporting a green deploy that did nothing.
+              set -eo pipefail
               cd /opt/tandem
-              
+
+              # --ignore-buildable: tandem/mcp images are built locally and are
+              # NOT in any registry, so a plain 'pull' errors on them. This pulls
+              # only the third-party images (caddy).
               echo '→ Pulling latest base images...'
-              sudo docker compose pull
-              
+              sudo docker compose pull --ignore-buildable
+
               echo '→ Deploying Tandem containers...'
               sudo docker compose up -d --build
-              
+
+              # Caddyfile is bind-mounted, so a file change alone never restarts
+              # Caddy and 'compose up' won't recreate it unless its service hash
+              # changed. Reload explicitly so routing changes always take effect.
+              echo '→ Reloading Caddy config...'
+              sudo docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+
               echo '→ Pruning old dangling images...'
               sudo docker image prune -f
             "

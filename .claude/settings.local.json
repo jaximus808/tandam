@@ -72,7 +72,11 @@
       "Bash(grep -rhoE '\\(becomes anything|any agent|shared|canvas|plan\\)[^<>{}]{0,60}' apps/web/src/pages/Landing.tsx)",
       "Bash(node *)",
       "Bash(grep -oE '\"[A-Z][^\"]{15,90}\"' apps/web/src/pages/Landing.tsx)",
-      "Bash(pnpm dev:mock *)"
+      "Bash(pnpm dev:mock *)",
+      "mcp__agentcanvas__canvas_form_define",
+      "Skill(browse)",
+      "mcp__agentcanvas__canvas_form_scaffold",
+      "Bash(echo \"exit $?\")"
     ]
   }
 }

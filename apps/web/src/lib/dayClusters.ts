@@ -68,7 +68,9 @@ export function buildDayClusters(state: CanvasState): DayCluster[] {
   const pinsByDay = new Map<string, Pin[]>();
   for (const [pinId, dayKey] of pinDay) {
     const pin = state.pins[pinId];
-    if (!pin) continue;
+    // Skip missing pins and any with non-finite coords — a NaN would poison the
+    // cluster centroid and produce an invalid Leaflet marker position.
+    if (!pin || !Number.isFinite(pin.lat) || !Number.isFinite(pin.lng)) continue;
     const arr = pinsByDay.get(dayKey) ?? [];
     arr.push(pin);
     pinsByDay.set(dayKey, arr);

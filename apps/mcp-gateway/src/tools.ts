@@ -208,6 +208,26 @@ export async function handleTool(
     case "canvas.chart.delete":
       return gateway.del(`/api/canvas/charts/${args.id}`);
 
+    // ── Forms (direct-input layer) ───────────────────────────────────────────────
+    case "canvas.form.scaffold":
+      return gateway.post("/api/canvas/forms/scaffold", { sheet: args.sheet });
+
+    case "canvas.form.define":
+      return gateway.post("/api/canvas/forms", {
+        name: args.name,
+        description: args.description,
+        fields: args.fields,
+        writes: args.writes,
+      });
+
+    case "canvas.form.update": {
+      const { id, ...intent } = args;
+      return gateway.patch(`/api/canvas/forms/${id}`, intent);
+    }
+
+    case "canvas.form.delete":
+      return gateway.del(`/api/canvas/forms/${args.id}`);
+
     // ── Pending edits ──────────────────────────────────────────────────────────
     case "canvas.pending_edits.read":
       return gateway.get("/api/canvas/state").then((s: any) => ({
@@ -768,6 +788,89 @@ export const TOOLS = [
   {
     name: "canvas.chart.delete",
     description: "Delete a chart by its ID.",
+    inputSchema: { type: "object" as const, properties: { id: { type: "string" } }, required: ["id"] },
+  },
+  {
+    name: "canvas.form.scaffold",
+    description:
+      "Draft a form from an existing sheet — the easy on-ramp to the direct-input layer. " +
+      "Returns a DRAFT intent (one field + one append binding per column) plus a compile " +
+      "report. Stores NOTHING. Edit the returned intent (rename, mark fields required, swap " +
+      "a field for {computed:'today'}, add upsert/pin writes) then call canvas.form.define. " +
+      "Needs the sheet to exist first (create it with canvas.sheet.add if needed).",
+    inputSchema: {
+      type: "object" as const,
+      properties: { sheet: { type: "string", description: "Name of an existing sheet." } },
+      required: ["sheet"],
+    },
+  },
+  {
+    name: "canvas.form.define",
+    description:
+      "Define a form: a recipe a human fills from a phone to mutate the canvas directly — " +
+      "no agent in the submit loop. You express INTENT (fields + where they go); the server " +
+      "validates against live state, compiles it to a stored mapping, and persists it. " +
+      "Returns { ok, errors, warnings, formId }. On ok:false NOTHING is stored — fix the " +
+      "errors (each has a path + suggestion) and call again. A `writes` entry targets either " +
+      "a sheet (append a row, or upsert+increment a running total) or a pin (patch its " +
+      "color/label/body/pinType). Columns are referenced by NAME. Each column/set value is a " +
+      "Source with EXACTLY ONE of: {field:'<fieldKey>'}, {computed:'today'|'now'}, " +
+      "{literal:<scalar>}.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        name: { type: "string", description: "Form name, e.g. 'Log a meal'." },
+        description: { type: "string" },
+        fields: {
+          type: "array",
+          description: "The inputs a human fills (1..20).",
+          items: {
+            type: "object",
+            properties: {
+              key: { type: "string", description: "lowercase id: ^[a-z][a-z0-9_]{0,31}$, unique." },
+              label: { type: "string" },
+              type: { type: "string", enum: ["text", "number", "date", "select", "checkbox"] },
+              required: { type: "boolean" },
+              options: { type: "array", items: { type: "string" }, description: "Required iff type=select." },
+              default: { description: "Type-compatible default; select ⇒ one of options." },
+              placeholder: { type: "string" },
+            },
+            required: ["key", "label", "type"],
+          },
+        },
+        writes: {
+          type: "array",
+          description:
+            "Where submitted values go (1..8). A SheetWrite has {sheet, mode:'append'|'upsert', " +
+            "columns:{<colName>:Source}, match?:[colName] (required for upsert), inc?:[colName] " +
+            "(upsert only — increments a numeric column, e.g. a running total)}. A PinWrite has " +
+            "{pin:<pinId>, set:{color|label|body|pinType: Source}}.",
+          items: { type: "object" },
+        },
+      },
+      required: ["name", "fields", "writes"],
+    },
+  },
+  {
+    name: "canvas.form.update",
+    description:
+      "Redefine an existing form by id from a full intent (same shape as canvas.form.define). " +
+      "Re-compiled and re-validated; on ok:false nothing changes.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        id: { type: "string" },
+        name: { type: "string" },
+        description: { type: "string" },
+        fields: { type: "array", items: { type: "object" } },
+        writes: { type: "array", items: { type: "object" } },
+      },
+      required: ["id", "name", "fields", "writes"],
+    },
+  },
+  {
+    name: "canvas.form.delete",
+    description: "Delete a form by its ID. (Rows/pins it already produced are unaffected.)",
     inputSchema: { type: "object" as const, properties: { id: { type: "string" } }, required: ["id"] },
   },
   {
