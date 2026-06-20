@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -31,6 +32,19 @@ func generateCode() string {
 		out[i] = codeChars[int(x)%len(codeChars)]
 	}
 	return string(out)
+}
+
+// generateClaimToken returns a one-time secret authorizing a canvas claim. Its
+// format is deliberately UNLIKE a canvas code (8 chars, uppercase, ambiguity-
+// free alphabet): a `clm_` prefix + 32 lowercase hex chars. Distinct prefix,
+// case, length and alphabet mean a code can never be mistaken for a token, and
+// the 16 random bytes (2^128 keyspace) make it unguessable as a bearer secret.
+func generateClaimToken() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Errorf("crypto/rand: %w", err))
+	}
+	return "clm_" + hex.EncodeToString(b)
 }
 
 // ── DB row types (snake_case = Supabase column names) ─────────────────────────
@@ -472,11 +486,21 @@ func (s *supabaseStore) exec(b interface{ Execute() ([]byte, int64, error) }) er
 // ── Canvas ────────────────────────────────────────────────────────────────────
 
 func (s *supabaseStore) CreateCanvas(_ context.Context, name string, ownerUserID *uuid.UUID) (*Canvas, error) {
+	// Anonymous canvases get a claim token so their rightful recipient can take
+	// ownership later (see ClaimCanvas). Owned canvases (a logged-in create) are
+	// already theirs and need none.
+	var claimToken string
+	if ownerUserID == nil {
+		claimToken = generateClaimToken()
+	}
 	for range 10 {
 		code := generateCode()
 		row := map[string]any{"code": code, "name": name}
 		if ownerUserID != nil {
 			row["owner_user_id"] = ownerUserID.String()
+		}
+		if claimToken != "" {
+			row["claim_token"] = claimToken
 		}
 		var rows []dbCanvas
 		_, err := s.client.From("canvases").
@@ -491,7 +515,11 @@ func (s *supabaseStore) CreateCanvas(_ context.Context, name string, ownerUserID
 		if len(rows) == 0 {
 			return nil, fmt.Errorf("no row returned after canvas insert")
 		}
-		return toCanvas(rows[0]), nil
+		c := toCanvas(rows[0])
+		// Surface the token ONLY here, on the create response. toCanvas never
+		// reads it back, so it can't leak via any later canvas read.
+		c.ClaimToken = claimToken
+		return c, nil
 	}
 	return nil, fmt.Errorf("failed to generate unique canvas code after 10 attempts")
 }
@@ -540,6 +568,35 @@ func (s *supabaseStore) CopyCanvas(ctx context.Context, srcID, ownerUserID uuid.
 		return s.GetCanvasByCode(ctx, code)
 	}
 	return nil, fmt.Errorf("failed to generate unique canvas code after 10 attempts")
+}
+
+// ClaimCanvas atomically transfers an anonymous canvas to ownerUserID. The whole
+// authorization lives in the WHERE clause: the row must match the code AND the
+// (single-use) token AND still be unowned. A single UPDATE means concurrent
+// claims can't both win — the first sets the owner and clears the token, so any
+// other request matches zero rows. We ask for the updated row back
+// (representation) to distinguish "claimed it" (1 row) from "couldn't" (0 rows).
+func (s *supabaseStore) ClaimCanvas(_ context.Context, code, token string, ownerUserID uuid.UUID) (*Canvas, error) {
+	if token == "" {
+		return nil, ErrCanvasNotClaimable
+	}
+	var rows []dbCanvas
+	_, err := s.client.From("canvases").
+		Update(map[string]any{
+			"owner_user_id": ownerUserID.String(),
+			"claim_token":   nil, // void the token — claims are single-use
+		}, "representation", "").
+		Eq("code", code).
+		Eq("claim_token", token).
+		Is("owner_user_id", "null").
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, ErrCanvasNotClaimable
+	}
+	return toCanvas(rows[0]), nil
 }
 
 // CanvasCount returns the total number of canvases. Uses a count=exact HEAD

@@ -35,12 +35,21 @@ export async function handleTool(
       const rawName = typeof args.name === "string" ? args.name.trim() : "";
       const name = rawName || "Untitled canvas";
       const session = await gateway.createCanvas(name);
+      const claimUrl = session.claimToken
+        ? gateway.claimUrl(session.canvasCode, session.claimToken)
+        : undefined;
       return {
         created: true,
         canvasId: session.canvasId,
         canvasName: session.canvasName,
         canvasCode: session.canvasCode,
         url: gateway.canvasUrl(session.canvasCode),
+        claimUrl,
+        // Guidance for the agent on how to present these to the user.
+        claimHint:
+          "Give the user `claimUrl` so they can sign in and claim ownership of " +
+          "this canvas (it's a one-time link — keep it private). Use `url` only " +
+          "for read-only sharing with others, which does not grant ownership.",
       };
     }
 
@@ -315,8 +324,12 @@ export const TOOLS = [
     description:
       "Create a NEW canvas and bind this session to it in one step — no human needs to make " +
       "one in the browser first. Use this to start fresh (e.g. the user says 'put a plan on a " +
-      "canvas' and gave no code). Returns canvasCode and a shareable web `url`; surface the URL " +
-      "to the user so they can open and watch the canvas live. After this, all other canvas.* " +
+      "canvas' and gave no code), or proactively OFFER it when the user is brainstorming or " +
+      "planning and would benefit from seeing their thoughts laid out on a live canvas. " +
+      "Returns `url` (read-only share link — open it to watch the canvas live) and `claimUrl` " +
+      "(a one-time PRIVATE link that lets the user sign in and take ownership of this exact " +
+      "canvas). Surface `claimUrl` to the user so they don't lose the canvas, and tell them it " +
+      "is for them only; use `url` for sharing with others. After this, all other canvas.* " +
       "tools operate on the new canvas with no ID needed.",
     inputSchema: {
       type: "object" as const,

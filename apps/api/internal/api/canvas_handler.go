@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -119,6 +120,39 @@ func (h *Handler) CopyCanvas(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, canvas)
+}
+
+// POST /api/canvases/{code}/claim  (RequireUser) — take ownership of an
+// anonymous canvas (e.g. one Claude created) using its one-time claim token.
+// Unlike copy, this assigns the SAME canvas to the user, so an agent already
+// editing it keeps writing to the canvas the user now owns. First valid claim
+// wins; the token is single-use.
+func (h *Handler) ClaimCanvas(w http.ResponseWriter, r *http.Request) {
+	uid, ok := UserIDFromCtx(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "not signed in")
+		return
+	}
+	var body struct {
+		Token string `json:"token"`
+	}
+	if err := decode(r, &body); err != nil || strings.TrimSpace(body.Token) == "" {
+		writeError(w, http.StatusBadRequest, "token is required")
+		return
+	}
+	code := chi.URLParam(r, "code")
+	canvas, err := h.store.ClaimCanvas(r.Context(), code, strings.TrimSpace(body.Token), uid)
+	if errors.Is(err, store.ErrCanvasNotClaimable) {
+		// Wrong token, wrong code, or already claimed — all 409 so we don't leak
+		// which canvases exist or are still unclaimed.
+		writeError(w, http.StatusConflict, "canvas is not claimable (already claimed or invalid token)")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, canvas)
 }
 
 // GET /api/stats  (public) — total canvases + user accounts created. The

@@ -3,10 +3,16 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// ErrCanvasNotClaimable is returned by ClaimCanvas when no canvas matched the
+// code+token while still unowned — i.e. a bad token, wrong code, or the canvas
+// was already claimed (the token is single-use).
+var ErrCanvasNotClaimable = errors.New("canvas not claimable")
 
 // ── Domain types ──────────────────────────────────────────────────────────────
 
@@ -17,6 +23,11 @@ type Canvas struct {
 	Mode        string     `json:"mode"`
 	MapID       *string    `json:"mapId,omitempty"`
 	OwnerUserID *uuid.UUID `json:"ownerUserId,omitempty"`
+	// ClaimToken is the one-time secret that authorizes claiming this canvas. It
+	// is populated ONLY in the response to CreateCanvas (so the creator can hand
+	// it to the rightful owner) and is NEVER set when reading a canvas back — see
+	// toCanvas, which deliberately ignores the column. Empty for owned canvases.
+	ClaimToken  string     `json:"claimToken,omitempty"`
 	Version     int        `json:"version"`
 	CreatedAt   time.Time  `json:"createdAt"`
 	UpdatedAt   time.Time  `json:"updatedAt"`
@@ -383,6 +394,11 @@ type Store interface {
 	CreateCanvas(ctx context.Context, name string, ownerUserID *uuid.UUID) (*Canvas, error)
 	ListCanvasesByOwner(ctx context.Context, ownerUserID uuid.UUID) ([]*Canvas, error)
 	CopyCanvas(ctx context.Context, srcID, ownerUserID uuid.UUID, name string) (*Canvas, error)
+	// ClaimCanvas atomically assigns an anonymous canvas to ownerUserID if (and
+	// only if) the supplied token matches and the canvas is still unowned, then
+	// voids the token. Returns ErrCanvasNotClaimable if no row matched (wrong
+	// code/token or already claimed).
+	ClaimCanvas(ctx context.Context, code, token string, ownerUserID uuid.UUID) (*Canvas, error)
 	CanvasCount(ctx context.Context) (int, error)
 	UserCount(ctx context.Context) (int, error)
 	CanvasRecurrence(ctx context.Context) (revisited int, total int, err error)

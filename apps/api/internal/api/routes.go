@@ -52,6 +52,7 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 		r.Use(RequireUser(authSvc))
 		r.Get("/api/me/canvases", h.MeCanvases)
 		r.Post("/api/canvases/{code}/copy", h.CopyCanvas)
+		r.Post("/api/canvases/{code}/claim", h.ClaimCanvas)
 	})
 
 	// Sheet export — public by canvas code (matches WS auth model).
