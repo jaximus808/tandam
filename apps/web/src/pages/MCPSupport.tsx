@@ -296,6 +296,18 @@ const TOOLS = [
   },
 ];
 
+// Hosted Streamable-HTTP MCP endpoint — the zero-install path for Claude's
+// own web / desktop / mobile clients (Customize → Connectors).
+const CONNECTOR_URL = "https://tandemcanvas.com/api/mcp";
+
+function StepNum({ children }: { children: string }) {
+  return (
+    <span className="shrink-0 grid place-items-center h-6 w-6 rounded-full bg-sky-600 text-white text-xs font-semibold font-code">
+      {children}
+    </span>
+  );
+}
+
 function CodeBlock({
   code,
   copyKey,
@@ -322,7 +334,19 @@ function CodeBlock({
   );
 }
 
+// Primary path toggle pill. Slightly larger than the install/client sub-tabs
+// since it's the top-level choice.
+function pathPill(active: boolean): string {
+  return [
+    "px-4 py-2 rounded-lg text-sm font-semibold transition-colors",
+    active
+      ? "bg-gray-900 text-white"
+      : "bg-white border border-gray-200 text-gray-600 hover:bg-gray-50",
+  ].join(" ");
+}
+
 export default function MCPSupport({ onBack }: Props) {
+  const [pathTab, setPathTab] = useState<"connector" | "gateway">("connector");
   const [installTab, setInstallTab] = useState<string>(INSTALL_METHODS[0].id);
   const [clientTab, setClientTab] = useState<string>(CLIENT_TABS[0].id);
   const [copied, setCopied] = useState<string | null>(null);
@@ -338,7 +362,7 @@ export default function MCPSupport({ onBack }: Props) {
   }
 
   return (
-    <div className="min-h-screen bg-[#FBFAF8] font-brand text-gray-900 antialiased overflow-y-auto">
+    <div className="min-h-screen bg-[#FBFAF8] font-brand text-gray-900 antialiased overflow-y-auto scroll-smooth">
       <header className="sticky top-0 z-10 bg-[#FBFAF8]/85 backdrop-blur border-b border-gray-900/5">
         <div className="max-w-4xl mx-auto px-6 py-3 flex items-center gap-3">
           <button
@@ -390,12 +414,112 @@ export default function MCPSupport({ onBack }: Props) {
           </p>
         </section>
 
-        {/* Install */}
-        <section className="space-y-4">
+        {/* ── Setup (tabbed: Claude.ai connector vs MCP gateway) ───────────── */}
+        <section className="space-y-6">
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={() => setPathTab("connector")}
+              className={pathPill(pathTab === "connector")}
+            >
+              Claude.ai — connector
+            </button>
+            <button
+              onClick={() => setPathTab("gateway")}
+              className={pathPill(pathTab === "gateway")}
+            >
+              MCP setup (editors & agents)
+            </button>
+          </div>
+
+          {pathTab === "connector" && (
+          <div className="space-y-4">
+            <div>
+              <h2 className="font-display text-2xl font-medium tracking-tight text-gray-900">
+                Set up Tandem as a Claude connector
+              </h2>
+              <p className="mt-1 text-sm text-gray-500">
+                For Claude on web, desktop, or mobile. A hosted MCP endpoint —
+                connect with a URL. No Node, no config file, nothing to install.
+              </p>
+            </div>
+
+          <div className="relative overflow-hidden rounded-2xl border border-sky-200/70 bg-gradient-to-br from-sky-50 via-white to-white p-6 sm:p-8">
+            {/* soft accent glow, decorative */}
+            <div
+              aria-hidden
+              className="pointer-events-none absolute -right-12 -top-12 h-40 w-40 rounded-full bg-sky-200/40 blur-2xl"
+            />
+            <ol className="relative space-y-4">
+              <li className="flex gap-3">
+                <StepNum>1</StepNum>
+                <div className="pt-0.5 text-sm text-gray-700 leading-relaxed">
+                  In Claude, open{" "}
+                  <span className="font-medium text-gray-900">
+                    Customize → Connectors
+                  </span>{" "}
+                  and click{" "}
+                  <span className="font-medium text-gray-900">
+                    Add custom connector
+                  </span>
+                  .
+                </div>
+              </li>
+              <li className="flex gap-3">
+                <StepNum>2</StepNum>
+                <div className="flex-1 space-y-2 pt-0.5">
+                  <p className="text-sm text-gray-700 leading-relaxed">
+                    Paste this URL — leave the OAuth fields blank — and hit{" "}
+                    <span className="font-medium text-gray-900">Add</span>:
+                  </p>
+                  <div className="flex items-center gap-2 rounded-lg border border-sky-200 bg-white py-1.5 pl-3 pr-1.5">
+                    <span className="flex-1 truncate font-code text-sm text-gray-900">
+                      {CONNECTOR_URL}
+                    </span>
+                    <button
+                      onClick={() => copy(CONNECTOR_URL, "connector-url")}
+                      className="shrink-0 rounded-md bg-gray-900 px-2.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-gray-700"
+                    >
+                      {copied === "connector-url" ? "Copied!" : "Copy"}
+                    </button>
+                  </div>
+                </div>
+              </li>
+              <li className="flex gap-3">
+                <StepNum>3</StepNum>
+                <div className="pt-0.5 text-sm text-gray-700 leading-relaxed">
+                  Enable Tandem in a chat from the{" "}
+                  <span className="font-medium text-gray-900">+</span> menu, then
+                  tell Claude{" "}
+                  <span className="font-code text-xs text-sky-700">
+                    connect to canvas TOKYO7X3K
+                  </span>
+                  . It binds to that canvas and edits it live — same as any other
+                  agent.
+                </div>
+              </li>
+            </ol>
+          </div>
+          </div>
+          )}
+
+          {pathTab === "gateway" && (
+          <div className="space-y-8">
+            <div>
+              <h2 className="font-display text-2xl font-medium tracking-tight text-gray-900">
+                Run the MCP gateway
+              </h2>
+              <p className="mt-1 text-sm text-gray-500">
+                A stdio server for Claude Code, Cursor, Codex, the OpenAI Agents
+                SDK, and bespoke orchestrators.
+              </p>
+            </div>
+
+          {/* 1. Install */}
+          <div className="space-y-4">
           <div>
             <h2 className="font-display text-2xl font-medium tracking-tight text-gray-900">1. Install the gateway</h2>
             <p className="mt-1 text-sm text-gray-500">
-              Pick whichever fits your setup. The npx form is the easiest and
+              Pick whichever fits your setup — the npx form is the easiest and
               works for almost everyone.
             </p>
           </div>
@@ -455,10 +579,10 @@ export default function MCPSupport({ onBack }: Props) {
               local or self-hosted instance.
             </p>
           </div>
-        </section>
+          </div>
 
-        {/* Client setup */}
-        <section className="space-y-4">
+          {/* 2. Wire */}
+          <div id="wire" className="space-y-4 scroll-mt-20">
           <div>
             <h2 className="font-display text-2xl font-medium tracking-tight text-gray-900">2. Wire it into your client</h2>
             <p className="mt-1 text-sm text-gray-500">
@@ -493,10 +617,10 @@ export default function MCPSupport({ onBack }: Props) {
               onCopy={copy}
             />
           </div>
-        </section>
+          </div>
 
-        {/* Connect step */}
-        <section className="space-y-3">
+          {/* 3. Connect */}
+          <div id="connect" className="space-y-3 scroll-mt-20">
           <h2 className="font-display text-2xl font-medium tracking-tight text-gray-900">3. Connect to a canvas</h2>
           <p className="text-sm text-gray-600 leading-relaxed">
             Create a canvas in your browser (it'll give you an 8-character code
@@ -505,10 +629,13 @@ export default function MCPSupport({ onBack }: Props) {
             once with that code; from then on every other tool operates on that
             canvas with no ID to pass around.
           </p>
+          </div>
+          </div>
+          )}
         </section>
 
         {/* Tool surface */}
-        <section className="space-y-4">
+        <section id="tools" className="space-y-4 scroll-mt-20">
           <div>
             <h2 className="font-display text-2xl font-medium tracking-tight text-gray-900">The tool surface</h2>
             <p className="mt-1 text-sm text-gray-500">
@@ -540,7 +667,7 @@ export default function MCPSupport({ onBack }: Props) {
         </section>
 
         {/* Multi-agent example */}
-        <section className="space-y-4">
+        <section id="multi-agent" className="space-y-4 scroll-mt-20">
           <div>
             <h2 className="font-display text-2xl font-medium tracking-tight text-gray-900">
               Multi-agent flow: research → report
@@ -606,7 +733,7 @@ export default function MCPSupport({ onBack }: Props) {
         </section>
 
         {/* Authoring your own */}
-        <section className="space-y-3">
+        <section id="build" className="space-y-3 scroll-mt-20">
           <h2 className="font-display text-2xl font-medium tracking-tight text-gray-900">Build your own integration</h2>
           <p className="text-sm text-gray-600 leading-relaxed">
             The gateway is intentionally thin: it owns a JWT and forwards
