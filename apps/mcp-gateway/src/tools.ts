@@ -7,6 +7,13 @@ export async function handleTool(
   toolName: string,
   args: Args
 ): Promise<unknown> {
+  // Backwards compat: tools are now advertised with underscore names
+  // (canvas_connect) because the old dotted form (canvas.connect) is invalid
+  // under Anthropic's tool-name rules and gets dropped by the Claude.ai web
+  // connector. Old clients / saved prompts may still call the dotted names, so
+  // normalize the incoming name before routing.
+  toolName = toolName.replace(/\./g, "_");
+
   switch (toolName) {
     // ── Connection ─────────────────────────────────────────────────────────────
     case "canvas_connect": {

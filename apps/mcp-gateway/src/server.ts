@@ -40,8 +40,10 @@ export function createTandemServer(gateway: Gateway, version: string): Server {
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const { name, arguments: args } = request.params;
-    const a = (args ?? {}) as Record<string, unknown>;
+    // Normalize legacy dotted tool names (canvas.connect) to the underscore
+    // form we now advertise (canvas_connect) — see handleTool for why.
+    const name = request.params.name.replace(/\./g, "_");
+    const a = (request.params.arguments ?? {}) as Record<string, unknown>;
 
     try {
       const result = await handleTool(gateway, name, a);
