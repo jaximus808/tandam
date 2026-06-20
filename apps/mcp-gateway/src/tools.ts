@@ -9,7 +9,7 @@ export async function handleTool(
 ): Promise<unknown> {
   switch (toolName) {
     // ── Connection ─────────────────────────────────────────────────────────────
-    case "canvas.connect": {
+    case "canvas_connect": {
       const code = args.code;
       if (typeof code !== "string" || !code.trim()) {
         throw new Error("`code` (string) is required");
@@ -24,7 +24,7 @@ export async function handleTool(
       };
     }
 
-    case "canvas.create": {
+    case "canvas_create": {
       const rawName = typeof args.name === "string" ? args.name.trim() : "";
       const name = rawName || "Untitled canvas";
       const session = await gateway.createCanvas(name);
@@ -38,18 +38,18 @@ export async function handleTool(
     }
 
     // ── State ──────────────────────────────────────────────────────────────────
-    case "canvas.state.read":
+    case "canvas_state_read":
       return gateway.get("/api/canvas/state");
 
     // ── Mode ───────────────────────────────────────────────────────────────────
-    case "canvas.mode.set":
+    case "canvas_mode_set":
       return gateway.post("/api/canvas/mode", { mode: args.mode });
 
     // ── Map ────────────────────────────────────────────────────────────────────
-    case "canvas.map.list":
+    case "canvas_map_list":
       return gateway.getPublic("/api/maps");
 
-    case "canvas.map.set":
+    case "canvas_map_set":
       // Implicit: switching map also switches mode to "map" (per §10 in DESIGN_PHASE3.md).
       return gateway.post("/api/canvas/template", {
         templateId: `map-${args.mapId}`,
@@ -58,7 +58,7 @@ export async function handleTool(
       });
 
     // ── Pins ───────────────────────────────────────────────────────────────────
-    case "canvas.pin.add":
+    case "canvas_pin_add":
       return gateway.post("/api/canvas/pins", {
         pinType: args.pinType ?? "marker",
         lat: args.lat,
@@ -69,16 +69,16 @@ export async function handleTool(
         createdBy: "agent",
       });
 
-    case "canvas.pin.update": {
+    case "canvas_pin_update": {
       const { id, ...partial } = args;
       return gateway.patch(`/api/canvas/pins/${id}`, partial);
     }
 
-    case "canvas.pin.delete":
+    case "canvas_pin_delete":
       return gateway.del(`/api/canvas/pins/${args.id}`);
 
     // ── Events ─────────────────────────────────────────────────────────────────
-    case "canvas.event.add":
+    case "canvas_event_add":
       return gateway.post("/api/canvas/events", {
         title: args.title,
         start: args.start,
@@ -94,16 +94,16 @@ export async function handleTool(
         createdBy: "agent",
       });
 
-    case "canvas.event.update": {
+    case "canvas_event_update": {
       const { id, ...partial } = args;
       return gateway.patch(`/api/canvas/events/${id}`, partial);
     }
 
-    case "canvas.event.delete":
+    case "canvas_event_delete":
       return gateway.del(`/api/canvas/events/${args.id}`);
 
     // ── Notes ──────────────────────────────────────────────────────────────────
-    case "canvas.note.add":
+    case "canvas_note_add":
       return gateway.post("/api/canvas/notes", {
         body: args.body,
         imageRefs: args.imageRefs ?? [],
@@ -112,16 +112,16 @@ export async function handleTool(
         createdBy: "agent",
       });
 
-    case "canvas.note.update": {
+    case "canvas_note_update": {
       const { id, ...partial } = args;
       return gateway.patch(`/api/canvas/notes/${id}`, partial);
     }
 
-    case "canvas.note.delete":
+    case "canvas_note_delete":
       return gateway.del(`/api/canvas/notes/${args.id}`);
 
     // ── Roadmap items ──────────────────────────────────────────────────────────
-    case "canvas.roadmap_item.add":
+    case "canvas_roadmap_item_add":
       return gateway.post("/api/canvas/roadmap-items", {
         parentId: args.parentId,
         title: args.title,
@@ -132,16 +132,16 @@ export async function handleTool(
         createdBy: "agent",
       });
 
-    case "canvas.roadmap_item.update": {
+    case "canvas_roadmap_item_update": {
       const { id, ...partial } = args;
       return gateway.patch(`/api/canvas/roadmap-items/${id}`, partial);
     }
 
-    case "canvas.roadmap_item.delete":
+    case "canvas_roadmap_item_delete":
       return gateway.del(`/api/canvas/roadmap-items/${args.id}`);
 
     // ── Sheets ─────────────────────────────────────────────────────────────────
-    case "canvas.sheet.add":
+    case "canvas_sheet_add":
       return gateway.post("/api/canvas/sheets", {
         name: args.name,
         columns: args.columns,
@@ -149,30 +149,30 @@ export async function handleTool(
         createdBy: "agent",
       });
 
-    case "canvas.sheet.update": {
+    case "canvas_sheet_update": {
       const { id, ...partial } = args;
       return gateway.patch(`/api/canvas/sheets/${id}`, partial);
     }
 
-    case "canvas.sheet.delete":
+    case "canvas_sheet_delete":
       return gateway.del(`/api/canvas/sheets/${args.id}`);
 
-    case "canvas.sheet.column.add":
+    case "canvas_sheet_column_add":
       return gateway.post(`/api/canvas/sheets/${args.sheetId}/columns`, {
         name: args.name,
         type: args.type,
         sortOrder: args.sortOrder ?? 0,
       });
 
-    case "canvas.sheet.column.update": {
+    case "canvas_sheet_column_update": {
       const { sheetId, columnId, ...partial } = args;
       return gateway.patch(`/api/canvas/sheets/${sheetId}/columns/${columnId}`, partial);
     }
 
-    case "canvas.sheet.column.delete":
+    case "canvas_sheet_column_delete":
       return gateway.del(`/api/canvas/sheets/${args.sheetId}/columns/${args.columnId}`);
 
-    case "canvas.sheet.row.add":
+    case "canvas_sheet_row_add":
       return gateway.post("/api/canvas/sheet-rows", {
         sheetId: args.sheetId,
         data: args.data ?? {},
@@ -180,16 +180,16 @@ export async function handleTool(
         createdBy: "agent",
       });
 
-    case "canvas.sheet.row.update": {
+    case "canvas_sheet_row_update": {
       const { id, ...partial } = args;
       return gateway.patch(`/api/canvas/sheet-rows/${id}`, partial);
     }
 
-    case "canvas.sheet.row.delete":
+    case "canvas_sheet_row_delete":
       return gateway.del(`/api/canvas/sheet-rows/${args.id}`);
 
     // ── Charts ─────────────────────────────────────────────────────────────────
-    case "canvas.chart.add":
+    case "canvas_chart_add":
       return gateway.post("/api/canvas/charts", {
         name: args.name,
         sheetId: args.sheetId,
@@ -200,19 +200,19 @@ export async function handleTool(
         createdBy: "agent",
       });
 
-    case "canvas.chart.update": {
+    case "canvas_chart_update": {
       const { id, ...partial } = args;
       return gateway.patch(`/api/canvas/charts/${id}`, partial);
     }
 
-    case "canvas.chart.delete":
+    case "canvas_chart_delete":
       return gateway.del(`/api/canvas/charts/${args.id}`);
 
     // ── Forms (direct-input layer) ───────────────────────────────────────────────
-    case "canvas.form.scaffold":
+    case "canvas_form_scaffold":
       return gateway.post("/api/canvas/forms/scaffold", { sheet: args.sheet });
 
-    case "canvas.form.define":
+    case "canvas_form_define":
       return gateway.post("/api/canvas/forms", {
         name: args.name,
         description: args.description,
@@ -220,25 +220,25 @@ export async function handleTool(
         writes: args.writes,
       });
 
-    case "canvas.form.update": {
+    case "canvas_form_update": {
       const { id, ...intent } = args;
       return gateway.patch(`/api/canvas/forms/${id}`, intent);
     }
 
-    case "canvas.form.delete":
+    case "canvas_form_delete":
       return gateway.del(`/api/canvas/forms/${args.id}`);
 
     // ── Pending edits ──────────────────────────────────────────────────────────
-    case "canvas.pending_edits.read":
+    case "canvas_pending_edits_read":
       return gateway.get("/api/canvas/state").then((s: any) => ({
         pendingEdits: s.pendingEdits,
       }));
 
-    case "canvas.pending_edits.complete":
+    case "canvas_pending_edits_complete":
       return gateway.del(`/api/canvas/pending-edits/${args.editId}`);
 
     // ── Agents (v1 identity / provenance) ───────────────────────────────────────
-    case "agent.register": {
+    case "agent_register": {
       const res = (await gateway.post("/api/canvas/agents", {
         name: args.name,
         role: args.role,
@@ -249,7 +249,7 @@ export async function handleTool(
     }
 
     // ── Actions (v1 execution primitive) ────────────────────────────────────────
-    case "canvas.action.propose":
+    case "canvas_action_propose":
       return gateway.post("/api/canvas/actions", {
         type: args.type ?? "navigate",
         payload: args.payload ?? {},
@@ -257,25 +257,25 @@ export async function handleTool(
         linkedPinIds: args.linkedPinIds,
       });
 
-    case "canvas.action.list": {
+    case "canvas_action_list": {
       const qs = args.state ? `?state=${encodeURIComponent(String(args.state))}` : "";
       return gateway.get(`/api/canvas/actions${qs}`);
     }
 
-    case "canvas.action.read":
+    case "canvas_action_read":
       return gateway.get(`/api/canvas/actions/${args.id}`);
 
-    case "canvas.action.approve":
+    case "canvas_action_approve":
       return gateway.post(`/api/canvas/actions/${args.id}/approve`, {
         approvedBy: gateway.getSession().agentId,
       });
 
-    case "canvas.action.reject":
+    case "canvas_action_reject":
       return gateway.post(`/api/canvas/actions/${args.id}/reject`, {
         reason: args.reason,
       });
 
-    case "canvas.action.update_state":
+    case "canvas_action_update_state":
       return gateway.patch(`/api/canvas/actions/${args.id}`, {
         state: args.state,
         result: args.result,
@@ -290,10 +290,10 @@ export async function handleTool(
 
 export const TOOLS = [
   {
-    name: "canvas.connect",
+    name: "canvas_connect",
     description:
       "Bind this MCP session to a canvas. MUST be called before any other canvas.* tool " +
-      "(unless you call canvas.create, which connects automatically). Takes a canvas code " +
+      "(unless you call canvas_create, which connects automatically). Takes a canvas code " +
       "(e.g. 'TOKYO7X3K'). Exchanges it for a JWT held in this gateway process; from then on, " +
       "every other tool operates on that canvas with no ID needed. Returns the shareable web " +
       "`url`. May be called again to switch the session to a different canvas.",
@@ -304,7 +304,7 @@ export const TOOLS = [
     },
   },
   {
-    name: "canvas.create",
+    name: "canvas_create",
     description:
       "Create a NEW canvas and bind this session to it in one step — no human needs to make " +
       "one in the browser first. Use this to start fresh (e.g. the user says 'put a plan on a " +
@@ -322,15 +322,15 @@ export const TOOLS = [
     },
   },
   {
-    name: "canvas.state.read",
+    name: "canvas_state_read",
     description:
       "Read the active canvas state. Call this at the start of every canvas-related turn. " +
       "Returns activeCanvasName, activeCanvasId, state (pins/events/notes), and pendingEdits. " +
-      "Requires canvas.connect to have been called first.",
+      "Requires canvas_connect to have been called first.",
     inputSchema: { type: "object" as const, properties: {} },
   },
   {
-    name: "canvas.mode.set",
+    name: "canvas_mode_set",
     description:
       "Set the canvas display mode. 'welcome' returns to the template picker; " +
       "'map', 'itinerary', and 'docs' switch the active view.",
@@ -341,25 +341,25 @@ export const TOOLS = [
     },
   },
   {
-    name: "canvas.map.list",
+    name: "canvas_map_list",
     description:
       "List the available base map presets (world, us, tokyo, japan, etc). " +
-      "Use the returned ids with canvas.map.set.",
+      "Use the returned ids with canvas_map_set.",
     inputSchema: { type: "object" as const, properties: {} },
   },
   {
-    name: "canvas.map.set",
+    name: "canvas_map_set",
     description:
       "Switch the base map to a registered preset (e.g. 'world', 'us', 'tokyo'). " +
-      "Also switches the canvas into map mode. Call canvas.map.list to enumerate options.",
+      "Also switches the canvas into map mode. Call canvas_map_list to enumerate options.",
     inputSchema: {
       type: "object" as const,
-      properties: { mapId: { type: "string", description: "Preset id from canvas.map.list" } },
+      properties: { mapId: { type: "string", description: "Preset id from canvas_map_list" } },
       required: ["mapId"],
     },
   },
   {
-    name: "canvas.pin.add",
+    name: "canvas_pin_add",
     description: "Add a location pin to the canvas map.",
     inputSchema: {
       type: "object" as const,
@@ -375,7 +375,7 @@ export const TOOLS = [
     },
   },
   {
-    name: "canvas.pin.update",
+    name: "canvas_pin_update",
     description: "Update an existing pin by its ID.",
     inputSchema: {
       type: "object" as const,
@@ -392,12 +392,12 @@ export const TOOLS = [
     },
   },
   {
-    name: "canvas.pin.delete",
+    name: "canvas_pin_delete",
     description: "Delete a pin by its ID.",
     inputSchema: { type: "object" as const, properties: { id: { type: "string" } }, required: ["id"] },
   },
   {
-    name: "canvas.event.add",
+    name: "canvas_event_add",
     description:
       "Add a timed itinerary entry. Three flavors:\n" +
       "  • Single-stop entry: set pinIds to one pin id (or use pinId).\n" +
@@ -471,7 +471,7 @@ export const TOOLS = [
     },
   },
   {
-    name: "canvas.event.update",
+    name: "canvas_event_update",
     description:
       "Update an existing entry by its ID. Set pinIds to change which pins it " +
       "covers (replaces the whole list; pass [] to clear). To convert an entry " +
@@ -518,12 +518,12 @@ export const TOOLS = [
     },
   },
   {
-    name: "canvas.event.delete",
+    name: "canvas_event_delete",
     description: "Delete an event by its ID.",
     inputSchema: { type: "object" as const, properties: { id: { type: "string" } }, required: ["id"] },
   },
   {
-    name: "canvas.note.add",
+    name: "canvas_note_add",
     description: "Add a markdown note. Attach to a Pin or Event via parentId + parentKind.",
     inputSchema: {
       type: "object" as const,
@@ -537,7 +537,7 @@ export const TOOLS = [
     },
   },
   {
-    name: "canvas.note.update",
+    name: "canvas_note_update",
     description: "Update an existing note by its ID.",
     inputSchema: {
       type: "object" as const,
@@ -552,12 +552,12 @@ export const TOOLS = [
     },
   },
   {
-    name: "canvas.note.delete",
+    name: "canvas_note_delete",
     description: "Delete a note by its ID.",
     inputSchema: { type: "object" as const, properties: { id: { type: "string" } }, required: ["id"] },
   },
   {
-    name: "canvas.roadmap_item.add",
+    name: "canvas_roadmap_item_add",
     description:
       "Add a roadmap item (goal / sub-goal / task) to the planning outline. " +
       "Pass parentId to nest under another item, or omit for a top-level entry. " +
@@ -584,7 +584,7 @@ export const TOOLS = [
     },
   },
   {
-    name: "canvas.roadmap_item.update",
+    name: "canvas_roadmap_item_update",
     description:
       "Update a roadmap item by its ID. Set stage to move a top-level goal " +
       "between phase bands ('' clears the phase / unstages it).",
@@ -607,12 +607,12 @@ export const TOOLS = [
     },
   },
   {
-    name: "canvas.roadmap_item.delete",
+    name: "canvas_roadmap_item_delete",
     description: "Delete a roadmap item by its ID. Children are deleted via cascade.",
     inputSchema: { type: "object" as const, properties: { id: { type: "string" } }, required: ["id"] },
   },
   {
-    name: "canvas.sheet.add",
+    name: "canvas_sheet_add",
     description:
       "Create a new sheet (spreadsheet) on the canvas. A canvas can have multiple sheets — " +
       "they appear as tabs at the top of the sheets view. Pass `columns` to seed the schema " +
@@ -640,7 +640,7 @@ export const TOOLS = [
     },
   },
   {
-    name: "canvas.sheet.update",
+    name: "canvas_sheet_update",
     description: "Rename or reorder a sheet.",
     inputSchema: {
       type: "object" as const,
@@ -653,12 +653,12 @@ export const TOOLS = [
     },
   },
   {
-    name: "canvas.sheet.delete",
+    name: "canvas_sheet_delete",
     description: "Delete a sheet and all its rows.",
     inputSchema: { type: "object" as const, properties: { id: { type: "string" } }, required: ["id"] },
   },
   {
-    name: "canvas.sheet.column.add",
+    name: "canvas_sheet_column_add",
     description:
       "Add a column to an existing sheet. Column types: text | number | date | checkbox. " +
       "Dates are ISO-8601 'YYYY-MM-DD' strings.",
@@ -674,7 +674,7 @@ export const TOOLS = [
     },
   },
   {
-    name: "canvas.sheet.column.update",
+    name: "canvas_sheet_column_update",
     description: "Rename a column, change its type, or reorder it within the sheet.",
     inputSchema: {
       type: "object" as const,
@@ -689,7 +689,7 @@ export const TOOLS = [
     },
   },
   {
-    name: "canvas.sheet.column.delete",
+    name: "canvas_sheet_column_delete",
     description:
       "Delete a column from a sheet. Also strips that column's data from every row " +
       "(non-reversible — the cell values are gone).",
@@ -703,7 +703,7 @@ export const TOOLS = [
     },
   },
   {
-    name: "canvas.sheet.row.add",
+    name: "canvas_sheet_row_add",
     description:
       "Add a row to a sheet. `data` is an object of cell values keyed by either the " +
       "column NAME (e.g. \"Task\", case-insensitive) or the column.id — names are " +
@@ -720,7 +720,7 @@ export const TOOLS = [
     },
   },
   {
-    name: "canvas.sheet.row.update",
+    name: "canvas_sheet_row_update",
     description:
       "Update a row by ID. `data` is merged into the existing row data — keys not present " +
       "are left untouched; setting a key to null clears that cell. Cells may be keyed by " +
@@ -736,12 +736,12 @@ export const TOOLS = [
     },
   },
   {
-    name: "canvas.sheet.row.delete",
+    name: "canvas_sheet_row_delete",
     description: "Delete a sheet row by its ID.",
     inputSchema: { type: "object" as const, properties: { id: { type: "string" } }, required: ["id"] },
   },
   {
-    name: "canvas.chart.add",
+    name: "canvas_chart_add",
     description:
       "Add a chart that visualizes data from a sheet. Pick a source `sheetId`, a " +
       "`chartType` (bar | line | area | pie), an `xColumn` for category/x-axis labels, " +
@@ -767,7 +767,7 @@ export const TOOLS = [
     },
   },
   {
-    name: "canvas.chart.update",
+    name: "canvas_chart_update",
     description:
       "Update a chart by ID. Any of name, sheetId, chartType, xColumn, yColumns, sortOrder " +
       "may be set. Column refs (xColumn / yColumns) may be names or ids; resolved server-side.",
@@ -786,18 +786,18 @@ export const TOOLS = [
     },
   },
   {
-    name: "canvas.chart.delete",
+    name: "canvas_chart_delete",
     description: "Delete a chart by its ID.",
     inputSchema: { type: "object" as const, properties: { id: { type: "string" } }, required: ["id"] },
   },
   {
-    name: "canvas.form.scaffold",
+    name: "canvas_form_scaffold",
     description:
       "Draft a form from an existing sheet — the easy on-ramp to the direct-input layer. " +
       "Returns a DRAFT intent (one field + one append binding per column) plus a compile " +
       "report. Stores NOTHING. Edit the returned intent (rename, mark fields required, swap " +
-      "a field for {computed:'today'}, add upsert/pin writes) then call canvas.form.define. " +
-      "Needs the sheet to exist first (create it with canvas.sheet.add if needed).",
+      "a field for {computed:'today'}, add upsert/pin writes) then call canvas_form_define. " +
+      "Needs the sheet to exist first (create it with canvas_sheet_add if needed).",
     inputSchema: {
       type: "object" as const,
       properties: { sheet: { type: "string", description: "Name of an existing sheet." } },
@@ -805,7 +805,7 @@ export const TOOLS = [
     },
   },
   {
-    name: "canvas.form.define",
+    name: "canvas_form_define",
     description:
       "Define a form: a recipe a human fills from a phone to mutate the canvas directly — " +
       "no agent in the submit loop. You express INTENT (fields + where they go); the server " +
@@ -852,9 +852,9 @@ export const TOOLS = [
     },
   },
   {
-    name: "canvas.form.update",
+    name: "canvas_form_update",
     description:
-      "Redefine an existing form by id from a full intent (same shape as canvas.form.define). " +
+      "Redefine an existing form by id from a full intent (same shape as canvas_form_define). " +
       "Re-compiled and re-validated; on ok:false nothing changes.",
     inputSchema: {
       type: "object" as const,
@@ -869,17 +869,17 @@ export const TOOLS = [
     },
   },
   {
-    name: "canvas.form.delete",
+    name: "canvas_form_delete",
     description: "Delete a form by its ID. (Rows/pins it already produced are unaffected.)",
     inputSchema: { type: "object" as const, properties: { id: { type: "string" } }, required: ["id"] },
   },
   {
-    name: "canvas.pending_edits.read",
+    name: "canvas_pending_edits_read",
     description: "Read pending scoped edit requests from the browser UI.",
     inputSchema: { type: "object" as const, properties: {} },
   },
   {
-    name: "canvas.pending_edits.complete",
+    name: "canvas_pending_edits_complete",
     description: "Mark a pending edit as done after applying it.",
     inputSchema: {
       type: "object" as const,
@@ -888,7 +888,7 @@ export const TOOLS = [
     },
   },
   {
-    name: "agent.register",
+    name: "agent_register",
     description:
       "Identify this agent to the canvas on connect. Returns an agentId that is " +
       "recorded as the author (provenance) of actions this session proposes. v1 " +
@@ -904,7 +904,7 @@ export const TOOLS = [
     },
   },
   {
-    name: "canvas.action.propose",
+    name: "canvas_action_propose",
     description:
       "Propose an action for human approval (the v1 execution primitive). The action " +
       "enters state 'proposed' and does NOT execute until a human approves it. v1 " +
@@ -928,7 +928,7 @@ export const TOOLS = [
     },
   },
   {
-    name: "canvas.action.list",
+    name: "canvas_action_list",
     description:
       "List actions on the canvas, optionally filtered by state. The executor polls " +
       "this with state='approved' to pick up work the human has approved.",
@@ -943,7 +943,7 @@ export const TOOLS = [
     },
   },
   {
-    name: "canvas.action.read",
+    name: "canvas_action_read",
     description: "Read a single action by id (poll for state changes / outcome).",
     inputSchema: {
       type: "object" as const,
@@ -952,7 +952,7 @@ export const TOOLS = [
     },
   },
   {
-    name: "canvas.action.approve",
+    name: "canvas_action_approve",
     description:
       "Approve a proposed action (proposed → approved). Primarily a human action in " +
       "the browser; exposed here for testing. Only then may the executor run it.",
@@ -963,7 +963,7 @@ export const TOOLS = [
     },
   },
   {
-    name: "canvas.action.reject",
+    name: "canvas_action_reject",
     description: "Reject a proposed action (proposed → rejected), with an optional reason.",
     inputSchema: {
       type: "object" as const,
@@ -975,7 +975,7 @@ export const TOOLS = [
     },
   },
   {
-    name: "canvas.action.update_state",
+    name: "canvas_action_update_state",
     description:
       "Executor-only: advance an approved action through execution. Legal targets: " +
       "'executing' (approved → executing), 'done' / 'failed' (executing → …). Set " +

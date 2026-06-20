@@ -6,7 +6,7 @@ This is a standard [Model Context Protocol](https://modelcontextprotocol.io) std
 
 ## What it does
 
-When you connect, you bind the MCP session to one canvas. From then on, every tool call (`canvas.pin.add`, `canvas.event.add`, `canvas.note.add`, …) operates on that canvas. Writes are broadcast over WebSocket to every browser and every other agent subscribed to the same canvas code.
+When you connect, you bind the MCP session to one canvas. From then on, every tool call (`canvas_pin_add`, `canvas_event_add`, `canvas_note_add`, …) operates on that canvas. Writes are broadcast over WebSocket to every browser and every other agent subscribed to the same canvas code.
 
 ## Install
 
@@ -55,32 +55,32 @@ pnpm --filter @jaximus/tandem-mcp build
 
 | Tool                              | Purpose                                                         |
 | --------------------------------- | --------------------------------------------------------------- |
-| `canvas.connect`                  | Bind the session to a canvas by 8-char code. Required first.    |
-| `canvas.state.read`               | Snapshot of pins, events, notes, mode, and pending edits.       |
-| `canvas.mode.set`                 | Switch view: `welcome` / `map` / `itinerary` / `docs`.          |
-| `canvas.map.list`                 | List base-map presets.                                          |
-| `canvas.map.set`                  | Pick a base map. Also switches into map mode.                   |
-| `canvas.pin.{add,update,delete}`  | Manage location pins.                                           |
-| `canvas.event.{add,update,delete}`| Manage timed events. Optionally link to a pin.                  |
-| `canvas.note.{add,update,delete}` | Manage markdown notes. Optionally attach to a pin or event.     |
-| `canvas.pending_edits.read`       | Read scoped edit requests posted from the browser.              |
-| `canvas.pending_edits.complete`   | Mark a scoped edit as done.                                     |
+| `canvas_connect`                  | Bind the session to a canvas by 8-char code. Required first.    |
+| `canvas_state_read`               | Snapshot of pins, events, notes, mode, and pending edits.       |
+| `canvas_mode_set`                 | Switch view: `welcome` / `map` / `itinerary` / `docs`.          |
+| `canvas_map_list`                 | List base-map presets.                                          |
+| `canvas_map_set`                  | Pick a base map. Also switches into map mode.                   |
+| `canvas_pin_{add,update,delete}`  | Manage location pins.                                           |
+| `canvas_event_{add,update,delete}`| Manage timed events. Optionally link to a pin.                  |
+| `canvas_note_{add,update,delete}` | Manage markdown notes. Optionally attach to a pin or event.     |
+| `canvas_pending_edits_read`       | Read scoped edit requests posted from the browser.              |
+| `canvas_pending_edits_complete`   | Mark a scoped edit as done.                                     |
 
 Full schemas are returned by the MCP `tools/list` request, or visible in [`src/tools.ts`](https://github.com/jaximus808/tandam/blob/main/apps/mcp-gateway/src/tools.ts).
 
 ## Example session
 
 ```text
-agent: canvas.connect { "code": "TOKYO7X3K" }
+agent: canvas_connect { "code": "TOKYO7X3K" }
   → { connected: true, canvasName: "Tokyo trip" }
 
-agent: canvas.pin.add {
+agent: canvas_pin_add {
   pinType: "marker", lat: 35.66, lng: 139.7,
   label: "Shibuya Crossing", body: "Best at sunset."
 }
   → { id: "pin_abc123", ... }
 
-agent: canvas.event.add {
+agent: canvas_event_add {
   title: "Shibuya at sunset", start: "2026-06-04T18:00:00",
   pinId: "pin_abc123"
 }
@@ -93,8 +93,8 @@ The user sees the pin drop and the event appear on their itinerary in real time,
 Multiple agents can connect to the same canvas at the same time. A common pattern:
 
 1. **Scout agent** — searches the web, drops candidate pins.
-2. **Planner agent** — reads `canvas.state.read`, emits day-by-day events linked to pins.
-3. **Reporter agent** — walks final state, writes a markdown summary via `canvas.note.add`.
+2. **Planner agent** — reads `canvas_state_read`, emits day-by-day events linked to pins.
+3. **Reporter agent** — walks final state, writes a markdown summary via `canvas_note_add`.
 
 The canvas is the shared blackboard. Hand-offs happen through canvas state, not a shared prompt — so you can mix vendors (Claude, GPT, local) without rewriting the orchestration.
 

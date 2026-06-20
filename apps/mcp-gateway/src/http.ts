@@ -12,7 +12,7 @@
  * Multi-tenancy: one process serves every client, so each MCP session gets its
  * own Gateway (its own canvas binding / JWT), keyed by the transport's
  * mcp-session-id. The canvas binding is still established at runtime via the
- * `canvas.connect` tool — there is no shared/global canvas.
+ * `canvas_connect` tool — there is no shared/global canvas.
  */
 
 import { randomUUID } from "node:crypto";
@@ -34,7 +34,7 @@ interface Session {
 }
 
 // sessionId -> live session. In-memory: a restart drops bindings and clients
-// transparently re-initialize (and re-`canvas.connect`). Fine for beta.
+// transparently re-initialize (and re-`canvas_connect`). Fine for beta.
 const sessions = new Map<string, Session>();
 
 /** Read and JSON-parse a request body. Returns undefined for an empty body. */
