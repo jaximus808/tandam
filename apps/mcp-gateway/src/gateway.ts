@@ -8,7 +8,13 @@
  */
 
 export interface GatewayConfig {
+  // Base URL the gateway makes API calls against. For the hosted HTTP sidecar
+  // this is the internal docker address (http://tandem:7891).
   apiUrl: string;
+  // Public, user-facing base URL used to build shareable canvas / claim links.
+  // Distinct from apiUrl because the sidecar talks to the API over the internal
+  // network but must hand users the public domain. Defaults to apiUrl.
+  webUrl?: string;
 }
 
 export interface CanvasSession {
@@ -95,9 +101,14 @@ export class Gateway {
     return session;
   }
 
-  /** The shareable web URL for a canvas code (same origin as the API). */
+  /** The shareable web URL for a canvas code (public origin, not the API host). */
   canvasUrl(code: string): string {
-    return `${this.config.apiUrl}/c/${code}`;
+    return `${this.webUrl()}/c/${code}`;
+  }
+
+  /** Public origin for user-facing links; falls back to the API base. */
+  private webUrl(): string {
+    return (this.config.webUrl ?? this.config.apiUrl).replace(/\/$/, "");
   }
 
   /**
@@ -106,7 +117,7 @@ export class Gateway {
    * the intended human — never use it as the share link.
    */
   canvasClaimUrl(code: string, claimToken: string): string {
-    return `${this.config.apiUrl}/c/${code}?claim=${encodeURIComponent(claimToken)}`;
+    return `${this.webUrl()}/c/${code}?claim=${encodeURIComponent(claimToken)}`;
   }
 
   isConnected(): boolean {

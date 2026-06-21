@@ -20,9 +20,12 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { Gateway } from "./gateway.js";
-import { createTandemServer, VERSION, DEFAULT_API_URL } from "./server.js";
+import { createTandemServer, VERSION, DEFAULT_API_URL, DEFAULT_WEB_URL } from "./server.js";
 
 const API_URL = (process.env.API_URL ?? DEFAULT_API_URL).replace(/\/$/, "");
+// User-facing share/claim links must use the public domain, NOT the internal
+// API_URL (http://tandem:7891) this sidecar talks to over the docker network.
+const WEB_URL = (process.env.PUBLIC_URL ?? DEFAULT_WEB_URL).replace(/\/$/, "");
 const PORT = Number(process.env.PORT ?? 8970);
 // The single MCP endpoint path. Must match the Caddy route and the URL users
 // paste into their MCP client (https://tandemcanvas.com/api/mcp).
@@ -103,7 +106,7 @@ async function handleMcp(req: IncomingMessage, res: ServerResponse): Promise<voi
   }
 
   // Fresh session: its own Gateway (canvas binding lives here) + Server.
-  const gateway = new Gateway({ apiUrl: API_URL });
+  const gateway = new Gateway({ apiUrl: API_URL, webUrl: WEB_URL });
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: (newId) => {

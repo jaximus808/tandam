@@ -56,8 +56,12 @@ if (cliArgs.includes("--help") || cliArgs.includes("-h")) {
 
 const apiUrlFromEnv = process.env.API_URL;
 const API_URL = (apiUrlFromEnv ?? DEFAULT_API_URL).replace(/\/$/, "");
+// Public origin for share/claim links. Defaults to the API base, which is
+// correct for the common stdio case (API_URL = public domain) and for local
+// dev (links point at the same local instance the canvas lives in).
+const WEB_URL = (process.env.PUBLIC_URL ?? API_URL).replace(/\/$/, "");
 
-const gateway = new Gateway({ apiUrl: API_URL });
+const gateway = new Gateway({ apiUrl: API_URL, webUrl: WEB_URL });
 
 async function main() {
   const server = createTandemServer(gateway, VERSION);

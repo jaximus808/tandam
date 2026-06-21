@@ -274,3 +274,66 @@
   .tandem-blob,
   .tandem-grid-pan { animation: none; }
 }
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Live agent presence: the "reading" scan, the op-feed toasts, the bell ring.
+   Terracotta is the agent's signature, so these all glow in it.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/* A light sheen sweeping across an agent avatar while it reads the canvas. */
+@keyframes tandem-scan {
+  0%   { transform: translateX(-120%); }
+  100% { transform: translateX(120%); }
+}
+.tandem-scan {
+  background: linear-gradient(
+    100deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.55) 50%,
+    transparent 100%
+  );
+  animation: tandem-scan 1.1s ease-in-out infinite;
+}
+
+/* The little three-bar "scanning equaliser" in the reading chip. */
+@keyframes tandem-read-bar {
+  0%, 100% { transform: scaleY(0.4); opacity: 0.55; }
+  50%      { transform: scaleY(1);   opacity: 1; }
+}
+.tandem-read-bar {
+  transform-origin: bottom;
+  animation: tandem-read-bar 0.9s ease-in-out infinite;
+}
+
+/* Toast pops in from the right, settling with a slight overshoot. */
+@keyframes tandem-toast-in {
+  0%   { opacity: 0; transform: translateX(16px) scale(0.97); }
+  100% { opacity: 1; transform: translateX(0) scale(1); }
+}
+.tandem-toast-in { animation: tandem-toast-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+/* The drain bar shrinks across the toast's lifetime (~2.6s). */
+@keyframes tandem-toast-bar {
+  from { width: 100%; }
+  to   { width: 0%; }
+}
+.tandem-toast-bar { animation: tandem-toast-bar 2.6s linear both; }
+
+/* A quick swing of the bell when fresh activity lands. */
+@keyframes tandem-bell-ring {
+  0%   { transform: rotate(0); }
+  20%  { transform: rotate(16deg); }
+  40%  { transform: rotate(-13deg); }
+  60%  { transform: rotate(8deg); }
+  80%  { transform: rotate(-5deg); }
+  100% { transform: rotate(0); }
+}
+.tandem-bell-ring { animation: tandem-bell-ring 0.7s ease-in-out both; transform-origin: 50% 18%; }
+
+@media (prefers-reduced-motion: reduce) {
+  .tandem-scan,
+  .tandem-read-bar,
+  .tandem-toast-in,
+  .tandem-toast-bar,
+  .tandem-bell-ring { animation: none; }
+}

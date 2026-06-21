@@ -45,6 +45,9 @@ services:
     environment:
       # Internal docker DNS: the Go API service is `tandem` on port 7891.
       API_URL: "http://tandem:7891"
+      # Public origin for share/claim links handed to users — must be the public
+      # domain, NOT the internal API_URL above.
+      PUBLIC_URL: "https://tandemcanvas.com"
       PORT: "8970"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8970/healthz"]

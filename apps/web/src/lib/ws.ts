@@ -28,6 +28,20 @@ export function onStateUpdate(fn: StateHandler): () => void {
   };
 }
 
+// Stateless agent-presence pulses (e.g. "an agent just read the canvas"),
+// separate from the heavyweight state stream so the UI can animate live
+// activity without a full re-render. Not wired through the mock backend.
+export type AgentActivity = { action: "read" };
+type ActivityHandler = (a: AgentActivity) => void;
+let activityHandlers: ActivityHandler[] = [];
+
+export function onAgentActivity(fn: ActivityHandler): () => void {
+  activityHandlers.push(fn);
+  return () => {
+    activityHandlers = activityHandlers.filter((h) => h !== fn);
+  };
+}
+
 // detachSocket strips every callback off the given socket and (best-effort)
 // closes it. Critical for navigation correctness: without it, an old socket's
 // onerror/onclose closures still reference the module-level `socket`, so a
@@ -105,6 +119,8 @@ function connect(code: string) {
             msg.lastChangeBy as ChangeActor | undefined
           )
         );
+      } else if (msg.type === "activity") {
+        activityHandlers.forEach((h) => h({ action: msg.action as "read" }));
       }
     } catch {
       // ignore malformed messages

@@ -198,6 +198,10 @@ func (h *Handler) GetState(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// This endpoint is the agent/gateway read path (the web client never calls
+	// it — it lives off the WS state stream). So a hit here means an agent just
+	// read the canvas; pulse that to viewers as live "reading" presence.
+	broadcastActivity(h.hub, canvasID, "read")
 	writeJSON(w, http.StatusOK, stateMsg{
 		Type:         "state",
 		Canvas:       canvas,

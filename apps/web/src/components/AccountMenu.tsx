@@ -6,7 +6,16 @@ import SignInModal from "./SignInModal";
 // "Sign in" button that opens SignInModal when signed out. Renders nothing if
 // sign-in isn't configured (no VITE_GOOGLE_CLIENT_ID) so the header degrades
 // cleanly.
-export default function AccountMenu({ onShowCanvases }: { onShowCanvases?: () => void } = {}) {
+export default function AccountMenu({
+  onShowCanvases,
+  onUserChange,
+}: {
+  onShowCanvases?: () => void;
+  // Notified whenever the signed-in user changes (initial load, sign-in,
+  // sign-out) so a parent can keep its own copy of `me` in sync — e.g. App
+  // needs this to auto-claim a canvas the moment a visitor signs in.
+  onUserChange?: (u: User | null) => void;
+} = {}) {
   const [user, setUser] = useState<User | null>(null);
   const [ready, setReady] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -18,6 +27,7 @@ export default function AccountMenu({ onShowCanvases }: { onShowCanvases?: () =>
       if (cancelled) return;
       setUser(u);
       setReady(true);
+      onUserChange?.(u);
     });
     return () => {
       cancelled = true;
@@ -29,6 +39,7 @@ export default function AccountMenu({ onShowCanvases }: { onShowCanvases?: () =>
     window.google?.accounts.id.disableAutoSelect();
     setUser(null);
     setMenuOpen(false);
+    onUserChange?.(null);
   }
 
   if (!GOOGLE_CLIENT_ID) return null;
@@ -49,6 +60,7 @@ export default function AccountMenu({ onShowCanvases }: { onShowCanvases?: () =>
             onSignedIn={(u) => {
               setUser(u);
               setSignInOpen(false);
+              onUserChange?.(u);
             }}
           />
         )}

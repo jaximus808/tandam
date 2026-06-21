@@ -29,6 +29,27 @@ func broadcastState(ctx context.Context, st store.Store, hub *ws.Hub, canvasID u
 	broadcastStateBy(ctx, st, hub, canvasID, "agent")
 }
 
+// activityMsg is a lightweight, stateless signal to viewers — e.g. an agent
+// reading the canvas — so the UI can show live presence (a "reading" pulse)
+// without paying for a full state push. Carries no canvas data.
+type activityMsg struct {
+	Type   string `json:"type"`
+	Action string `json:"action"`
+	Actor  string `json:"actor,omitempty"`
+}
+
+// broadcastActivity fans a stateless activity signal out to a canvas's viewers.
+// Used by read-only paths (GetState) that change nothing but are still worth
+// surfacing as live agent presence.
+func broadcastActivity(hub *ws.Hub, canvasID uuid.UUID, action string) {
+	data, err := json.Marshal(activityMsg{Type: "activity", Action: action, Actor: "agent"})
+	if err != nil {
+		log.Printf("broadcastActivity marshal: %v", err)
+		return
+	}
+	hub.Broadcast(canvasID, data)
+}
+
 func broadcastStateBy(ctx context.Context, st store.Store, hub *ws.Hub, canvasID uuid.UUID, by string) {
 	canvas, state, edits, err := st.GetCanvasState(ctx, canvasID)
 	if err != nil {

@@ -67,6 +67,30 @@ export async function submitForm(
   }
 }
 
+// Take ownership of an unowned (agent-created) canvas using its private claim
+// token. Unlike copyCanvas this transfers THE canvas itself — the same one the
+// agent keeps editing — and the API voids the token on success (single-use).
+// Needs the session cookie (must be signed in).
+export async function claimCanvas(code: string, claimToken: string): Promise<CanvasMeta> {
+  const res = await fetch(`/api/canvases/${code}/claim`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ claimToken }),
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    let msg = detail;
+    try {
+      msg = (JSON.parse(detail) as { error?: string }).error ?? detail;
+    } catch {
+      /* not json */
+    }
+    throw new Error(msg || "Claim failed");
+  }
+  return (await res.json()) as CanvasMeta;
+}
+
 // Deep-copy a canvas into the signed-in user's account; returns the new canvas.
 export async function copyCanvas(code: string): Promise<CanvasMeta> {
   const res = await fetch(`/api/canvases/${code}/copy`, {

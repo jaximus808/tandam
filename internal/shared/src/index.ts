@@ -298,4 +298,7 @@ export type WSClientMessage =
 
 export type WSServerMessage =
   | { type: "state"; canvas: CanvasMeta; canvases: CanvasMeta[]; state: CanvasState; pendingEdits: PendingEdit[] }
+  // A stateless live-presence pulse (e.g. an agent reading the canvas). Carries
+  // no canvas data — purely a signal to animate "the agent is here, looking".
+  | { type: "activity"; action: "read"; actor?: "agent" }
   | { type: "error"; message: string };

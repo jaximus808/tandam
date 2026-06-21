@@ -15,15 +15,18 @@ import MCPSupport from "./pages/MCPSupport";
 import MyCanvases from "./pages/MyCanvases";
 import StatsPage from "./pages/StatsPage";
 import { fetchMe, type User } from "./lib/auth";
-import { copyCanvas } from "./lib/api";
+import { copyCanvas, claimCanvas } from "./lib/api";
 import ConnectModal, { hasDismissedConnect } from "./components/ConnectModal";
 import TandemLogo from "./components/TandemLogo";
 import AccountMenu from "./components/AccountMenu";
 import AgentCursor from "./components/AgentCursor";
 import AgentPresence from "./components/AgentPresence";
+import NotificationBell from "./components/NotificationBell";
+import AgentToasts from "./components/AgentToasts";
 import QuickLog from "./components/QuickLog";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { useAgentActivity } from "./lib/useAgentActivity";
+import { useAgentNotifications } from "./lib/useAgentNotifications";
 import { recordRecent } from "./lib/recentCanvases";
 import { MOCK_ENABLED, mockCanvas } from "./lib/mockFixture";
 import { modeTheme } from "./lib/modeTheme";
@@ -71,6 +74,24 @@ function getCodeFromURL(): string | null {
   return new URLSearchParams(window.location.search).get("code")?.toUpperCase() ?? null;
 }
 
+// The private one-time claim token from an agent-created canvas link
+// (/c/CODE?claim=clm_…). Present → the visitor should take ownership of THIS
+// canvas (not a copy). Read once on load; stripped from the URL after claiming.
+function getClaimTokenFromURL(): string | null {
+  if (MOCK_ENABLED) return null;
+  const t = new URLSearchParams(window.location.search).get("claim");
+  return t && t.trim() ? t.trim() : null;
+}
+
+// Remove the ?claim token from the address bar (keep the canvas path) once it's
+// been used or is no longer needed — it's single-use and shouldn't linger.
+function stripClaimFromURL() {
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has("claim")) return;
+  url.searchParams.delete("claim");
+  window.history.replaceState(null, "", url.pathname + url.search + url.hash);
+}
+
 type Route = "home" | "mcp" | "me" | "stats";
 
 function routeFromPath(): Route {
@@ -111,6 +132,15 @@ export default function App() {
   // shown when this canvas isn't already owned by me.
   const [me, setMe] = useState<User | null>(null);
   const [copying, setCopying] = useState(false);
+  // Pending claim token from a /c/CODE?claim=… link. Held in state (not just the
+  // URL) so it survives the URL being stripped and a later sign-in.
+  const [claimToken, setClaimToken] = useState<string | null>(getClaimTokenFromURL);
+  const [claiming, setClaiming] = useState(false);
+  // Transient "Saved to your account ✓" confirmation after a successful claim.
+  const [claimNotice, setClaimNotice] = useState<string | null>(null);
+  // A given claim token is attempted at most once, even as `canvas` re-renders
+  // from incoming WS updates.
+  const claimAttemptedRef = useRef<string | null>(null);
   // Actor behind the latest state push ("agent" | "user"), read by the activity
   // hook. A ref so it's set synchronously before the re-render it triggers.
   const lastChangeByRef = useRef<ChangeActor | undefined>(undefined);
@@ -231,6 +261,9 @@ export default function App() {
     setCanvasCode(code);
     setCodeInURL(code);
     resetPerCanvasState();
+    // A claim token is scoped to the canvas it arrived with — drop it when the
+    // user navigates elsewhere so it can't be misapplied to another canvas.
+    setClaimToken(null);
   }
 
   function showMyCanvases() {
@@ -252,9 +285,54 @@ export default function App() {
     }
   }
 
+  // Auto-claim: landing on /c/CODE?claim=TOKEN while signed in takes ownership
+  // of THIS canvas in place (the agent keeps editing the very same canvas), and
+  // the API voids the token so the link can't be reused. If the visitor isn't
+  // signed in yet, we wait — signing in updates `me`, which re-runs this.
+  useEffect(() => {
+    if (!claimToken || !me || !canvas || !canvasCode) return;
+    // Already mine (e.g. just claimed, or I created it) — nothing to do but tidy.
+    if (canvas.ownerUserId === me.id) {
+      stripClaimFromURL();
+      setClaimToken(null);
+      return;
+    }
+    if (claimAttemptedRef.current === claimToken) return;
+    claimAttemptedRef.current = claimToken;
+    setClaiming(true);
+    claimCanvas(canvasCode, claimToken)
+      .then((updated) => {
+        // Reflect new ownership immediately so the "Copy to my account" button
+        // disappears; WS updates will keep meta fresh after this.
+        setCanvas((prev) =>
+          prev && prev.code === updated.code ? { ...prev, ...updated } : prev,
+        );
+        stripClaimFromURL();
+        setClaimToken(null);
+        setClaimNotice("Saved to your account");
+        window.setTimeout(() => setClaimNotice(null), 4000);
+      })
+      .catch((err) => {
+        // Don't trap the user: a bad/used token just means no auto-claim — the
+        // "Copy to my account" fallback still works. Log for diagnosis.
+        console.warn("Claim failed:", err instanceof Error ? err.message : err);
+        stripClaimFromURL();
+        setClaimToken(null);
+      })
+      .finally(() => setClaiming(false));
+  }, [claimToken, me, canvas, canvasCode]);
+
   // Live agent presence: detect agent-authored edits and surface a cursor +
   // who's in the room. Safe to call with nulls before a canvas loads.
-  const { edit: agentEdit, agents: agentList } = useAgentActivity(canvas?.id, canvasState, lastChangeByRef);
+  const {
+    edit: agentEdit,
+    agents: agentList,
+    reading: agentReading,
+    lastAction: agentAction,
+  } = useAgentActivity(canvas?.id, canvasState, lastChangeByRef);
+
+  // Notification center: turns agent actions into transient toasts + a bell log.
+  const notify = useAgentNotifications(agentAction);
 
   // Auto-follow: while following, jump the view to wherever the agent acts.
   // (1) An agent edit pulls the follower to that entity's tab — this is the bit
@@ -442,7 +520,9 @@ export default function App() {
   return (
     <ModeNavContext.Provider value={setMode}>
     <div className="flex flex-col h-screen bg-paper font-brand text-gray-900 overflow-hidden">
-      <header className="relative z-30 flex items-center gap-1.5 px-3 py-2.5 bg-paper/85 backdrop-blur border-b border-gray-900/5 shrink-0 sm:gap-2 sm:px-4">
+      {/* z-[80] so the header (and its bell dropdown) sits above the agent
+          cursor overlay (z-[70]); modals are z-[2000] and still cover it. */}
+      <header className="relative z-[80] flex items-center gap-1.5 px-3 py-2.5 bg-paper/85 backdrop-blur border-b border-gray-900/5 shrink-0 sm:gap-2 sm:px-4">
         {/* Accent rule across the top of the chrome — picks up the active mode's
             colour and eases between them as you switch views. */}
         <span
@@ -470,6 +550,17 @@ export default function App() {
             {canvas.code}
           </span>
         </div>
+
+        {/* Agent-activity bell — rings + badges when an agent changes anything,
+            opens the recent-activity log, and toggles the popup alerts. */}
+        <NotificationBell
+          log={notify.log}
+          unread={notify.unread}
+          muted={notify.muted}
+          toggleMute={notify.toggleMute}
+          markRead={notify.markRead}
+          clearLog={notify.clearLog}
+        />
 
         {/* Tab bar — always present once a canvas is loaded. On the template
             homepage (zero tabs) only the "+" shows, so you can create a tab
@@ -615,7 +706,7 @@ export default function App() {
         </>
 
         <div className="ml-auto flex items-center gap-2 shrink-0">
-          <AgentPresence agents={agentList} edit={agentEdit} onJump={setViewMode} />
+          <AgentPresence agents={agentList} edit={agentEdit} reading={agentReading} onJump={setViewMode} />
           <button
             onClick={toggleFollow}
             className={[
@@ -648,15 +739,22 @@ export default function App() {
               {following ? (agentPresent ? "Following" : "Following · waiting") : "Follow agent"}
             </span>
           </button>
-          {me && canvas.ownerUserId !== me.id && (
-            <button
-              onClick={handleCopyToAccount}
-              disabled={copying}
-              className="hidden rounded-md border border-ink/20 px-3 py-1.5 text-sm font-medium text-ink/75 transition-colors hover:border-ink/50 hover:bg-white disabled:opacity-60 sm:inline-block"
-              title="Save a copy of this canvas to your account so it shows up in My canvases on every device"
-            >
-              {copying ? "Copying…" : "Copy to my account"}
-            </button>
+          {claiming ? (
+            <span className="hidden rounded-md border border-ink/20 px-3 py-1.5 text-sm font-medium text-ink/60 sm:inline-block">
+              Saving to your account…
+            </span>
+          ) : (
+            me &&
+            canvas.ownerUserId !== me.id && (
+              <button
+                onClick={handleCopyToAccount}
+                disabled={copying}
+                className="hidden rounded-md border border-ink/20 px-3 py-1.5 text-sm font-medium text-ink/75 transition-colors hover:border-ink/50 hover:bg-white disabled:opacity-60 sm:inline-block"
+                title="Save a copy of this canvas to your account so it shows up in My canvases on every device"
+              >
+                {copying ? "Copying…" : "Copy to my account"}
+              </button>
+            )
           )}
           <button
             onClick={() => setConnectOpen(true)}
@@ -664,9 +762,20 @@ export default function App() {
           >
             Connect
           </button>
-          <AccountMenu onShowCanvases={showMyCanvases} />
+          <AccountMenu onShowCanvases={showMyCanvases} onUserChange={setMe} />
         </div>
       </header>
+
+      {claimNotice && (
+        <div className="pointer-events-none fixed inset-x-0 top-16 z-50 flex justify-center">
+          <div className="pointer-events-auto rounded-full bg-ink px-4 py-2 text-sm font-medium text-paper shadow-lg">
+            {claimNotice} ✓
+          </div>
+        </div>
+      )}
+
+      {/* Live agent op-feed popups. Muting is controlled from the header bell. */}
+      <AgentToasts toasts={notify.toasts} onDismiss={notify.dismissToast} />
 
       <div className="relative flex flex-1 min-h-0">
         <ErrorBoundary resetKey={`${canvas.id}:${effectiveMode}`}>

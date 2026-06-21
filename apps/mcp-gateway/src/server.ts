@@ -26,6 +26,12 @@ export const VERSION = "2.1.0";
 // self-hosted instance (the HTTP sidecar sets this to the in-cluster Go API).
 export const DEFAULT_API_URL = "https://tandemcanvas.com";
 
+// Public origin used to build shareable canvas / claim links handed to users.
+// Override with the PUBLIC_URL env var. The HTTP sidecar must set this (or rely
+// on this default) so links use the public domain rather than the internal
+// API_URL (e.g. http://tandem:7891).
+export const DEFAULT_WEB_URL = "https://tandemcanvas.com";
+
 /**
  * Build an MCP Server bound to `gateway`. One Gateway (and therefore one
  * Server) per session — for stdio that's the whole process; for HTTP it's one
