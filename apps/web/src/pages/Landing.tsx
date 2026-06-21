@@ -1135,9 +1135,9 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
             >
               <button
                 onClick={onOpenMCP}
-                className="inline-flex items-center gap-1.5 font-medium text-agent transition-colors hover:text-ink"
+                className="inline-flex items-center gap-1.5 text-[13.5px] font-semibold text-agent transition-colors hover:text-ink"
               >
-                <Icon name="spark" className="h-3 w-3" />
+                <Icon name="spark" className="h-3.5 w-3.5" />
                 connect an AI agent →
               </button>
               <span>

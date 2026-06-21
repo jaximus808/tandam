@@ -41,13 +41,15 @@ export default function WelcomeMode({ canvasName, onOpenConnect, onApply }: Prop
       />
       <div className="relative mx-auto max-w-4xl space-y-12 px-6 py-14">
         <div className="tandem-mode-enter text-center">
-          <span className="inline-flex items-center gap-2 rounded-md border border-ink/15 bg-white px-3 py-1 font-code text-[10.5px] text-ink/55">
-            <span className="relative flex h-1.5 w-1.5">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-agent opacity-70" />
-              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-agent" />
+          <div>
+            <span className="inline-flex items-center gap-2 rounded-md border border-ink/15 bg-white px-3 py-1 font-code text-[10.5px] text-ink/55">
+              <span className="relative flex h-1.5 w-1.5">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-agent opacity-70" />
+                <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-agent" />
+              </span>
+              blank surface · ready for you and your agents
             </span>
-            blank surface · ready for you and your agents
-          </span>
+          </div>
 
           <div className="mt-9 inline-block">
             <div className="relative text-ink">
