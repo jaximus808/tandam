@@ -727,6 +727,7 @@ export default function App() {
         <ConnectModal
           code={canvas.code}
           version={canvasState.version}
+          agents={agentList}
           onClose={() => setConnectOpen(false)}
           onSwitchCanvas={() => { setConnectOpen(false); handleJoin(""); }}
         />
