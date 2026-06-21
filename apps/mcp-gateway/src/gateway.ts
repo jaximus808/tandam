@@ -150,16 +150,39 @@ export class Gateway {
     }
   }
 
+  /**
+   * Turn a non-2xx response into a thrown error. A 401 means the canvas JWT
+   * expired (or was revoked) mid-session — the agent's token is time-limited.
+   * The agent has no way to know that from a generic "failed: 401", so we make
+   * the message actionable: tell it to re-run `canvas_connect` for a fresh
+   * token and retry. The code is on the session, so name it explicitly.
+   */
+  private async assertOk(method: string, path: string, res: Response): Promise<void> {
+    if (res.ok) return;
+    const body = await res.text();
+    if (res.status === 401) {
+      const code = this.session?.canvasCode;
+      const reconnect = code
+        ? `call \`canvas_connect\` with code "${code}" again`
+        : "call `canvas_connect` with your canvas code again";
+      throw new Error(
+        `Your canvas session token has expired (401). Tokens are time-limited — ` +
+          `${reconnect} to get a fresh token, then retry this operation. (${method} ${path})`
+      );
+    }
+    throw new Error(`${method} ${path} failed: ${res.status} ${body}`);
+  }
+
   async get<T>(path: string): Promise<T> {
     const res = await this.safeFetch(path, { headers: this.authHeaders() });
-    if (!res.ok) throw new Error(`GET ${path} failed: ${res.status} ${await res.text()}`);
+    await this.assertOk("GET", path, res);
     return res.json() as Promise<T>;
   }
 
   /** GET an endpoint that does not require auth (e.g. /api/maps). */
   async getPublic<T>(path: string): Promise<T> {
     const res = await this.safeFetch(path);
-    if (!res.ok) throw new Error(`GET ${path} failed: ${res.status} ${await res.text()}`);
+    await this.assertOk("GET", path, res);
     return res.json() as Promise<T>;
   }
 
@@ -169,7 +192,7 @@ export class Gateway {
       headers: this.authHeaders(),
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
-    if (!res.ok) throw new Error(`POST ${path} failed: ${res.status} ${await res.text()}`);
+    await this.assertOk("POST", path, res);
     return res.json() as Promise<T>;
   }
 
@@ -179,7 +202,7 @@ export class Gateway {
       headers: this.authHeaders(),
       body: JSON.stringify(body),
     });
-    if (!res.ok) throw new Error(`PATCH ${path} failed: ${res.status} ${await res.text()}`);
+    await this.assertOk("PATCH", path, res);
     return res.json() as Promise<T>;
   }
 
@@ -188,7 +211,7 @@ export class Gateway {
       method: "DELETE",
       headers: this.authHeaders(),
     });
-    if (!res.ok) throw new Error(`DELETE ${path} failed: ${res.status} ${await res.text()}`);
+    await this.assertOk("DELETE", path, res);
     return res.json() as Promise<T>;
   }
 }
