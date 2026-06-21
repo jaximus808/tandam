@@ -3,9 +3,19 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
+)
+
+// Claim outcomes. ClaimCanvas distinguishes these so the caller can return the
+// right status (404 vs already-claimed vs bad token) and the web banner can offer
+// "Copy instead" when a canvas is already owned.
+var (
+	ErrCanvasNotFound    = errors.New("canvas not found")
+	ErrAlreadyClaimed    = errors.New("canvas already claimed")
+	ErrInvalidClaimToken = errors.New("invalid claim token")
 )
 
 // ── Domain types ──────────────────────────────────────────────────────────────
@@ -17,9 +27,15 @@ type Canvas struct {
 	Mode        string     `json:"mode"`
 	MapID       *string    `json:"mapId,omitempty"`
 	OwnerUserID *uuid.UUID `json:"ownerUserId,omitempty"`
-	Version     int        `json:"version"`
-	CreatedAt   time.Time  `json:"createdAt"`
-	UpdatedAt   time.Time  `json:"updatedAt"`
+	// ClaimToken is the private "own this canvas" capability for an anonymous
+	// canvas. It is deliberately surfaced ONLY on the create response (so the
+	// creator can hand it to the intended human) and never on any read path —
+	// toCanvas() leaves it empty, so GetCanvasByCode / state / list never leak it.
+	// See migration 0020.
+	ClaimToken string    `json:"claimToken,omitempty"`
+	Version    int       `json:"version"`
+	CreatedAt  time.Time `json:"createdAt"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
 type Pin struct {
@@ -36,8 +52,8 @@ type Pin struct {
 }
 
 type Event struct {
-	ID         uuid.UUID  `json:"id"`
-	Kind       string     `json:"kind"` // always "event"
+	ID         uuid.UUID   `json:"id"`
+	Kind       string      `json:"kind"` // always "event"
 	Title      string      `json:"title"`
 	Start      time.Time   `json:"start"`
 	End        *time.Time  `json:"end,omitempty"`
@@ -45,12 +61,12 @@ type Event struct {
 	PinIDs     []uuid.UUID `json:"pinIds,omitempty"`
 	PinID      *uuid.UUID  `json:"pinId,omitempty"`
 	FromPinID  *uuid.UUID  `json:"fromPinId,omitempty"`
-	ToPinID    *uuid.UUID `json:"toPinId,omitempty"`
-	TravelMode *string    `json:"travelMode,omitempty"`
-	DayTag     *string    `json:"dayTag,omitempty"`
-	Cost       *float64   `json:"cost,omitempty"`
-	CreatedBy  string     `json:"createdBy"`
-	UpdatedAt  time.Time  `json:"updatedAt"`
+	ToPinID    *uuid.UUID  `json:"toPinId,omitempty"`
+	TravelMode *string     `json:"travelMode,omitempty"`
+	DayTag     *string     `json:"dayTag,omitempty"`
+	Cost       *float64    `json:"cost,omitempty"`
+	CreatedBy  string      `json:"createdBy"`
+	UpdatedAt  time.Time   `json:"updatedAt"`
 }
 
 type Note struct {
@@ -65,18 +81,18 @@ type Note struct {
 }
 
 type RoadmapItem struct {
-	ID        uuid.UUID  `json:"id"`
-	Kind      string     `json:"kind"` // always "roadmap"
-	ParentID  *uuid.UUID `json:"parentId,omitempty"`
-	Title     string     `json:"title"`
-	Body      string     `json:"body"`
-	Status    string     `json:"status"`
+	ID       uuid.UUID  `json:"id"`
+	Kind     string     `json:"kind"` // always "roadmap"
+	ParentID *uuid.UUID `json:"parentId,omitempty"`
+	Title    string     `json:"title"`
+	Body     string     `json:"body"`
+	Status   string     `json:"status"`
 	// Stage is a free-text phase label ("Now"/"Next"/"Later", "v1"/"v2", …)
 	// used to group top-level goals into bands. Empty/absent = unstaged.
-	Stage     string     `json:"stage,omitempty"`
-	SortOrder int        `json:"sortOrder"`
-	CreatedBy string     `json:"createdBy"`
-	UpdatedAt time.Time  `json:"updatedAt"`
+	Stage     string    `json:"stage,omitempty"`
+	SortOrder int       `json:"sortOrder"`
+	CreatedBy string    `json:"createdBy"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 type SheetColumn struct {
@@ -97,13 +113,13 @@ type Sheet struct {
 }
 
 type SheetRow struct {
-	ID        uuid.UUID              `json:"id"`
-	Kind      string                 `json:"kind"` // always "sheetRow"
-	SheetID   uuid.UUID              `json:"sheetId"`
-	Data      map[string]any         `json:"data"` // keyed by SheetColumn.id; values: string|number|bool|null
-	SortOrder int                    `json:"sortOrder"`
-	CreatedBy string                 `json:"createdBy"`
-	UpdatedAt time.Time              `json:"updatedAt"`
+	ID        uuid.UUID      `json:"id"`
+	Kind      string         `json:"kind"` // always "sheetRow"
+	SheetID   uuid.UUID      `json:"sheetId"`
+	Data      map[string]any `json:"data"` // keyed by SheetColumn.id; values: string|number|bool|null
+	SortOrder int            `json:"sortOrder"`
+	CreatedBy string         `json:"createdBy"`
+	UpdatedAt time.Time      `json:"updatedAt"`
 }
 
 type Chart struct {
@@ -254,19 +270,19 @@ type PendingEdit struct {
 
 // CanvasState is the full snapshot sent to clients.
 type CanvasState struct {
-	Version       int                          `json:"version"`
-	Mode          string                       `json:"mode"`
-	EnabledModes  []string                     `json:"enabledModes"`
-	Pins          map[string]*Pin              `json:"pins"`
-	Events        map[string]*Event            `json:"events"`
-	Notes         map[string]*Note             `json:"notes"`
-	RoadmapItems  map[string]*RoadmapItem      `json:"roadmapItems"`
-	Sheets        map[string]*Sheet            `json:"sheets"`
-	SheetRows     map[string]*SheetRow         `json:"sheetRows"`
-	Charts        map[string]*Chart            `json:"charts"`
-	Forms         map[string]*Form             `json:"forms"`
-	Actions       map[string]*Action           `json:"actions"`
-	Agents        map[string]*Agent            `json:"agents"`
+	Version      int                     `json:"version"`
+	Mode         string                  `json:"mode"`
+	EnabledModes []string                `json:"enabledModes"`
+	Pins         map[string]*Pin         `json:"pins"`
+	Events       map[string]*Event       `json:"events"`
+	Notes        map[string]*Note        `json:"notes"`
+	RoadmapItems map[string]*RoadmapItem `json:"roadmapItems"`
+	Sheets       map[string]*Sheet       `json:"sheets"`
+	SheetRows    map[string]*SheetRow    `json:"sheetRows"`
+	Charts       map[string]*Chart       `json:"charts"`
+	Forms        map[string]*Form        `json:"forms"`
+	Actions      map[string]*Action      `json:"actions"`
+	Agents       map[string]*Agent       `json:"agents"`
 }
 
 // ── Patch types (partial updates from JSON body) ──────────────────────────────
@@ -288,10 +304,10 @@ type EventPatch struct {
 	PinIDs     *[]uuid.UUID `json:"pinIds"`
 	PinID      *uuid.UUID   `json:"pinId"`
 	FromPinID  *uuid.UUID   `json:"fromPinId"`
-	ToPinID    *uuid.UUID `json:"toPinId"`
-	TravelMode *string    `json:"travelMode"`
-	DayTag     *string    `json:"dayTag"`
-	Cost       *float64   `json:"cost"`
+	ToPinID    *uuid.UUID   `json:"toPinId"`
+	TravelMode *string      `json:"travelMode"`
+	DayTag     *string      `json:"dayTag"`
+	Cost       *float64     `json:"cost"`
 }
 
 type NotePatch struct {
@@ -302,13 +318,13 @@ type NotePatch struct {
 }
 
 type RoadmapItemPatch struct {
-	ParentID  *uuid.UUID `json:"parentId"`
-	Title     *string    `json:"title"`
-	Body      *string    `json:"body"`
-	Status    *string    `json:"status"`
+	ParentID *uuid.UUID `json:"parentId"`
+	Title    *string    `json:"title"`
+	Body     *string    `json:"body"`
+	Status   *string    `json:"status"`
 	// Stage: pass "" to clear (unstage), a label to set. nil = leave unchanged.
-	Stage     *string    `json:"stage"`
-	SortOrder *int       `json:"sortOrder"`
+	Stage     *string `json:"stage"`
+	SortOrder *int    `json:"sortOrder"`
 }
 
 // RoadmapReorder is one entry in a bulk reorder. ParentID is always interpreted
@@ -383,6 +399,10 @@ type Store interface {
 	CreateCanvas(ctx context.Context, name string, ownerUserID *uuid.UUID) (*Canvas, error)
 	ListCanvasesByOwner(ctx context.Context, ownerUserID uuid.UUID) ([]*Canvas, error)
 	CopyCanvas(ctx context.Context, srcID, ownerUserID uuid.UUID, name string) (*Canvas, error)
+	// ClaimCanvas atomically transfers an unowned canvas to ownerUserID iff the
+	// claimToken matches and the canvas is still unowned, voiding the token on
+	// success. Returns ErrCanvasNotFound / ErrAlreadyClaimed / ErrInvalidClaimToken.
+	ClaimCanvas(ctx context.Context, code, claimToken string, ownerUserID uuid.UUID) (*Canvas, error)
 	CanvasCount(ctx context.Context) (int, error)
 	UserCount(ctx context.Context) (int, error)
 	CanvasRecurrence(ctx context.Context) (revisited int, total int, err error)

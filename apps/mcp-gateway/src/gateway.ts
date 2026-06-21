@@ -16,6 +16,11 @@ export interface CanvasSession {
   canvasId: string;
   canvasName: string;
   canvasCode: string;
+  // Private "own this canvas" token, present only for an anonymous canvas this
+  // gateway just CREATED (never for one connected-to by code). Surfaced to the
+  // user as a claim link so they can take ownership; kept out of the plain share
+  // URL. See the API's migration 0020.
+  claimToken?: string;
   // Set by the `agent_register` tool; used as `proposedBy` on action.propose so
   // the canvas records which agent authored each action (v1 provenance).
   agentId?: string;
@@ -79,16 +84,29 @@ export class Gateway {
       const body = await res.text();
       throw new Error(`Create canvas failed (${res.status}): ${body}`);
     }
-    const canvas = (await res.json()) as { code: string };
+    const canvas = (await res.json()) as { code: string; claimToken?: string };
     if (!canvas?.code) {
       throw new Error("Create canvas returned no code");
     }
-    return this.connectWithCode(canvas_code);
+    // connectWithCode (via /api/mcp/auth) issues the JWT but doesn't carry the
+    // claim token — that's only on the create response — so attach it after.
+    const session = await this.connectWithCode(canvas.code);
+    session.claimToken = canvas.claimToken;
+    return session;
   }
 
   /** The shareable web URL for a canvas code (same origin as the API). */
   canvasUrl(code: string): string {
     return `${this.config.apiUrl}/c/${code}`;
+  }
+
+  /**
+   * The PRIVATE claim URL: the share URL plus the one-time claim token. Whoever
+   * opens this while logged in can take ownership of the canvas. Hand it only to
+   * the intended human — never use it as the share link.
+   */
+  canvasClaimUrl(code: string, claimToken: string): string {
+    return `${this.config.apiUrl}/c/${code}?claim=${encodeURIComponent(claimToken)}`;
   }
 
   isConnected(): boolean {

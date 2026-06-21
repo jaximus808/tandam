@@ -3,14 +3,15 @@ package store
 import (
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
-	supa "github.com/supabase-community/supabase-go"
 	"github.com/google/uuid"
+	supa "github.com/supabase-community/supabase-go"
 )
 
 // Ambiguous glyphs (0/O, 1/I/L) intentionally excluded so codes are easy to
@@ -33,6 +34,20 @@ func generateCode() string {
 	return string(out)
 }
 
+// generateClaimToken mints a private "own this canvas" token. Its format is
+// deliberately distinct from a canvas code (see migration 0020): a "clm_" prefix
+// plus 32 lowercase hex chars. Different prefix, length, alphabet, and case mean
+// a code can never be mistaken for or collide with a token. 16 bytes = 128 bits
+// of entropy, appropriate for an unguessable bearer secret (vs. the code's ~40
+// bits, which only gates view access). crypto/rand for the same reason as codes.
+func generateClaimToken() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Errorf("crypto/rand: %w", err))
+	}
+	return "clm_" + hex.EncodeToString(b)
+}
+
 // ── DB row types (snake_case = Supabase column names) ─────────────────────────
 
 type dbCanvas struct {
@@ -42,6 +57,7 @@ type dbCanvas struct {
 	Mode         string          `json:"mode"`
 	MapID        *string         `json:"map_id"`
 	OwnerUserID  *string         `json:"owner_user_id"`
+	ClaimToken   *string         `json:"claim_token"`
 	EnabledModes json.RawMessage `json:"enabled_modes"`
 	Version      int             `json:"version"`
 	CreatedAt    string          `json:"created_at"`
@@ -69,7 +85,7 @@ type dbEvent struct {
 	PinIDs     []string `json:"pin_ids"`
 	PinID      *string  `json:"pin_id"`
 	FromPinID  *string  `json:"from_pin_id"`
-	ToPinID    *string `json:"to_pin_id"`
+	ToPinID    *string  `json:"to_pin_id"`
 	TravelMode *string  `json:"travel_mode"`
 	DayTag     *string  `json:"day_tag"`
 	Cost       *float64 `json:"cost"`
@@ -186,18 +202,18 @@ type dbPendingEdit struct {
 // Used for GetCanvasState — one request with embedded child tables.
 type dbCanvasWithChildren struct {
 	dbCanvas
-	Pins          []dbPin          `json:"pins"`
-	Events        []dbEvent        `json:"events"`
-	Notes         []dbNote         `json:"notes"`
-	RoadmapItems  []dbRoadmapItem  `json:"roadmap_items"`
-	Sheets        []dbSheet        `json:"sheets"`
+	Pins         []dbPin         `json:"pins"`
+	Events       []dbEvent       `json:"events"`
+	Notes        []dbNote        `json:"notes"`
+	RoadmapItems []dbRoadmapItem `json:"roadmap_items"`
+	Sheets       []dbSheet       `json:"sheets"`
 	// NOTE: sheet rows are NOT a top-level embed — they ride nested inside each
 	// dbSheet.SheetRows (sheet_rows is FK'd to sheets, not canvases).
-	Charts        []dbChart        `json:"charts"`
-	Forms         []dbForm         `json:"forms"`
-	Actions       []dbAction       `json:"actions"`
-	Agents        []dbAgent        `json:"agents"`
-	PendingEdits  []dbPendingEdit  `json:"pending_edits"`
+	Charts       []dbChart       `json:"charts"`
+	Forms        []dbForm        `json:"forms"`
+	Actions      []dbAction      `json:"actions"`
+	Agents       []dbAgent       `json:"agents"`
+	PendingEdits []dbPendingEdit `json:"pending_edits"`
 }
 
 // ── Converters ────────────────────────────────────────────────────────────────
@@ -472,11 +488,20 @@ func (s *supabaseStore) exec(b interface{ Execute() ([]byte, int64, error) }) er
 // ── Canvas ────────────────────────────────────────────────────────────────────
 
 func (s *supabaseStore) CreateCanvas(_ context.Context, name string, ownerUserID *uuid.UUID) (*Canvas, error) {
+	// An anonymous create (no owner — the MCP/gateway path) gets a claim token so
+	// the human can later make it theirs. A logged-in create is already owned, so
+	// it needs none (NULL claim_token = "not claimable this way").
+	var claimToken string
+	if ownerUserID == nil {
+		claimToken = generateClaimToken()
+	}
 	for range 10 {
 		code := generateCode()
 		row := map[string]any{"code": code, "name": name}
 		if ownerUserID != nil {
 			row["owner_user_id"] = ownerUserID.String()
+		} else {
+			row["claim_token"] = claimToken
 		}
 		var rows []dbCanvas
 		_, err := s.client.From("canvases").
@@ -491,7 +516,11 @@ func (s *supabaseStore) CreateCanvas(_ context.Context, name string, ownerUserID
 		if len(rows) == 0 {
 			return nil, fmt.Errorf("no row returned after canvas insert")
 		}
-		return toCanvas(rows[0]), nil
+		c := toCanvas(rows[0])
+		// Surface the token ONLY here, on the create response. toCanvas deliberately
+		// never reads it, so every other path (read/state/list/copy) omits it.
+		c.ClaimToken = claimToken
+		return c, nil
 	}
 	return nil, fmt.Errorf("failed to generate unique canvas code after 10 attempts")
 }
@@ -540,6 +569,41 @@ func (s *supabaseStore) CopyCanvas(ctx context.Context, srcID, ownerUserID uuid.
 		return s.GetCanvasByCode(ctx, code)
 	}
 	return nil, fmt.Errorf("failed to generate unique canvas code after 10 attempts")
+}
+
+// ClaimCanvas atomically transfers an unowned canvas to ownerUserID. The single
+// UPDATE ... WHERE owner_user_id IS NULL AND claim_token = ? is the whole race
+// guard: only one caller can match (the row stops being unowned after the first
+// success), and the token is voided in the same statement so it's single-use.
+// On no-match we read the canvas back to report WHY (not found / already claimed
+// / wrong token) so the caller can return a precise status.
+func (s *supabaseStore) ClaimCanvas(ctx context.Context, code, claimToken string, ownerUserID uuid.UUID) (*Canvas, error) {
+	code = strings.ToUpper(code)
+	var rows []dbCanvas
+	_, err := s.client.From("canvases").
+		Update(map[string]any{
+			"owner_user_id": ownerUserID.String(),
+			"claim_token":   nil, // void on success — single-use
+		}, "representation", "").
+		Eq("code", code).
+		Eq("claim_token", claimToken).
+		Is("owner_user_id", "null").
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 1 {
+		return toCanvas(rows[0]), nil
+	}
+	// No row updated — disambiguate the reason from current state.
+	existing, gerr := s.GetCanvasByCode(ctx, code)
+	if gerr != nil {
+		return nil, ErrCanvasNotFound
+	}
+	if existing.OwnerUserID != nil {
+		return nil, ErrAlreadyClaimed
+	}
+	return nil, ErrInvalidClaimToken
 }
 
 // CanvasCount returns the total number of canvases. Uses a count=exact HEAD
@@ -828,12 +892,24 @@ func (s *supabaseStore) CreatePin(ctx context.Context, canvasID uuid.UUID, pin *
 
 func (s *supabaseStore) UpdatePin(ctx context.Context, canvasID uuid.UUID, id uuid.UUID, patch PinPatch) (int, error) {
 	m := map[string]any{}
-	if patch.PinType != nil { m["pin_type"] = *patch.PinType }
-	if patch.Lat != nil     { m["lat"] = *patch.Lat }
-	if patch.Lng != nil     { m["lng"] = *patch.Lng }
-	if patch.Label != nil   { m["label"] = *patch.Label }
-	if patch.Body != nil    { m["body"] = *patch.Body }
-	if patch.Color != nil   { m["color"] = *patch.Color }
+	if patch.PinType != nil {
+		m["pin_type"] = *patch.PinType
+	}
+	if patch.Lat != nil {
+		m["lat"] = *patch.Lat
+	}
+	if patch.Lng != nil {
+		m["lng"] = *patch.Lng
+	}
+	if patch.Label != nil {
+		m["label"] = *patch.Label
+	}
+	if patch.Body != nil {
+		m["body"] = *patch.Body
+	}
+	if patch.Color != nil {
+		m["color"] = *patch.Color
+	}
 	if len(m) == 0 {
 		return 0, nil
 	}
@@ -908,17 +984,39 @@ func (s *supabaseStore) CreateEvent(ctx context.Context, canvasID uuid.UUID, ev 
 
 func (s *supabaseStore) UpdateEvent(ctx context.Context, canvasID uuid.UUID, id uuid.UUID, patch EventPatch) (int, error) {
 	m := map[string]any{}
-	if patch.Title != nil      { m["title"] = *patch.Title }
-	if patch.Start != nil      { m["start_time"] = patch.Start.Format(time.RFC3339) }
-	if patch.End != nil        { m["end_time"] = patch.End.Format(time.RFC3339) }
-	if patch.Timezone != nil   { m["timezone"] = *patch.Timezone }
-	if patch.PinIDs != nil     { m["pin_ids"] = uuidStrings(*patch.PinIDs) }
-	if patch.PinID != nil      { m["pin_id"] = patch.PinID.String() }
-	if patch.FromPinID != nil  { m["from_pin_id"] = patch.FromPinID.String() }
-	if patch.ToPinID != nil    { m["to_pin_id"] = patch.ToPinID.String() }
-	if patch.TravelMode != nil { m["travel_mode"] = *patch.TravelMode }
-	if patch.DayTag != nil     { m["day_tag"] = *patch.DayTag }
-	if patch.Cost != nil       { m["cost"] = *patch.Cost }
+	if patch.Title != nil {
+		m["title"] = *patch.Title
+	}
+	if patch.Start != nil {
+		m["start_time"] = patch.Start.Format(time.RFC3339)
+	}
+	if patch.End != nil {
+		m["end_time"] = patch.End.Format(time.RFC3339)
+	}
+	if patch.Timezone != nil {
+		m["timezone"] = *patch.Timezone
+	}
+	if patch.PinIDs != nil {
+		m["pin_ids"] = uuidStrings(*patch.PinIDs)
+	}
+	if patch.PinID != nil {
+		m["pin_id"] = patch.PinID.String()
+	}
+	if patch.FromPinID != nil {
+		m["from_pin_id"] = patch.FromPinID.String()
+	}
+	if patch.ToPinID != nil {
+		m["to_pin_id"] = patch.ToPinID.String()
+	}
+	if patch.TravelMode != nil {
+		m["travel_mode"] = *patch.TravelMode
+	}
+	if patch.DayTag != nil {
+		m["day_tag"] = *patch.DayTag
+	}
+	if patch.Cost != nil {
+		m["cost"] = *patch.Cost
+	}
 	if len(m) == 0 {
 		return 0, nil
 	}
@@ -971,10 +1069,18 @@ func (s *supabaseStore) CreateNote(ctx context.Context, canvasID uuid.UUID, n *N
 
 func (s *supabaseStore) UpdateNote(ctx context.Context, canvasID uuid.UUID, id uuid.UUID, patch NotePatch) (int, error) {
 	m := map[string]any{}
-	if patch.Body != nil       { m["body"] = *patch.Body }
-	if patch.ImageRefs != nil  { m["image_refs"] = patch.ImageRefs }
-	if patch.ParentKind != nil { m["parent_kind"] = *patch.ParentKind }
-	if patch.ParentID != nil   { m["parent_id"] = patch.ParentID.String() }
+	if patch.Body != nil {
+		m["body"] = *patch.Body
+	}
+	if patch.ImageRefs != nil {
+		m["image_refs"] = patch.ImageRefs
+	}
+	if patch.ParentKind != nil {
+		m["parent_kind"] = *patch.ParentKind
+	}
+	if patch.ParentID != nil {
+		m["parent_id"] = patch.ParentID.String()
+	}
 	if len(m) == 0 {
 		return 0, nil
 	}
@@ -1027,11 +1133,21 @@ func (s *supabaseStore) CreateRoadmapItem(ctx context.Context, canvasID uuid.UUI
 
 func (s *supabaseStore) UpdateRoadmapItem(ctx context.Context, canvasID uuid.UUID, id uuid.UUID, patch RoadmapItemPatch) (int, error) {
 	m := map[string]any{}
-	if patch.Title != nil     { m["title"] = *patch.Title }
-	if patch.Body != nil      { m["body"] = *patch.Body }
-	if patch.Status != nil    { m["status"] = *patch.Status }
-	if patch.SortOrder != nil { m["sort_order"] = *patch.SortOrder }
-	if patch.ParentID != nil  { m["parent_id"] = patch.ParentID.String() }
+	if patch.Title != nil {
+		m["title"] = *patch.Title
+	}
+	if patch.Body != nil {
+		m["body"] = *patch.Body
+	}
+	if patch.Status != nil {
+		m["status"] = *patch.Status
+	}
+	if patch.SortOrder != nil {
+		m["sort_order"] = *patch.SortOrder
+	}
+	if patch.ParentID != nil {
+		m["parent_id"] = patch.ParentID.String()
+	}
 	// Stage: "" clears the phase (store NULL), a label sets it.
 	if patch.Stage != nil {
 		if *patch.Stage == "" {
@@ -1173,10 +1289,18 @@ func (s *supabaseStore) ListActions(_ context.Context, canvasID uuid.UUID, state
 // fields the target state carries.
 func (s *supabaseStore) UpdateActionState(ctx context.Context, canvasID, id uuid.UUID, patch ActionStatePatch) (int, error) {
 	m := map[string]any{"state": patch.State}
-	if patch.Result != nil     { m["result"] = *patch.Result }
-	if patch.Error != nil      { m["error"] = *patch.Error }
-	if patch.ApprovedBy != nil { m["approved_by"] = *patch.ApprovedBy }
-	if len(patch.Payload) > 0  { m["payload"] = json.RawMessage(patch.Payload) }
+	if patch.Result != nil {
+		m["result"] = *patch.Result
+	}
+	if patch.Error != nil {
+		m["error"] = *patch.Error
+	}
+	if patch.ApprovedBy != nil {
+		m["approved_by"] = *patch.ApprovedBy
+	}
+	if len(patch.Payload) > 0 {
+		m["payload"] = json.RawMessage(patch.Payload)
+	}
 	err := s.exec(s.client.From("actions").
 		Update(m, "minimal", "").
 		Eq("id", id.String()).
@@ -1236,13 +1360,13 @@ func (s *supabaseStore) CreateSheet(ctx context.Context, canvasID uuid.UUID, sh 
 	now := time.Now().UTC()
 	sh.UpdatedAt = now
 	row := map[string]any{
-		"id":          sh.ID.String(),
-		"canvas_id":   canvasID.String(),
-		"name":        sh.Name,
-		"columns":     json.RawMessage(colsJSON),
-		"sort_order":  sh.SortOrder,
-		"created_by":  sh.CreatedBy,
-		"updated_at":  now.Format(time.RFC3339),
+		"id":         sh.ID.String(),
+		"canvas_id":  canvasID.String(),
+		"name":       sh.Name,
+		"columns":    json.RawMessage(colsJSON),
+		"sort_order": sh.SortOrder,
+		"created_by": sh.CreatedBy,
+		"updated_at": now.Format(time.RFC3339),
 	}
 	if err := s.exec(s.client.From("sheets").Insert(row, false, "", "minimal", "")); err != nil {
 		return 0, err
@@ -1253,8 +1377,12 @@ func (s *supabaseStore) CreateSheet(ctx context.Context, canvasID uuid.UUID, sh 
 
 func (s *supabaseStore) UpdateSheet(ctx context.Context, canvasID uuid.UUID, id uuid.UUID, patch SheetPatch) (int, error) {
 	m := map[string]any{}
-	if patch.Name != nil      { m["name"] = *patch.Name }
-	if patch.SortOrder != nil { m["sort_order"] = *patch.SortOrder }
+	if patch.Name != nil {
+		m["name"] = *patch.Name
+	}
+	if patch.SortOrder != nil {
+		m["sort_order"] = *patch.SortOrder
+	}
 	if len(m) == 0 {
 		return 0, nil
 	}
@@ -1299,9 +1427,15 @@ func (s *supabaseStore) UpdateSheetColumn(ctx context.Context, canvasID, sheetID
 	found := false
 	for i := range sh.Columns {
 		if sh.Columns[i].ID == columnID {
-			if patch.Name != nil      { sh.Columns[i].Name = *patch.Name }
-			if patch.Type != nil      { sh.Columns[i].Type = *patch.Type }
-			if patch.SortOrder != nil { sh.Columns[i].SortOrder = *patch.SortOrder }
+			if patch.Name != nil {
+				sh.Columns[i].Name = *patch.Name
+			}
+			if patch.Type != nil {
+				sh.Columns[i].Type = *patch.Type
+			}
+			if patch.SortOrder != nil {
+				sh.Columns[i].SortOrder = *patch.SortOrder
+			}
 			found = true
 			break
 		}

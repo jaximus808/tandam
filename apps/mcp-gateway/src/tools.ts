@@ -35,13 +35,24 @@ export async function handleTool(
       const rawName = typeof args.name === "string" ? args.name.trim() : "";
       const name = rawName || "Untitled canvas";
       const session = await gateway.createCanvas(name);
-      return {
+      const result: Record<string, unknown> = {
         created: true,
         canvasId: session.canvasId,
         canvasName: session.canvasName,
         canvasCode: session.canvasCode,
+        // Ownership-free view/share link — safe to give anyone.
         url: gateway.canvasUrl(session.canvasCode),
       };
+      // For an anonymous create, also surface the PRIVATE claim link so the user
+      // can take ownership. Keep the two links distinct in what you tell the user.
+      if (session.claimToken) {
+        result.claimUrl = gateway.canvasClaimUrl(session.canvasCode, session.claimToken);
+        result.claimHint =
+          "Give `claimUrl` to the user privately and tell them to open it (signing in if needed) " +
+          "to claim this canvas as their own — it'll then show up in their account and stays the " +
+          "exact canvas you're editing. Use `url` for sharing/viewing only; it does not grant ownership.";
+      }
+      return result;
     }
 
     // ── State ──────────────────────────────────────────────────────────────────
@@ -315,9 +326,14 @@ export const TOOLS = [
     description:
       "Create a NEW canvas and bind this session to it in one step — no human needs to make " +
       "one in the browser first. Use this to start fresh (e.g. the user says 'put a plan on a " +
-      "canvas' and gave no code). Returns canvasCode and a shareable web `url`; surface the URL " +
-      "to the user so they can open and watch the canvas live. After this, all other canvas.* " +
-      "tools operate on the new canvas with no ID needed.",
+      "canvas' and gave no code). Good moment to OFFER this: when the user is brainstorming or " +
+      "planning and would benefit from seeing it laid out — ask if they want it on a Tandem " +
+      "canvas. Returns: `url` (ownership-free view/share link — surface this so they can open and " +
+      "watch it live) and, for these agent-created canvases, `claimUrl` + `claimHint`. The " +
+      "claimUrl is a PRIVATE link that lets the user claim the canvas as their own (it then " +
+      "appears in their account and stays the very canvas you keep editing). Give claimUrl only " +
+      "to the intended user; never use it as the public share link. After this, all other " +
+      "canvas.* tools operate on the new canvas with no ID needed.",
     inputSchema: {
       type: "object" as const,
       properties: {

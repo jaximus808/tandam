@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -119,6 +120,41 @@ func (h *Handler) CopyCanvas(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, canvas)
+}
+
+// POST /api/canvases/{code}/claim  (RequireUser) — take ownership of an
+// anonymous canvas in place (no copy), so an agent that created it keeps writing
+// to the same canvas the user now owns. Requires the private claim token; the
+// canvas code alone (view capability) is not enough. First valid claim wins.
+func (h *Handler) ClaimCanvas(w http.ResponseWriter, r *http.Request) {
+	uid, ok := UserIDFromCtx(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "not signed in")
+		return
+	}
+	var body struct {
+		ClaimToken string `json:"claimToken"`
+	}
+	if err := decode(r, &body); err != nil || strings.TrimSpace(body.ClaimToken) == "" {
+		writeError(w, http.StatusBadRequest, "claimToken is required")
+		return
+	}
+	canvas, err := h.store.ClaimCanvas(r.Context(), chi.URLParam(r, "code"), strings.TrimSpace(body.ClaimToken), uid)
+	if err != nil {
+		switch {
+		case errors.Is(err, store.ErrCanvasNotFound):
+			writeError(w, http.StatusNotFound, "canvas not found")
+		case errors.Is(err, store.ErrAlreadyClaimed):
+			// Distinct from a bad token so the web can offer "Copy instead".
+			writeError(w, http.StatusConflict, "canvas already claimed")
+		case errors.Is(err, store.ErrInvalidClaimToken):
+			writeError(w, http.StatusForbidden, "invalid claim token")
+		default:
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, canvas)
 }
 
 // GET /api/stats  (public) — total canvases + user accounts created. The

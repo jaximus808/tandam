@@ -1,6 +1,37 @@
 package store
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+// A claim token must be impossible to confuse with a canvas code: different
+// prefix, length, and alphabet (codes are uppercase A–Z/2–9, no "clm_"). This
+// guards the property migration 0020 relies on for the two-capability split.
+func TestClaimTokenFormatDistinctFromCode(t *testing.T) {
+	for range 200 {
+		tok := generateClaimToken()
+		if !strings.HasPrefix(tok, "clm_") {
+			t.Fatalf("claim token missing clm_ prefix: %q", tok)
+		}
+		hexPart := strings.TrimPrefix(tok, "clm_")
+		if len(hexPart) != 32 {
+			t.Fatalf("claim token hex part = %d chars, want 32: %q", len(hexPart), tok)
+		}
+		// A canvas code is 8 uppercase chars from codeChars — it can never contain
+		// '_' or lowercase, so a token can never be parsed as a code.
+		if strings.ToUpper(tok) == tok {
+			t.Fatalf("claim token has no lowercase, could collide with code space: %q", tok)
+		}
+		code := generateCode()
+		if len(code) != 8 || strings.Contains(code, "_") {
+			t.Fatalf("canvas code unexpectedly shaped: %q", code)
+		}
+		if tok == code {
+			t.Fatalf("claim token equals a canvas code: %q", tok)
+		}
+	}
+}
 
 func TestResolveRowData(t *testing.T) {
 	cols := []SheetColumn{
