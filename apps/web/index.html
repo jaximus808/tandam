@@ -6,13 +6,71 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="theme-color" content="#38BDF8" />
+
+    <!-- Primary SEO. Title/description lead with "Tandem Canvas" so the brand
+         people actually search (and the domain) is reinforced; the bare word
+         "Tandem" is too crowded to target. -->
+    <title>Tandem Canvas — one canvas for your team and your AI agents</title>
+    <meta
+      name="description"
+      content="Tandem is a shared planning canvas that humans and AI agents co-edit in real time. One live canvas with shared memory — maps, docs, sheets, roadmaps, and charts — for operations, builders, and teams."
+    />
+    <link rel="canonical" href="https://tandemcanvas.com/" />
+    <meta name="robots" content="index, follow" />
+    <meta name="application-name" content="Tandem Canvas" />
+
+    <!-- Open Graph (link previews on Slack, iMessage, LinkedIn, Facebook…) -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Tandem Canvas" />
+    <meta property="og:title" content="Tandem Canvas — one canvas for your team and your AI agents" />
+    <meta
+      property="og:description"
+      content="A shared planning canvas that humans and AI agents co-edit in real time. One live canvas, shared memory, any number of people and agents at once."
+    />
+    <meta property="og:url" content="https://tandemcanvas.com/" />
+    <!-- TODO: replace with a dedicated 1200×630 PNG (e.g. /og-image.png) for
+         richer previews; apple-touch-icon is a square stop-gap that always renders. -->
+    <meta property="og:image" content="https://tandemcanvas.com/apple-touch-icon.png" />
+
+    <!-- Twitter / X card -->
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Tandem Canvas — one canvas for your team and your AI agents" />
+    <meta
+      name="twitter:description"
+      content="A shared planning canvas that humans and AI agents co-edit in real time."
+    />
+    <meta name="twitter:image" content="https://tandemcanvas.com/apple-touch-icon.png" />
+
+    <!-- Structured data: helps search engines understand the brand + product. -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "WebSite",
+            "name": "Tandem Canvas",
+            "alternateName": "Tandem",
+            "url": "https://tandemcanvas.com/"
+          },
+          {
+            "@type": "SoftwareApplication",
+            "name": "Tandem Canvas",
+            "applicationCategory": "BusinessApplication",
+            "operatingSystem": "Web",
+            "url": "https://tandemcanvas.com/",
+            "description": "A shared planning canvas that humans and AI agents co-edit in real time.",
+            "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+          }
+        ]
+      }
+    </script>
+
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500;1,9..144,600;1,9..144,700&family=Hanken+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:ital,wght@0,400;0,500;0,700;1,400&display=swap"
       rel="stylesheet"
     />
-    <title>Tandem — one canvas for your team and your agents</title>
   </head>
   <body>
     <div id="root"></div>

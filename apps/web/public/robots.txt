@@ -1,0 +1,7 @@
+# Tandem Canvas — https://tandemcanvas.com
+# Allow everything; canvas/app routes are crawlable but carry no unique
+# metadata, so the landing page is what we expect to rank.
+User-agent: *
+Allow: /
+
+Sitemap: https://tandemcanvas.com/sitemap.xml
