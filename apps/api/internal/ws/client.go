@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -30,12 +31,37 @@ type Client struct {
 	conn     *websocket.Conn
 	send     chan []byte
 
+	// userID is the connected human (nil = anonymous) and canWrite is the live
+	// write-gate. Both are stamped at connect time and can be re-evaluated after a
+	// sharing change so access is revoked/downgraded in real time (see the hub's
+	// ClientsFor + the api layer's reevaluateAccess), not only on the next
+	// reconnect. canWrite is atomic because ReadPump reads it while a sharing
+	// change writes it from another goroutine.
+	userID   *uuid.UUID
+	canWrite atomic.Bool
+
 	closeOnce sync.Once
 	done      chan struct{}
 
 	// HandleMessage lets the caller react to inbound ops (direct manipulation).
 	HandleMessage func(canvasID uuid.UUID, raw []byte)
 }
+
+// SetIdentity stamps the connecting user + initial write-gate on the client.
+func (c *Client) SetIdentity(userID *uuid.UUID, canWrite bool) {
+	c.userID = userID
+	c.canWrite.Store(canWrite)
+}
+
+// UserID is the connected human, or nil for an anonymous viewer.
+func (c *Client) UserID() *uuid.UUID { return c.userID }
+
+// CanWrite reports whether this client may currently mutate the canvas.
+func (c *Client) CanWrite() bool { return c.canWrite.Load() }
+
+// SetCanWrite updates the live write-gate (used when a share downgrades/upgrades
+// a connected viewer between read and write).
+func (c *Client) SetCanWrite(v bool) { c.canWrite.Store(v) }
 
 func NewClient(hub *Hub, canvasID uuid.UUID, conn *websocket.Conn, handler func(uuid.UUID, []byte)) *Client {
 	return &Client{
@@ -115,6 +141,22 @@ func (c *Client) WritePump() {
 	for {
 		select {
 		case <-c.done:
+			// Flush anything already queued (notably a final "access revoked"
+			// notice a sharing change enqueued just before Close) so a
+			// server-initiated kick still reaches the client before the close
+			// frame. Safe because Close() never closes c.send.
+			for {
+				select {
+				case msg := <-c.send:
+					c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+					if err := c.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+						return
+					}
+					continue
+				default:
+				}
+				break
+			}
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 			return

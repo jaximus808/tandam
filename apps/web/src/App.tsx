@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import type { CanvasMeta, CanvasMode, CanvasState } from "./types";
-import { connectToCanvas, disconnectFromCanvas, onStateUpdate, sendOp, type ChangeActor } from "./lib/ws";
+import { connectToCanvas, disconnectFromCanvas, onStateUpdate, onAccessError, onRoleChange, sendOp, setCanvasReadOnly, type AccessStatus, type ChangeActor } from "./lib/ws";
 import { ModeNavContext } from "./lib/modeNav";
 import MapMode from "./modes/MapMode";
 import ItineraryMode from "./modes/ItineraryMode";
@@ -17,6 +17,8 @@ import StatsPage from "./pages/StatsPage";
 import { fetchMe, type User } from "./lib/auth";
 import { copyCanvas, claimCanvas } from "./lib/api";
 import ConnectModal, { hasDismissedConnect } from "./components/ConnectModal";
+import ShareDialog from "./components/ShareDialog";
+import AccessDenied from "./components/AccessDenied";
 import TandemLogo from "./components/TandemLogo";
 import AccountMenu from "./components/AccountMenu";
 import AgentCursor from "./components/AgentCursor";
@@ -126,6 +128,10 @@ export default function App() {
   const [selectedPinId, setSelectedPinId] = useState<string | null>(null);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [connectOpen, setConnectOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  // Set when this canvas can't be opened (private, no access) or our access was
+  // revoked live. Drives the access-denied screen instead of an endless spinner.
+  const [accessError, setAccessError] = useState<AccessStatus | null>(null);
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [addTabOpen, setAddTabOpen] = useState(false);
   // The signed-in user (or null). Drives the "Copy to my account" button —
@@ -204,10 +210,50 @@ export default function App() {
       // re-renders — the activity hook reads it to drive the agent cursor.
       // Undefined on the initial connect snapshot.
       lastChangeByRef.current = lastChangeBy;
-      setCanvas(c);
+      setCanvas((prev) => {
+        // yourRole rides only on the per-connection initial snapshot; later
+        // broadcasts omit it. Keep the established role sticky across updates so
+        // a refresh broadcast can't accidentally un-read-only the board.
+        if (c.yourRole == null && prev?.yourRole != null) {
+          return { ...c, yourRole: prev.yourRole };
+        }
+        return c;
+      });
       setCanvasState(s);
     });
   }, []);
+
+  // Mirror the resolved role into the WS write-gate: a 'read' viewer's outbound
+  // ops are muted at the source (the server rejects them too — this just keeps
+  // the UI from looking like edits saved).
+  useEffect(() => {
+    setCanvasReadOnly(canvas?.yourRole === "read");
+  }, [canvas?.yourRole]);
+
+  // A failed WS upgrade (probed to a real reason) or a live revoke surfaces here
+  // → render the access-denied screen. Arriving state clears it (we got in).
+  useEffect(() => onAccessError(setAccessError), []);
+
+  // The owner changed our access while we're connected (e.g. view→edit) — flip
+  // the board's read-only state live, no reconnect.
+  useEffect(
+    () =>
+      onRoleChange((role) =>
+        setCanvas((prev) => (prev ? { ...prev, yourRole: role } : prev)),
+      ),
+    [],
+  );
+
+  // If we were denied and the visitor then signs in, retry: the new session
+  // cookie may grant access (the canvas could be shared with that account). A
+  // still-denied retry just re-emits the error — no loop, since `me` is stable.
+  useEffect(() => {
+    if (me && accessError?.kind === "forbidden" && canvasCode) {
+      setAccessError(null);
+      connectToCanvas(canvasCode);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [me, canvasCode]);
 
   // Auto-open the connect modal the first time we see a given canvas in this browser.
   useEffect(() => {
@@ -237,8 +283,10 @@ export default function App() {
     setViewMode(null);
     setFollowMode(null);
     setConnectOpen(false);
+    setShareOpen(false);
     setModeMenuOpen(false);
     setAddTabOpen(false);
+    setAccessError(null);
   }
 
   function handleJoin(code: string) {
@@ -452,6 +500,20 @@ export default function App() {
     );
   }
 
+  // Can't open this canvas (private / not a member / not found), or our access
+  // was revoked live — show a clear screen instead of spinning forever.
+  if (accessError) {
+    return (
+      <AccessDenied
+        status={accessError}
+        me={me}
+        onHome={() => handleJoin("")}
+        onShowCanvases={showMyCanvases}
+        onUserChange={setMe}
+      />
+    );
+  }
+
   if (!canvasState || !canvas) {
     return (
       <div className="relative flex h-screen flex-col items-center justify-center overflow-hidden bg-paper font-brand text-ink">
@@ -549,6 +611,15 @@ export default function App() {
           <span className="hidden rounded-[3px] border border-ink/10 bg-white px-1.5 py-px font-code text-[10px] tracking-[0.14em] text-ink/40 shrink-0 sm:inline">
             {canvas.code}
           </span>
+          {canvas.yourRole === "read" && (
+            <span
+              className="inline-flex items-center gap-1 rounded-[3px] border border-ink/15 bg-ink/[0.04] px-1.5 py-px font-code text-[10px] uppercase tracking-[0.12em] text-ink/50 shrink-0"
+              title="You have view-only access to this canvas"
+            >
+              <span className="h-1 w-1 rounded-full bg-ink/35" />
+              View only
+            </span>
+          )}
         </div>
 
         {/* Agent-activity bell — rings + badges when an agent changes anything,
@@ -756,6 +827,15 @@ export default function App() {
               </button>
             )
           )}
+          {me && canvas.ownerUserId === me.id && (
+            <button
+              onClick={() => setShareOpen(true)}
+              className="rounded-md border border-ink/20 px-3 py-1.5 text-sm font-medium text-ink/75 transition-colors hover:border-ink/50 hover:bg-white"
+              title="Control who can open and edit this canvas"
+            >
+              Share
+            </button>
+          )}
           <button
             onClick={() => setConnectOpen(true)}
             className="btn-press rounded-md px-3.5 py-1.5 text-sm font-medium bg-ink text-paper shadow-[2px_2px_0_#C75B39]"
@@ -771,6 +851,13 @@ export default function App() {
           <div className="pointer-events-auto rounded-full bg-ink px-4 py-2 text-sm font-medium text-paper shadow-lg">
             {claimNotice} ✓
           </div>
+        </div>
+      )}
+
+      {canvas.yourRole === "read" && (
+        <div className="flex items-center justify-center gap-2 border-b border-ink/10 bg-paper px-4 py-1.5 text-center font-code text-[11.5px] text-ink/55">
+          <span className="inline-block h-1.5 w-1.5 rounded-full bg-ink/30" />
+          View only — you can follow along but not edit this canvas.
         </div>
       )}
 
@@ -840,6 +927,10 @@ export default function App() {
           onClose={() => setConnectOpen(false)}
           onSwitchCanvas={() => { setConnectOpen(false); handleJoin(""); }}
         />
+      )}
+
+      {shareOpen && (
+        <ShareDialog code={canvas.code} canvas={canvas} onClose={() => setShareOpen(false)} />
       )}
 
       <AgentCursor edit={agentEdit} name={agentList[0]?.name ?? "Claude"} />

@@ -40,6 +40,24 @@ func (wh *WSHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Resolve the connecting human's role from the session cookie (anonymous →
+	// nil → public canvases only). This MUST happen before the upgrade so we can
+	// still write an HTTP error: once upgraded we can only close the socket.
+	var uid *uuid.UUID
+	if id, ok := sessionUserID(wh.authSvc, r); ok {
+		uid = &id
+	}
+	role, err := wh.store.ResolveCanvasRole(r.Context(), canvas, uid)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not resolve canvas access")
+		return
+	}
+	if role == "none" {
+		writeError(w, http.StatusForbidden, "this canvas is private — sign in with an account it's shared with")
+		return
+	}
+	canWrite := role == "write"
+
 	conn, err := ws.Upgrade(w, r)
 	if err != nil {
 		log.Printf("ws upgrade: %v", err)
@@ -47,7 +65,15 @@ func (wh *WSHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	canvasID := canvas.ID
-	client := ws.NewClient(wh.hub, canvasID, conn, wh.handleOp)
+	// Read-only viewers still connect and receive state + live broadcasts; the
+	// closure simply mutes their inbound writes (see handleOp). The gate is read
+	// from the client each op (not captured) so a live sharing change can flip it
+	// without reconnecting — see reevaluateAccess.
+	var client *ws.Client
+	client = ws.NewClient(wh.hub, canvasID, conn, func(cid uuid.UUID, raw []byte) {
+		wh.handleOp(cid, raw, client.CanWrite())
+	})
+	client.SetIdentity(uid, canWrite)
 	wh.hub.Register(client)
 
 	// Send current state immediately on connect
@@ -57,6 +83,7 @@ func (wh *WSHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 			log.Printf("ws initial state: %v", err)
 			return
 		}
+		c.YourRole = role // let the board render read-only when role != write
 		data, _ := json.Marshal(stateMsg{Type: "state", Canvas: c, State: state, PendingEdits: edits})
 		client.Send(data)
 	}()
@@ -65,7 +92,12 @@ func (wh *WSHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 	client.ReadPump() // blocks until disconnect
 }
 
-func (wh *WSHandler) handleOp(canvasID uuid.UUID, raw []byte) {
+func (wh *WSHandler) handleOp(canvasID uuid.UUID, raw []byte, canWrite bool) {
+	// Every inbound WS op is a mutation. Read-only viewers are dropped silently —
+	// the gate lives here (not just in the UI) so a crafted client can't write.
+	if !canWrite {
+		return
+	}
 	var msg struct {
 		Op          string          `json:"op"`
 		ID          *uuid.UUID      `json:"id"`

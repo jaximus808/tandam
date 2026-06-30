@@ -26,6 +26,9 @@ export interface CanvasMeta {
   mode: string;
   mapId?: string;    // Phase 3: active map preset (only meaningful in map mode)
   ownerUserId?: string; // set when a logged-in user owns the canvas; absent = anonymous
+  visibility?: "public" | "private"; // access posture (migration 0021); absent treated as public
+  publicRole?: "read" | "write";     // when public, what the code grants
+  yourRole?: "write" | "read" | "none"; // requester's resolved role; set per-connection on the state push
   version: number;
   createdAt: string; // ISO timestamp (Go API returns strings)
   updatedAt: string;

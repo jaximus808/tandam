@@ -102,3 +102,17 @@ func (h *Hub) Broadcast(canvasID uuid.UUID, data []byte) {
 
 func (h *Hub) Register(c *Client)   { h.register <- c }
 func (h *Hub) Unregister(c *Client) { h.unregister <- c }
+
+// ClientsFor returns a snapshot of the clients currently connected to a canvas,
+// so a sharing change can re-evaluate each one's access live. The slice is a
+// copy — safe to range after the lock is dropped.
+func (h *Hub) ClientsFor(canvasID uuid.UUID) []*Client {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	room := h.rooms[canvasID]
+	out := make([]*Client, 0, len(room))
+	for c := range room {
+		out = append(out, c)
+	}
+	return out
+}

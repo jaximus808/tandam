@@ -76,7 +76,8 @@
       "mcp__agentcanvas__canvas_form_define",
       "Skill(browse)",
       "mcp__agentcanvas__canvas_form_scaffold",
-      "Bash(echo \"exit $?\")"
+      "Bash(echo \"exit $?\")",
+      "WebFetch(domain:claude.com)"
     ]
   }
 }
