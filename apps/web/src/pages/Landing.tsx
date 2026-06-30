@@ -5,6 +5,7 @@ import TandemLogo from "../components/TandemLogo";
 import AccountMenu from "../components/AccountMenu";
 import CanvasLauncher from "../components/CanvasLauncher";
 import SignInModal from "../components/SignInModal";
+import InboxBell from "../components/InboxBell";
 
 interface Props {
   onJoin: (code: string) => void;
@@ -1012,7 +1013,8 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
             >
               Connect an agent
             </button>
-            <AccountMenu onShowCanvases={onShowCanvases} />
+            <InboxBell enabled={!!user} onOpenCanvas={onJoin} />
+            <AccountMenu onShowCanvases={onShowCanvases} onUserChange={setUser} />
           </nav>
         </div>
       </header>

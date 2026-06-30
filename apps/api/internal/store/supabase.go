@@ -58,6 +58,8 @@ type dbCanvas struct {
 	MapID        *string         `json:"map_id"`
 	OwnerUserID  *string         `json:"owner_user_id"`
 	ClaimToken   *string         `json:"claim_token"`
+	Visibility   string          `json:"visibility"`
+	PublicRole   string          `json:"public_role"`
 	EnabledModes json.RawMessage `json:"enabled_modes"`
 	Version      int             `json:"version"`
 	CreatedAt    string          `json:"created_at"`
@@ -243,7 +245,8 @@ func toCanvas(d dbCanvas) *Canvas {
 			owner = &oid
 		}
 	}
-	return &Canvas{ID: id, Code: d.Code, Name: d.Name, Mode: d.Mode, MapID: d.MapID, OwnerUserID: owner, Version: d.Version,
+	return &Canvas{ID: id, Code: d.Code, Name: d.Name, Mode: d.Mode, MapID: d.MapID, OwnerUserID: owner,
+		Visibility: d.Visibility, PublicRole: d.PublicRole, Version: d.Version,
 		CreatedAt: parseTime(d.CreatedAt), UpdatedAt: parseTime(d.UpdatedAt)}
 }
 
@@ -683,6 +686,246 @@ func (s *supabaseStore) GetCanvasByID(_ context.Context, id uuid.UUID) (*Canvas,
 		return nil, fmt.Errorf("canvas not found: %s", id)
 	}
 	return toCanvas(rows[0]), nil
+}
+
+// ── Access control (migration 0021) ───────────────────────────────────────────
+
+// dbCanvasAccess is a canvas_access row; `users(...)` is a PostgREST embed (the
+// FK canvas_access.user_id → users.id), nil when the select doesn't ask for it.
+type dbCanvasAccess struct {
+	UserID string `json:"user_id"`
+	Role   string `json:"role"`
+	User   *struct {
+		Email       string `json:"email"`
+		DisplayName string `json:"display_name"`
+		AvatarURL   string `json:"avatar_url"`
+	} `json:"users"`
+}
+
+// ResolveCanvasRole — the single resolver behind both write paths. owner→write,
+// explicit access row→its role, else public→public_role, else none.
+func (s *supabaseStore) ResolveCanvasRole(_ context.Context, canvas *Canvas, userID *uuid.UUID) (string, error) {
+	if canvas == nil {
+		return "none", nil
+	}
+	if userID != nil {
+		if canvas.OwnerUserID != nil && *canvas.OwnerUserID == *userID {
+			return "write", nil
+		}
+		var rows []dbCanvasAccess
+		_, err := s.client.From("canvas_access").
+			Select("role", "", false).
+			Eq("canvas_id", canvas.ID.String()).
+			Eq("user_id", userID.String()).
+			ExecuteTo(&rows)
+		if err != nil {
+			return "", err
+		}
+		if len(rows) > 0 {
+			return rows[0].Role, nil
+		}
+	}
+	// Anything not explicitly private is public (covers legacy/empty visibility).
+	if canvas.Visibility == "private" {
+		return "none", nil
+	}
+	role := canvas.PublicRole
+	if role == "" {
+		role = "write" // legacy rows pre-0021 default
+	}
+	return role, nil
+}
+
+func (s *supabaseStore) SetCanvasVisibility(ctx context.Context, canvasID uuid.UUID, visibility, publicRole string) (int, error) {
+	err := s.exec(s.client.From("canvases").
+		Update(map[string]string{"visibility": visibility, "public_role": publicRole}, "minimal", "").
+		Eq("id", canvasID.String()))
+	if err != nil {
+		return 0, err
+	}
+	// Bump version so connected boards re-fetch state and pick up the new posture.
+	return s.bumpVersion(ctx, canvasID)
+}
+
+func (s *supabaseStore) ListCanvasAccess(_ context.Context, canvasID uuid.UUID) ([]*CanvasAccess, error) {
+	var rows []dbCanvasAccess
+	_, err := s.client.From("canvas_access").
+		Select("user_id,role,users(email,display_name,avatar_url)", "", false).
+		Eq("canvas_id", canvasID.String()).
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*CanvasAccess, 0, len(rows))
+	for _, d := range rows {
+		uid, _ := uuid.Parse(d.UserID)
+		ca := &CanvasAccess{UserID: uid, Role: d.Role}
+		if d.User != nil {
+			ca.Email = d.User.Email
+			ca.DisplayName = d.User.DisplayName
+			ca.AvatarURL = d.User.AvatarURL
+		}
+		out = append(out, ca)
+	}
+	return out, nil
+}
+
+func (s *supabaseStore) UpsertCanvasAccess(_ context.Context, canvasID, userID uuid.UUID, role string) error {
+	return s.exec(s.client.From("canvas_access").
+		Insert(map[string]string{
+			"canvas_id": canvasID.String(),
+			"user_id":   userID.String(),
+			"role":      role,
+		}, true, "canvas_id,user_id", "minimal", ""))
+}
+
+func (s *supabaseStore) DeleteCanvasAccess(_ context.Context, canvasID, userID uuid.UUID) error {
+	return s.exec(s.client.From("canvas_access").
+		Delete("minimal", "").
+		Eq("canvas_id", canvasID.String()).
+		Eq("user_id", userID.String()))
+}
+
+// dbSharedCanvas is a canvas_access row with the canvas it points at embedded —
+// powers ListCanvasesSharedWithUser (the recipient's "shared with me" view).
+type dbSharedCanvas struct {
+	Role   string    `json:"role"`
+	Canvas *dbCanvas `json:"canvases"`
+}
+
+func (s *supabaseStore) ListCanvasesSharedWithUser(_ context.Context, userID uuid.UUID) ([]*Canvas, error) {
+	var rows []dbSharedCanvas
+	_, err := s.client.From("canvas_access").
+		Select("role,canvases(*)", "", false).
+		Eq("user_id", userID.String()).
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*Canvas, 0, len(rows))
+	for _, d := range rows {
+		if d.Canvas == nil {
+			continue
+		}
+		c := toCanvas(*d.Canvas)
+		// Stamp the role this user was granted so the list can badge view/edit and
+		// the board opens with the right gate — the recipient-side mirror of
+		// ResolveCanvasRole's access-row branch.
+		c.YourRole = d.Role
+		out = append(out, c)
+	}
+	// Newest-edited first (small per-user list; sort here to match ListCanvasesByOwner).
+	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
+	return out, nil
+}
+
+// dbNotification is a notifications row with the canvas + actor it references
+// embedded. Two FKs point at users (user_id recipient, actor_user_id), so the
+// actor embed is disambiguated by column: users!actor_user_id.
+type dbNotification struct {
+	ID        string  `json:"id"`
+	Kind      string  `json:"kind"`
+	CanvasID  *string `json:"canvas_id"`
+	Role      *string `json:"role"`
+	ReadAt    *string `json:"read_at"`
+	CreatedAt string  `json:"created_at"`
+	Canvas    *struct {
+		Code string `json:"code"`
+		Name string `json:"name"`
+	} `json:"canvases"`
+	Actor *struct {
+		DisplayName string `json:"display_name"`
+	} `json:"actor"`
+}
+
+func (s *supabaseStore) CreateNotification(_ context.Context, n *Notification) error {
+	row := map[string]any{
+		"user_id": n.recipientID.String(),
+		"kind":    n.Kind,
+	}
+	if n.CanvasID != nil {
+		row["canvas_id"] = n.CanvasID.String()
+	}
+	if n.actorID != nil {
+		row["actor_user_id"] = n.actorID.String()
+	}
+	if n.Role != "" {
+		row["role"] = n.Role
+	}
+	return s.exec(s.client.From("notifications").Insert(row, false, "", "minimal", ""))
+}
+
+func (s *supabaseStore) ListNotifications(_ context.Context, userID uuid.UUID, limit int) ([]*Notification, error) {
+	var rows []dbNotification
+	_, err := s.client.From("notifications").
+		Select("id,kind,canvas_id,role,read_at,created_at,canvases(code,name),actor:users!actor_user_id(display_name)", "", false).
+		Eq("user_id", userID.String()).
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*Notification, 0, len(rows))
+	for _, d := range rows {
+		id, _ := uuid.Parse(d.ID)
+		n := &Notification{
+			ID:        id,
+			Kind:      d.Kind,
+			Read:      d.ReadAt != nil,
+			CreatedAt: parseTime(d.CreatedAt),
+		}
+		if d.CanvasID != nil {
+			if cid, err := uuid.Parse(*d.CanvasID); err == nil {
+				n.CanvasID = &cid
+			}
+		}
+		if d.Role != nil {
+			n.Role = *d.Role
+		}
+		if d.Canvas != nil {
+			n.CanvasCode = d.Canvas.Code
+			n.CanvasName = d.Canvas.Name
+		}
+		if d.Actor != nil {
+			n.ActorName = d.Actor.DisplayName
+		}
+		out = append(out, n)
+	}
+	// Newest first, then cap. Sorted/truncated here (small per-user list) to match
+	// the rest of the store's "avoid the client order surface" convention.
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (s *supabaseStore) CountUnreadNotifications(_ context.Context, userID uuid.UUID) (int, error) {
+	var rows []struct {
+		ReadAt *string `json:"read_at"`
+	}
+	_, err := s.client.From("notifications").
+		Select("read_at", "", false).
+		Eq("user_id", userID.String()).
+		ExecuteTo(&rows)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, r := range rows {
+		if r.ReadAt == nil {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (s *supabaseStore) MarkNotificationsRead(_ context.Context, userID uuid.UUID) error {
+	// Mark the whole inbox read in one statement: only this user's still-unread
+	// rows match, so it's idempotent and touches nothing already read.
+	return s.exec(s.client.From("notifications").
+		Update(map[string]any{"read_at": time.Now().UTC().Format(time.RFC3339)}, "minimal", "").
+		Eq("user_id", userID.String()).
+		Is("read_at", "null"))
 }
 
 // GetCanvasState uses PostgREST embedded selects — one HTTP request for everything.
@@ -1985,6 +2228,23 @@ func (s *supabaseStore) GetUserByID(_ context.Context, id uuid.UUID) (*User, err
 	}
 	if len(rows) == 0 {
 		return nil, fmt.Errorf("user not found: %s", id)
+	}
+	return toUser(rows[0]), nil
+}
+
+// GetUserByEmail backs share-by-email. Ilike with no wildcards = case-insensitive
+// exact match (Google emails are lowercased, but typed shares may not be).
+func (s *supabaseStore) GetUserByEmail(_ context.Context, email string) (*User, error) {
+	var rows []dbUser
+	_, err := s.client.From("users").
+		Select("*", "", false).
+		Ilike("email", strings.TrimSpace(email)).
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, ErrUserNotFound
 	}
 	return toUser(rows[0]), nil
 }

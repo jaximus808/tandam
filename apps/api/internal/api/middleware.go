@@ -29,6 +29,29 @@ func UserIDFromCtx(ctx context.Context) (uuid.UUID, bool) {
 	return id, ok
 }
 
+// RoleFromCtx returns the canvas role baked into the JWT ("write" | "read"),
+// empty when no claims are present.
+func RoleFromCtx(ctx context.Context) string {
+	c, _ := ctx.Value(claimsKey).(*auth.Claims)
+	if c == nil {
+		return ""
+	}
+	return c.Role
+}
+
+// RequireWrite rejects a valid-but-read-only canvas token on mutating routes.
+// Layer it AFTER RequireJWT — it reads the claims RequireJWT injects. This is the
+// HTTP/agent counterpart to the WebSocket write gate in ws_handler.handleOp.
+func RequireWrite(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if RoleFromCtx(r.Context()) != "write" {
+			writeError(w, http.StatusForbidden, "this canvas is read-only for you")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // sessionUserID validates the session cookie and returns the user id, if any.
 // Shared by the two user middlewares below; mirrors auth_handler.Me's logic.
 func sessionUserID(authSvc *auth.Service, r *http.Request) (uuid.UUID, bool) {

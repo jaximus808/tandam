@@ -1,16 +1,21 @@
 import { useEffect, useState } from "react";
 import type { CanvasMeta } from "../types";
-import { listMyCanvases } from "../lib/api";
+import { listMyCanvases, listSharedWithMe } from "../lib/api";
 import { fetchMe, type User } from "../lib/auth";
 import { modeTheme } from "../lib/modeTheme";
 import TandemLogo from "../components/TandemLogo";
+import InboxBell from "../components/InboxBell";
 
 interface Props {
   onOpenCanvas: (code: string) => void;
   onHome: () => void;
 }
 
-type Load = { status: "loading" } | { status: "signedOut" } | { status: "error"; message: string } | { status: "ready"; canvases: CanvasMeta[] };
+type Load =
+  | { status: "loading" }
+  | { status: "signedOut" }
+  | { status: "error"; message: string }
+  | { status: "ready"; canvases: CanvasMeta[]; shared: CanvasMeta[] };
 
 function timeAgo(iso: string): string {
   const then = Date.parse(iso);
@@ -40,8 +45,13 @@ export default function MyCanvases({ onOpenCanvas, onHome }: Props) {
         return;
       }
       try {
-        const canvases = await listMyCanvases();
-        if (!cancelled) setLoad({ status: "ready", canvases });
+        // Shared-with-me is best-effort — a failure there shouldn't blank out the
+        // owned list, so it defaults to [].
+        const [canvases, shared] = await Promise.all([
+          listMyCanvases(),
+          listSharedWithMe().catch(() => [] as CanvasMeta[]),
+        ]);
+        if (!cancelled) setLoad({ status: "ready", canvases, shared });
       } catch (e) {
         if (!cancelled) setLoad({ status: "error", message: e instanceof Error ? e.message : String(e) });
       }
@@ -62,6 +72,9 @@ export default function MyCanvases({ onOpenCanvas, onHome }: Props) {
         </button>
         <span className="text-gray-200">/</span>
         <span className="font-display text-[15px] font-medium">Your canvases</span>
+        <div className="ml-auto">
+          <InboxBell enabled={!!user} onOpenCanvas={onOpenCanvas} />
+        </div>
       </header>
 
       <main className="mx-auto w-full max-w-4xl flex-1 px-6 py-10">
@@ -113,39 +126,74 @@ export default function MyCanvases({ onOpenCanvas, onHome }: Props) {
               </div>
             ) : (
               <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                {load.canvases.map((c) => {
-                  const t = modeTheme((c.mode as never) ?? "welcome");
-                  return (
-                    <li key={c.id}>
-                      <button
-                        onClick={() => onOpenCanvas(c.code)}
-                        className="group relative block w-full overflow-hidden rounded-2xl border border-gray-900/10 bg-white p-4 text-left transition-all hover:-translate-y-0.5 hover:border-gray-300 hover:shadow-md"
-                      >
-                        <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: t.solid }} />
-                        <div className="flex items-start justify-between gap-3">
-                          <span className="font-display text-base font-medium leading-snug text-gray-900">
-                            {c.name || "Untitled canvas"}
-                          </span>
-                          <span
-                            className="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium capitalize"
-                            style={{ backgroundColor: t.soft, color: t.solid }}
-                          >
-                            {c.mode}
-                          </span>
-                        </div>
-                        <div className="mt-3 flex items-center justify-between text-xs text-gray-400">
-                          <span className="font-code tracking-[0.15em]">{c.code}</span>
-                          <span>{timeAgo(c.updatedAt)}</span>
-                        </div>
-                      </button>
-                    </li>
-                  );
-                })}
+                {load.canvases.map((c) => (
+                  <CanvasCard key={c.id} c={c} onOpen={onOpenCanvas} />
+                ))}
               </ul>
+            )}
+
+            {/* Shared with you — canvases other owners granted you access to. */}
+            {load.shared.length > 0 && (
+              <section className="mt-10">
+                <h2 className="font-display text-lg font-medium tracking-tight">Shared with you</h2>
+                <p className="mt-1 text-sm text-gray-500">
+                  {load.shared.length} {load.shared.length === 1 ? "canvas" : "canvases"} others gave you access to
+                </p>
+                <ul className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  {load.shared.map((c) => (
+                    <CanvasCard key={c.id} c={c} onOpen={onOpenCanvas} role={c.yourRole} />
+                  ))}
+                </ul>
+              </section>
             )}
           </>
         )}
       </main>
     </div>
+  );
+}
+
+// CanvasCard renders one canvas tile. For a shared canvas, pass `role` to badge
+// the access level (View/Edit) instead of the mode.
+function CanvasCard({
+  c,
+  onOpen,
+  role,
+}: {
+  c: CanvasMeta;
+  onOpen: (code: string) => void;
+  role?: "read" | "write" | "none";
+}) {
+  const t = modeTheme((c.mode as never) ?? "welcome");
+  return (
+    <li>
+      <button
+        onClick={() => onOpen(c.code)}
+        className="group relative block w-full overflow-hidden rounded-2xl border border-gray-900/10 bg-white p-4 text-left transition-all hover:-translate-y-0.5 hover:border-gray-300 hover:shadow-md"
+      >
+        <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: t.solid }} />
+        <div className="flex items-start justify-between gap-3">
+          <span className="font-display text-base font-medium leading-snug text-gray-900">
+            {c.name || "Untitled canvas"}
+          </span>
+          {role ? (
+            <span className="shrink-0 rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] font-medium text-gray-500">
+              {role === "write" ? "Edit" : "View"}
+            </span>
+          ) : (
+            <span
+              className="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium capitalize"
+              style={{ backgroundColor: t.soft, color: t.solid }}
+            >
+              {c.mode}
+            </span>
+          )}
+        </div>
+        <div className="mt-3 flex items-center justify-between text-xs text-gray-400">
+          <span className="font-code tracking-[0.15em]">{c.code}</span>
+          <span>{timeAgo(c.updatedAt)}</span>
+        </div>
+      </button>
+    </li>
   );
 }

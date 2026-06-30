@@ -16,6 +16,7 @@ var (
 	ErrCanvasNotFound    = errors.New("canvas not found")
 	ErrAlreadyClaimed    = errors.New("canvas already claimed")
 	ErrInvalidClaimToken = errors.New("invalid claim token")
+	ErrUserNotFound      = errors.New("user not found")
 )
 
 // ── Domain types ──────────────────────────────────────────────────────────────
@@ -32,10 +33,61 @@ type Canvas struct {
 	// creator can hand it to the intended human) and never on any read path —
 	// toCanvas() leaves it empty, so GetCanvasByCode / state / list never leak it.
 	// See migration 0020.
-	ClaimToken string    `json:"claimToken,omitempty"`
+	ClaimToken string `json:"claimToken,omitempty"`
+	// Visibility ('public'|'private') + PublicRole ('read'|'write') drive access
+	// control (migration 0021). Safe to expose on read paths — they describe the
+	// share posture, not a secret. YourRole is the requester's resolved role for
+	// this canvas ('write'|'read'|'none'); it is NOT stored, so toCanvas leaves it
+	// empty and handlers fill it per-request via ResolveCanvasRole.
+	Visibility string    `json:"visibility,omitempty"`
+	PublicRole string    `json:"publicRole,omitempty"`
+	YourRole   string    `json:"yourRole,omitempty"`
 	Version    int       `json:"version"`
 	CreatedAt  time.Time `json:"createdAt"`
 	UpdatedAt  time.Time `json:"updatedAt"`
+}
+
+// CanvasAccess is one account a canvas has been shared with (a canvas_access row
+// joined to the user it points at). Returned by the owner-only member list.
+type CanvasAccess struct {
+	UserID      uuid.UUID `json:"userId"`
+	Email       string    `json:"email"`
+	DisplayName string    `json:"displayName"`
+	AvatarURL   string    `json:"avatarUrl"`
+	Role        string    `json:"role"`
+}
+
+// Notification is one entry in an account's inbox (migration 0022). Today the
+// only kind is 'canvas_shared' — emitted when an owner shares a canvas with this
+// user. CanvasCode/CanvasName/ActorName are joined in for display so the client
+// needs no follow-up lookups.
+type Notification struct {
+	ID         uuid.UUID  `json:"id"`
+	Kind       string     `json:"kind"`
+	CanvasID   *uuid.UUID `json:"canvasId,omitempty"`
+	CanvasCode string     `json:"canvasCode,omitempty"`
+	CanvasName string     `json:"canvasName,omitempty"`
+	ActorName  string     `json:"actorName,omitempty"`
+	Role       string     `json:"role,omitempty"`
+	Read       bool       `json:"read"`
+	CreatedAt  time.Time  `json:"createdAt"`
+
+	// Write-only routing fields, set by the caller when creating a notification.
+	// Unexported so they never serialize onto the read/response path.
+	recipientID uuid.UUID  // whose inbox (notifications.user_id)
+	actorID     *uuid.UUID // who caused it (notifications.actor_user_id)
+}
+
+// NewNotification builds a notification ready for CreateNotification, carrying
+// the recipient + actor in the unexported routing fields.
+func NewNotification(recipientID uuid.UUID, kind string, canvasID *uuid.UUID, actorID *uuid.UUID, role string) *Notification {
+	return &Notification{
+		Kind:        kind,
+		CanvasID:    canvasID,
+		Role:        role,
+		recipientID: recipientID,
+		actorID:     actorID,
+	}
 }
 
 type Pin struct {
@@ -408,6 +460,27 @@ type Store interface {
 	CanvasRecurrence(ctx context.Context) (revisited int, total int, err error)
 	GetCanvasByCode(ctx context.Context, code string) (*Canvas, error)
 	GetCanvasByID(ctx context.Context, id uuid.UUID) (*Canvas, error)
+
+	// Access control (migration 0021). ResolveCanvasRole is the single source of
+	// truth used by the WS upgrade + /api/mcp/auth: given an already-loaded canvas
+	// and an optional logged-in user, returns "write" | "read" | "none". The
+	// remaining methods back the owner-only sharing UI.
+	ResolveCanvasRole(ctx context.Context, canvas *Canvas, userID *uuid.UUID) (string, error)
+	SetCanvasVisibility(ctx context.Context, canvasID uuid.UUID, visibility, publicRole string) (int, error)
+	ListCanvasAccess(ctx context.Context, canvasID uuid.UUID) ([]*CanvasAccess, error)
+	UpsertCanvasAccess(ctx context.Context, canvasID, userID uuid.UUID, role string) error
+	DeleteCanvasAccess(ctx context.Context, canvasID, userID uuid.UUID) error
+	// ListCanvasesSharedWithUser returns canvases another owner has shared with
+	// this user (canvas_access rows where user_id = userID), each Canvas carrying
+	// the granted role in YourRole. Powers the "shared with you" list — the
+	// recipient-side mirror of the owner-only ListCanvasAccess.
+	ListCanvasesSharedWithUser(ctx context.Context, userID uuid.UUID) ([]*Canvas, error)
+
+	// Notifications (migration 0022) — the account-level inbox.
+	CreateNotification(ctx context.Context, n *Notification) error
+	ListNotifications(ctx context.Context, userID uuid.UUID, limit int) ([]*Notification, error)
+	CountUnreadNotifications(ctx context.Context, userID uuid.UUID) (int, error)
+	MarkNotificationsRead(ctx context.Context, userID uuid.UUID) error
 	GetCanvasState(ctx context.Context, canvasID uuid.UUID) (*Canvas, *CanvasState, []*PendingEdit, error)
 	SetMode(ctx context.Context, canvasID uuid.UUID, mode string) (int, error)
 	EnableMode(ctx context.Context, canvasID uuid.UUID, mode string) (int, error)
@@ -474,6 +547,9 @@ type Store interface {
 	// Users
 	UpsertUserByGoogleSub(ctx context.Context, u *User) (*User, error)
 	GetUserByID(ctx context.Context, id uuid.UUID) (*User, error)
+	// GetUserByEmail powers share-by-email; returns ErrUserNotFound when no
+	// account uses that address (they must have signed in at least once).
+	GetUserByEmail(ctx context.Context, email string) (*User, error)
 
 	// Pending edits
 	CreatePendingEdit(ctx context.Context, canvasID uuid.UUID, entityID uuid.UUID, instruction string) (*PendingEdit, error)
