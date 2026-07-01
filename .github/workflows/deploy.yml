@@ -81,6 +81,27 @@ jobs:
               set -eo pipefail
               cd /opt/tandem
 
+              # Reclaim disk BEFORE building. Old deploys leave build cache
+              # (Go module downloads, node_modules layers) and orphaned images
+              # that 'docker image prune' alone never touches — over time this
+              # fills the VM disk and the build dies with 'no space left on
+              # device'. Running it up front (not just after) also breaks the
+              # death spiral where a build fails on a full disk and the trailing
+              # cleanup never runs, so the next deploy starts already-full.
+              #
+              # Currently-running containers protect their own images/volumes,
+              # so this only removes genuinely unused data. We deliberately do
+              # NOT pass --volumes: the named volumes hold real state
+              # (canvas-images uploads, caddy_data TLS certs) that must survive.
+              echo '→ Disk usage before cleanup:'
+              df -h / | tail -1
+              echo '→ Reclaiming Docker disk (stopped containers, unused images, build cache)...'
+              sudo docker container prune -f
+              sudo docker image prune -af
+              sudo docker builder prune -af
+              echo '→ Disk usage after cleanup:'
+              df -h / | tail -1
+
               # --ignore-buildable: tandem/mcp images are built locally and are
               # NOT in any registry, so a plain 'pull' errors on them. This pulls
               # only the third-party images (caddy).
@@ -96,6 +117,7 @@ jobs:
               echo '→ Reloading Caddy config...'
               sudo docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
 
-              echo '→ Pruning old dangling images...'
+              # Drop the image the previous 'tandem:latest' tag just orphaned.
+              echo '→ Pruning images orphaned by this build...'
               sudo docker image prune -f
             "
