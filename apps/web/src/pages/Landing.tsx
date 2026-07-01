@@ -5,7 +5,6 @@ import TandemLogo from "../components/TandemLogo";
 import AccountMenu from "../components/AccountMenu";
 import CanvasLauncher from "../components/CanvasLauncher";
 import SignInModal from "../components/SignInModal";
-import InboxBell from "../components/InboxBell";
 
 interface Props {
   onJoin: (code: string) => void;
@@ -1013,8 +1012,20 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
             >
               Connect an agent
             </button>
-            <InboxBell enabled={!!user} onOpenCanvas={onJoin} />
-            <AccountMenu onShowCanvases={onShowCanvases} onUserChange={setUser} />
+            {user && (
+              <button
+                onClick={onShowCanvases}
+                className="inline-flex items-center gap-1.5 rounded-md border-[1.5px] border-ink bg-white px-3 py-1.5 font-medium text-ink shadow-[2px_2px_0_rgba(28,25,23,0.15)] transition-transform hover:-translate-y-px"
+              >
+                Dashboard
+                <Icon name="arrow" className="h-3.5 w-3.5" />
+              </button>
+            )}
+            <AccountMenu
+              onShowCanvases={onShowCanvases}
+              onUserChange={setUser}
+              onOpenCanvas={onJoin}
+            />
           </nav>
         </div>
       </header>
@@ -1111,24 +1122,46 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
               everyone's mind.
             </p>
 
-            {/* Primary actions — the create / join forms live in the launcher modal */}
+            {/* Primary actions — the create / join forms live in the launcher modal.
+                Signed in, the primary path is the dashboard (like Supabase's
+                "start your project"); signed out, it's straight to create. */}
             <div
               className="tandem-rise mt-9 flex flex-wrap items-center gap-4"
               style={{ animationDelay: "180ms" }}
             >
-              <button
-                onClick={() => setLauncher("create")}
-                className="btn-press inline-flex items-center justify-center gap-2 rounded-md bg-ink px-6 py-3 font-medium text-paper shadow-[4px_4px_0_#C75B39]"
-              >
-                Create a canvas
-                <Icon name="arrow" className="h-4 w-4" />
-              </button>
-              <button
-                onClick={() => setLauncher("join")}
-                className="btn-press rounded-md border-[1.5px] border-ink bg-white px-6 py-3 font-medium text-ink shadow-[4px_4px_0_rgba(28,25,23,0.15)]"
-              >
-                Join with a code
-              </button>
+              {user ? (
+                <>
+                  <button
+                    onClick={onShowCanvases}
+                    className="btn-press inline-flex items-center justify-center gap-2 rounded-md bg-ink px-6 py-3 font-medium text-paper shadow-[4px_4px_0_#C75B39]"
+                  >
+                    Go to your dashboard
+                    <Icon name="arrow" className="h-4 w-4" />
+                  </button>
+                  <button
+                    onClick={() => setLauncher("create")}
+                    className="btn-press rounded-md border-[1.5px] border-ink bg-white px-6 py-3 font-medium text-ink shadow-[4px_4px_0_rgba(28,25,23,0.15)]"
+                  >
+                    Create a canvas
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={() => setLauncher("create")}
+                    className="btn-press inline-flex items-center justify-center gap-2 rounded-md bg-ink px-6 py-3 font-medium text-paper shadow-[4px_4px_0_#C75B39]"
+                  >
+                    Create a canvas
+                    <Icon name="arrow" className="h-4 w-4" />
+                  </button>
+                  <button
+                    onClick={() => setLauncher("join")}
+                    className="btn-press rounded-md border-[1.5px] border-ink bg-white px-6 py-3 font-medium text-ink shadow-[4px_4px_0_rgba(28,25,23,0.15)]"
+                  >
+                    Join with a code
+                  </button>
+                </>
+              )}
             </div>
 
             <div

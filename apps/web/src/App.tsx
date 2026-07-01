@@ -483,6 +483,10 @@ export default function App() {
           setRoute("home");
           handleJoin("");
         }}
+        onOpenMCP={() => {
+          setMCPInURL();
+          setRoute("mcp");
+        }}
       />
     );
   }
@@ -842,7 +846,7 @@ export default function App() {
           >
             Connect
           </button>
-          <AccountMenu onShowCanvases={showMyCanvases} onUserChange={setMe} />
+          <AccountMenu onShowCanvases={showMyCanvases} onUserChange={setMe} onOpenCanvas={handleJoin} />
         </div>
       </header>
 
