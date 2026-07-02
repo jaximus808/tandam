@@ -1,0 +1,520 @@
+import { useMemo, useState } from "react";
+import { Bot, Check, ChevronsRight, Link2, Pencil, Plus, User, X } from "lucide-react";
+import type { Action, CanvasState, TaskPayload } from "../types";
+import { approveAction, createTask, rejectAction, updateTask, type TaskDraft } from "../lib/api";
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   TasksPanel — the work queue.
+
+   Tasks are Action rows of type "task" ({title, body?, linkedIds?, assignee}).
+   assignee splits the queue: "agent" tasks are what agent sessions pull over
+   MCP; "human" tasks are your own todos and never reach the agent queue.
+   Humans author tasks here (born approved — the gate exists for agent-proposed
+   work); agent-proposed ones show Approve / Reject. All mutations are REST with
+   the canvas JWT; state comes back over the WS full-state broadcast like every
+   other entity, so the panel just re-renders from props. Desktop-only v1.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+const STATE_CHIP: Record<string, { label: string; bg: string; fg: string }> = {
+  proposed:  { label: "Proposed",  bg: "#F59E0B1A", fg: "#B45309" },
+  approved:  { label: "Ready",     bg: "#0EA5E91A", fg: "#0369A1" },
+  executing: { label: "Working",   bg: "#8B5CF61A", fg: "#6D28D9" },
+  done:      { label: "Done",      bg: "#10B9811A", fg: "#047857" },
+  failed:    { label: "Failed",    bg: "#F43F5E1A", fg: "#BE123C" },
+  rejected:  { label: "Rejected",  bg: "#1111110D", fg: "#57534E" },
+};
+
+function taskPayload(a: Action): TaskPayload {
+  return (a.payload ?? {}) as TaskPayload;
+}
+
+// A pickable link target: any roadmap item or note on the canvas.
+interface LinkTarget {
+  id: string;
+  kind: "roadmap" | "note";
+  label: string;
+}
+
+function linkTargets(state: CanvasState): LinkTarget[] {
+  const roadmap = Object.values(state.roadmapItems ?? {}).map((r) => ({
+    id: r.id,
+    kind: "roadmap" as const,
+    label: r.title || "Untitled goal",
+  }));
+  const notes = Object.values(state.notes ?? {}).map((n) => ({
+    id: n.id,
+    kind: "note" as const,
+    label: (n.body ?? "").split("\n")[0].replace(/^#+\s*/, "").slice(0, 60) || "Untitled note",
+  }));
+  return [...roadmap, ...notes];
+}
+
+export default function TasksPanel({
+  code,
+  state,
+  readOnly,
+  onClose,
+}: {
+  code: string;
+  state: CanvasState;
+  readOnly: boolean;
+  onClose: () => void;
+}) {
+  const [composing, setComposing] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [rejectingId, setRejectingId] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const tasks = useMemo(
+    () =>
+      Object.values(state.actions ?? {})
+        .filter((a) => a.type === "task")
+        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)),
+    [state.actions],
+  );
+
+  const queue = tasks.filter((t) => t.state === "proposed" || t.state === "approved");
+  const active = tasks.filter((t) => t.state === "executing");
+  const finished = tasks.filter((t) => t.state === "done" || t.state === "failed" || t.state === "rejected");
+
+  const targets = useMemo(() => linkTargets(state), [state]);
+  const targetLabel = useMemo(() => new Map(targets.map((t) => [t.id, t.label])), [targets]);
+
+  async function run(id: string, fn: () => Promise<void>) {
+    setBusyId(id);
+    setError(null);
+    try {
+      await fn();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  function renderTask(t: Action) {
+    if (editingId === t.id) {
+      const p = taskPayload(t);
+      return (
+        <div key={t.id} className="rounded-xl border border-ink/20 bg-white p-2.5">
+          <Composer
+            targets={targets}
+            initial={{ title: p.title ?? "", body: p.body, linkedIds: p.linkedIds, assignee: p.assignee }}
+            submitLabel="Save"
+            onCancel={() => setEditingId(null)}
+            onSubmit={async (draft) => {
+              await updateTask(code, t.id, draft);
+              setEditingId(null);
+            }}
+          />
+        </div>
+      );
+    }
+    const editable = !readOnly && (t.state === "proposed" || t.state === "approved");
+    return (
+      <TaskCard key={t.id} task={t} labelFor={targetLabel} onEdit={editable ? () => setEditingId(t.id) : undefined}>
+        {t.state === "proposed" && !readOnly && (
+          rejectingId === t.id ? (
+            <RejectForm
+              busy={busyId === t.id}
+              onCancel={() => setRejectingId(null)}
+              onConfirm={(reason) =>
+                void run(t.id, async () => {
+                  await rejectAction(code, t.id, reason || undefined);
+                  setRejectingId(null);
+                })
+              }
+            />
+          ) : (
+            <div className="mt-2 flex gap-1.5">
+              <button
+                onClick={() => void run(t.id, () => approveAction(code, t.id))}
+                disabled={busyId === t.id}
+                className="flex flex-1 items-center justify-center gap-1 rounded-lg bg-ink px-2 py-1.5 text-xs font-semibold text-paper transition-opacity disabled:opacity-40"
+              >
+                <Check size={13} /> Approve
+              </button>
+              <button
+                onClick={() => setRejectingId(t.id)}
+                disabled={busyId === t.id}
+                className="flex flex-1 items-center justify-center gap-1 rounded-lg border border-ink/15 px-2 py-1.5 text-xs font-medium text-ink/60 transition-colors hover:border-ink/30 disabled:opacity-40"
+              >
+                <X size={13} /> Reject
+              </button>
+            </div>
+          )
+        )}
+      </TaskCard>
+    );
+  }
+
+  return (
+    <div className="z-20 hidden w-[320px] shrink-0 flex-col border-l border-ink/10 bg-white/90 backdrop-blur sm:flex">
+      <div className="flex items-center justify-between border-b border-ink/10 px-3 py-3 pl-4">
+        <span className="text-sm font-semibold text-ink">Tasks</span>
+        <div className="flex items-center gap-1">
+          {!readOnly && !composing && (
+            <button
+              onClick={() => setComposing(true)}
+              className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-ink/50 transition-colors hover:bg-ink/5 hover:text-ink/80"
+            >
+              <Plus size={14} /> New task
+            </button>
+          )}
+          <button
+            onClick={onClose}
+            title="Close tasks"
+            className="flex h-7 w-7 items-center justify-center rounded-lg text-ink/35 transition-colors hover:bg-ink/5 hover:text-ink/60"
+          >
+            <ChevronsRight size={16} strokeWidth={1.75} />
+          </button>
+        </div>
+      </div>
+
+      {composing && (
+        <div className="border-b border-ink/10 p-3">
+          <Composer
+            targets={targets}
+            onCancel={() => setComposing(false)}
+            onSubmit={async (draft) => {
+              await createTask(code, draft);
+              setComposing(false);
+            }}
+          />
+        </div>
+      )}
+
+      <div className="min-h-0 flex-1 overflow-y-auto p-3">
+        {error && (
+          <div className="mb-2 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-[12px] text-rose-700">
+            {error}
+          </div>
+        )}
+
+        {tasks.length === 0 && !composing && (
+          <p className="px-1 py-2 text-[12px] leading-relaxed text-ink/45">
+            No tasks yet. Write one here for an agent session to pick up, or ask your agent to
+            draft some for your approval.
+          </p>
+        )}
+
+        <Section title="Queue" tasks={queue}>
+          {renderTask}
+        </Section>
+        <Section title="In progress" tasks={active}>
+          {renderTask}
+        </Section>
+        <Section title="Done" tasks={finished}>
+          {renderTask}
+        </Section>
+      </div>
+    </div>
+  );
+}
+
+function Section({
+  title,
+  tasks,
+  children,
+}: {
+  title: string;
+  tasks: Action[];
+  children: (t: Action) => React.ReactNode;
+}) {
+  if (tasks.length === 0) return null;
+  return (
+    <div className="mb-3">
+      <div className="mb-1.5 px-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink/35">
+        {title} · {tasks.length}
+      </div>
+      <div className="flex flex-col gap-1.5">{tasks.map(children)}</div>
+    </div>
+  );
+}
+
+// Who the task is FOR — the load-bearing visual split of the queue.
+function AssigneeChip({ assignee }: { assignee?: "agent" | "human" }) {
+  const isHuman = assignee === "human";
+  return (
+    <span
+      className="inline-flex shrink-0 items-center gap-1 rounded-[4px] px-1.5 py-px text-[10px] font-semibold uppercase tracking-[0.08em]"
+      style={
+        isHuman
+          ? { backgroundColor: "#1111110A", color: "#57534E" }
+          : { backgroundColor: "#0EA5E914", color: "#0369A1" }
+      }
+      title={isHuman ? "Your own todo — agents never pull this" : "Agent task — agent sessions pull this from the queue"}
+    >
+      {isHuman ? <User size={10} /> : <Bot size={10} />}
+      {isHuman ? "You" : "Agent"}
+    </span>
+  );
+}
+
+function TaskCard({
+  task,
+  labelFor,
+  onEdit,
+  children,
+}: {
+  task: Action;
+  labelFor: Map<string, string>;
+  onEdit?: () => void;
+  children?: React.ReactNode;
+}) {
+  const p = taskPayload(task);
+  const chip = STATE_CHIP[task.state] ?? STATE_CHIP.proposed;
+  const terminal = task.state === "done" || task.state === "failed" || task.state === "rejected";
+
+  return (
+    <div className="group/task rounded-xl border border-ink/10 bg-white p-2.5">
+      <div className="flex items-start justify-between gap-2">
+        <span className={`text-[13px] font-semibold leading-snug ${terminal ? "text-ink/55" : "text-ink"}`}>
+          {p.title || "Untitled task"}
+        </span>
+        <span className="flex shrink-0 items-center gap-1">
+          {onEdit && (
+            <button
+              onClick={onEdit}
+              title="Edit task"
+              className="rounded-md p-0.5 text-ink/25 opacity-0 transition-opacity hover:bg-ink/5 hover:text-ink/60 group-hover/task:opacity-100"
+            >
+              <Pencil size={12} />
+            </button>
+          )}
+          <span
+            className="rounded-[4px] px-1.5 py-px text-[10px] font-semibold uppercase tracking-[0.08em]"
+            style={{ backgroundColor: chip.bg, color: chip.fg }}
+          >
+            {chip.label}
+          </span>
+        </span>
+      </div>
+      {p.body && <p className="mt-1 line-clamp-3 text-[12px] leading-snug text-ink/55">{p.body}</p>}
+      {(p.linkedIds ?? []).length > 0 && (
+        <div className="mt-1.5 flex flex-wrap gap-1">
+          {(p.linkedIds ?? []).map((id) => (
+            <span
+              key={id}
+              className="inline-flex max-w-full items-center gap-1 rounded-[4px] border border-ink/10 bg-ink/[0.03] px-1.5 py-px text-[10px] text-ink/50"
+            >
+              <Link2 size={10} className="shrink-0" />
+              <span className="truncate">{labelFor.get(id) ?? "missing link"}</span>
+            </span>
+          ))}
+        </div>
+      )}
+      {task.state === "done" && task.result && (
+        <p className="mt-1.5 rounded-lg bg-emerald-50 px-2 py-1.5 text-[12px] leading-snug text-emerald-800">
+          {task.result}
+        </p>
+      )}
+      {(task.state === "failed" || task.state === "rejected") && task.error && (
+        <p className="mt-1.5 rounded-lg bg-rose-50 px-2 py-1.5 text-[12px] leading-snug text-rose-800">
+          {task.error}
+        </p>
+      )}
+      <div className="mt-1.5 flex items-center gap-1.5">
+        <AssigneeChip assignee={p.assignee} />
+        <span className="text-[10px] text-ink/35">
+          by {task.proposedBy}
+          {task.state === "proposed" && " · awaiting approval"}
+        </span>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+// Inline reject-reason form — replaces the browser's native prompt dialog.
+function RejectForm({
+  busy,
+  onConfirm,
+  onCancel,
+}: {
+  busy: boolean;
+  onConfirm: (reason: string) => void;
+  onCancel: () => void;
+}) {
+  const [reason, setReason] = useState("");
+  return (
+    <div className="mt-2 flex flex-col gap-1.5">
+      <input
+        autoFocus
+        value={reason}
+        onChange={(e) => setReason(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") onConfirm(reason.trim());
+          if (e.key === "Escape") onCancel();
+        }}
+        placeholder="Why reject? (optional)"
+        className="w-full rounded-lg border border-ink/15 bg-white px-2.5 py-1.5 text-[12px] text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
+      />
+      <div className="flex gap-1.5">
+        <button
+          onClick={() => onConfirm(reason.trim())}
+          disabled={busy}
+          className="flex-1 rounded-lg bg-rose-600 px-2 py-1.5 text-xs font-semibold text-white transition-opacity disabled:opacity-40"
+        >
+          Reject task
+        </button>
+        <button
+          onClick={onCancel}
+          className="rounded-lg border border-ink/15 px-2.5 py-1.5 text-xs font-medium text-ink/60 hover:border-ink/30"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Composer({
+  targets,
+  initial,
+  submitLabel = "Add task",
+  onSubmit,
+  onCancel,
+}: {
+  targets: LinkTarget[];
+  initial?: TaskDraft;
+  submitLabel?: string;
+  onSubmit: (draft: TaskDraft) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [title, setTitle] = useState(initial?.title ?? "");
+  const [body, setBody] = useState(initial?.body ?? "");
+  const [assignee, setAssignee] = useState<"agent" | "human">(initial?.assignee ?? "agent");
+  const [linked, setLinked] = useState<Set<string>>(new Set(initial?.linkedIds ?? []));
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const editing = initial !== undefined;
+
+  function toggleLink(id: string) {
+    setLinked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function submit() {
+    if (!title.trim() || saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await onSubmit({
+        title: title.trim(),
+        body: body.trim() || undefined,
+        linkedIds: linked.size > 0 ? [...linked] : undefined,
+        assignee,
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save task");
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      {/* Who is this for? Agent tasks land in the agent queue; yours don't. */}
+      <div className="flex rounded-lg border border-ink/10 bg-ink/[0.03] p-0.5">
+        {(["agent", "human"] as const).map((a) => {
+          const active = assignee === a;
+          return (
+            <button
+              key={a}
+              onClick={() => setAssignee(a)}
+              className={[
+                "flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1 text-xs font-semibold transition-colors",
+                active ? "bg-white text-ink shadow-sm" : "text-ink/40 hover:text-ink/65",
+              ].join(" ")}
+            >
+              {a === "agent" ? <Bot size={13} /> : <User size={13} />}
+              {a === "agent" ? "For the agent" : "For me"}
+            </button>
+          );
+        })}
+      </div>
+      <input
+        autoFocus
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && void submit()}
+        placeholder={assignee === "agent" ? "What should the agent do?" : "What do you need to do?"}
+        className="w-full rounded-lg border border-ink/15 bg-white px-2.5 py-1.5 text-sm text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
+      />
+      <textarea
+        value={body}
+        onChange={(e) => setBody(e.target.value)}
+        placeholder="Brief: what, why, acceptance criteria (optional)"
+        rows={3}
+        className="w-full resize-none rounded-lg border border-ink/15 bg-white px-2.5 py-1.5 text-[13px] text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
+      />
+
+      {targets.length > 0 && (
+        <div>
+          <button
+            onClick={() => setPickerOpen((o) => !o)}
+            className="flex items-center gap-1 text-[11px] font-medium text-ink/45 hover:text-ink/70"
+          >
+            <Link2 size={12} />
+            {linked.size > 0 ? `${linked.size} linked` : "Link roadmap items / notes"}
+          </button>
+          {pickerOpen && (
+            <div className="mt-1.5 max-h-40 overflow-y-auto rounded-lg border border-ink/10 bg-ink/[0.02] p-1">
+              {targets.map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => toggleLink(t.id)}
+                  className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-[12px] text-ink/70 hover:bg-ink/5"
+                >
+                  <span
+                    className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border"
+                    style={{
+                      backgroundColor: linked.has(t.id) ? "#111111" : "transparent",
+                      borderColor: linked.has(t.id) ? "#111111" : "rgba(17,17,17,0.2)",
+                    }}
+                  >
+                    {linked.has(t.id) && <Check size={10} color="#fff" />}
+                  </span>
+                  <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-ink/35">
+                    {t.kind === "roadmap" ? "goal" : "note"}
+                  </span>
+                  <span className="truncate">{t.label}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {error && <p className="text-[11px] text-rose-600">{error}</p>}
+
+      <div className="flex gap-1.5">
+        <button
+          onClick={() => void submit()}
+          disabled={!title.trim() || saving}
+          className="flex-1 rounded-lg bg-ink px-3 py-1.5 text-sm font-semibold text-paper transition-opacity disabled:opacity-40"
+        >
+          {saving ? "Saving…" : submitLabel}
+        </button>
+        <button
+          onClick={onCancel}
+          className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm font-medium text-ink/60 hover:border-ink/30"
+        >
+          Cancel
+        </button>
+      </div>
+      {!editing && (
+        <p className="text-[10px] leading-snug text-ink/35">
+          Your tasks are ready immediately — no approval needed. Agent sessions pull only
+          “For the agent” tasks from the queue.
+        </p>
+      )}
+    </div>
+  );
+}

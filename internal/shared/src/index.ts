@@ -5,7 +5,7 @@ export type TravelMode = "flight" | "train" | "drive";
 export type SheetColumnType = "text" | "number" | "date" | "checkbox";
 export type ChartType = "bar" | "line" | "area" | "pie";
 // v1 (Tandem × ANDR) execution primitive.
-export type ActionType = "navigate";
+export type ActionType = "navigate" | "task";
 export type ActionState =
   | "proposed"
   | "approved"
@@ -100,6 +100,10 @@ export interface RoadmapItem {
   // Free-text phase label ("Now"/"Next"/"Later", "v1"/"v2", …) used to group
   // top-level goals into bands on the board. Empty/absent = unstaged.
   stage?: string;
+  // Who this item is FOR. "agent" marks it as an agent task — work an agent
+  // session pulls (canvas_roadmap_task_list) and executes. Absent/"human" = a
+  // human goal, the default.
+  assignee?: "agent" | "human";
   sortOrder: number;
   createdBy: "agent" | "user";
   updatedAt: number;
@@ -158,12 +162,24 @@ export interface NavigatePayload {
   waypoints?: { lat: number; lng: number }[];
 }
 
+// Payload for `type: "task"` — a unit of work an agent session picks up.
+// linkedIds reference roadmap items / notes that carry the heavy context.
+// assignee says who the work is FOR: "agent" tasks are what agent sessions
+// pull from the queue; "human" tasks are the human's own todos. Defaults to
+// "agent" server-side.
+export interface TaskPayload {
+  title: string;
+  body?: string;
+  linkedIds?: EntityId[];
+  assignee?: "agent" | "human";
+}
+
 export interface Action {
   id: EntityId;
   kind: "action";
   type: ActionType;
   state: ActionState;
-  payload: NavigatePayload;
+  payload: NavigatePayload | TaskPayload;
   proposedBy: string;        // agent id (provenance)
   approvedBy?: string;       // human/agent id that approved
   result?: string;           // execution outcome summary

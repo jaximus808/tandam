@@ -548,6 +548,24 @@ func (h *Handler) DeleteNote(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
 }
 
+// GET /api/canvas/roadmap-items?assignee=  — list roadmap items, optionally
+// filtered by assignee. assignee=agent returns the agent-task queue: goals a
+// human marked for an agent session to pull and execute (the MCP hits this).
+func (h *Handler) ListRoadmapItems(w http.ResponseWriter, r *http.Request) {
+	canvasID := CanvasIDFromCtx(r.Context())
+	assignee := r.URL.Query().Get("assignee")
+	if assignee != "" && assignee != "agent" && assignee != "human" {
+		writeError(w, http.StatusBadRequest, "assignee must be 'agent' or 'human'")
+		return
+	}
+	items, err := h.store.ListRoadmapItems(r.Context(), canvasID, assignee)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
 // POST /api/canvas/roadmap-items
 func (h *Handler) CreateRoadmapItem(w http.ResponseWriter, r *http.Request) {
 	canvasID := CanvasIDFromCtx(r.Context())
@@ -557,6 +575,7 @@ func (h *Handler) CreateRoadmapItem(w http.ResponseWriter, r *http.Request) {
 		Body      string     `json:"body"`
 		Status    string     `json:"status"`
 		Stage     string     `json:"stage"`
+		Assignee  string     `json:"assignee"`
 		SortOrder int        `json:"sortOrder"`
 		CreatedBy string     `json:"createdBy"`
 	}
@@ -570,10 +589,20 @@ func (h *Handler) CreateRoadmapItem(w http.ResponseWriter, r *http.Request) {
 	if body.Status == "" {
 		body.Status = "todo"
 	}
+	if body.Assignee != "" && body.Assignee != "agent" && body.Assignee != "human" {
+		writeError(w, http.StatusBadRequest, "assignee must be 'agent' or 'human'")
+		return
+	}
+	// "human" is the implicit default — store it as unmarked so the column stays
+	// NULL for goals and only agent tasks carry a value.
+	if body.Assignee == "human" {
+		body.Assignee = ""
+	}
 	item := &store.RoadmapItem{
 		ID: uuid.New(), Kind: "roadmap",
 		ParentID: body.ParentID, Title: body.Title, Body: body.Body,
-		Status: body.Status, Stage: body.Stage, SortOrder: body.SortOrder, CreatedBy: body.CreatedBy,
+		Status: body.Status, Stage: body.Stage, Assignee: body.Assignee,
+		SortOrder: body.SortOrder, CreatedBy: body.CreatedBy,
 	}
 	if _, err := h.store.CreateRoadmapItem(r.Context(), canvasID, item); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())

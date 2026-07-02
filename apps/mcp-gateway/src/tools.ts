@@ -146,6 +146,7 @@ export async function handleTool(
         body: args.body ?? "",
         status: args.status ?? "todo",
         stage: args.stage,
+        assignee: args.assignee,
         sortOrder: args.sortOrder ?? 0,
         createdBy: "agent",
       });
@@ -157,6 +158,34 @@ export async function handleTool(
 
     case "canvas_roadmap_item_delete":
       return gateway.del(`/api/canvas/roadmap-items/${args.id}`);
+
+    case "canvas_roadmap_task_list": {
+      // The agent-task queue drawn from the roadmap: goals a human marked for an
+      // agent session to execute. Compact projection — canvas_roadmap_item /
+      // canvas_state_read has the rest.
+      const res = (await gateway.get(
+        "/api/canvas/roadmap-items?assignee=agent",
+      )) as {
+        items: Array<{
+          id: string;
+          title: string;
+          body: string;
+          status: string;
+          stage?: string;
+          parentId?: string;
+        }>;
+      };
+      return {
+        tasks: (res.items ?? []).map((it) => ({
+          id: it.id,
+          title: it.title,
+          status: it.status,
+          ...(it.body ? { body: it.body } : {}),
+          ...(it.stage ? { stage: it.stage } : {}),
+          ...(it.parentId ? { parentId: it.parentId } : {}),
+        })),
+      };
+    }
 
     // ── Sheets ─────────────────────────────────────────────────────────────────
     case "canvas_sheet_add":
@@ -301,6 +330,68 @@ export async function handleTool(
         payload: args.payload,
       });
 
+    // ── Tasks (actions of type "task": the agent work queue) ───────────────────
+    case "canvas_task_add":
+      return gateway.post("/api/canvas/actions", {
+        type: "task",
+        payload: {
+          title: args.title,
+          body: args.body,
+          linkedIds: args.linkedIds,
+          assignee: args.assignee ?? "agent",
+        },
+        proposedBy: gateway.getSession().agentId,
+      });
+
+    case "canvas_task_list": {
+      // Agents pull THEIR queue by default — human todos stay out unless asked.
+      const assignee = String(args.assignee ?? "agent");
+      let qs = assignee === "any" ? "" : `&assignee=${encodeURIComponent(assignee)}`;
+      if (args.state) qs += `&state=${encodeURIComponent(String(args.state))}`;
+      const res = (await gateway.get(`/api/canvas/actions?type=task${qs}`)) as {
+        actions: Array<{
+          id: string;
+          state: string;
+          payload?: { title?: string; assignee?: string };
+          proposedBy: string;
+          result?: string;
+          createdAt: string;
+        }>;
+      };
+      // Compact projection: no bodies, no linkedIds. canvas_task_get has the rest.
+      return {
+        tasks: (res.actions ?? []).map((a) => ({
+          id: a.id,
+          title: a.payload?.title ?? "",
+          state: a.state,
+          assignee: a.payload?.assignee ?? "agent",
+          proposedBy: a.proposedBy,
+          ...(a.result ? { result: a.result } : {}),
+          createdAt: a.createdAt,
+        })),
+      };
+    }
+
+    case "canvas_task_get":
+      return gateway.get(`/api/canvas/actions/${args.id}`);
+
+    case "canvas_task_start":
+      return gateway.patch(`/api/canvas/actions/${args.id}`, { state: "executing" });
+
+    case "canvas_task_complete": {
+      const { action } = (await gateway.get(`/api/canvas/actions/${args.id}`)) as {
+        action: { state: string };
+      };
+      if (action.state === "approved") {
+        await gateway.patch(`/api/canvas/actions/${args.id}`, { state: "executing" });
+      }
+      return gateway.patch(`/api/canvas/actions/${args.id}`, {
+        state: args.status ?? "done",
+        result: args.result,
+        error: args.error,
+      });
+    }
+
     default:
       throw new Error(`Unknown tool: ${toolName}`);
   }
@@ -347,9 +438,10 @@ export const TOOLS = [
   {
     name: "canvas_state_read",
     description:
-      "Read the active canvas state. Call this at the start of every canvas-related turn. " +
-      "Returns activeCanvasName, activeCanvasId, state (pins/events/notes), and pendingEdits. " +
-      "Requires canvas_connect to have been called first.",
+      "Read the active canvas state. Returns activeCanvasName, activeCanvasId, state " +
+      "(pins/events/notes), and pendingEdits. Requires canvas_connect to have been called " +
+      "first. NOTE: this returns the ENTIRE canvas and can be very large — if you're " +
+      "looking for work to do, start with canvas_task_list instead.",
     inputSchema: { type: "object" as const, properties: {} },
   },
   {
@@ -601,6 +693,14 @@ export const TOOLS = [
             "'Next' / 'Later' or 'v1' / 'v2'. Free text — reuse an existing label " +
             "to add to that band. Omit for unstaged. Only meaningful on top-level items.",
         },
+        assignee: {
+          type: "string",
+          enum: ["agent", "human"],
+          description:
+            "Mark who the item is FOR. 'agent' = an agent task pulled via " +
+            "canvas_roadmap_task_list and executed by a session; 'human' (default) " +
+            "= a human goal. Omit for a human goal.",
+        },
         sortOrder: { type: "number", description: "Position among siblings; higher = later." },
       },
       required: ["title"],
@@ -610,7 +710,8 @@ export const TOOLS = [
     name: "canvas_roadmap_item_update",
     description:
       "Update a roadmap item by its ID. Set stage to move a top-level goal " +
-      "between phase bands ('' clears the phase / unstages it).",
+      "between phase bands ('' clears the phase / unstages it). Set assignee to " +
+      "mark it as an agent task ('agent') or clear the mark ('human').",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -624,10 +725,25 @@ export const TOOLS = [
           description:
             "Phase label (e.g. 'Now', 'v2'). Pass '' to clear the phase (unstage).",
         },
+        assignee: {
+          type: "string",
+          enum: ["agent", "human"],
+          description: "'agent' marks it an agent task; 'human' clears the mark.",
+        },
         sortOrder: { type: "number" },
       },
       required: ["id"],
     },
+  },
+  {
+    name: "canvas_roadmap_task_list",
+    description:
+      "List the roadmap's AGENT tasks: goals a human marked (assignee='agent') " +
+      "for an agent session to execute. Returns { tasks: [{id, title, status, " +
+      "body?, stage?, parentId?}] }. This is the roadmap-side work queue — use it " +
+      "to pull work to do, then canvas_roadmap_item_update to move a task's status " +
+      "to 'in_progress' / 'done' as you go.",
+    inputSchema: { type: "object" as const, properties: {} },
   },
   {
     name: "canvas_roadmap_item_delete",
@@ -936,7 +1052,7 @@ export const TOOLS = [
     inputSchema: {
       type: "object" as const,
       properties: {
-        type: { type: "string", enum: ["navigate"] },
+        type: { type: "string", enum: ["navigate", "task"] },
         payload: {
           type: "object",
           description: "navigate: { goalLabel?, goal?: {lat,lng}, waypoints?: [{lat,lng}] }",
@@ -1015,6 +1131,97 @@ export const TOOLS = [
         payload: { type: "object" },
       },
       required: ["id", "state"],
+    },
+  },
+  {
+    name: "canvas_task_add",
+    description:
+      "Add a task to the canvas work queue for a future agent session to implement. " +
+      "Enters state 'proposed'; a human approves it in the web UI before any session " +
+      "picks it up. Keep `body` a concise brief — heavy context belongs in roadmap " +
+      "items / notes referenced via linkedIds, which canvas_task_get hydrates later.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        title: { type: "string", description: "Short imperative title, e.g. 'Add CSV export to sheets'." },
+        body: { type: "string", description: "Concise brief: what to do, acceptance criteria." },
+        linkedIds: {
+          type: "array",
+          items: { type: "string" },
+          description: "Roadmap item / note ids carrying the detailed context.",
+        },
+        assignee: {
+          type: "string",
+          enum: ["agent", "human"],
+          description:
+            "Who the task is FOR. 'agent' (default) = an agent session executes it; " +
+            "'human' = the human's own todo, invisible to the agent queue.",
+        },
+      },
+      required: ["title"],
+    },
+  },
+  {
+    name: "canvas_task_list",
+    description:
+      "List AGENT tasks as a compact queue: {id, title, state, assignee, proposedBy, " +
+      "result?, createdAt} — no bodies or linked context. START HERE when looking for " +
+      "work instead of canvas_state_read; then canvas_task_get exactly the task you'll " +
+      "work on. state='approved' = ready to pick up. Human todos are excluded by " +
+      "default; pass assignee='human' or 'any' to see them.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        state: {
+          type: "string",
+          enum: ["proposed", "approved", "rejected", "executing", "done", "failed"],
+        },
+        assignee: {
+          type: "string",
+          enum: ["agent", "human", "any"],
+          description: "Default 'agent' — the queue meant for agent sessions.",
+        },
+      },
+    },
+  },
+  {
+    name: "canvas_task_get",
+    description:
+      "Read one task by id with its linked context hydrated: returns { action, linked } " +
+      "where linked[] contains the referenced roadmap items / notes (title, body, status). " +
+      "Everything a session needs to start work — no full state pull required.",
+    inputSchema: {
+      type: "object" as const,
+      properties: { id: { type: "string" } },
+      required: ["id"],
+    },
+  },
+  {
+    name: "canvas_task_start",
+    description:
+      "Claim an approved task before working on it (approved → executing) so other " +
+      "sessions listing the queue skip it.",
+    inputSchema: {
+      type: "object" as const,
+      properties: { id: { type: "string" } },
+      required: ["id"],
+    },
+  },
+  {
+    name: "canvas_task_complete",
+    description:
+      "Finish a task with a result summary. Marks it 'done' (or 'failed' via status) — " +
+      "auto-claims first if you skipped canvas_task_start. `result` should be a short " +
+      "human-readable summary of what was done; it shows in the web Tasks panel.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        id: { type: "string" },
+        result: { type: "string", description: "What was done / where (e.g. commit, PR, file)." },
+        status: { type: "string", enum: ["done", "failed"] },
+        error: { type: "string", description: "Failure detail when status='failed'." },
+      },
+      required: ["id", "result"],
     },
   },
 ];

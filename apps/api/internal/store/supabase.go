@@ -112,6 +112,7 @@ type dbRoadmapItem struct {
 	Body      string  `json:"body"`
 	Status    string  `json:"status"`
 	Stage     *string `json:"stage"`
+	Assignee  *string `json:"assignee"`
 	SortOrder int     `json:"sort_order"`
 	CreatedBy string  `json:"created_by"`
 	UpdatedAt string  `json:"updated_at"`
@@ -324,6 +325,9 @@ func toRoadmapItem(d dbRoadmapItem) *RoadmapItem {
 		CreatedBy: d.CreatedBy, UpdatedAt: parseTime(d.UpdatedAt)}
 	if d.Stage != nil {
 		r.Stage = *d.Stage
+	}
+	if d.Assignee != nil {
+		r.Assignee = *d.Assignee
 	}
 	if d.ParentID != nil {
 		parentID, err := uuid.Parse(*d.ParentID)
@@ -1366,6 +1370,9 @@ func (s *supabaseStore) CreateRoadmapItem(ctx context.Context, canvasID uuid.UUI
 	if r.Stage != "" {
 		row["stage"] = r.Stage
 	}
+	if r.Assignee != "" {
+		row["assignee"] = r.Assignee
+	}
 	err := s.exec(s.client.From("roadmap_items").Insert(row, false, "", "minimal", ""))
 	if err != nil {
 		return 0, err
@@ -1399,6 +1406,15 @@ func (s *supabaseStore) UpdateRoadmapItem(ctx context.Context, canvasID uuid.UUI
 			m["stage"] = *patch.Stage
 		}
 	}
+	// Assignee: "agent" marks it an agent task; "" (or "human") clears the mark
+	// back to a human goal (store NULL).
+	if patch.Assignee != nil {
+		if *patch.Assignee == "agent" {
+			m["assignee"] = "agent"
+		} else {
+			m["assignee"] = nil
+		}
+	}
 	if len(m) == 0 {
 		return 0, nil
 	}
@@ -1421,6 +1437,26 @@ func (s *supabaseStore) DeleteRoadmapItem(ctx context.Context, canvasID uuid.UUI
 		return 0, err
 	}
 	return s.bumpVersion(ctx, canvasID)
+}
+
+// ListRoadmapItems returns a canvas's roadmap items ordered by sort_order,
+// optionally filtered by assignee ("agent" = the agent-task queue; "" = all).
+func (s *supabaseStore) ListRoadmapItems(_ context.Context, canvasID uuid.UUID, assignee string) ([]*RoadmapItem, error) {
+	var rows []dbRoadmapItem
+	q := s.client.From("roadmap_items").
+		Select("*", "", false).
+		Eq("canvas_id", canvasID.String())
+	if assignee != "" {
+		q = q.Eq("assignee", assignee)
+	}
+	if _, err := q.Order("sort_order", nil).ExecuteTo(&rows); err != nil {
+		return nil, err
+	}
+	items := make([]*RoadmapItem, 0, len(rows))
+	for _, r := range rows {
+		items = append(items, toRoadmapItem(r))
+	}
+	return items, nil
 }
 
 // ReorderRoadmapItems applies a batch of (parent_id, sort_order) updates and
@@ -1487,6 +1523,9 @@ func (s *supabaseStore) CreateAction(ctx context.Context, canvasID uuid.UUID, a 
 		"linked_pin_ids": json.RawMessage(linkedJSON),
 		"updated_at":     now.Format(time.RFC3339),
 	}
+	if a.ApprovedBy != nil {
+		row["approved_by"] = *a.ApprovedBy
+	}
 	if err := s.exec(s.client.From("actions").Insert(row, false, "", "minimal", "")); err != nil {
 		return 0, err
 	}
@@ -1509,13 +1548,24 @@ func (s *supabaseStore) GetAction(_ context.Context, canvasID, id uuid.UUID) (*A
 	return toAction(rows[0]), nil
 }
 
-func (s *supabaseStore) ListActions(_ context.Context, canvasID uuid.UUID, stateFilter string) ([]*Action, error) {
+func (s *supabaseStore) ListActions(_ context.Context, canvasID uuid.UUID, stateFilter, typeFilter, assigneeFilter string) ([]*Action, error) {
 	var rows []dbAction
 	q := s.client.From("actions").
 		Select("*", "", false).
 		Eq("canvas_id", canvasID.String())
 	if stateFilter != "" {
 		q = q.Eq("state", stateFilter)
+	}
+	if typeFilter != "" {
+		q = q.Eq("type", typeFilter)
+	}
+	switch assigneeFilter {
+	case "":
+	case "agent":
+		// Tasks created before the assignee field existed are agent tasks.
+		q = q.Or("payload->>assignee.eq.agent,payload->>assignee.is.null", "")
+	default:
+		q = q.Eq("payload->>assignee", assigneeFilter)
 	}
 	if _, err := q.Order("created_at", nil).ExecuteTo(&rows); err != nil {
 		return nil, err
@@ -1552,6 +1602,63 @@ func (s *supabaseStore) UpdateActionState(ctx context.Context, canvasID, id uuid
 		return 0, err
 	}
 	return s.bumpVersion(ctx, canvasID)
+}
+
+// UpdateActionPayload replaces an action's payload without touching its state —
+// the edit path for task content (title / body / links / assignee).
+func (s *supabaseStore) UpdateActionPayload(ctx context.Context, canvasID, id uuid.UUID, payload json.RawMessage) (int, error) {
+	err := s.exec(s.client.From("actions").
+		Update(map[string]any{"payload": payload}, "minimal", "").
+		Eq("id", id.String()).
+		Eq("canvas_id", canvasID.String()))
+	if err != nil {
+		return 0, err
+	}
+	return s.bumpVersion(ctx, canvasID)
+}
+
+// GetLinkedEntities resolves a task's payload.linkedIds against roadmap items
+// and notes (the two entity kinds tasks link to). Unknown ids are skipped, not
+// errors — a linked item may have been deleted since the task was written.
+func (s *supabaseStore) GetLinkedEntities(_ context.Context, canvasID uuid.UUID, ids []uuid.UUID) ([]TaskLink, error) {
+	if len(ids) == 0 {
+		return []TaskLink{}, nil
+	}
+	idStrs := uuidStrings(ids)
+
+	var items []dbRoadmapItem
+	if _, err := s.client.From("roadmap_items").
+		Select("*", "", false).
+		Eq("canvas_id", canvasID.String()).
+		In("id", idStrs).
+		ExecuteTo(&items); err != nil {
+		return nil, err
+	}
+	var notes []dbNote
+	if _, err := s.client.From("notes").
+		Select("*", "", false).
+		Eq("canvas_id", canvasID.String()).
+		In("id", idStrs).
+		ExecuteTo(&notes); err != nil {
+		return nil, err
+	}
+
+	links := make([]TaskLink, 0, len(items)+len(notes))
+	for _, it := range items {
+		id, err := uuid.Parse(it.ID)
+		if err != nil {
+			continue
+		}
+		links = append(links, TaskLink{ID: id, Kind: "roadmap", Title: it.Title, Body: it.Body, Status: it.Status})
+	}
+	for _, n := range notes {
+		id, err := uuid.Parse(n.ID)
+		if err != nil {
+			continue
+		}
+		links = append(links, TaskLink{ID: id, Kind: "note", Body: n.Body})
+	}
+	return links, nil
 }
 
 // ── Sheets ────────────────────────────────────────────────────────────────────

@@ -75,24 +75,24 @@ async function canvasToken(code: string): Promise<string> {
   return token;
 }
 
-export async function submitForm(
+// Canvas-JWT fetch with a single retry on 401 (cached token gone stale).
+async function authedFetch(
   code: string,
-  formId: string,
-  values: Record<string, unknown>,
-  submissionId?: string,
-): Promise<void> {
-  const doPost = async (token: string) =>
-    fetch(`/api/canvas/forms/${formId}/submit`, {
-      method: "POST",
+  path: string,
+  init: { method: string; body?: unknown },
+  fallbackError: string,
+): Promise<Response> {
+  const doFetch = async (token: string) =>
+    fetch(path, {
+      method: init.method,
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ values, submissionId }),
+      body: init.body === undefined ? undefined : JSON.stringify(init.body),
     });
 
-  let res = await doPost(await canvasToken(code));
-  // A cached token can go stale (expiry); refresh once on 401.
+  let res = await doFetch(await canvasToken(code));
   if (res.status === 401) {
     tokenCache.delete(code);
-    res = await doPost(await canvasToken(code));
+    res = await doFetch(await canvasToken(code));
   }
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
@@ -102,8 +102,74 @@ export async function submitForm(
     } catch {
       /* not json */
     }
-    throw new Error(msg || "Submit failed");
+    throw new Error(msg || fallbackError);
   }
+  return res;
+}
+
+export async function submitForm(
+  code: string,
+  formId: string,
+  values: Record<string, unknown>,
+  submissionId?: string,
+): Promise<void> {
+  await authedFetch(
+    code,
+    `/api/canvas/forms/${formId}/submit`,
+    { method: "POST", body: { values, submissionId } },
+    "Submit failed",
+  );
+}
+
+// ── Tasks (actions of type "task") ───────────────────────────────────────────
+// Human-created tasks are born approved — the approval gate exists only for
+// agent-proposed work. State updates come back over WS like everything else.
+
+export type TaskDraft = {
+  title: string;
+  body?: string;
+  linkedIds?: string[];
+  assignee?: "agent" | "human";
+};
+
+export async function createTask(code: string, task: TaskDraft): Promise<void> {
+  await authedFetch(
+    code,
+    "/api/canvas/actions",
+    {
+      method: "POST",
+      body: { type: "task", state: "approved", proposedBy: "human", payload: task },
+    },
+    "Could not create task",
+  );
+}
+
+// Payload-only PATCH: rewrite a task's content without touching its state.
+export async function updateTask(code: string, id: string, task: TaskDraft): Promise<void> {
+  await authedFetch(
+    code,
+    `/api/canvas/actions/${id}`,
+    { method: "PATCH", body: { payload: task } },
+    "Could not update task",
+  );
+}
+
+export async function approveAction(code: string, id: string): Promise<void> {
+  await authedFetch(
+    code,
+    `/api/canvas/actions/${id}/approve`,
+    { method: "POST", body: { approvedBy: "human" } },
+    "Could not approve",
+  );
+}
+
+export async function rejectAction(code: string, id: string, reason?: string): Promise<void> {
+  await authedFetch(
+    code,
+    `/api/canvas/actions/${id}/reject`,
+    { method: "POST", body: { reason } },
+    "Could not reject",
+  );
 }
 
 // Take ownership of an unowned (agent-created) canvas using its private claim

@@ -103,6 +103,7 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 		r.Post("/api/canvas/forms/scaffold", h.ScaffoldForm) // computes a spec; no mutation
 		r.Get("/api/canvas/actions", h.ListActions)
 		r.Get("/api/canvas/actions/{id}", h.ReadAction)
+		r.Get("/api/canvas/roadmap-items", h.ListRoadmapItems)
 
 		// Writes — require write role.
 		r.Group(func(r chi.Router) {

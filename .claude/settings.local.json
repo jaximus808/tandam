@@ -86,7 +86,9 @@
       "Bash(cp assets/png/icon/tandem-icon-180.png apps/web/public/apple-touch-icon.png)",
       "Bash(cp assets/png/social/tandem-og-1200x630.png apps/web/public/og-image.png)",
       "Bash(docker start *)",
-      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:7891/)"
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:7891/)",
+      "Bash(curl -s -m 3 http://localhost:7891/api/maps -o /dev/null -w \"%{http_code}\\\\n\")",
+      "mcp__agentcanvas__canvas_roadmap_task_list"
     ]
   }
 }

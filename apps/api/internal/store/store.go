@@ -141,7 +141,10 @@ type RoadmapItem struct {
 	Status   string     `json:"status"`
 	// Stage is a free-text phase label ("Now"/"Next"/"Later", "v1"/"v2", …)
 	// used to group top-level goals into bands. Empty/absent = unstaged.
-	Stage     string    `json:"stage,omitempty"`
+	Stage string `json:"stage,omitempty"`
+	// Assignee marks who the item is FOR: "agent" = an agent task a session
+	// pulls and executes; empty/absent = a human goal (the default).
+	Assignee  string    `json:"assignee,omitempty"`
 	SortOrder int       `json:"sortOrder"`
 	CreatedBy string    `json:"createdBy"`
 	UpdatedAt time.Time `json:"updatedAt"`
@@ -291,6 +294,17 @@ type Action struct {
 	UpdatedAt    time.Time       `json:"updatedAt"`
 }
 
+// TaskLink is a linked entity resolved from a task action's payload.linkedIds —
+// the context a session needs to start work without pulling full canvas state.
+// Kind is "roadmap" or "note"; Title/Status are empty for notes.
+type TaskLink struct {
+	ID     uuid.UUID `json:"id"`
+	Kind   string    `json:"kind"`
+	Title  string    `json:"title,omitempty"`
+	Body   string    `json:"body"`
+	Status string    `json:"status,omitempty"`
+}
+
 // Agent is minimal identity so the canvas knows who is writing (provenance) and
 // can show who is connected. Exactly one planner + one executor in v1.
 type Agent struct {
@@ -375,7 +389,10 @@ type RoadmapItemPatch struct {
 	Body     *string    `json:"body"`
 	Status   *string    `json:"status"`
 	// Stage: pass "" to clear (unstage), a label to set. nil = leave unchanged.
-	Stage     *string `json:"stage"`
+	Stage *string `json:"stage"`
+	// Assignee: "agent" marks it as an agent task, "" (or "human") clears the
+	// mark back to a human goal. nil = leave unchanged.
+	Assignee  *string `json:"assignee"`
 	SortOrder *int    `json:"sortOrder"`
 }
 
@@ -508,6 +525,9 @@ type Store interface {
 	UpdateRoadmapItem(ctx context.Context, canvasID uuid.UUID, id uuid.UUID, patch RoadmapItemPatch) (int, error)
 	DeleteRoadmapItem(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error)
 	ReorderRoadmapItems(ctx context.Context, canvasID uuid.UUID, updates []RoadmapReorder) (int, error)
+	// ListRoadmapItems returns a canvas's roadmap items, optionally filtered by
+	// assignee ("agent" = the agent-task queue; "" = all).
+	ListRoadmapItems(ctx context.Context, canvasID uuid.UUID, assignee string) ([]*RoadmapItem, error)
 
 	// Sheets + columns + rows
 	CreateSheet(ctx context.Context, canvasID uuid.UUID, s *Sheet) (int, error)
@@ -541,8 +561,10 @@ type Store interface {
 	// Actions (v1 execution primitive)
 	CreateAction(ctx context.Context, canvasID uuid.UUID, a *Action) (int, error)
 	GetAction(ctx context.Context, canvasID, id uuid.UUID) (*Action, error)
-	ListActions(ctx context.Context, canvasID uuid.UUID, stateFilter string) ([]*Action, error)
+	ListActions(ctx context.Context, canvasID uuid.UUID, stateFilter, typeFilter, assigneeFilter string) ([]*Action, error)
 	UpdateActionState(ctx context.Context, canvasID, id uuid.UUID, patch ActionStatePatch) (int, error)
+	UpdateActionPayload(ctx context.Context, canvasID, id uuid.UUID, payload json.RawMessage) (int, error)
+	GetLinkedEntities(ctx context.Context, canvasID uuid.UUID, ids []uuid.UUID) ([]TaskLink, error)
 
 	// Users
 	UpsertUserByGoogleSub(ctx context.Context, u *User) (*User, error)

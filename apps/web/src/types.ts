@@ -19,6 +19,7 @@ export type {
   ActionType,
   ActionState,
   NavigatePayload,
+  TaskPayload,
   Agent,
   AgentRole,
   AgentStatus,

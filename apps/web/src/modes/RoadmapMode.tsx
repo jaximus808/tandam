@@ -21,6 +21,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { Bot } from "lucide-react";
 import type { CanvasState, RoadmapItem, RoadmapStatus } from "../types";
 import { sendOp } from "../lib/ws";
 import EmptyState from "../components/EmptyState";
@@ -29,7 +30,6 @@ import { modeTheme } from "../lib/modeTheme";
 const ACCENT = modeTheme("roadmap");
 
 const INDENT_PX = 20;
-const LIST_HINT_KEY = "tandem.roadmapListHint.dismissed";
 
 const STATUS_LABELS: Record<RoadmapStatus, string> = {
   todo: "Todo",
@@ -39,6 +39,70 @@ const STATUS_LABELS: Record<RoadmapStatus, string> = {
 };
 
 const STATUS_CYCLE: RoadmapStatus[] = ["todo", "in_progress", "done", "blocked"];
+
+// In-app replacement for window.prompt when naming a phase — the native browser
+// dialog shows "localhost says…" chrome and can't be styled or branded.
+function PhaseNameDialog({
+  title,
+  hint,
+  initial = "",
+  submitLabel = "Save",
+  allowEmpty = false,
+  onSubmit,
+  onClose,
+}: {
+  title: string;
+  hint?: string;
+  initial?: string;
+  submitLabel?: string;
+  allowEmpty?: boolean;
+  onSubmit: (name: string) => void;
+  onClose: () => void;
+}) {
+  const [value, setValue] = useState(initial);
+  const canSubmit = allowEmpty || value.trim() !== "";
+  function submit() {
+    if (!canSubmit) return;
+    onSubmit(value.trim());
+    onClose();
+  }
+  return (
+    <div className="fixed inset-0 z-[2000] flex items-start justify-center pt-[18vh]" role="dialog" aria-modal="true">
+      <div className="absolute inset-0 bg-ink/25 backdrop-blur-[1px]" onClick={onClose} />
+      <div className="relative w-[340px] max-w-[92vw] rounded-2xl border border-ink/10 bg-white p-4 shadow-[4px_6px_0_rgba(17,17,17,0.08)]">
+        <h3 className="text-sm font-semibold text-ink">{title}</h3>
+        <input
+          autoFocus
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") submit();
+            if (e.key === "Escape") onClose();
+          }}
+          placeholder="e.g. Now, Next, Later, v1, v2"
+          className="mt-2.5 w-full rounded-lg border border-ink/15 bg-white px-2.5 py-1.5 text-sm text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
+        />
+        {hint && <p className="mt-1.5 text-[11px] leading-snug text-ink/40">{hint}</p>}
+        <div className="mt-3 flex justify-end gap-1.5">
+          <button
+            onClick={onClose}
+            className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm font-medium text-ink/60 hover:border-ink/30"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={submit}
+            disabled={!canSubmit}
+            className="rounded-lg px-3.5 py-1.5 text-sm font-semibold text-white transition-opacity disabled:opacity-40"
+            style={{ backgroundColor: ACCENT.solid }}
+          >
+            {submitLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 interface FlatItem {
   id: string;
@@ -73,22 +137,6 @@ export default function RoadmapMode({ state }: Props) {
   const [overId, setOverId] = useState<string | null>(null);
   const [offsetX, setOffsetX] = useState(0);
   const [view, setView] = useState<"list" | "board">("board");
-  const [listHintDismissed, setListHintDismissed] = useState(() => {
-    try {
-      return localStorage.getItem(LIST_HINT_KEY) === "1";
-    } catch {
-      return false;
-    }
-  });
-
-  function dismissListHint() {
-    setListHintDismissed(true);
-    try {
-      localStorage.setItem(LIST_HINT_KEY, "1");
-    } catch {
-      /* ignore (private mode / disabled storage) */
-    }
-  }
 
   // Top-level goals group into phase sections (by `stage`); each section's
   // subtree is flattened beneath its header. `flat` is the concatenation in
@@ -255,11 +303,7 @@ export default function RoadmapMode({ state }: Props) {
   }
 
   // Create a brand-new phase by seeding it with one (empty) goal.
-  function handleAddPhase() {
-    const name = window.prompt("New phase name (e.g. Now, Next, Later, v1, v2):", "")?.trim();
-    if (!name) return;
-    handleAddRootInStage(name);
-  }
+  const [addPhaseOpen, setAddPhaseOpen] = useState(false);
 
   // Rename a phase: rewrite the stage on every top-level goal currently in it.
   function renameStage(oldStage: string, newStage: string) {
@@ -288,42 +332,26 @@ export default function RoadmapMode({ state }: Props) {
         <div className="flex items-center justify-between gap-2 mb-3">
           <div className="flex min-w-0 items-center gap-2 sm:gap-3">
             <h1 className="font-display text-xl font-medium tracking-tight text-gray-900">Roadmap</h1>
-            <ViewToggle
-              view={view}
-              onChange={(v) => {
-                setView(v);
-                if (v === "list") dismissListHint();
-              }}
-            />
-            {view === "board" && !listHintDismissed && (
-              <div
-                className="hidden items-center gap-1.5 pl-2 pr-1 py-1 rounded-lg border text-xs lg:inline-flex"
-                style={{ backgroundColor: ACCENT.soft, borderColor: ACCENT.line, color: ACCENT.hover }}
-              >
-                <span aria-hidden style={{ color: ACCENT.solid }}>←</span>
-                <span>Switch to List to edit &amp; reorder</span>
-                <button
-                  onClick={dismissListHint}
-                  className="shrink-0 w-4 h-4 flex items-center justify-center rounded hover:bg-black/5"
-                  title="Dismiss"
-                  aria-label="Dismiss hint"
-                >
-                  <svg width="9" height="9" viewBox="0 0 12 12">
-                    <path d="M3 3 L 9 9 M 9 3 L 3 9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-                  </svg>
-                </button>
-              </div>
-            )}
+            <ViewToggle view={view} onChange={setView} />
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
             <button
-              onClick={handleAddPhase}
+              onClick={() => setAddPhaseOpen(true)}
               className="whitespace-nowrap text-sm px-3 py-1.5 rounded-lg font-medium border transition-colors"
               style={{ color: ACCENT.hover, borderColor: ACCENT.line, backgroundColor: ACCENT.soft }}
               title="Create a new phase (e.g. Now, Next, Later, v1, v2)"
             >
               + Phase
             </button>
+            {addPhaseOpen && (
+              <PhaseNameDialog
+                title="New phase"
+                hint="Phases group top-level goals into bands on the board."
+                submitLabel="Create phase"
+                onSubmit={handleAddRootInStage}
+                onClose={() => setAddPhaseOpen(false)}
+              />
+            )}
             <button
               onClick={handleAddRoot}
               className="whitespace-nowrap text-sm px-3.5 py-1.5 rounded-lg text-white font-medium shadow-sm transition-opacity hover:opacity-90"
@@ -344,7 +372,7 @@ export default function RoadmapMode({ state }: Props) {
           ))}
           <span className="ml-auto text-gray-400">
             {view === "board"
-              ? "Click a status icon to cycle · edit items in list view"
+              ? "Click a title to edit · click a status icon to cycle · + adds a sub-item"
               : "Drag rows to reorder · drag across a phase to re-file · click icon to cycle"}
           </span>
         </div>
@@ -544,12 +572,7 @@ function Row({
     setEditing(false);
   }
 
-  function setPhase() {
-    const current = item.stage?.trim() ?? "";
-    const name = window.prompt("Phase for this goal (blank to clear):", current);
-    if (name === null) return; // cancelled
-    sendOp({ op: "roadmap.update", id: item.id, partial: { stage: name.trim() } });
-  }
+  const [phaseOpen, setPhaseOpen] = useState(false);
 
   function cycleStatus() {
     const i = STATUS_CYCLE.indexOf(status);
@@ -670,9 +693,11 @@ function Row({
         </span>
       )}
 
+      <AgentTaskToggle item={item} />
+
       {depth === 0 && (
         <button
-          onClick={setPhase}
+          onClick={() => setPhaseOpen(true)}
           className={`shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded transition-colors ${
             item.stage?.trim()
               ? ""
@@ -683,6 +708,16 @@ function Row({
         >
           {item.stage?.trim() ? item.stage : "+ phase"}
         </button>
+      )}
+      {phaseOpen && (
+        <PhaseNameDialog
+          title="Phase for this goal"
+          hint="Leave blank to remove it from its phase."
+          initial={item.stage?.trim() ?? ""}
+          allowEmpty
+          onSubmit={(name) => sendOp({ op: "roadmap.update", id: item.id, partial: { stage: name } })}
+          onClose={() => setPhaseOpen(false)}
+        />
       )}
 
       <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -833,35 +868,46 @@ function RoadmapBoard({ items }: { items: Record<string, RoadmapItem> }) {
 // goal lives in. Free-text so a new phase is one prompt away.
 function StageSelect({ item, stages }: { item: RoadmapItem; stages: string[] }) {
   const current = item.stage?.trim() ?? "";
+  const [newPhaseOpen, setNewPhaseOpen] = useState(false);
   function apply(stage: string) {
     sendOp({ op: "roadmap.update", id: item.id, partial: { stage } });
   }
   function onChange(e: ChangeEvent<HTMLSelectElement>) {
     const v = e.target.value;
     if (v === "__new__") {
-      const name = window.prompt("New phase name (e.g. Now, Next, Later, v1, v2):", "")?.trim();
-      if (name) apply(name);
+      setNewPhaseOpen(true);
       return;
     }
     apply(v); // "" clears (unstage)
   }
   const options = current && !stages.includes(current) ? [current, ...stages] : stages;
   return (
-    <select
-      value={current}
-      onChange={onChange}
-      title="Phase / stage for this goal"
-      className="max-w-full text-[11px] rounded border border-gray-200 bg-gray-50 px-1.5 py-0.5 text-gray-600 hover:border-gray-300 focus:outline-none"
-      style={current ? { color: ACCENT.hover, borderColor: ACCENT.line } : undefined}
-    >
-      <option value="">No stage</option>
-      {options.map((s) => (
-        <option key={s} value={s}>
-          {s}
-        </option>
-      ))}
-      <option value="__new__">+ New phase…</option>
-    </select>
+    <>
+      <select
+        value={current}
+        onChange={onChange}
+        title="Phase / stage for this goal"
+        className="max-w-full text-[11px] rounded border border-gray-200 bg-gray-50 px-1.5 py-0.5 text-gray-600 hover:border-gray-300 focus:outline-none"
+        style={current ? { color: ACCENT.hover, borderColor: ACCENT.line } : undefined}
+      >
+        <option value="">No stage</option>
+        {options.map((s) => (
+          <option key={s} value={s}>
+            {s}
+          </option>
+        ))}
+        <option value="__new__">+ New phase…</option>
+      </select>
+      {newPhaseOpen && (
+        <PhaseNameDialog
+          title="New phase"
+          hint="This goal moves into the new phase band."
+          submitLabel="Create phase"
+          onSubmit={apply}
+          onClose={() => setNewPhaseOpen(false)}
+        />
+      )}
+    </>
   );
 }
 
@@ -893,6 +939,19 @@ function RoadmapColumn({
   const total = rows.length;
   const status = root.status as RoadmapStatus;
 
+  function addSubItem() {
+    const kids = byParent.get(root.id) ?? [];
+    sendOp({
+      op: "roadmap.add",
+      data: { parentId: root.id, title: "", body: "", status: "todo", sortOrder: nextSortOrder(kids) },
+    });
+  }
+  function deleteGoal() {
+    const hasKids = (byParent.get(root.id) ?? []).length > 0;
+    if (!confirm(hasKids ? "Delete this goal and all its sub-items?" : "Delete this goal?")) return;
+    sendOp({ op: "roadmap.delete", id: root.id });
+  }
+
   return (
     <div
       data-agent-target={root.id}
@@ -901,16 +960,29 @@ function RoadmapColumn({
       }`}
     >
       <div className={`h-1 shrink-0 ${STATUS_ACCENT[status]}`} />
-      <div className="shrink-0 px-3 pt-2.5 pb-3 border-b border-gray-100">
+      <div className="group shrink-0 px-3 pt-2.5 pb-3 border-b border-gray-100">
         <div className="flex items-start gap-2">
           <StatusButton item={root} className="mt-0.5" />
-          <span
-            className={`text-sm font-semibold leading-snug ${
+          <EditableTitle
+            item={root}
+            placeholder="Untitled goal"
+            className={`flex-1 min-w-0 text-sm font-semibold leading-snug ${
               status === "done" ? "line-through decoration-gray-400 text-gray-500" : "text-gray-900"
             }`}
-          >
-            {root.title || <span className="text-gray-400 italic font-normal">Untitled goal</span>}
-          </span>
+          />
+          <div className="flex shrink-0 items-center gap-1">
+            <AgentTaskToggle item={root} />
+            <button
+              onClick={deleteGoal}
+              title="Delete goal"
+              aria-label="Delete goal"
+              className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-600 transition-opacity"
+            >
+              <svg width="12" height="12" viewBox="0 0 12 12">
+                <path d="M3 3 L 9 9 M 9 3 L 3 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              </svg>
+            </button>
+          </div>
         </div>
         <div className="mt-2">
           <StageSelect item={root} stages={stages} />
@@ -918,18 +990,44 @@ function RoadmapColumn({
         {total > 0 && <ProgressBar done={done} total={total} />}
       </div>
       <div className="flex-1 overflow-y-auto p-1.5 flex flex-col gap-0.5">
-        {rows.length === 0 ? (
-          <div className="px-2 py-3 text-xs text-gray-400 italic">No sub-items</div>
-        ) : (
-          rows.map((r) => <BoardRow key={r.item.id} item={r.item} depth={r.depth} />)
-        )}
+        {rows.map((r) => (
+          <BoardRow key={r.item.id} item={r.item} depth={r.depth} byParent={byParent} />
+        ))}
+        <button
+          onClick={addSubItem}
+          className="mt-0.5 flex items-center gap-1 self-start rounded px-2 py-1 text-xs text-gray-400 transition-colors hover:bg-gray-50 hover:text-gray-700"
+        >
+          + Add sub-item
+        </button>
       </div>
     </div>
   );
 }
 
-function BoardRow({ item, depth }: { item: RoadmapItem; depth: number }) {
+function BoardRow({
+  item,
+  depth,
+  byParent,
+}: {
+  item: RoadmapItem;
+  depth: number;
+  byParent: Map<string | null, RoadmapItem[]>;
+}) {
   const status = item.status as RoadmapStatus;
+
+  function addChild() {
+    const kids = byParent.get(item.id) ?? [];
+    sendOp({
+      op: "roadmap.add",
+      data: { parentId: item.id, title: "", body: "", status: "todo", sortOrder: nextSortOrder(kids) },
+    });
+  }
+  function del() {
+    const hasKids = (byParent.get(item.id) ?? []).length > 0;
+    if (!confirm(hasKids ? "Delete this item and all its sub-items?" : "Delete this item?")) return;
+    sendOp({ op: "roadmap.delete", id: item.id });
+  }
+
   return (
     <div
       data-agent-target={item.id}
@@ -938,14 +1036,33 @@ function BoardRow({ item, depth }: { item: RoadmapItem; depth: number }) {
     >
       {depth > 0 && <span aria-hidden className="self-stretch w-px bg-gray-200 ml-0.5 mr-0.5" />}
       <StatusButton item={item} className="mt-0.5" />
-      <span
-        className={`text-xs leading-snug ${
+      <EditableTitle
+        item={item}
+        className={`flex-1 min-w-0 text-xs leading-snug ${
           status === "done" ? "line-through decoration-gray-400 text-gray-400" : "text-gray-700"
         }`}
-        title={item.body || undefined}
-      >
-        {item.title || <span className="text-gray-400 italic">Untitled item</span>}
-      </span>
+      />
+      <AgentTaskToggle item={item} size="xs" />
+      <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+        <button
+          onClick={addChild}
+          title="Add sub-item"
+          aria-label="Add sub-item"
+          className="rounded px-1 text-xs text-gray-400 hover:bg-blue-50 hover:text-blue-600"
+        >
+          +
+        </button>
+        <button
+          onClick={del}
+          title="Delete item"
+          aria-label="Delete item"
+          className="rounded px-0.5 text-gray-400 hover:bg-red-50 hover:text-red-600"
+        >
+          <svg width="11" height="11" viewBox="0 0 12 12">
+            <path d="M3 3 L 9 9 M 9 3 L 3 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+          </svg>
+        </button>
+      </div>
     </div>
   );
 }
@@ -982,6 +1099,110 @@ function StatusButton({ item, className }: { item: RoadmapItem; className?: stri
     >
       <StatusIcon status={status} />
     </button>
+  );
+}
+
+// Mark a roadmap item as an agent task (assignee "agent") or clear it back to a
+// human goal. Agent-marked items are what an agent session pulls off the roadmap
+// via canvas_roadmap_task_list. When marked it renders as a persistent chip;
+// unmarked it's a hover affordance (the parent row needs a `group` class).
+function AgentTaskToggle({ item, size = "sm" }: { item: RoadmapItem; size?: "sm" | "xs" }) {
+  const isAgent = item.assignee === "agent";
+  function toggle(e: React.MouseEvent) {
+    e.stopPropagation();
+    sendOp({
+      op: "roadmap.update",
+      id: item.id,
+      partial: { assignee: isAgent ? "human" : "agent" },
+    });
+  }
+  const pad = size === "xs" ? "px-1 py-0.5 text-[9px]" : "px-1.5 py-0.5 text-[10px]";
+  return (
+    <button
+      onClick={toggle}
+      className={`shrink-0 inline-flex items-center gap-1 font-medium rounded transition-colors ${pad} ${
+        isAgent
+          ? ""
+          : "opacity-0 group-hover:opacity-100 border border-dashed border-gray-300 text-gray-400 hover:text-gray-700"
+      }`}
+      style={isAgent ? { backgroundColor: "#0EA5E914", color: "#0369A1" } : undefined}
+      title={isAgent ? "Agent task — click to unmark" : "Mark as an agent task"}
+    >
+      <Bot size={size === "xs" ? 10 : 11} />
+      Agent
+    </button>
+  );
+}
+
+// Next sort_order for a new sibling among `siblings` (append to the end).
+function nextSortOrder(siblings: RoadmapItem[]): number {
+  return siblings.length ? Math.max(...siblings.map((s) => s.sortOrder)) + 1 : 0;
+}
+
+// Inline-editable roadmap item title. Click to edit; Enter/blur commits, Escape
+// reverts. Auto-enters edit mode for a freshly-added (empty-title) item so the
+// board's "+ sub-item" flows straight into typing — same feel as the list view.
+function EditableTitle({
+  item,
+  className = "",
+  placeholder = "Untitled item",
+}: {
+  item: RoadmapItem;
+  className?: string;
+  placeholder?: string;
+}) {
+  const [editing, setEditing] = useState(item.title === "");
+  const [draft, setDraft] = useState(item.title);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => setDraft(item.title), [item.title]);
+  useEffect(() => {
+    if (editing) inputRef.current?.focus();
+  }, [editing]);
+
+  function commit() {
+    if (draft !== item.title) {
+      sendOp({ op: "roadmap.update", id: item.id, partial: { title: draft } });
+    }
+    setEditing(false);
+  }
+  function cancel() {
+    setDraft(item.title);
+    setEditing(false);
+  }
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            commit();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            cancel();
+          }
+        }}
+        placeholder={placeholder}
+        className={`bg-transparent focus:outline-none border-b border-blue-300 ${className}`}
+      />
+    );
+  }
+  return (
+    <span
+      onClick={(e) => {
+        e.stopPropagation();
+        setEditing(true);
+      }}
+      className={`cursor-text ${className}`}
+    >
+      {item.title || <span className="text-gray-400 italic font-normal">{placeholder}</span>}
+    </span>
   );
 }
 
@@ -1053,15 +1274,23 @@ function SectionHeader({
   onClear?: () => void;
   onAddGoal: () => void;
 }) {
-  function rename() {
-    if (!onRename || stage === null) return;
-    const name = window.prompt("Rename phase:", stage)?.trim();
-    if (name && name !== stage) onRename(name);
-  }
+  const [renameOpen, setRenameOpen] = useState(false);
   return (
     <div className="group/hdr sticky top-0 z-[1] -mx-1 mb-0.5 mt-3 flex items-center gap-2 bg-paper/95 px-1 py-1 backdrop-blur first:mt-0">
+      {renameOpen && stage !== null && onRename && (
+        <PhaseNameDialog
+          title="Rename phase"
+          hint="Every goal in this phase moves to the new name."
+          initial={stage}
+          submitLabel="Rename"
+          onSubmit={(name) => {
+            if (name !== stage) onRename(name);
+          }}
+          onClose={() => setRenameOpen(false)}
+        />
+      )}
       <button
-        onClick={rename}
+        onClick={() => setRenameOpen(true)}
         disabled={!onRename}
         className={`text-xs font-semibold uppercase tracking-wider ${onRename ? "hover:underline" : "cursor-default"}`}
         style={{ color: stage ? ACCENT.solid : "#9ca3af" }}

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, ClipboardList } from "lucide-react";
 import type { CanvasMeta, CanvasMode, CanvasState } from "./types";
 import { connectToCanvas, disconnectFromCanvas, onStateUpdate, onAccessError, onRoleChange, sendOp, setCanvasReadOnly, type AccessStatus, type ChangeActor } from "./lib/ws";
 import { ModeNavContext } from "./lib/modeNav";
@@ -26,6 +26,7 @@ import AgentPresence from "./components/AgentPresence";
 import NotificationBell from "./components/NotificationBell";
 import AgentToasts from "./components/AgentToasts";
 import QuickLog from "./components/QuickLog";
+import TasksPanel from "./components/TasksPanel";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { useAgentActivity } from "./lib/useAgentActivity";
 import { useAgentNotifications } from "./lib/useAgentNotifications";
@@ -94,6 +95,8 @@ function stripClaimFromURL() {
   window.history.replaceState(null, "", url.pathname + url.search + url.hash);
 }
 
+const TASKS_OPEN_KEY = "tandem.tasks.open";
+
 type Route = "home" | "mcp" | "me" | "stats";
 
 function routeFromPath(): Route {
@@ -129,6 +132,26 @@ export default function App() {
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [connectOpen, setConnectOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
+  // Tasks panel (the agent work queue) — open/closed choice remembered.
+  const [tasksOpen, setTasksOpen] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(TASKS_OPEN_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  function setTasksOpenPersist(next: boolean) {
+    setTasksOpen(next);
+    try {
+      localStorage.setItem(TASKS_OPEN_KEY, next ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }
+  // Agent-proposed tasks awaiting your approval — badges the header button.
+  const proposedTaskCount = Object.values(canvasState?.actions ?? {}).filter(
+    (a) => a.type === "task" && a.state === "proposed",
+  ).length;
   // Set when this canvas can't be opened (private, no access) or our access was
   // revoked live. Drives the access-denied screen instead of an endless spinner.
   const [accessError, setAccessError] = useState<AccessStatus | null>(null);
@@ -841,6 +864,23 @@ export default function App() {
             </button>
           )}
           <button
+            onClick={() => setTasksOpenPersist(!tasksOpen)}
+            className={[
+              "relative hidden h-8 w-8 items-center justify-center rounded-lg transition-colors sm:flex",
+              tasksOpen ? "bg-ink/10 text-ink" : "text-gray-500 hover:bg-gray-900/5 hover:text-gray-800",
+            ].join(" ")}
+            title="Tasks — the agent work queue"
+            aria-label="Tasks"
+            aria-pressed={tasksOpen}
+          >
+            <ClipboardList size={17} strokeWidth={1.75} />
+            {proposedTaskCount > 0 && (
+              <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#C75B39] px-1 text-[9px] font-bold text-white">
+                {proposedTaskCount}
+              </span>
+            )}
+          </button>
+          <button
             onClick={() => setConnectOpen(true)}
             className="btn-press rounded-md px-3.5 py-1.5 text-sm font-medium bg-ink text-paper shadow-[2px_2px_0_#C75B39]"
           >
@@ -921,6 +961,17 @@ export default function App() {
         {/* Direct-input layer: quick-log rail + mobile FAB, overlaid on whatever
             mode is showing. Renders the canvas's agent-defined forms. */}
         <QuickLog code={canvas.code} forms={canvasState.forms} />
+
+        {/* Agent work queue: author tasks, approve agent-proposed ones, and see
+            results. In-flow like QuickLog expanded, so the mode reflows. */}
+        {tasksOpen && (
+          <TasksPanel
+            code={canvas.code}
+            state={canvasState}
+            readOnly={canvas.yourRole === "read"}
+            onClose={() => setTasksOpenPersist(false)}
+          />
+        )}
       </div>
 
       {connectOpen && (
