@@ -1,0 +1,26 @@
+{
+  "pkg": "web",
+  "globalName": "Tandem",
+  "shape": "package",
+  "projectId": "e4ec5438-9864-434e-9617-eaa2a1665241",
+  "entry": "apps/web/_ds_entry.tsx",
+  "tsconfig": "tsconfig.json",
+  "cssEntry": "tandem-ds.css",
+  "readmeHeader": ".design-sync/conventions.md",
+  "componentSrcMap": {
+    "TandemLogo": "src/components/TandemLogo.tsx",
+    "EmptyState": "src/components/EmptyState.tsx",
+    "AgentToasts": "src/components/AgentToasts.tsx",
+    "AgentPresence": "src/components/AgentPresence.tsx"
+  },
+  "overrides": {
+    "AgentToasts": { "cardMode": "single", "primaryStory": "Stack" },
+    "AgentPresence": { "cardMode": "column", "viewport": "760x110" }
+  },
+  "dtsPropsFor": {
+    "TandemLogo": "/** Pixel size of the square logo. Default 64. */\n  size?: number;\n  /** Animate the orbit expanding and spinning into place. Default true. */\n  animate?: boolean;\n  /** Extra class names applied to the root <svg>. */\n  className?: string;",
+    "EmptyState": "/** Heading shown inside the dashed placeholder frame. */\n  title: string;\n  /** Optional supporting line rendered under the title. */\n  hint?: string;",
+    "AgentToasts": "/** The live stack of agent-action popups (newest first). Each is an agent action stamped with an id + time. */\n  toasts: { id: number; at: number; nonce: number; op: \"created\" | \"updated\" | \"removed\"; kind: string; mode: \"welcome\" | \"map\" | \"itinerary\" | \"docs\" | \"roadmap\" | \"sheets\" | \"charts\"; agentName: string; isClaude: boolean }[];\n  /** Called with the toast id when a toast is dismissed (clicked). */\n  onDismiss: (id: number) => void;",
+    "AgentPresence": "/** Agents currently present in the canvas. Claude renders terracotta, other agents ink. */\n  agents: { name: string; isClaude: boolean }[];\n  /** The agent's live edit target, or null when it isn't editing. */\n  edit: { entityId: string; mode: \"welcome\" | \"map\" | \"itinerary\" | \"docs\" | \"roadmap\" | \"sheets\" | \"charts\" } | null;\n  /** Whether an agent is currently reading (scanning) the canvas. */\n  reading: boolean;\n  /** Jump to the mode an agent is editing. */\n  onJump: (mode: \"welcome\" | \"map\" | \"itinerary\" | \"docs\" | \"roadmap\" | \"sheets\" | \"charts\") => void;"
+  }
+}

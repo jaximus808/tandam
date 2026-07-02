@@ -91,7 +91,7 @@ export default function CanvasLauncher({ initialMode, onJoin, onClose, onOpenMCP
       >
         {/* header */}
         <div className="flex items-center gap-2 border-b border-ink/10 bg-paper px-6 py-4">
-          <TandemLogo size={22} animate={false} />
+          <TandemLogo size={28} animate={false} />
           <span id="launcher-title" className="font-display text-lg font-medium tracking-tight text-ink">
             Open a canvas
           </span>

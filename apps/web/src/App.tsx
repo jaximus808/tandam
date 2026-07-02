@@ -602,7 +602,7 @@ export default function App() {
           className="group flex items-center gap-1.5 text-sm shrink-0"
           title="Back to home"
         >
-          <TandemLogo size={22} animate={false} />
+          <TandemLogo size={28} animate={false} />
           <span className="hidden font-semibold tracking-tight text-gray-900 transition-colors group-hover:text-sky-600 sm:inline">
             Tandem
           </span>

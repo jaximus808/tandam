@@ -975,7 +975,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
       <header className="sticky top-0 z-40 border-b border-ink/10 bg-paper/85 backdrop-blur">
         <div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-6">
           <div className="flex items-center gap-2 text-[16px] font-semibold tracking-tight">
-            <TandemLogo size={24} />
+            <TandemLogo size={32} />
             <span>Tandem</span>
             <span className="ml-1 hidden items-center gap-1.5 rounded-[3px] border border-ink/10 px-1.5 py-0.5 font-code text-[9px] uppercase tracking-[0.14em] text-ink/40 md:inline-flex">
               <span className="relative flex h-1 w-1">

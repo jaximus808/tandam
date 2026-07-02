@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 210" width="300" height="210">
+  
+  <rect x="90" y="6" width="120" height="120" rx="27" fill="#0D6E66"></rect>
+  <g transform="translate(90,6)"><g transform="translate(60,60) scale(0.84) translate(-60,-60)">
+    <path d="M85.3 37.3 A34 34 0 0 1 52.9 93.3" fill="none" stroke="#FFFFFF" stroke-width="9" stroke-linecap="round"></path>
+    <path d="M34.7 82.7 A34 34 0 0 1 67.1 26.7" fill="none" stroke="#FFFFFF" stroke-width="9" stroke-linecap="round"></path>
+    <line x1="43" y1="89" x2="77" y2="31" stroke="#FFFFFF" stroke-width="5" stroke-linecap="round"></line>
+    <circle cx="77" cy="31" r="11" fill="#FFFFFF"></circle>
+    <circle cx="43" cy="89" r="11" fill="#0D6E66" stroke="#FFFFFF" stroke-width="6"></circle></g></g>
+  <text class="wm" x="150" y="188" font-size="58" fill="#0D6E66" text-anchor="middle">Tandem</text>
+</svg>

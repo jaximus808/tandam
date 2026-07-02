@@ -43,38 +43,37 @@
   width: 100%;
 }
 
-/* Tandem logo entrance + steady orbit.
-   On mount the orbit ring + dots start collapsed inside the central
-   canvas and spinning fast, then expand outward and decelerate into a
-   slow steady-state rotation. transform-box: view-box anchors all
-   transforms to the SVG viewBox center. */
-@keyframes tandem-orbit-expand {
-  from { transform: scale(0.32); }
-  to   { transform: scale(1); }
+/* Tandem logo entrance: the mark assembles once on mount — the two arcs
+   draw in, the bar connects them, then the beads pop. Timings adapted from
+   the brand pack's looping animation (assets/tandem-logo-animated.html),
+   played as a one-shot. Elements use pathLength=100 so dasharray is uniform. */
+@keyframes tandem-draw {
+  from { stroke-dashoffset: 100; }
+  to   { stroke-dashoffset: 0; }
 }
-@keyframes tandem-orbit-rotate-intro {
-  from { transform: rotate(0deg); }
-  to   { transform: rotate(720deg); }
+@keyframes tandem-pop {
+  0%   { transform: scale(0); }
+  70%  { transform: scale(1.15); }
+  100% { transform: scale(1); }
 }
-@keyframes tandem-orbit-rotate-steady {
-  from { transform: rotate(720deg); }
-  to   { transform: rotate(1080deg); }
+.tandem-arc {
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+  animation: tandem-draw 0.7s ease both;
 }
-.tandem-orbit-expand {
-  transform-box: view-box;
-  transform-origin: 50% 50%;
-  animation: tandem-orbit-expand 2.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+.tandem-arc-2 { animation-delay: 0.12s; }
+.tandem-bar   { animation-delay: 0.35s; }
+.tandem-bead {
+  transform-box: fill-box;
+  transform-origin: center;
+  transform: scale(0);
+  animation: tandem-pop 0.45s cubic-bezier(0.34, 1.4, 0.64, 1) both;
 }
-.tandem-orbit-rotate {
-  transform-box: view-box;
-  transform-origin: 50% 50%;
-  animation:
-    tandem-orbit-rotate-intro 2.4s cubic-bezier(0.16, 0.84, 0.44, 1) forwards,
-    tandem-orbit-rotate-steady 18s linear 2.4s infinite;
-}
+.tandem-bead-human { animation-delay: 0.75s; }
+.tandem-bead-agent { animation-delay: 0.9s; }
 @media (prefers-reduced-motion: reduce) {
-  .tandem-orbit-expand,
-  .tandem-orbit-rotate { animation: none; }
+  .tandem-arc,
+  .tandem-bead { animation: none; stroke-dashoffset: 0; transform: none; }
 }
 
 /* Hero canvas demo: pins drop in, itinerary rows slide in, the "editing"

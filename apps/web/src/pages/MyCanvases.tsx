@@ -159,7 +159,7 @@ export default function MyCanvases({ onOpenCanvas, onHome, onOpenMCP }: Props) {
       {/* Top chrome — breadcrumb, inbox, account, primary "New canvas" CTA. */}
       <header className="sticky top-0 z-40 flex items-center gap-2 border-b border-ink/10 bg-paper/85 px-4 py-3 backdrop-blur sm:px-6">
         <button onClick={onHome} className="group flex items-center gap-1.5" title="Back to home">
-          <TandemLogo size={22} animate={false} />
+          <TandemLogo size={28} animate={false} />
           <span className="hidden font-semibold tracking-tight transition-colors group-hover:text-sky-600 sm:inline">
             Tandem
           </span>

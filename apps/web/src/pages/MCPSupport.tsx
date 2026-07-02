@@ -370,7 +370,7 @@ export default function MCPSupport({ onBack }: Props) {
             className="flex items-center gap-2 font-semibold text-gray-900 text-sm hover:text-sky-600 transition-colors"
             title="Back to home"
           >
-            <TandemLogo size={22} />
+            <TandemLogo size={28} />
             <span>Tandem</span>
           </button>
           <div className="w-px h-4 bg-gray-200" />

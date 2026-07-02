@@ -77,7 +77,16 @@
       "Skill(browse)",
       "mcp__agentcanvas__canvas_form_scaffold",
       "Bash(echo \"exit $?\")",
-      "WebFetch(domain:claude.com)"
+      "WebFetch(domain:claude.com)",
+      "Read(//Users/jaxon/.cache/**)",
+      "Read(//Users/jaxon/Library/Caches/ms-playwright/**)",
+      "Bash(npm i *)",
+      "Bash(awk -F: '{print $2}')",
+      "Bash(cp assets/svg/tandem-favicon.svg apps/web/public/favicon.svg)",
+      "Bash(cp assets/png/icon/tandem-icon-180.png apps/web/public/apple-touch-icon.png)",
+      "Bash(cp assets/png/social/tandem-og-1200x630.png apps/web/public/og-image.png)",
+      "Bash(docker start *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:7891/)"
     ]
   }
 }

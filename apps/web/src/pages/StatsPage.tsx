@@ -105,7 +105,7 @@ export default function StatsPage({ onHome }: Props) {
     <div className="flex min-h-screen flex-col bg-paper font-brand text-gray-900">
       <header className="flex items-center gap-2 border-b border-gray-900/5 px-4 py-3">
         <button onClick={onHome} className="group flex items-center gap-1.5" title="Back to home">
-          <TandemLogo size={22} animate={false} />
+          <TandemLogo size={28} animate={false} />
           <span className="hidden font-semibold tracking-tight transition-colors group-hover:text-sky-600 sm:inline">
             Tandem
           </span>
