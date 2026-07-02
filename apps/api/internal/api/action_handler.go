@@ -274,6 +274,23 @@ func (h *Handler) UpdateActionState(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// DELETE /api/canvas/actions/{id}  — remove an action (e.g. delete a task from
+// the queue). Terminal for any state — no state-machine guard.
+func (h *Handler) DeleteAction(w http.ResponseWriter, r *http.Request) {
+	canvasID := CanvasIDFromCtx(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	if _, err := h.store.DeleteAction(r.Context(), canvasID, id); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	broadcastState(r.Context(), h.store, h.hub, canvasID)
+	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
+}
+
 // updateActionPayload is the payload-only PATCH path (task content edits).
 func (h *Handler) updateActionPayload(w http.ResponseWriter, r *http.Request, payload json.RawMessage) {
 	canvasID := CanvasIDFromCtx(r.Context())

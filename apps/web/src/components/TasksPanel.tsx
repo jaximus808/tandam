@@ -1,7 +1,14 @@
 import { useMemo, useState } from "react";
-import { Bot, Check, ChevronsRight, Link2, Pencil, Plus, User, X } from "lucide-react";
+import { Bot, Check, ChevronsRight, Link2, Pencil, Plus, Trash2, User, X } from "lucide-react";
 import type { Action, CanvasState, TaskPayload } from "../types";
-import { approveAction, createTask, rejectAction, updateTask, type TaskDraft } from "../lib/api";
+import {
+  approveAction,
+  createTask,
+  deleteTask,
+  rejectAction,
+  updateTask,
+  type TaskDraft,
+} from "../lib/api";
 
 /* ─────────────────────────────────────────────────────────────────────────────
    TasksPanel — the work queue.
@@ -63,6 +70,7 @@ export default function TasksPanel({
   const [composing, setComposing] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [rejectingId, setRejectingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -113,8 +121,25 @@ export default function TasksPanel({
     }
     const editable = !readOnly && (t.state === "proposed" || t.state === "approved");
     return (
-      <TaskCard key={t.id} task={t} labelFor={targetLabel} onEdit={editable ? () => setEditingId(t.id) : undefined}>
-        {t.state === "proposed" && !readOnly && (
+      <TaskCard
+        key={t.id}
+        task={t}
+        labelFor={targetLabel}
+        onEdit={editable ? () => setEditingId(t.id) : undefined}
+        onDelete={!readOnly ? () => setDeletingId(t.id) : undefined}
+      >
+        {deletingId === t.id ? (
+          <DeleteConfirm
+            busy={busyId === t.id}
+            onCancel={() => setDeletingId(null)}
+            onConfirm={() =>
+              void run(t.id, async () => {
+                await deleteTask(code, t.id);
+                setDeletingId(null);
+              })
+            }
+          />
+        ) : t.state === "proposed" && !readOnly ? (
           rejectingId === t.id ? (
             <RejectForm
               busy={busyId === t.id}
@@ -144,7 +169,7 @@ export default function TasksPanel({
               </button>
             </div>
           )
-        )}
+        ) : null}
       </TaskCard>
     );
   }
@@ -256,11 +281,13 @@ function TaskCard({
   task,
   labelFor,
   onEdit,
+  onDelete,
   children,
 }: {
   task: Action;
   labelFor: Map<string, string>;
   onEdit?: () => void;
+  onDelete?: () => void;
   children?: React.ReactNode;
 }) {
   const p = taskPayload(task);
@@ -281,6 +308,15 @@ function TaskCard({
               className="rounded-md p-0.5 text-ink/25 opacity-0 transition-opacity hover:bg-ink/5 hover:text-ink/60 group-hover/task:opacity-100"
             >
               <Pencil size={12} />
+            </button>
+          )}
+          {onDelete && (
+            <button
+              onClick={onDelete}
+              title="Delete task"
+              className="rounded-md p-0.5 text-ink/25 opacity-0 transition-opacity hover:bg-rose-50 hover:text-rose-600 group-hover/task:opacity-100"
+            >
+              <Trash2 size={12} />
             </button>
           )}
           <span
@@ -323,6 +359,37 @@ function TaskCard({
         </span>
       </div>
       {children}
+    </div>
+  );
+}
+
+// Inline delete confirmation — a destructive action gets one guard tap, no
+// native confirm() dialog (matches the reject flow's in-panel style).
+function DeleteConfirm({
+  busy,
+  onConfirm,
+  onCancel,
+}: {
+  busy: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="mt-2 flex items-center gap-1.5">
+      <span className="flex-1 text-[12px] leading-snug text-ink/60">Delete this task?</span>
+      <button
+        onClick={onConfirm}
+        disabled={busy}
+        className="rounded-lg bg-rose-600 px-2.5 py-1.5 text-xs font-semibold text-white transition-opacity disabled:opacity-40"
+      >
+        Delete
+      </button>
+      <button
+        onClick={onCancel}
+        className="rounded-lg border border-ink/15 px-2.5 py-1.5 text-xs font-medium text-ink/60 hover:border-ink/30"
+      >
+        Cancel
+      </button>
     </div>
   );
 }

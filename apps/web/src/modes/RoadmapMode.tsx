@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+} from "react";
 import {
   DndContext,
   KeyboardSensor,
@@ -21,9 +29,10 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Bot } from "lucide-react";
-import type { CanvasState, RoadmapItem, RoadmapStatus } from "../types";
+import { Bot, Check, Link2, Plus } from "lucide-react";
+import type { Action, CanvasState, RoadmapItem, RoadmapStatus, TaskPayload } from "../types";
 import { sendOp } from "../lib/ws";
+import { createTask } from "../lib/api";
 import EmptyState from "../components/EmptyState";
 import { modeTheme } from "../lib/modeTheme";
 
@@ -39,6 +48,34 @@ const STATUS_LABELS: Record<RoadmapStatus, string> = {
 };
 
 const STATUS_CYCLE: RoadmapStatus[] = ["todo", "in_progress", "done", "blocked"];
+
+// A task (action of type "task") linked back to a roadmap item, projected down to
+// what the roadmap UI needs to show "has an open task" vs "still taskless".
+interface LinkedTask {
+  id: string;
+  state: string;
+}
+
+// Shared down the tree so any roadmap row can offer "create agent task from this"
+// without threading code/readOnly/handlers through every layer. openCreateTask
+// pops the dialog at the RoadmapMode root; linkedTasks maps a roadmap item id to
+// the tasks already pointing at it.
+interface RoadmapTaskCtx {
+  code: string;
+  readOnly: boolean;
+  linkedTasks: Map<string, LinkedTask[]>;
+  openCreateTask: (item: RoadmapItem) => void;
+}
+
+const RoadmapTaskContext = createContext<RoadmapTaskCtx | null>(null);
+
+// An agent-marked item is "taskless" until a still-actionable task links it — a
+// done/failed/rejected task doesn't count, so the item can be re-tasked.
+function hasOpenTask(linked: LinkedTask[]): boolean {
+  return linked.some(
+    (t) => t.state === "proposed" || t.state === "approved" || t.state === "executing",
+  );
+}
 
 // In-app replacement for window.prompt when naming a phase — the native browser
 // dialog shows "localhost says…" chrome and can't be styled or branded.
@@ -128,10 +165,37 @@ interface Projection {
 
 interface Props {
   state: CanvasState;
+  code: string;
+  readOnly: boolean;
 }
 
-export default function RoadmapMode({ state }: Props) {
+export default function RoadmapMode({ state, code, readOnly }: Props) {
   const items = state.roadmapItems;
+
+  // Which roadmap items already have tasks pointing at them (via task
+  // payload.linkedIds). Drives the "＋ Task" vs "✓ Task" affordance so a human
+  // doesn't double-author and can see at a glance what's still taskless.
+  const linkedTasks = useMemo(() => {
+    const map = new Map<string, LinkedTask[]>();
+    for (const a of Object.values(state.actions ?? {}) as Action[]) {
+      if (a.type !== "task") continue;
+      const p = a.payload as TaskPayload;
+      for (const rid of p.linkedIds ?? []) {
+        const arr = map.get(rid) ?? [];
+        arr.push({ id: a.id, state: a.state });
+        map.set(rid, arr);
+      }
+    }
+    return map;
+  }, [state.actions]);
+
+  // The item a "create agent task" dialog is currently open for (null = closed).
+  const [taskFor, setTaskFor] = useState<RoadmapItem | null>(null);
+
+  const taskCtx = useMemo<RoadmapTaskCtx>(
+    () => ({ code, readOnly, linkedTasks, openCreateTask: setTaskFor }),
+    [code, readOnly, linkedTasks],
+  );
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [activeId, setActiveId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
@@ -327,6 +391,7 @@ export default function RoadmapMode({ state }: Props) {
   const isEmpty = Object.keys(items).length === 0;
 
   return (
+    <RoadmapTaskContext.Provider value={taskCtx}>
     <div className="flex-1 flex flex-col min-h-0 min-w-0">
       <div className="shrink-0 max-w-5xl mx-auto w-full px-4 pt-6 pb-3 sm:px-6">
         <div className="flex items-center justify-between gap-2 mb-3">
@@ -449,6 +514,10 @@ export default function RoadmapMode({ state }: Props) {
         </div>
       )}
     </div>
+    {taskFor && (
+      <CreateTaskDialog item={taskFor} code={code} onClose={() => setTaskFor(null)} />
+    )}
+    </RoadmapTaskContext.Provider>
   );
 }
 
@@ -693,7 +762,7 @@ function Row({
         </span>
       )}
 
-      <AgentTaskToggle item={item} />
+      <AgentControls item={item} />
 
       {depth === 0 && (
         <button
@@ -971,7 +1040,7 @@ function RoadmapColumn({
             }`}
           />
           <div className="flex shrink-0 items-center gap-1">
-            <AgentTaskToggle item={root} />
+            <AgentControls item={root} />
             <button
               onClick={deleteGoal}
               title="Delete goal"
@@ -1042,7 +1111,7 @@ function BoardRow({
           status === "done" ? "line-through decoration-gray-400 text-gray-400" : "text-gray-700"
         }`}
       />
-      <AgentTaskToggle item={item} size="xs" />
+      <AgentControls item={item} size="xs" />
       <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
         <button
           onClick={addChild}
@@ -1131,6 +1200,143 @@ function AgentTaskToggle({ item, size = "sm" }: { item: RoadmapItem; size?: "sm"
       <Bot size={size === "xs" ? 10 : 11} />
       Agent
     </button>
+  );
+}
+
+// The agent affordances on a roadmap row: the mark-as-agent chip, plus — the
+// moment an item is marked agent — a "create agent task from this" button. The
+// button is the whole point of the feature: marking agent is cheap intent that
+// surfaces the promote action; nothing is forced. Once an open task links the
+// item the button flips to a "✓ Task" marker so you don't double-author.
+function AgentControls({ item, size = "sm" }: { item: RoadmapItem; size?: "sm" | "xs" }) {
+  const ctx = useContext(RoadmapTaskContext);
+  const isAgent = item.assignee === "agent";
+  const linked = ctx?.linkedTasks.get(item.id) ?? [];
+  const tasked = hasOpenTask(linked);
+  const icon = size === "xs" ? 10 : 11;
+
+  return (
+    <span className="flex shrink-0 items-center gap-1">
+      <AgentTaskToggle item={item} size={size} />
+      {isAgent && ctx && !ctx.readOnly && (
+        tasked ? (
+          <span
+            className="inline-flex shrink-0 items-center gap-1 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700"
+            title={`${linked.length} agent task${linked.length > 1 ? "s" : ""} linked — open the Tasks panel to see ${linked.length > 1 ? "them" : "it"}`}
+          >
+            <Check size={icon} />
+            Task
+          </span>
+        ) : (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              ctx.openCreateTask(item);
+            }}
+            className="inline-flex shrink-0 items-center gap-1 rounded border border-dashed border-sky-300 px-1.5 py-0.5 text-[10px] font-medium text-sky-600 transition-colors hover:bg-sky-50 hover:text-sky-700"
+            title="Create an agent task from this item — born ready, no approval needed"
+          >
+            <Plus size={icon} />
+            Task
+          </button>
+        )
+      )}
+    </span>
+  );
+}
+
+// The pre-filled "create agent task" dialog, popped from AgentControls. Seeds
+// title/body from the roadmap item, auto-links it, and — being human-authored —
+// creates the task born approved (skips the proposed gate). State comes back
+// over WS, so linkedTasks recomputes and the row flips to "✓ Task" on its own.
+function CreateTaskDialog({
+  item,
+  code,
+  onClose,
+}: {
+  item: RoadmapItem;
+  code: string;
+  onClose: () => void;
+}) {
+  const [title, setTitle] = useState(item.title || "");
+  const [body, setBody] = useState(item.body ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit() {
+    if (!title.trim() || saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await createTask(code, {
+        title: title.trim(),
+        body: body.trim() || undefined,
+        linkedIds: [item.id],
+        assignee: "agent",
+      });
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not create task");
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[2000] flex items-start justify-center pt-[16vh]"
+      role="dialog"
+      aria-modal="true"
+    >
+      <div className="absolute inset-0 bg-ink/25 backdrop-blur-[1px]" onClick={onClose} />
+      <div className="relative w-[440px] max-w-[92vw] rounded-2xl border border-ink/10 bg-white p-4 shadow-[4px_6px_0_rgba(17,17,17,0.08)]">
+        <div className="flex items-center gap-2">
+          <Bot size={15} style={{ color: ACCENT.solid }} />
+          <h3 className="text-sm font-semibold text-ink">Create agent task</h3>
+        </div>
+        <p className="mt-1 text-[11px] leading-snug text-ink/45">
+          Born ready — an agent session can pick this up immediately. Linked back to this roadmap item.
+        </p>
+        <input
+          autoFocus
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") submit();
+            if (e.key === "Escape") onClose();
+          }}
+          placeholder="What should the agent do?"
+          className="mt-2.5 w-full rounded-lg border border-ink/15 bg-white px-2.5 py-1.5 text-sm text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
+        />
+        <textarea
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+          placeholder="Brief: what, why, acceptance criteria (optional)"
+          rows={4}
+          className="mt-2 w-full resize-none rounded-lg border border-ink/15 bg-white px-2.5 py-1.5 text-[13px] text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
+        />
+        <div className="mt-2 inline-flex max-w-full items-center gap-1 rounded-[4px] border border-ink/10 bg-ink/[0.03] px-1.5 py-0.5 text-[10px] text-ink/50">
+          <Link2 size={10} className="shrink-0" />
+          <span className="truncate">Linked to “{item.title || "this item"}”</span>
+        </div>
+        {error && <p className="mt-2 text-[11px] text-rose-600">{error}</p>}
+        <div className="mt-3 flex justify-end gap-1.5">
+          <button
+            onClick={onClose}
+            className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm font-medium text-ink/60 hover:border-ink/30"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={submit}
+            disabled={!title.trim() || saving}
+            className="rounded-lg px-3.5 py-1.5 text-sm font-semibold text-white transition-opacity disabled:opacity-40"
+            style={{ backgroundColor: ACCENT.solid }}
+          >
+            {saving ? "Creating…" : "Create task"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

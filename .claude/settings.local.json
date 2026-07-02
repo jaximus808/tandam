@@ -88,7 +88,16 @@
       "Bash(docker start *)",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:7891/)",
       "Bash(curl -s -m 3 http://localhost:7891/api/maps -o /dev/null -w \"%{http_code}\\\\n\")",
-      "mcp__agentcanvas__canvas_roadmap_task_list"
+      "mcp__agentcanvas__canvas_roadmap_task_list",
+      "mcp__claude_ai_tandem__canvas_connect",
+      "mcp__claude_ai_tandem__canvas_state_read",
+      "mcp__claude_ai_tandem__canvas_roadmap_item_add",
+      "mcp__claude_ai_tandem__canvas_note_add",
+      "mcp__claude_ai_tandem__canvas_task_add",
+      "mcp__claude_ai_tandem__canvas_roadmap_item_update",
+      "mcp__claude_ai_tandem__canvas_task_get",
+      "mcp__claude_ai_tandem__canvas_task_start",
+      "mcp__claude_ai_tandem__canvas_task_complete"
     ]
   }
 }

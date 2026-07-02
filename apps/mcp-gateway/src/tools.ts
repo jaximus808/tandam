@@ -162,28 +162,64 @@ export async function handleTool(
     case "canvas_roadmap_task_list": {
       // The agent-task queue drawn from the roadmap: goals a human marked for an
       // agent session to execute. Compact projection — canvas_roadmap_item /
-      // canvas_state_read has the rest.
-      const res = (await gateway.get(
-        "/api/canvas/roadmap-items?assignee=agent",
-      )) as {
-        items: Array<{
-          id: string;
-          title: string;
-          body: string;
-          status: string;
-          stage?: string;
-          parentId?: string;
-        }>;
-      };
+      // canvas_state_read has the rest. We also fold in whether a type="task"
+      // action already links each item, so a session can tell which agent-marked
+      // goals are still TASKLESS (candidates to propose a task for) vs already
+      // being worked.
+      const [roadmapRes, actionsRes] = (await Promise.all([
+        gateway.get("/api/canvas/roadmap-items?assignee=agent"),
+        gateway.get("/api/canvas/actions?type=task"),
+      ])) as [
+        {
+          items: Array<{
+            id: string;
+            title: string;
+            body: string;
+            status: string;
+            stage?: string;
+            parentId?: string;
+          }>;
+        },
+        {
+          actions: Array<{
+            id: string;
+            state: string;
+            payload?: { linkedIds?: string[] };
+          }>;
+        },
+      ];
+
+      // roadmap item id → the tasks pointing at it (id + state).
+      const linkedByItem = new Map<string, Array<{ id: string; state: string }>>();
+      for (const a of actionsRes.actions ?? []) {
+        for (const rid of a.payload?.linkedIds ?? []) {
+          const arr = linkedByItem.get(rid) ?? [];
+          arr.push({ id: a.id, state: a.state });
+          linkedByItem.set(rid, arr);
+        }
+      }
+      // A done/failed/rejected task doesn't keep an item "covered" — it can be
+      // re-tasked, so only still-actionable states count as an open task.
+      const isOpen = (s: string) =>
+        s === "proposed" || s === "approved" || s === "executing";
+
       return {
-        tasks: (res.items ?? []).map((it) => ({
-          id: it.id,
-          title: it.title,
-          status: it.status,
-          ...(it.body ? { body: it.body } : {}),
-          ...(it.stage ? { stage: it.stage } : {}),
-          ...(it.parentId ? { parentId: it.parentId } : {}),
-        })),
+        tasks: (roadmapRes.items ?? []).map((it) => {
+          const linked = linkedByItem.get(it.id) ?? [];
+          const hasOpenTask = linked.some((t) => isOpen(t.state));
+          return {
+            id: it.id,
+            title: it.title,
+            status: it.status,
+            ...(it.body ? { body: it.body } : {}),
+            ...(it.stage ? { stage: it.stage } : {}),
+            ...(it.parentId ? { parentId: it.parentId } : {}),
+            // false ⇒ no open task links this goal yet — propose one via
+            // canvas_task_add (linkedIds:[id]) if you intend to work it.
+            hasOpenTask,
+            ...(linked.length > 0 ? { linkedTasks: linked } : {}),
+          };
+        }),
       };
     }
 
@@ -740,9 +776,14 @@ export const TOOLS = [
     description:
       "List the roadmap's AGENT tasks: goals a human marked (assignee='agent') " +
       "for an agent session to execute. Returns { tasks: [{id, title, status, " +
-      "body?, stage?, parentId?}] }. This is the roadmap-side work queue — use it " +
-      "to pull work to do, then canvas_roadmap_item_update to move a task's status " +
-      "to 'in_progress' / 'done' as you go.",
+      "body?, stage?, parentId?, hasOpenTask, linkedTasks?}] }. This is the " +
+      "roadmap-side work queue — use it to pull work to do, then " +
+      "canvas_roadmap_item_update to move a task's status to 'in_progress' / " +
+      "'done' as you go. `hasOpenTask` is false when no still-actionable task " +
+      "(proposed/approved/executing) links the goal yet: if you intend to work " +
+      "it, propose a task with canvas_task_add and linkedIds:[<goal id>] so the " +
+      "human can approve a concrete unit of work. `linkedTasks` lists the tasks " +
+      "already pointing at the goal (id + state).",
     inputSchema: { type: "object" as const, properties: {} },
   },
   {

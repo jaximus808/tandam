@@ -1617,6 +1617,18 @@ func (s *supabaseStore) UpdateActionPayload(ctx context.Context, canvasID, id uu
 	return s.bumpVersion(ctx, canvasID)
 }
 
+// DeleteAction removes an action row (e.g. deleting a task from the queue).
+func (s *supabaseStore) DeleteAction(ctx context.Context, canvasID, id uuid.UUID) (int, error) {
+	err := s.exec(s.client.From("actions").
+		Delete("minimal", "").
+		Eq("id", id.String()).
+		Eq("canvas_id", canvasID.String()))
+	if err != nil {
+		return 0, err
+	}
+	return s.bumpVersion(ctx, canvasID)
+}
+
 // GetLinkedEntities resolves a task's payload.linkedIds against roadmap items
 // and notes (the two entity kinds tasks link to). Unknown ids are skipped, not
 // errors — a linked item may have been deleted since the task was written.

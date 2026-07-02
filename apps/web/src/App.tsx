@@ -950,7 +950,13 @@ export default function App() {
                 />
               )}
               {m === "docs" && <DocsMode canvasId={canvas.id} state={canvasState} />}
-              {m === "roadmap" && <RoadmapMode state={canvasState} />}
+              {m === "roadmap" && (
+                <RoadmapMode
+                  state={canvasState}
+                  code={canvas.code}
+                  readOnly={canvas.yourRole === "read"}
+                />
+              )}
               {m === "sheets" && <SheetsMode state={canvasState} canvasCode={canvas.code} />}
               {m === "charts" && <ChartsMode state={canvasState} />}
             </div>

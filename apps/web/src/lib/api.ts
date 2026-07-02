@@ -154,6 +154,17 @@ export async function updateTask(code: string, id: string, task: TaskDraft): Pro
   );
 }
 
+// Delete a task outright (any state). Removes the action row; state comes back
+// over WS so the panel drops it on the next broadcast.
+export async function deleteTask(code: string, id: string): Promise<void> {
+  await authedFetch(
+    code,
+    `/api/canvas/actions/${id}`,
+    { method: "DELETE" },
+    "Could not delete task",
+  );
+}
+
 export async function approveAction(code: string, id: string): Promise<void> {
   await authedFetch(
     code,
