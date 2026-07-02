@@ -191,7 +191,20 @@ func (h *Handler) Stats(w http.ResponseWriter, r *http.Request) {
 }
 
 // GET /api/canvas/state  (JWT required)
+//
+// Read shapes (query params), to keep a big canvas from barfing the agent's
+// token budget — see state_read.go:
+//   - ?full=true             → the entire canvas (back-compat).
+//   - ?fields=roadmapItems,… → only those kinds, in full.
+//   - (neither)              → lightweight summary: per-kind counts + names.
 func (h *Handler) GetState(w http.ResponseWriter, r *http.Request) {
+	fields, err := validateStateFields(r.URL.Query().Get("fields"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	full := r.URL.Query().Get("full") == "true"
+
 	canvasID := CanvasIDFromCtx(r.Context())
 	canvas, state, edits, err := h.store.GetCanvasState(r.Context(), canvasID)
 	if err != nil {
@@ -202,6 +215,16 @@ func (h *Handler) GetState(w http.ResponseWriter, r *http.Request) {
 	// it — it lives off the WS state stream). So a hit here means an agent just
 	// read the canvas; pulse that to viewers as live "reading" presence.
 	broadcastActivity(h.hub, canvasID, "read")
+
+	// Default (no fields, not full) → cheap summary so the agent can navigate
+	// without pulling the whole board.
+	if !full && len(fields) == 0 {
+		writeJSON(w, http.StatusOK, summarizeState(canvas, state, edits))
+		return
+	}
+	if len(fields) > 0 {
+		state = projectState(state, fields)
+	}
 	writeJSON(w, http.StatusOK, stateMsg{
 		Type:         "state",
 		Canvas:       canvas,

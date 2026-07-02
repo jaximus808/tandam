@@ -56,8 +56,17 @@ export async function handleTool(
     }
 
     // ── State ──────────────────────────────────────────────────────────────────
-    case "canvas_state_read":
-      return gateway.get("/api/canvas/state");
+    case "canvas_state_read": {
+      // Default is a cheap summary (counts + names). fields=[...] pulls only the
+      // named kinds in full; full=true returns the entire canvas (can be huge).
+      const qs = new URLSearchParams();
+      if (Array.isArray(args.fields) && args.fields.length > 0) {
+        qs.set("fields", args.fields.join(","));
+      }
+      if (args.full === true) qs.set("full", "true");
+      const q = qs.toString();
+      return gateway.get(`/api/canvas/state${q ? `?${q}` : ""}`);
+    }
 
     // ── Mode ───────────────────────────────────────────────────────────────────
     case "canvas_mode_set":
@@ -474,11 +483,36 @@ export const TOOLS = [
   {
     name: "canvas_state_read",
     description:
-      "Read the active canvas state. Returns activeCanvasName, activeCanvasId, state " +
-      "(pins/events/notes), and pendingEdits. Requires canvas_connect to have been called " +
-      "first. NOTE: this returns the ENTIRE canvas and can be very large — if you're " +
-      "looking for work to do, start with canvas_task_list instead.",
-    inputSchema: { type: "object" as const, properties: {} },
+      "Read the active canvas state. Requires canvas_connect first. By DEFAULT returns a " +
+      "lightweight SUMMARY — per-kind counts plus the name/title of each item (mode, version, " +
+      "enabledModes too) — so you can see what's on the canvas without pulling the whole board " +
+      "(a real canvas is 100k+ chars and will blow your token budget). To read actual objects, " +
+      "pass `fields` with just the kinds you need, e.g. fields:[\"roadmapItems\"] or " +
+      "fields:[\"sheets\",\"sheetRows\"]. Valid kinds: pins, events, notes, roadmapItems, sheets, " +
+      "sheetRows, charts, forms, actions, agents. Reading a sheet? request BOTH \"sheets\" and " +
+      "\"sheetRows\". Only pass full:true if you truly need the entire canvas. If you're looking " +
+      "for work to do, start with canvas_task_list instead.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        fields: {
+          type: "array",
+          items: {
+            type: "string",
+            enum: [
+              "pins", "events", "notes", "roadmapItems", "sheets",
+              "sheetRows", "charts", "forms", "actions", "agents",
+            ],
+          },
+          description:
+            "Return the full objects for only these kinds. Omit for a summary of the whole canvas.",
+        },
+        full: {
+          type: "boolean",
+          description: "Return the ENTIRE canvas (can be very large). Prefer `fields` instead.",
+        },
+      },
+    },
   },
   {
     name: "canvas_mode_set",

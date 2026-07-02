@@ -1,6 +1,8 @@
 {
   "permissions": {
     "allow": [
+      "mcp__claude_ai_tandem",
+      "mcp__claude_ai_tandem__*",
       "Bash(pnpm install *)",
       "Bash(pnpm --filter mcp-gateway build)",
       "mcp__agentcanvas__canvas_pin_add",

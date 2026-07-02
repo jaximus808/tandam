@@ -15,12 +15,12 @@ Live at https://tandemcanvas.com. Deploy = push to `main` (GitHub Actions → GC
 
 ## Work from the canvas task queue
 
-The living roadmap for THIS project is itself a Tandem canvas: **code `PKMLR67T`**
+The living roadmap for THIS project is itself a Tandem canvas: **code `TEGLQFXR`**
 ("tandem planning"). Dogfooding — we plan Tandem in Tandem.
 
 Sessions start from the task queue, NOT a full state read:
 
-1. `canvas_connect` with code `PKMLR67T` (once per session).
+1. `canvas_connect` with code `TEGLQFXR` (once per session).
 2. `canvas_task_list` with `state: "approved"` — the ready-to-work queue. This is
    the cheap entry point; do **not** open with `canvas_state_read` (it returns the
    entire canvas and is huge). Reserve `canvas_state_read` for when you genuinely
