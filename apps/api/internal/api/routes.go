@@ -104,12 +104,17 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 		r.Get("/api/canvas/actions", h.ListActions)
 		r.Get("/api/canvas/actions/{id}", h.ReadAction)
 		r.Get("/api/canvas/roadmap-items", h.ListRoadmapItems)
+		r.Get("/api/canvas/documents", h.ListDocuments)
 
 		// Writes — require write role.
 		r.Group(func(r chi.Router) {
 			r.Use(RequireWrite)
 
 			r.Post("/api/canvas/mode", h.SetMode)
+
+			r.Post("/api/canvas/documents", h.CreateDocument)
+			r.Patch("/api/canvas/documents/{ref}", h.UpdateDocument)
+			r.Delete("/api/canvas/documents/{ref}", h.DeleteDocument)
 			r.Post("/api/canvas/mode/enable", h.EnableMode)
 			r.Post("/api/canvas/map", h.SetMap)
 			r.Post("/api/canvas/template", h.ApplyTemplate)

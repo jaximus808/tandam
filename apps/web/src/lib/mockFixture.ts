@@ -11,6 +11,7 @@ import type {
   RoadmapItem,
   Sheet,
   SheetRow,
+  Document,
   EntityId,
 } from "../types";
 
@@ -313,15 +314,35 @@ function toRecord<T extends { id: EntityId }>(arr: T[]): Record<EntityId, T> {
   return out;
 }
 
+// Documents (migration 0024): the mock's content predates the model, so wrap
+// each kind in a named document and stamp its rows with that documentId — the
+// canvas tab strip renders one tab per document.
+const mapDocId = id();
+const itinDocId = id();
+const notesDocId = id();
+const roadmapDocId = id();
+const sheetDocId = id();
+
+const documents: Document[] = [
+  { id: mapDocId, kind: "document", type: "map", name: "Tokyo map", sortOrder: 0, config: { mapId: "tokyo" }, createdBy: "user", updatedAt: Date.now() },
+  { id: itinDocId, kind: "document", type: "itinerary", name: "Itinerary", sortOrder: 1, config: {}, createdBy: "user", updatedAt: Date.now() },
+  { id: notesDocId, kind: "document", type: "notes", name: "Notes", sortOrder: 2, config: {}, createdBy: "user", updatedAt: Date.now() },
+  { id: roadmapDocId, kind: "document", type: "roadmap", name: "Roadmap", sortOrder: 3, config: {}, createdBy: "user", updatedAt: Date.now() },
+  { id: sheetDocId, kind: "document", type: "sheet", name: "Hotel comparison", sortOrder: 4, config: {}, createdBy: "user", updatedAt: Date.now() },
+];
+
+const stamp = <T,>(arr: T[], documentId: string): T[] => arr.map((e) => ({ ...e, documentId }));
+
 const initialState: CanvasState = {
   version: 1,
   mode: "sheets",
   enabledModes: [],
-  pins: toRecord(pins),
-  events: toRecord(events),
-  notes: toRecord(notes),
-  roadmapItems: toRecord(roadmapItems),
-  sheets: toRecord(sheets),
+  documents: toRecord(documents),
+  pins: toRecord(stamp(pins, mapDocId)),
+  events: toRecord(stamp(events, itinDocId)),
+  notes: toRecord(stamp(notes, notesDocId)),
+  roadmapItems: toRecord(stamp(roadmapItems, roadmapDocId)),
+  sheets: toRecord(stamp(sheets, sheetDocId)),
   sheetRows: toRecord(sheetRows),
   charts: {},
   forms: {},

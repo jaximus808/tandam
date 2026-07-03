@@ -211,6 +211,14 @@ func (wh *WSHandler) handleOp(canvasID uuid.UUID, raw []byte, canWrite bool) {
 			ParentKind: data.ParentKind,
 			CreatedBy:  "user",
 		}
+		// Land the note in the canvas's default notes document (creating one if
+		// needed) so it belongs to a tab, matching the agent/REST path.
+		docID, derr := ensureDefaultDocument(ctx, wh.store, canvasID, "notes", "user")
+		if derr != nil {
+			log.Printf("ws op note.add: document: %v", derr)
+			return
+		}
+		n.DocumentID = &docID
 		_, mutErr = wh.store.CreateNote(ctx, canvasID, n)
 
 	case "note.update":
@@ -260,6 +268,12 @@ func (wh *WSHandler) handleOp(canvasID uuid.UUID, raw []byte, canWrite bool) {
 			SortOrder: data.SortOrder,
 			CreatedBy: "user",
 		}
+		docID, derr := ensureDefaultDocument(ctx, wh.store, canvasID, "roadmap", "user")
+		if derr != nil {
+			log.Printf("ws op roadmap.add: document: %v", derr)
+			return
+		}
+		r.DocumentID = &docID
 		_, mutErr = wh.store.CreateRoadmapItem(ctx, canvasID, r)
 
 	case "roadmap.update":
@@ -290,6 +304,66 @@ func (wh *WSHandler) handleOp(canvasID uuid.UUID, raw []byte, canWrite bool) {
 			return
 		}
 		_, mutErr = wh.store.ReorderRoadmapItems(ctx, canvasID, payload.Updates)
+
+	case "document.add":
+		var data struct {
+			Type      string         `json:"type"`
+			Name      string         `json:"name"`
+			Config    map[string]any `json:"config"`
+			SortOrder int            `json:"sortOrder"`
+		}
+		if len(msg.Data) > 0 {
+			if err := json.Unmarshal(msg.Data, &data); err != nil {
+				log.Printf("ws op document.add: bad data: %v", err)
+				return
+			}
+		}
+		if !docTypesCreatable[data.Type] { // excludes "chart" (needs a source sheet) + unknowns
+			log.Printf("ws op document.add: invalid type %q", data.Type)
+			return
+		}
+		if data.Name == "" {
+			data.Name = defaultDocNames[data.Type]
+		}
+		// A sheet document is 1:1 with a sheet row; the store mints the doc for us.
+		if data.Type == "sheet" {
+			sh := &store.Sheet{ID: uuid.New(), Kind: "sheet", Name: data.Name,
+				Columns: []store.SheetColumn{}, SortOrder: data.SortOrder, CreatedBy: "user"}
+			_, mutErr = wh.store.CreateSheet(ctx, canvasID, sh)
+		} else {
+			doc := &store.Document{ID: uuid.New(), Kind: "document", Type: data.Type,
+				Name: data.Name, Config: data.Config, SortOrder: data.SortOrder, CreatedBy: "user"}
+			_, mutErr = wh.store.CreateDocument(ctx, canvasID, doc)
+		}
+
+	case "document.update":
+		if msg.ID == nil {
+			return
+		}
+		var patch store.DocumentPatch
+		if err := json.Unmarshal(msg.Partial, &patch); err != nil {
+			return
+		}
+		_, mutErr = wh.store.UpdateDocument(ctx, canvasID, *msg.ID, patch)
+
+	case "document.delete":
+		if msg.ID == nil {
+			return
+		}
+		_, mutErr = wh.store.DeleteDocument(ctx, canvasID, *msg.ID)
+
+	case "document.reorder":
+		var payload struct {
+			Updates []store.DocumentReorder `json:"updates"`
+		}
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			log.Printf("ws op document.reorder: bad payload: %v", err)
+			return
+		}
+		if len(payload.Updates) == 0 {
+			return
+		}
+		_, mutErr = wh.store.ReorderDocuments(ctx, canvasID, payload.Updates)
 
 	case "sheet.add":
 		var data struct {

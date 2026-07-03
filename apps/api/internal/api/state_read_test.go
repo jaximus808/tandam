@@ -14,11 +14,13 @@ func sampleState() *store.CanvasState {
 	rid := uuid.New()
 	nid := uuid.New()
 	pid := uuid.New()
+	did := uuid.New()
 	return &store.CanvasState{
 		Version:      7,
 		Mode:         "roadmap",
 		EnabledModes: []string{"roadmap", "map"},
-		Pins:         map[string]*store.Pin{pid.String(): {ID: pid, Label: strptr("Tokyo Tower")}},
+		Documents:    map[string]*store.Document{did.String(): {ID: did, Type: "map", Name: "Japan"}},
+		Pins:         map[string]*store.Pin{pid.String(): {ID: pid, DocumentID: &did, Label: strptr("Tokyo Tower")}},
 		RoadmapItems: map[string]*store.RoadmapItem{rid.String(): {ID: rid, Title: "Fix the state barf"}},
 		Notes:        map[string]*store.Note{nid.String(): {ID: nid, Body: "line one\nline two"}},
 	}
@@ -52,8 +54,14 @@ func TestProjectStateKeepsOnlyRequested(t *testing.T) {
 	if len(out.RoadmapItems) != 1 {
 		t.Fatalf("requested kind should be present, got %d", len(out.RoadmapItems))
 	}
-	if out.Notes != nil || out.Pins != nil {
-		t.Fatalf("unrequested kinds must be nil, got notes=%v pins=%v", out.Notes, out.Pins)
+	if out.Notes != nil || out.Pins != nil || out.Documents != nil {
+		t.Fatalf("unrequested kinds must be nil, got notes=%v pins=%v documents=%v", out.Notes, out.Pins, out.Documents)
+	}
+
+	// documents is a projectable kind.
+	docsOnly := projectState(sampleState(), []string{"documents"})
+	if len(docsOnly.Documents) != 1 || docsOnly.RoadmapItems != nil {
+		t.Fatalf("documents projection wrong: docs=%d roadmap=%v", len(docsOnly.Documents), docsOnly.RoadmapItems)
 	}
 }
 
@@ -67,6 +75,12 @@ func TestSummarizeState(t *testing.T) {
 	}
 	if msg.Counts["roadmapItems"] != 1 || msg.Counts["notes"] != 1 || msg.Counts["events"] != 0 {
 		t.Fatalf("counts wrong: %+v", msg.Counts)
+	}
+	if msg.Counts["documents"] != 1 {
+		t.Fatalf("documents count wrong: %+v", msg.Counts)
+	}
+	if got := msg.Names["documents"]; len(got) != 1 || got[0] != "Japan (map)" {
+		t.Fatalf("document name should carry type, got %v", got)
 	}
 	if got := msg.Names["roadmapItems"]; len(got) != 1 || got[0] != "Fix the state barf" {
 		t.Fatalf("roadmap names wrong: %v", got)

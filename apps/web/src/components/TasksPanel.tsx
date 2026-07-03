@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Bot, Check, ChevronsRight, Link2, Pencil, Plus, Trash2, User, X } from "lucide-react";
+import { Bot, Check, ChevronsLeft, Link2, Pencil, Plus, Trash2, User, X } from "lucide-react";
 import type { Action, CanvasState, TaskPayload } from "../types";
 import {
   approveAction,
@@ -175,7 +175,7 @@ export default function TasksPanel({
   }
 
   return (
-    <div className="z-20 hidden w-[320px] shrink-0 flex-col border-l border-ink/10 bg-white/90 backdrop-blur sm:flex">
+    <>
       <div className="flex items-center justify-between border-b border-ink/10 px-3 py-3 pl-4">
         <span className="text-sm font-semibold text-ink">Tasks</span>
         <div className="flex items-center gap-1">
@@ -189,10 +189,10 @@ export default function TasksPanel({
           )}
           <button
             onClick={onClose}
-            title="Close tasks"
+            title="Hide tasks"
             className="flex h-7 w-7 items-center justify-center rounded-lg text-ink/35 transition-colors hover:bg-ink/5 hover:text-ink/60"
           >
-            <ChevronsRight size={16} strokeWidth={1.75} />
+            <ChevronsLeft size={16} strokeWidth={1.75} />
           </button>
         </div>
       </div>
@@ -234,7 +234,7 @@ export default function TasksPanel({
           {renderTask}
         </Section>
       </div>
-    </div>
+    </>
   );
 }
 

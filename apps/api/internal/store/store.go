@@ -91,21 +91,23 @@ func NewNotification(recipientID uuid.UUID, kind string, canvasID *uuid.UUID, ac
 }
 
 type Pin struct {
-	ID        uuid.UUID `json:"id"`
-	Kind      string    `json:"kind"` // always "pin"
-	PinType   string    `json:"pinType"`
-	Lat       float64   `json:"lat"`
-	Lng       float64   `json:"lng"`
-	Label     *string   `json:"label,omitempty"`
-	Body      *string   `json:"body,omitempty"`
-	Color     *string   `json:"color,omitempty"`
-	CreatedBy string    `json:"createdBy"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	ID         uuid.UUID  `json:"id"`
+	Kind       string     `json:"kind"` // always "pin"
+	DocumentID *uuid.UUID `json:"documentId,omitempty"`
+	PinType    string     `json:"pinType"`
+	Lat        float64    `json:"lat"`
+	Lng        float64    `json:"lng"`
+	Label      *string    `json:"label,omitempty"`
+	Body       *string    `json:"body,omitempty"`
+	Color      *string    `json:"color,omitempty"`
+	CreatedBy  string     `json:"createdBy"`
+	UpdatedAt  time.Time  `json:"updatedAt"`
 }
 
 type Event struct {
 	ID         uuid.UUID   `json:"id"`
 	Kind       string      `json:"kind"` // always "event"
+	DocumentID *uuid.UUID  `json:"documentId,omitempty"`
 	Title      string      `json:"title"`
 	Start      time.Time   `json:"start"`
 	End        *time.Time  `json:"end,omitempty"`
@@ -124,6 +126,7 @@ type Event struct {
 type Note struct {
 	ID         uuid.UUID  `json:"id"`
 	Kind       string     `json:"kind"` // always "note"
+	DocumentID *uuid.UUID `json:"documentId,omitempty"`
 	Body       string     `json:"body"`
 	ImageRefs  []string   `json:"imageRefs"`
 	ParentID   *uuid.UUID `json:"parentId,omitempty"`
@@ -133,12 +136,13 @@ type Note struct {
 }
 
 type RoadmapItem struct {
-	ID       uuid.UUID  `json:"id"`
-	Kind     string     `json:"kind"` // always "roadmap"
-	ParentID *uuid.UUID `json:"parentId,omitempty"`
-	Title    string     `json:"title"`
-	Body     string     `json:"body"`
-	Status   string     `json:"status"`
+	ID         uuid.UUID  `json:"id"`
+	Kind       string     `json:"kind"` // always "roadmap"
+	DocumentID *uuid.UUID `json:"documentId,omitempty"`
+	ParentID   *uuid.UUID `json:"parentId,omitempty"`
+	Title      string     `json:"title"`
+	Body       string     `json:"body"`
+	Status     string     `json:"status"`
 	// Stage is a free-text phase label ("Now"/"Next"/"Later", "v1"/"v2", …)
 	// used to group top-level goals into bands. Empty/absent = unstaged.
 	Stage string `json:"stage,omitempty"`
@@ -158,13 +162,14 @@ type SheetColumn struct {
 }
 
 type Sheet struct {
-	ID        uuid.UUID     `json:"id"`
-	Kind      string        `json:"kind"` // always "sheet"
-	Name      string        `json:"name"`
-	Columns   []SheetColumn `json:"columns"`
-	SortOrder int           `json:"sortOrder"`
-	CreatedBy string        `json:"createdBy"`
-	UpdatedAt time.Time     `json:"updatedAt"`
+	ID         uuid.UUID     `json:"id"`
+	Kind       string        `json:"kind"` // always "sheet"
+	DocumentID *uuid.UUID    `json:"documentId,omitempty"`
+	Name       string        `json:"name"`
+	Columns    []SheetColumn `json:"columns"`
+	SortOrder  int           `json:"sortOrder"`
+	CreatedBy  string        `json:"createdBy"`
+	UpdatedAt  time.Time     `json:"updatedAt"`
 }
 
 type SheetRow struct {
@@ -178,16 +183,17 @@ type SheetRow struct {
 }
 
 type Chart struct {
-	ID        uuid.UUID `json:"id"`
-	Kind      string    `json:"kind"` // always "chart"
-	Name      string    `json:"name"`
-	SheetID   uuid.UUID `json:"sheetId"`
-	ChartType string    `json:"chartType"` // "bar" | "line" | "area" | "pie"
-	XColumn   string    `json:"xColumn"`   // SheetColumn.id
-	YColumns  []string  `json:"yColumns"`  // SheetColumn.ids
-	SortOrder int       `json:"sortOrder"`
-	CreatedBy string    `json:"createdBy"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	ID         uuid.UUID  `json:"id"`
+	Kind       string     `json:"kind"` // always "chart"
+	DocumentID *uuid.UUID `json:"documentId,omitempty"`
+	Name       string     `json:"name"`
+	SheetID    uuid.UUID  `json:"sheetId"`
+	ChartType  string     `json:"chartType"` // "bar" | "line" | "area" | "pie"
+	XColumn    string     `json:"xColumn"`   // SheetColumn.id
+	YColumns   []string   `json:"yColumns"`  // SheetColumn.ids
+	SortOrder  int        `json:"sortOrder"`
+	CreatedBy  string     `json:"createdBy"`
+	UpdatedAt  time.Time  `json:"updatedAt"`
 }
 
 // ── Forms (direct-input layer) ────────────────────────────────────────────────
@@ -334,11 +340,34 @@ type PendingEdit struct {
 	CreatedAt   time.Time `json:"createdAt"`
 }
 
+// Document is a named, multi-instance tab on a canvas (migration 0024). It
+// generalizes what sheets already do to every view type: a canvas is a bag of
+// documents, each with a Type (map/notes/itinerary/roadmap/sheet/chart), a Name,
+// and a SortOrder. Child rows (pins/events/notes/roadmap items/sheets/charts)
+// point back at their document via DocumentID. Config carries type-specific
+// settings — e.g. {"mapId":"tokyo"} for a map document.
+//
+// ParentID is reserved for a future folder tree (the document explorer sidebar,
+// roadmap item 9) — it is always null today, so the model is flat now but a tree
+// can be layered on with no schema rework.
+type Document struct {
+	ID        uuid.UUID      `json:"id"`
+	Kind      string         `json:"kind"` // always "document"
+	Type      string         `json:"type"`
+	Name      string         `json:"name"`
+	ParentID  *uuid.UUID     `json:"parentId,omitempty"`
+	SortOrder int            `json:"sortOrder"`
+	Config    map[string]any `json:"config"`
+	CreatedBy string         `json:"createdBy"`
+	UpdatedAt time.Time      `json:"updatedAt"`
+}
+
 // CanvasState is the full snapshot sent to clients.
 type CanvasState struct {
 	Version      int                     `json:"version"`
 	Mode         string                  `json:"mode"`
 	EnabledModes []string                `json:"enabledModes"`
+	Documents    map[string]*Document    `json:"documents"`
 	Pins         map[string]*Pin         `json:"pins"`
 	Events       map[string]*Event       `json:"events"`
 	Notes        map[string]*Note        `json:"notes"`
@@ -408,6 +437,18 @@ type RoadmapReorder struct {
 type SheetPatch struct {
 	Name      *string `json:"name"`
 	SortOrder *int    `json:"sortOrder"`
+}
+
+type DocumentPatch struct {
+	Name      *string        `json:"name"`
+	SortOrder *int           `json:"sortOrder"`
+	Config    map[string]any `json:"config"`
+}
+
+// DocumentReorder is one entry in a bulk tab reorder (drag-and-drop).
+type DocumentReorder struct {
+	ID        uuid.UUID `json:"id"`
+	SortOrder int       `json:"sortOrder"`
 }
 
 type SheetColumnPatch struct {
@@ -504,6 +545,15 @@ type Store interface {
 	SetMapID(ctx context.Context, canvasID uuid.UUID, mapID string) (int, error)
 	ApplyTemplate(ctx context.Context, canvasID uuid.UUID, mode string, mapID *string) (int, error)
 	LeaveWelcomeIfNeeded(ctx context.Context, canvasID uuid.UUID, fallbackMode string) error
+
+	// Documents (migration 0024) — named, multi-instance tabs. Child rows point
+	// back via document_id; ListDocuments powers name/id targeting.
+	CreateDocument(ctx context.Context, canvasID uuid.UUID, d *Document) (int, error)
+	UpdateDocument(ctx context.Context, canvasID uuid.UUID, id uuid.UUID, patch DocumentPatch) (int, error)
+	DeleteDocument(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error)
+	ReorderDocuments(ctx context.Context, canvasID uuid.UUID, updates []DocumentReorder) (int, error)
+	ListDocuments(ctx context.Context, canvasID uuid.UUID) ([]*Document, error)
+	GetDocument(ctx context.Context, canvasID, id uuid.UUID) (*Document, error)
 
 	// Pins
 	CreatePin(ctx context.Context, canvasID uuid.UUID, p *Pin) (int, error)

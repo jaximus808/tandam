@@ -37,6 +37,7 @@ export interface CanvasMeta {
 export interface Pin {
   id: EntityId;
   kind: "pin";
+  documentId?: EntityId; // the map document this pin belongs to (see Document)
   pinType: "marker" | "annotation";
   lat: number;
   lng: number;
@@ -50,6 +51,7 @@ export interface Pin {
 export interface CanvasEvent {
   id: EntityId;
   kind: "event";
+  documentId?: EntityId; // the itinerary document this event belongs to
   title: string;
   start: string;     // true UTC instant (ISO-8601)
   end?: string;
@@ -83,6 +85,7 @@ export interface CanvasEvent {
 export interface Note {
   id: EntityId;
   kind: "note";
+  documentId?: EntityId; // the notes document this note belongs to
   body: string;
   imageRefs: string[];
   parentId?: EntityId;
@@ -93,6 +96,7 @@ export interface Note {
 export interface RoadmapItem {
   id: EntityId;
   kind: "roadmap";
+  documentId?: EntityId; // the roadmap document this item belongs to
   parentId?: EntityId;
   title: string;
   body: string;
@@ -119,6 +123,7 @@ export interface SheetColumn {
 export interface Sheet {
   id: EntityId;
   kind: "sheet";
+  documentId?: EntityId; // the sheet document this sheet backs (1:1)
   name: string;
   columns: SheetColumn[];
   sortOrder: number;
@@ -143,6 +148,7 @@ export interface SheetRow {
 export interface Chart {
   id: EntityId;
   kind: "chart";
+  documentId?: EntityId;   // the chart document this chart backs (1:1)
   name: string;
   sheetId: EntityId;       // source sheet
   chartType: ChartType;
@@ -239,6 +245,27 @@ export interface Form {
   updatedAt: number;
 }
 
+// A Document is a named, multi-instance tab on a canvas (migration 0024). It
+// generalizes what sheets already do to every view type: a canvas is a bag of
+// documents, each an instance of a `type`, with a `name` and `sortOrder`. Child
+// entities (pins/events/notes/roadmap items/sheets/charts) point back via their
+// `documentId`. `config` carries type-specific settings — e.g. { mapId } for a
+// map document. `parentId` is reserved for a future folder tree (the document
+// explorer sidebar); it is always absent today — flat now, tree-ready.
+export type DocumentType = "map" | "notes" | "itinerary" | "roadmap" | "sheet" | "chart";
+
+export interface Document {
+  id: EntityId;
+  kind: "document";
+  type: DocumentType;
+  name: string;
+  parentId?: EntityId;
+  sortOrder: number;
+  config: Record<string, unknown>;
+  createdBy: "agent" | "user";
+  updatedAt: number;
+}
+
 export interface CanvasState {
   version: number;
   mode: CanvasMode;
@@ -246,6 +273,9 @@ export interface CanvasState {
   // content. The tab bar shows the union of these and content-derived modes;
   // the agent sees them in state.read as "the user wants a tab here".
   enabledModes: CanvasMode[];
+  // Named document instances — the source of truth for the tab strip (item 8)
+  // and document explorer (item 9). Keyed by Document.id.
+  documents: Record<EntityId, Document>;
   pins: Record<EntityId, Pin>;
   events: Record<EntityId, CanvasEvent>;
   notes: Record<EntityId, Note>;
@@ -309,6 +339,17 @@ export type WSClientMessage =
       partial: Partial<Pick<Chart, "name" | "sheetId" | "chartType" | "xColumn" | "yColumns" | "sortOrder">>;
     }
   | { op: "chart.delete"; id: EntityId }
+  | {
+      op: "document.add";
+      data: { type: DocumentType; name?: string; config?: Record<string, unknown>; sortOrder?: number };
+    }
+  | {
+      op: "document.update";
+      id: EntityId;
+      partial: { name?: string; sortOrder?: number; config?: Record<string, unknown> };
+    }
+  | { op: "document.delete"; id: EntityId }
+  | { op: "document.reorder"; updates: { id: EntityId; sortOrder: number }[] }
   | { op: "mode.set"; mode: CanvasMode }
   | { op: "mode.enable"; mode: CanvasMode }
   | { op: "map.set"; mapId: string }

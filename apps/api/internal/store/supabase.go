@@ -67,19 +67,21 @@ type dbCanvas struct {
 }
 
 type dbPin struct {
-	ID        string  `json:"id"`
-	PinType   string  `json:"pin_type"`
-	Lat       float64 `json:"lat"`
-	Lng       float64 `json:"lng"`
-	Label     *string `json:"label"`
-	Body      *string `json:"body"`
-	Color     *string `json:"color"`
-	CreatedBy string  `json:"created_by"`
-	UpdatedAt string  `json:"updated_at"`
+	ID         string  `json:"id"`
+	DocumentID *string `json:"document_id"`
+	PinType    string  `json:"pin_type"`
+	Lat        float64 `json:"lat"`
+	Lng        float64 `json:"lng"`
+	Label      *string `json:"label"`
+	Body       *string `json:"body"`
+	Color      *string `json:"color"`
+	CreatedBy  string  `json:"created_by"`
+	UpdatedAt  string  `json:"updated_at"`
 }
 
 type dbEvent struct {
 	ID         string   `json:"id"`
+	DocumentID *string  `json:"document_id"`
 	Title      string   `json:"title"`
 	StartTime  string   `json:"start_time"`
 	EndTime    *string  `json:"end_time"`
@@ -97,6 +99,7 @@ type dbEvent struct {
 
 type dbNote struct {
 	ID         string   `json:"id"`
+	DocumentID *string  `json:"document_id"`
 	Body       string   `json:"body"`
 	ImageRefs  []string `json:"image_refs"`
 	ParentID   *string  `json:"parent_id"`
@@ -106,25 +109,27 @@ type dbNote struct {
 }
 
 type dbRoadmapItem struct {
-	ID        string  `json:"id"`
-	ParentID  *string `json:"parent_id"`
-	Title     string  `json:"title"`
-	Body      string  `json:"body"`
-	Status    string  `json:"status"`
-	Stage     *string `json:"stage"`
-	Assignee  *string `json:"assignee"`
-	SortOrder int     `json:"sort_order"`
-	CreatedBy string  `json:"created_by"`
-	UpdatedAt string  `json:"updated_at"`
+	ID         string  `json:"id"`
+	DocumentID *string `json:"document_id"`
+	ParentID   *string `json:"parent_id"`
+	Title      string  `json:"title"`
+	Body       string  `json:"body"`
+	Status     string  `json:"status"`
+	Stage      *string `json:"stage"`
+	Assignee   *string `json:"assignee"`
+	SortOrder  int     `json:"sort_order"`
+	CreatedBy  string  `json:"created_by"`
+	UpdatedAt  string  `json:"updated_at"`
 }
 
 type dbSheet struct {
-	ID        string          `json:"id"`
-	Name      string          `json:"name"`
-	Columns   json.RawMessage `json:"columns"`
-	SortOrder int             `json:"sort_order"`
-	CreatedBy string          `json:"created_by"`
-	UpdatedAt string          `json:"updated_at"`
+	ID         string          `json:"id"`
+	DocumentID *string         `json:"document_id"`
+	Name       string          `json:"name"`
+	Columns    json.RawMessage `json:"columns"`
+	SortOrder  int             `json:"sort_order"`
+	CreatedBy  string          `json:"created_by"`
+	UpdatedAt  string          `json:"updated_at"`
 	// sheet_rows is FK'd to sheets (no canvas_id), so PostgREST embeds rows
 	// nested here under each sheet — NOT as a top-level table on the canvas.
 	SheetRows []dbSheetRow `json:"sheet_rows"`
@@ -140,15 +145,16 @@ type dbSheetRow struct {
 }
 
 type dbChart struct {
-	ID        string          `json:"id"`
-	Name      string          `json:"name"`
-	SheetID   string          `json:"sheet_id"`
-	ChartType string          `json:"chart_type"`
-	XColumn   string          `json:"x_column"`
-	YColumns  json.RawMessage `json:"y_columns"`
-	SortOrder int             `json:"sort_order"`
-	CreatedBy string          `json:"created_by"`
-	UpdatedAt string          `json:"updated_at"`
+	ID         string          `json:"id"`
+	DocumentID *string         `json:"document_id"`
+	Name       string          `json:"name"`
+	SheetID    string          `json:"sheet_id"`
+	ChartType  string          `json:"chart_type"`
+	XColumn    string          `json:"x_column"`
+	YColumns   json.RawMessage `json:"y_columns"`
+	SortOrder  int             `json:"sort_order"`
+	CreatedBy  string          `json:"created_by"`
+	UpdatedAt  string          `json:"updated_at"`
 }
 
 type dbForm struct {
@@ -202,9 +208,21 @@ type dbPendingEdit struct {
 	CreatedAt   string `json:"created_at"`
 }
 
+type dbDocument struct {
+	ID        string          `json:"id"`
+	Type      string          `json:"type"`
+	Name      string          `json:"name"`
+	ParentID  *string         `json:"parent_id"`
+	SortOrder int             `json:"sort_order"`
+	Config    json.RawMessage `json:"config"`
+	CreatedBy string          `json:"created_by"`
+	UpdatedAt string          `json:"updated_at"`
+}
+
 // Used for GetCanvasState — one request with embedded child tables.
 type dbCanvasWithChildren struct {
 	dbCanvas
+	Documents    []dbDocument    `json:"documents"`
 	Pins         []dbPin         `json:"pins"`
 	Events       []dbEvent       `json:"events"`
 	Notes        []dbNote        `json:"notes"`
@@ -227,6 +245,42 @@ func uuidStrings(ids []uuid.UUID) []string {
 		out = append(out, id.String())
 	}
 	return out
+}
+
+// parseUUIDPtr turns a nullable db uuid string into *uuid.UUID, tolerating nil,
+// empty, and unparseable values (all → nil). Used for the many nullable FKs
+// (document_id, parent_id, …).
+func parseUUIDPtr(s *string) *uuid.UUID {
+	if s == nil || *s == "" {
+		return nil
+	}
+	if id, err := uuid.Parse(*s); err == nil {
+		return &id
+	}
+	return nil
+}
+
+// uuidPtrStr renders a nullable uuid for an insert/update map: nil stays SQL
+// NULL, a set value becomes its string form. Used for the document_id FK.
+func uuidPtrStr(id *uuid.UUID) any {
+	if id == nil {
+		return nil
+	}
+	return id.String()
+}
+
+func toDocument(d dbDocument) *Document {
+	id, _ := uuid.Parse(d.ID)
+	doc := &Document{ID: id, Kind: "document",
+		Type: d.Type, Name: d.Name, SortOrder: d.SortOrder,
+		ParentID:  parseUUIDPtr(d.ParentID),
+		CreatedBy: d.CreatedBy, UpdatedAt: parseTime(d.UpdatedAt),
+		Config: map[string]any{},
+	}
+	if len(d.Config) > 0 {
+		_ = json.Unmarshal(d.Config, &doc.Config)
+	}
+	return doc
 }
 
 func parseTime(s string) time.Time {
@@ -253,14 +307,16 @@ func toCanvas(d dbCanvas) *Canvas {
 
 func toPin(d dbPin) *Pin {
 	id, _ := uuid.Parse(d.ID)
-	return &Pin{ID: id, Kind: "pin", PinType: d.PinType, Lat: d.Lat, Lng: d.Lng,
+	return &Pin{ID: id, Kind: "pin", DocumentID: parseUUIDPtr(d.DocumentID),
+		PinType: d.PinType, Lat: d.Lat, Lng: d.Lng,
 		Label: d.Label, Body: d.Body, Color: d.Color,
 		CreatedBy: d.CreatedBy, UpdatedAt: parseTime(d.UpdatedAt)}
 }
 
 func toEvent(d dbEvent) *Event {
 	id, _ := uuid.Parse(d.ID)
-	ev := &Event{ID: id, Kind: "event", Title: d.Title, Start: parseTime(d.StartTime),
+	ev := &Event{ID: id, Kind: "event", DocumentID: parseUUIDPtr(d.DocumentID),
+		Title: d.Title, Start: parseTime(d.StartTime),
 		Timezone:   d.Timezone,
 		TravelMode: d.TravelMode,
 		DayTag:     d.DayTag,
@@ -303,7 +359,8 @@ func toEvent(d dbEvent) *Event {
 
 func toNote(d dbNote) *Note {
 	id, _ := uuid.Parse(d.ID)
-	n := &Note{ID: id, Kind: "note", Body: d.Body,
+	n := &Note{ID: id, Kind: "note", DocumentID: parseUUIDPtr(d.DocumentID),
+		Body:      d.Body,
 		ImageRefs: d.ImageRefs, ParentKind: d.ParentKind,
 		CreatedBy: d.CreatedBy, UpdatedAt: parseTime(d.UpdatedAt)}
 	if n.ImageRefs == nil {
@@ -320,7 +377,7 @@ func toNote(d dbNote) *Note {
 
 func toRoadmapItem(d dbRoadmapItem) *RoadmapItem {
 	id, _ := uuid.Parse(d.ID)
-	r := &RoadmapItem{ID: id, Kind: "roadmap",
+	r := &RoadmapItem{ID: id, Kind: "roadmap", DocumentID: parseUUIDPtr(d.DocumentID),
 		Title: d.Title, Body: d.Body, Status: d.Status, SortOrder: d.SortOrder,
 		CreatedBy: d.CreatedBy, UpdatedAt: parseTime(d.UpdatedAt)}
 	if d.Stage != nil {
@@ -340,7 +397,7 @@ func toRoadmapItem(d dbRoadmapItem) *RoadmapItem {
 
 func toSheet(d dbSheet) *Sheet {
 	id, _ := uuid.Parse(d.ID)
-	s := &Sheet{ID: id, Kind: "sheet",
+	s := &Sheet{ID: id, Kind: "sheet", DocumentID: parseUUIDPtr(d.DocumentID),
 		Name: d.Name, SortOrder: d.SortOrder,
 		CreatedBy: d.CreatedBy, UpdatedAt: parseTime(d.UpdatedAt),
 		Columns: []SheetColumn{},
@@ -354,7 +411,7 @@ func toSheet(d dbSheet) *Sheet {
 func toChart(d dbChart) *Chart {
 	id, _ := uuid.Parse(d.ID)
 	sheetID, _ := uuid.Parse(d.SheetID)
-	c := &Chart{ID: id, Kind: "chart",
+	c := &Chart{ID: id, Kind: "chart", DocumentID: parseUUIDPtr(d.DocumentID),
 		Name: d.Name, SheetID: sheetID, ChartType: d.ChartType,
 		XColumn: d.XColumn, SortOrder: d.SortOrder,
 		CreatedBy: d.CreatedBy, UpdatedAt: parseTime(d.UpdatedAt),
@@ -937,7 +994,7 @@ func (s *supabaseStore) GetCanvasState(_ context.Context, canvasID uuid.UUID) (*
 	var rows []dbCanvasWithChildren
 
 	_, err := s.client.From("canvases").
-		Select("*,pins(*),events(*),notes(*),roadmap_items(*),sheets(*, sheet_rows(*)),charts(*),forms(*),actions(*),agents(*),pending_edits(*)", "", false).
+		Select("*,documents(*),pins(*),events(*),notes(*),roadmap_items(*),sheets(*, sheet_rows(*)),charts(*),forms(*),actions(*),agents(*),pending_edits(*)", "", false).
 		Eq("id", canvasID.String()).
 		ExecuteTo(&rows)
 	if err != nil {
@@ -959,6 +1016,7 @@ func (s *supabaseStore) GetCanvasState(_ context.Context, canvasID uuid.UUID) (*
 		Version:      canvas.Version,
 		Mode:         canvas.Mode,
 		EnabledModes: enabledModes,
+		Documents:    make(map[string]*Document, len(row.Documents)),
 		Pins:         make(map[string]*Pin, len(row.Pins)),
 		Events:       make(map[string]*Event, len(row.Events)),
 		Notes:        make(map[string]*Note, len(row.Notes)),
@@ -969,6 +1027,10 @@ func (s *supabaseStore) GetCanvasState(_ context.Context, canvasID uuid.UUID) (*
 		Forms:        make(map[string]*Form, len(row.Forms)),
 		Actions:      make(map[string]*Action, len(row.Actions)),
 		Agents:       make(map[string]*Agent, len(row.Agents)),
+	}
+	for _, d := range row.Documents {
+		doc := toDocument(d)
+		state.Documents[doc.ID.String()] = doc
 	}
 	for _, d := range row.Pins {
 		p := toPin(d)
@@ -1119,12 +1181,127 @@ func (s *supabaseStore) LeaveWelcomeIfNeeded(ctx context.Context, canvasID uuid.
 
 // ── Pins ──────────────────────────────────────────────────────────────────────
 
+// ── Documents (migration 0024) ────────────────────────────────────────────────
+
+func (s *supabaseStore) CreateDocument(ctx context.Context, canvasID uuid.UUID, d *Document) (int, error) {
+	cfg := d.Config
+	if cfg == nil {
+		cfg = map[string]any{}
+	}
+	cfgJSON, err := json.Marshal(cfg)
+	if err != nil {
+		return 0, err
+	}
+	now := time.Now().UTC()
+	d.UpdatedAt = now
+	row := map[string]any{
+		"id":         d.ID.String(),
+		"canvas_id":  canvasID.String(),
+		"type":       d.Type,
+		"name":       d.Name,
+		"parent_id":  uuidPtrStr(d.ParentID),
+		"sort_order": d.SortOrder,
+		"config":     json.RawMessage(cfgJSON),
+		"created_by": d.CreatedBy,
+		"updated_at": now.Format(time.RFC3339),
+	}
+	if err := s.exec(s.client.From("documents").Insert(row, false, "", "minimal", "")); err != nil {
+		return 0, err
+	}
+	return s.bumpVersion(ctx, canvasID)
+}
+
+func (s *supabaseStore) UpdateDocument(ctx context.Context, canvasID uuid.UUID, id uuid.UUID, patch DocumentPatch) (int, error) {
+	m := map[string]any{}
+	if patch.Name != nil {
+		m["name"] = *patch.Name
+	}
+	if patch.SortOrder != nil {
+		m["sort_order"] = *patch.SortOrder
+	}
+	if patch.Config != nil {
+		cfgJSON, err := json.Marshal(patch.Config)
+		if err != nil {
+			return 0, err
+		}
+		m["config"] = json.RawMessage(cfgJSON)
+	}
+	if len(m) == 0 {
+		return 0, nil
+	}
+	err := s.exec(s.client.From("documents").
+		Update(m, "minimal", "").
+		Eq("id", id.String()).
+		Eq("canvas_id", canvasID.String()))
+	if err != nil {
+		return 0, err
+	}
+	return s.bumpVersion(ctx, canvasID)
+}
+
+func (s *supabaseStore) DeleteDocument(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error) {
+	err := s.exec(s.client.From("documents").
+		Delete("minimal", "").
+		Eq("id", id.String()).
+		Eq("canvas_id", canvasID.String()))
+	if err != nil {
+		return 0, err
+	}
+	return s.bumpVersion(ctx, canvasID)
+}
+
+func (s *supabaseStore) ReorderDocuments(ctx context.Context, canvasID uuid.UUID, updates []DocumentReorder) (int, error) {
+	for _, u := range updates {
+		err := s.exec(s.client.From("documents").
+			Update(map[string]any{"sort_order": u.SortOrder}, "minimal", "").
+			Eq("id", u.ID.String()).
+			Eq("canvas_id", canvasID.String()))
+		if err != nil {
+			return 0, err
+		}
+	}
+	return s.bumpVersion(ctx, canvasID)
+}
+
+func (s *supabaseStore) ListDocuments(_ context.Context, canvasID uuid.UUID) ([]*Document, error) {
+	var rows []dbDocument
+	_, err := s.client.From("documents").
+		Select("*", "", false).
+		Eq("canvas_id", canvasID.String()).
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*Document, 0, len(rows))
+	for _, d := range rows {
+		out = append(out, toDocument(d))
+	}
+	return out, nil
+}
+
+func (s *supabaseStore) GetDocument(_ context.Context, canvasID, id uuid.UUID) (*Document, error) {
+	var rows []dbDocument
+	_, err := s.client.From("documents").
+		Select("*", "", false).
+		Eq("id", id.String()).
+		Eq("canvas_id", canvasID.String()).
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("document %s not found in canvas %s", id, canvasID)
+	}
+	return toDocument(rows[0]), nil
+}
+
 func (s *supabaseStore) CreatePin(ctx context.Context, canvasID uuid.UUID, pin *Pin) (int, error) {
 	now := time.Now().UTC()
 	pin.UpdatedAt = now
 	row := map[string]any{
 		"id": pin.ID.String(), "canvas_id": canvasID.String(),
-		"pin_type": pin.PinType, "lat": pin.Lat, "lng": pin.Lng,
+		"document_id": uuidPtrStr(pin.DocumentID),
+		"pin_type":    pin.PinType, "lat": pin.Lat, "lng": pin.Lng,
 		"label": pin.Label, "body": pin.Body, "color": pin.Color,
 		"created_by": pin.CreatedBy,
 		"updated_at": now.Format(time.RFC3339),
@@ -1192,7 +1369,8 @@ func (s *supabaseStore) CreateEvent(ctx context.Context, canvasID uuid.UUID, ev 
 	}
 	row := map[string]any{
 		"id": ev.ID.String(), "canvas_id": canvasID.String(),
-		"title": ev.Title, "start_time": ev.Start.Format(time.RFC3339),
+		"document_id": uuidPtrStr(ev.DocumentID),
+		"title":       ev.Title, "start_time": ev.Start.Format(time.RFC3339),
 		"pin_ids":    uuidStrings(ev.PinIDs),
 		"created_by": ev.CreatedBy,
 		"updated_at": now.Format(time.RFC3339),
@@ -1299,7 +1477,8 @@ func (s *supabaseStore) CreateNote(ctx context.Context, canvasID uuid.UUID, n *N
 	}
 	row := map[string]any{
 		"id": n.ID.String(), "canvas_id": canvasID.String(),
-		"body": n.Body, "image_refs": refs,
+		"document_id": uuidPtrStr(n.DocumentID),
+		"body":        n.Body, "image_refs": refs,
 		"parent_kind": n.ParentKind, "created_by": n.CreatedBy,
 		"updated_at": now.Format(time.RFC3339),
 	}
@@ -1359,7 +1538,8 @@ func (s *supabaseStore) CreateRoadmapItem(ctx context.Context, canvasID uuid.UUI
 	r.UpdatedAt = now
 	row := map[string]any{
 		"id": r.ID.String(), "canvas_id": canvasID.String(),
-		"title": r.Title, "body": r.Body,
+		"document_id": uuidPtrStr(r.DocumentID),
+		"title":       r.Title, "body": r.Body,
 		"status": r.Status, "sort_order": r.SortOrder,
 		"created_by": r.CreatedBy,
 		"updated_at": now.Format(time.RFC3339),
@@ -1721,14 +1901,26 @@ func (s *supabaseStore) CreateSheet(ctx context.Context, canvasID uuid.UUID, sh 
 	}
 	now := time.Now().UTC()
 	sh.UpdatedAt = now
+	// A sheet is 1:1 with a 'sheet' document (migration 0024) — it's a tab. Mint
+	// the backing document if the caller didn't supply one, so every sheet shows
+	// up in the tab strip / explorer regardless of which entry point created it.
+	if sh.DocumentID == nil {
+		doc := &Document{ID: uuid.New(), Kind: "document", Type: "sheet",
+			Name: sh.Name, SortOrder: sh.SortOrder, CreatedBy: sh.CreatedBy}
+		if _, err := s.CreateDocument(ctx, canvasID, doc); err != nil {
+			return 0, err
+		}
+		sh.DocumentID = &doc.ID
+	}
 	row := map[string]any{
-		"id":         sh.ID.String(),
-		"canvas_id":  canvasID.String(),
-		"name":       sh.Name,
-		"columns":    json.RawMessage(colsJSON),
-		"sort_order": sh.SortOrder,
-		"created_by": sh.CreatedBy,
-		"updated_at": now.Format(time.RFC3339),
+		"id":          sh.ID.String(),
+		"canvas_id":   canvasID.String(),
+		"document_id": uuidPtrStr(sh.DocumentID),
+		"name":        sh.Name,
+		"columns":     json.RawMessage(colsJSON),
+		"sort_order":  sh.SortOrder,
+		"created_by":  sh.CreatedBy,
+		"updated_at":  now.Format(time.RFC3339),
 	}
 	if err := s.exec(s.client.From("sheets").Insert(row, false, "", "minimal", "")); err != nil {
 		return 0, err
@@ -1759,6 +1951,13 @@ func (s *supabaseStore) UpdateSheet(ctx context.Context, canvasID uuid.UUID, id 
 }
 
 func (s *supabaseStore) DeleteSheet(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error) {
+	// The document is the canonical parent (migration 0024): if this sheet backs a
+	// tab, delete the document so the tab disappears too — the FK cascade takes the
+	// sheet (and its rows) with it. Fall back to a direct delete for any pre-0024
+	// sheet that has no document.
+	if sh, err := s.getSheet(canvasID, id); err == nil && sh.DocumentID != nil {
+		return s.DeleteDocument(ctx, canvasID, *sh.DocumentID)
+	}
 	err := s.exec(s.client.From("sheets").
 		Delete("minimal", "").
 		Eq("id", id.String()).
@@ -2091,17 +2290,27 @@ func (s *supabaseStore) CreateChart(ctx context.Context, canvasID uuid.UUID, ch 
 	}
 	now := time.Now().UTC()
 	ch.UpdatedAt = now
+	// A chart is 1:1 with a 'chart' document (its tab) — mint one if absent.
+	if ch.DocumentID == nil {
+		doc := &Document{ID: uuid.New(), Kind: "document", Type: "chart",
+			Name: ch.Name, SortOrder: ch.SortOrder, CreatedBy: ch.CreatedBy}
+		if _, err := s.CreateDocument(ctx, canvasID, doc); err != nil {
+			return 0, err
+		}
+		ch.DocumentID = &doc.ID
+	}
 	row := map[string]any{
-		"id":         ch.ID.String(),
-		"canvas_id":  canvasID.String(),
-		"sheet_id":   ch.SheetID.String(),
-		"name":       ch.Name,
-		"chart_type": ch.ChartType,
-		"x_column":   ch.XColumn,
-		"y_columns":  json.RawMessage(ysJSON),
-		"sort_order": ch.SortOrder,
-		"created_by": ch.CreatedBy,
-		"updated_at": now.Format(time.RFC3339),
+		"id":          ch.ID.String(),
+		"canvas_id":   canvasID.String(),
+		"document_id": uuidPtrStr(ch.DocumentID),
+		"sheet_id":    ch.SheetID.String(),
+		"name":        ch.Name,
+		"chart_type":  ch.ChartType,
+		"x_column":    ch.XColumn,
+		"y_columns":   json.RawMessage(ysJSON),
+		"sort_order":  ch.SortOrder,
+		"created_by":  ch.CreatedBy,
+		"updated_at":  now.Format(time.RFC3339),
 	}
 	if err := s.exec(s.client.From("charts").Insert(row, false, "", "minimal", "")); err != nil {
 		return 0, err
@@ -2169,6 +2378,10 @@ func (s *supabaseStore) UpdateChart(ctx context.Context, canvasID uuid.UUID, id 
 }
 
 func (s *supabaseStore) DeleteChart(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error) {
+	// Canonical delete via the backing 'chart' document (its tab); see DeleteSheet.
+	if ch, err := s.getChart(canvasID, id); err == nil && ch.DocumentID != nil {
+		return s.DeleteDocument(ctx, canvasID, *ch.DocumentID)
+	}
 	err := s.exec(s.client.From("charts").
 		Delete("minimal", "").
 		Eq("id", id.String()).

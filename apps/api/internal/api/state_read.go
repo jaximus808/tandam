@@ -23,7 +23,7 @@ import (
 // stateKinds are the projectable kind keys, matching CanvasState's JSON field
 // names so the agent uses the same vocabulary it sees in the payload.
 var stateKinds = []string{
-	"pins", "events", "notes", "roadmapItems", "sheets",
+	"documents", "pins", "events", "notes", "roadmapItems", "sheets",
 	"sheetRows", "charts", "forms", "actions", "agents",
 }
 
@@ -87,6 +87,8 @@ func projectState(state *store.CanvasState, fields []string) *store.CanvasState 
 	}
 	for _, k := range fields {
 		switch k {
+		case "documents":
+			out.Documents = state.Documents
 		case "pins":
 			out.Pins = state.Pins
 		case "events":
@@ -117,6 +119,7 @@ func summarizeState(canvas *store.Canvas, state *store.CanvasState, edits []*sto
 	counts := map[string]int{}
 	names := map[string][]string{}
 	if state != nil {
+		counts["documents"] = len(state.Documents)
 		counts["pins"] = len(state.Pins)
 		counts["events"] = len(state.Events)
 		counts["notes"] = len(state.Notes)
@@ -128,6 +131,9 @@ func summarizeState(canvas *store.Canvas, state *store.CanvasState, edits []*sto
 		counts["actions"] = len(state.Actions)
 		counts["agents"] = len(state.Agents)
 
+		for _, d := range state.Documents {
+			names["documents"] = append(names["documents"], clip(d.Name)+" ("+d.Type+")")
+		}
 		for _, p := range state.Pins {
 			names["pins"] = append(names["pins"], derefName(p.Label, "(pin)"))
 		}

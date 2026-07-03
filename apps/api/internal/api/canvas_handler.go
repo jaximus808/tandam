@@ -361,11 +361,17 @@ func isValidChartType(t string) bool {
 // POST /api/canvas/pins
 func (h *Handler) CreatePin(w http.ResponseWriter, r *http.Request) {
 	canvasID := CanvasIDFromCtx(r.Context())
-	var pin store.Pin
-	if err := decode(r, &pin); err != nil {
+	// Embed store.Pin so callers can still POST a bare pin; `document` (id or name)
+	// is the friendly way to target a map document, documentId the explicit one.
+	var body struct {
+		store.Pin
+		Document string `json:"document"`
+	}
+	if err := decode(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	pin := body.Pin
 	if msg := validateLatLng(pin.Lat, pin.Lng); msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
@@ -375,6 +381,15 @@ func (h *Handler) CreatePin(w http.ResponseWriter, r *http.Request) {
 	if pin.CreatedBy == "" {
 		pin.CreatedBy = "agent"
 	}
+	ref := body.Document
+	if ref == "" && body.Pin.DocumentID != nil {
+		ref = body.Pin.DocumentID.String()
+	}
+	docID, ok := h.attachDocument(w, r, canvasID, "map", ref)
+	if !ok {
+		return
+	}
+	pin.DocumentID = docID
 	if _, err := h.store.CreatePin(r.Context(), canvasID, &pin); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -452,6 +467,7 @@ func (h *Handler) CreateEvent(w http.ResponseWriter, r *http.Request) {
 		DayTag     *string     `json:"dayTag"`
 		Cost       *float64    `json:"cost"`
 		CreatedBy  string      `json:"createdBy"`
+		Document   string      `json:"document"` // target itinerary doc (id or name)
 	}
 	if err := decode(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -460,8 +476,12 @@ func (h *Handler) CreateEvent(w http.ResponseWriter, r *http.Request) {
 	if body.CreatedBy == "" {
 		body.CreatedBy = "agent"
 	}
+	docID, ok := h.attachDocument(w, r, canvasID, "itinerary", body.Document)
+	if !ok {
+		return
+	}
 	ev := &store.Event{
-		ID: uuid.New(), Kind: "event",
+		ID: uuid.New(), Kind: "event", DocumentID: docID,
 		Title: body.Title, Start: body.Start, End: body.End,
 		Timezone: body.Timezone,
 		PinIDs:   body.PinIDs, PinID: body.PinID,
@@ -520,6 +540,7 @@ func (h *Handler) CreateNote(w http.ResponseWriter, r *http.Request) {
 		ParentID   *uuid.UUID `json:"parentId"`
 		ParentKind *string    `json:"parentKind"`
 		CreatedBy  string     `json:"createdBy"`
+		Document   string     `json:"document"` // target notes doc (id or name)
 	}
 	if err := decode(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -528,8 +549,12 @@ func (h *Handler) CreateNote(w http.ResponseWriter, r *http.Request) {
 	if body.CreatedBy == "" {
 		body.CreatedBy = "agent"
 	}
+	docID, ok := h.attachDocument(w, r, canvasID, "notes", body.Document)
+	if !ok {
+		return
+	}
 	n := &store.Note{
-		ID: uuid.New(), Kind: "note",
+		ID: uuid.New(), Kind: "note", DocumentID: docID,
 		Body: body.Body, ImageRefs: body.ImageRefs,
 		ParentID: body.ParentID, ParentKind: body.ParentKind,
 		CreatedBy: body.CreatedBy,
@@ -601,6 +626,7 @@ func (h *Handler) CreateRoadmapItem(w http.ResponseWriter, r *http.Request) {
 		Assignee  string     `json:"assignee"`
 		SortOrder int        `json:"sortOrder"`
 		CreatedBy string     `json:"createdBy"`
+		Document  string     `json:"document"` // target roadmap doc (id or name)
 	}
 	if err := decode(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -621,8 +647,12 @@ func (h *Handler) CreateRoadmapItem(w http.ResponseWriter, r *http.Request) {
 	if body.Assignee == "human" {
 		body.Assignee = ""
 	}
+	docID, ok := h.attachDocument(w, r, canvasID, "roadmap", body.Document)
+	if !ok {
+		return
+	}
 	item := &store.RoadmapItem{
-		ID: uuid.New(), Kind: "roadmap",
+		ID: uuid.New(), Kind: "roadmap", DocumentID: docID,
 		ParentID: body.ParentID, Title: body.Title, Body: body.Body,
 		Status: body.Status, Stage: body.Stage, Assignee: body.Assignee,
 		SortOrder: body.SortOrder, CreatedBy: body.CreatedBy,

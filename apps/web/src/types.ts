@@ -15,6 +15,8 @@ export type {
   SheetCellValue,
   Chart,
   ChartType,
+  Document,
+  DocumentType,
   Action,
   ActionType,
   ActionState,

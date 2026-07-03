@@ -1,8 +1,14 @@
-import { useEffect, useRef, useState } from "react";
-import { ChevronDown, ClipboardList } from "lucide-react";
-import type { CanvasMeta, CanvasMode, CanvasState } from "./types";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { CanvasMeta, CanvasMode, CanvasState, Document, DocumentType } from "./types";
 import { connectToCanvas, disconnectFromCanvas, onStateUpdate, onAccessError, onRoleChange, sendOp, setCanvasReadOnly, type AccessStatus, type ChangeActor } from "./lib/ws";
 import { ModeNavContext } from "./lib/modeNav";
+import { parseSidebarView, type SidebarView } from "./lib/sidebar";
+import DocumentTabs from "./components/DocumentTabs";
+import ActivityBar from "./components/ActivityBar";
+import SidePanel, { SidePanelReopenHandle, SIDE_PANEL_MIN, SIDE_PANEL_MAX, SIDE_PANEL_DEFAULT } from "./components/SidePanel";
+import DocumentExplorer from "./components/DocumentExplorer";
+import SettingsPanel from "./components/SettingsPanel";
+import { DOC_TYPE_TO_MODE } from "./lib/docTypes";
 import MapMode from "./modes/MapMode";
 import ItineraryMode from "./modes/ItineraryMode";
 import DocsMode from "./modes/DocsMode";
@@ -34,39 +40,50 @@ import { recordRecent } from "./lib/recentCanvases";
 import { MOCK_ENABLED, mockCanvas } from "./lib/mockFixture";
 import { modeTheme } from "./lib/modeTheme";
 
-const MODES: { id: CanvasMode; label: string }[] = [
-  { id: "map", label: "Map" },
-  { id: "itinerary", label: "Itinerary" },
-  { id: "docs", label: "Docs" },
-  { id: "roadmap", label: "Roadmap" },
-  { id: "sheets", label: "Sheets" },
-  { id: "charts", label: "Charts" },
-];
-
-// The tabs a canvas has: any mode that holds content, plus empty modes a user
-// turned on via "+" (persisted in enabledModes). `optimistic` is this viewer's
-// locally-selected mode, folded in so a just-clicked "+" tab shows instantly,
-// before the mode.enable round-trip lands. When this returns [], the canvas has
-// no tabs and the template homepage is shown instead.
-function canvasTabs(state: CanvasState, optimistic?: CanvasMode | null): CanvasMode[] {
-  const has = {
-    map: Object.keys(state.pins).length > 0,
-    itinerary: Object.keys(state.events).length > 0,
-    docs: Object.keys(state.notes).length > 0,
-    roadmap: Object.keys(state.roadmapItems).length > 0,
-    sheets: Object.keys(state.sheets).length > 0,
-    charts: Object.keys(state.charts).length > 0,
+// A canvas is a bag of named documents (migration 0024). Each document renders
+// through its type's existing mode component; to show ONE document we hand that
+// component a state scoped to just that document's slice of the matching kind.
+// Cross-references (a pin's attached notes, an event's pins) are left intact —
+// the mode components already skip references they can't resolve.
+function scopeStateToDocument(state: CanvasState, doc: Document | undefined): CanvasState {
+  if (!doc) return state;
+  const only = <T extends { documentId?: string }>(rec: Record<string, T>): Record<string, T> => {
+    const out: Record<string, T> = {};
+    for (const [k, v] of Object.entries(rec)) if (v.documentId === doc.id) out[k] = v;
+    return out;
   };
-  const out = new Set<CanvasMode>();
-  if (has.map) out.add("map");
-  if (has.itinerary) out.add("itinerary");
-  if (has.docs) out.add("docs");
-  if (has.roadmap) out.add("roadmap");
-  if (has.sheets) out.add("sheets");
-  if (has.charts) out.add("charts");
-  for (const m of state.enabledModes ?? []) out.add(m);
-  if (optimistic && optimistic !== "welcome") out.add(optimistic);
-  return MODES.map((m) => m.id).filter((id) => out.has(id));
+  switch (doc.type) {
+    case "map":
+      return { ...state, pins: only(state.pins) };
+    case "itinerary":
+      return { ...state, events: only(state.events) };
+    case "notes":
+      return { ...state, notes: only(state.notes) };
+    case "roadmap":
+      return { ...state, roadmapItems: only(state.roadmapItems) };
+    case "sheet":
+      return { ...state, sheets: only(state.sheets) };
+    case "chart":
+      return { ...state, charts: only(state.charts) };
+    default:
+      return state;
+  }
+}
+
+// Which document an entity belongs to — used to follow the agent to the right
+// tab when it edits. Sheet rows resolve via their parent sheet.
+function documentIdForEntity(state: CanvasState, entityId: string): string | null {
+  const direct =
+    state.pins[entityId] ??
+    state.events[entityId] ??
+    state.notes[entityId] ??
+    state.roadmapItems[entityId] ??
+    state.sheets[entityId] ??
+    state.charts[entityId];
+  if (direct?.documentId) return direct.documentId;
+  const row = state.sheetRows[entityId];
+  if (row) return state.sheets[row.sheetId]?.documentId ?? null;
+  return null;
 }
 
 function getCodeFromURL(): string | null {
@@ -95,7 +112,9 @@ function stripClaimFromURL() {
   window.history.replaceState(null, "", url.pathname + url.search + url.hash);
 }
 
-const TASKS_OPEN_KEY = "tandem.tasks.open";
+const SIDEBAR_VIEW_KEY = "tandem.sidebar.view";
+const SIDEBAR_OPEN_KEY = "tandem.sidebar.open";
+const SIDEBAR_WIDTH_KEY = "tandem.sidebar.width";
 
 type Route = "home" | "mcp" | "me" | "stats";
 
@@ -132,18 +151,79 @@ export default function App() {
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [connectOpen, setConnectOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
-  // Tasks panel (the agent work queue) — open/closed choice remembered.
-  const [tasksOpen, setTasksOpen] = useState<boolean>(() => {
+  // Left activity-bar dock (VS Code style). The SELECTED view (Documents / Agent
+  // tasks / Settings) and whether the panel is OPEN are tracked separately: the
+  // selection is what the rail highlights, and it survives a close — so collapsing
+  // keeps the icon lit and clicking it again re-opens the same view. The activity
+  // bar (lib/sidebar) is the holder future "extension" panels attach to. Both are
+  // remembered across reloads.
+  const [sidebarView, setSidebarView] = useState<SidebarView | null>(() => {
     try {
-      return localStorage.getItem(TASKS_OPEN_KEY) === "1";
+      return parseSidebarView(localStorage.getItem(SIDEBAR_VIEW_KEY));
+    } catch {
+      return null;
+    }
+  });
+  const [sidebarOpen, setSidebarOpen] = useState<boolean>(() => {
+    try {
+      const raw = localStorage.getItem(SIDEBAR_OPEN_KEY);
+      if (raw === "1") return true;
+      if (raw === "0") return false;
+      // No stored preference → open if a view was previously selected (migration
+      // from the old single-key model, where a stored view meant "open").
+      return parseSidebarView(localStorage.getItem(SIDEBAR_VIEW_KEY)) !== null;
     } catch {
       return false;
     }
   });
-  function setTasksOpenPersist(next: boolean) {
-    setTasksOpen(next);
+  function persist(key: string, value: string) {
     try {
-      localStorage.setItem(TASKS_OPEN_KEY, next ? "1" : "0");
+      localStorage.setItem(key, value);
+    } catch {
+      /* ignore */
+    }
+  }
+  // Rail click: same icon toggles the panel open/closed (selection stays lit);
+  // a different icon selects that view and opens it.
+  function selectSidebarView(view: SidebarView) {
+    if (view === sidebarView) {
+      setSidebarOpen((o) => {
+        const next = !o;
+        persist(SIDEBAR_OPEN_KEY, next ? "1" : "0");
+        return next;
+      });
+      return;
+    }
+    setSidebarView(view);
+    persist(SIDEBAR_VIEW_KEY, view);
+    setSidebarOpen(true);
+    persist(SIDEBAR_OPEN_KEY, "1");
+  }
+  // Collapse the panel but KEEP the selection so the rail stays highlighted and
+  // the same view re-opens on the next click (X button + drag-to-close).
+  function closeSidebar() {
+    setSidebarOpen(false);
+    persist(SIDEBAR_OPEN_KEY, "0");
+  }
+  // Reopen the collapsed panel (drag/click the edge strip), optionally at a width.
+  function openSidebar(width?: number) {
+    if (width !== undefined) setPanelWidthPersist(width);
+    setSidebarOpen(true);
+    persist(SIDEBAR_OPEN_KEY, "1");
+  }
+  // The side panel's width, drag-resized and remembered across reloads.
+  const [panelWidth, setPanelWidth] = useState<number>(() => {
+    try {
+      const n = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+      return Number.isFinite(n) && n >= SIDE_PANEL_MIN && n <= SIDE_PANEL_MAX ? n : SIDE_PANEL_DEFAULT;
+    } catch {
+      return SIDE_PANEL_DEFAULT;
+    }
+  });
+  function setPanelWidthPersist(w: number) {
+    setPanelWidth(w);
+    try {
+      localStorage.setItem(SIDEBAR_WIDTH_KEY, String(w));
     } catch {
       /* ignore */
     }
@@ -155,8 +235,6 @@ export default function App() {
   // Set when this canvas can't be opened (private, no access) or our access was
   // revoked live. Drives the access-denied screen instead of an endless spinner.
   const [accessError, setAccessError] = useState<AccessStatus | null>(null);
-  const [modeMenuOpen, setModeMenuOpen] = useState(false);
-  const [addTabOpen, setAddTabOpen] = useState(false);
   // The signed-in user (or null). Drives the "Copy to my account" button —
   // shown when this canvas isn't already owned by me.
   const [me, setMe] = useState<User | null>(null);
@@ -173,36 +251,91 @@ export default function App() {
   // Actor behind the latest state push ("agent" | "user"), read by the activity
   // hook. A ref so it's set synchronously before the re-render it triggers.
   const lastChangeByRef = useRef<ChangeActor | undefined>(undefined);
-  // Latest active mode, mirrored into a ref so the "user scrolled → stop
-  // following" listeners (set up before the mode is computed) can read it.
+  // Latest focused mode + document, mirrored into refs so the "user scrolled →
+  // stop following" listeners (set up before these are computed) can read them.
   const effectiveModeRef = useRef<CanvasMode>("welcome");
+  const effectiveDocIdRef = useRef<string | null>(null);
   const [autoOpenedFor, setAutoOpenedFor] = useState<string | null>(null);
   // Keep-alive: once a mode has been opened, keep its subtree mounted and
   // toggle visibility instead of re-mounting on every tab switch. This avoids
   // re-constructing Leaflet, re-parsing markdown, and losing useMemo caches.
   const [visitedModes, setVisitedModes] = useState<Set<CanvasMode>>(new Set());
-  // The active tab is LOCAL to this viewer — switching tabs only changes what
-  // *I* see, never the shared canvas (like switching tabs in a Google Doc). It
-  // is never persisted to canvas state and never broadcast.
-  //   - null → "follow the canvas": show whatever mode the canvas is in. Lets a
-  //     fresh viewer land where the agent/template put things, and auto-advances
-  //     off the welcome screen once content appears.
-  //   - set  → the user took the wheel; their view is fully local and unaffected
-  //     by what anyone else (or the agent) does.
-  const [viewMode, setViewMode] = useState<CanvasMode | null>(null);
-  // While following, the tab to show — driven by where the agent last acted
-  // (an edit OR an explicit mode change), so a follower auto-jumps to the tab
-  // the agent is working in even when no mode.set was sent. Ignored once the
-  // user takes the wheel (viewMode set). null → fall back to canvasState.mode.
-  const [followMode, setFollowMode] = useState<CanvasMode | null>(null);
-  const currentMode = (viewMode ?? (canvasState?.mode as CanvasMode | undefined)) as
-    | CanvasMode
-    | undefined;
 
+  // ── Document tabs (migration 0024) ──────────────────────────────────────────
+  // A canvas is a bag of named documents; the tab strip shows the OPEN ones.
+  // Which docs are open, their order, and which one is focused are LOCAL to this
+  // viewer (like tabs in a Google Doc) — never broadcast. closedDocIds remembers
+  // tabs this viewer explicitly closed so the sync effect won't reopen them.
+  // activeDocId null = "follow the agent"; set = the viewer took the wheel.
+  const [openDocIds, setOpenDocIds] = useState<string[]>([]);
+  const [closedDocIds, setClosedDocIds] = useState<Set<string>>(new Set());
+  const [activeDocId, setActiveDocId] = useState<string | null>(null);
+  const [followDocId, setFollowDocId] = useState<string | null>(null);
+  // A created document's server id is unknown until it lands in the next state
+  // push; this flags "focus the next brand-new doc that appears".
+  const activateNextNewDocRef = useRef(false);
+  const prevDocIdsRef = useRef<string[]>([]);
+
+  // All documents, ordered for display, plus the open subset.
+  const documents = useMemo<Document[]>(
+    () =>
+      canvasState
+        ? Object.values(canvasState.documents ?? {}).sort((a, b) => a.sortOrder - b.sortOrder)
+        : [],
+    [canvasState],
+  );
+  const docsById = useMemo(() => {
+    const m: Record<string, Document> = {};
+    for (const d of documents) m[d.id] = d;
+    return m;
+  }, [documents]);
+  const openSet = useMemo(() => new Set(openDocIds), [openDocIds]);
+  const openDocs = useMemo(() => documents.filter((d) => openSet.has(d.id)), [documents, openSet]);
+
+  // Keep the open set in sync with the documents that exist: drop deleted ones
+  // and auto-open any new doc the viewer hasn't explicitly closed (so agent- and
+  // "+"-created docs surface). Focuses a doc we just created via activateNext…
   useEffect(() => {
-    if (!currentMode) return;
-    setVisitedModes((prev) => (prev.has(currentMode) ? prev : new Set(prev).add(currentMode)));
-  }, [currentMode]);
+    const ids = documents.map((d) => d.id);
+    const existing = new Set(ids);
+    const newIds = ids.filter((id) => !prevDocIdsRef.current.includes(id));
+    prevDocIdsRef.current = ids;
+
+    setOpenDocIds((prev) => {
+      let next = prev.filter((id) => existing.has(id));
+      for (const d of documents) {
+        if (!next.includes(d.id) && !closedDocIds.has(d.id)) next = [...next, d.id];
+      }
+      return next.length === prev.length && next.every((v, i) => v === prev[i]) ? prev : next;
+    });
+    setClosedDocIds((prev) => {
+      const kept = [...prev].filter((id) => existing.has(id));
+      return kept.length === prev.size ? prev : new Set(kept);
+    });
+    if (activateNextNewDocRef.current && newIds.length > 0) {
+      activateNextNewDocRef.current = false;
+      setActiveDocId(newIds[newIds.length - 1]);
+    }
+  }, [documents, closedDocIds]);
+
+  const following = activeDocId === null;
+  // The focused document: the viewer's pick if still open; else (following) the
+  // agent's doc; else the first open tab; else none (welcome / empty canvas).
+  const effectiveDoc: Document | undefined =
+    (!following && activeDocId && openSet.has(activeDocId) ? docsById[activeDocId] : undefined) ??
+    (following && followDocId && openSet.has(followDocId) ? docsById[followDocId] : undefined) ??
+    openDocs[0];
+  const effectiveDocId = effectiveDoc?.id ?? null;
+  const effectiveMode: CanvasMode = effectiveDoc ? DOC_TYPE_TO_MODE[effectiveDoc.type] : "welcome";
+  const hasTabs = openDocs.length > 0;
+  effectiveModeRef.current = effectiveMode;
+  effectiveDocIdRef.current = effectiveDocId;
+
+  // Keep-alive: mark the focused mode visited so its subtree stays mounted.
+  useEffect(() => {
+    if (!hasTabs) return;
+    setVisitedModes((prev) => (prev.has(effectiveMode) ? prev : new Set(prev).add(effectiveMode)));
+  }, [effectiveMode, hasTabs]);
 
   useEffect(() => {
     if (!canvasCode) return;
@@ -303,12 +436,13 @@ export default function App() {
     setSelectedPinId(null);
     setSelectedEventId(null);
     setVisitedModes(new Set());
-    setViewMode(null);
-    setFollowMode(null);
+    setActiveDocId(null);
+    setFollowDocId(null);
+    setOpenDocIds([]);
+    setClosedDocIds(new Set());
+    prevDocIdsRef.current = [];
     setConnectOpen(false);
     setShareOpen(false);
-    setModeMenuOpen(false);
-    setAddTabOpen(false);
     setAccessError(null);
   }
 
@@ -405,24 +539,19 @@ export default function App() {
   // Notification center: turns agent actions into transient toasts + a bell log.
   const notify = useAgentNotifications(agentAction);
 
-  // Auto-follow: while following, jump the view to wherever the agent acts.
-  // (1) An agent edit pulls the follower to that entity's tab — this is the bit
-  // mode.set alone couldn't do (adding a roadmap item never set the mode).
+  // Auto-follow: while following, an agent edit pulls the follower to the
+  // document that edit lives in (so you watch the agent move between tabs).
   useEffect(() => {
-    if (viewMode === null && agentEdit) setFollowMode(agentEdit.mode);
-  }, [agentEdit, viewMode]);
-  // (2) An explicit agent mode change (template / map / mode.set) is also
-  // followed; this effect runs last so an explicit switch wins ties, and on
-  // resume-follow (viewMode→null) it re-baselines to the canvas mode.
-  useEffect(() => {
-    if (viewMode === null && canvasState) setFollowMode(canvasState.mode as CanvasMode);
-  }, [canvasState?.mode, viewMode]);
+    if (activeDocId !== null || !agentEdit || !canvasState) return;
+    const docId = documentIdForEntity(canvasState, agentEdit.entityId);
+    if (docId) setFollowDocId(docId);
+  }, [agentEdit, activeDocId, canvasState]);
 
   // While following, scroll the agent's just-edited element into view so its
   // cursor is always on screen. The element may not be mounted yet (the tab is
   // mid-switch), so retry across a few frames until it's present + visible.
   useEffect(() => {
-    if (viewMode !== null || !agentEdit) return;
+    if (activeDocId !== null || !agentEdit) return;
     const id = agentEdit.entityId;
     let raf = 0;
     let tries = 0;
@@ -439,7 +568,7 @@ export default function App() {
     };
     raf = requestAnimationFrame(tryScroll);
     return () => cancelAnimationFrame(raf);
-  }, [agentEdit, viewMode]);
+  }, [agentEdit, activeDocId]);
 
   // A user scroll/pan while following = "I'm taking the wheel": pin to the
   // current tab and stop following until they click Follow again. We listen for
@@ -448,8 +577,8 @@ export default function App() {
   // shortcut, or cmd-tabbing must never silently drop follow. We also skip
   // 'scroll' itself, which the auto-scroll above fires programmatically.
   useEffect(() => {
-    if (viewMode !== null) return;
-    const stop = () => setViewMode(effectiveModeRef.current);
+    if (activeDocId !== null) return;
+    const stop = () => setActiveDocId(effectiveDocIdRef.current);
     const passive: AddEventListenerOptions = { passive: true };
     // The keys that move the viewport — only these hand off the wheel.
     const SCROLL_KEYS = new Set([
@@ -471,7 +600,7 @@ export default function App() {
       window.removeEventListener("touchmove", stop, passive);
       window.removeEventListener("keydown", onKey);
     };
-  }, [viewMode]);
+  }, [activeDocId]);
 
   if (route === "mcp") {
     return (
@@ -562,48 +691,61 @@ export default function App() {
   }
 
   // Local navigation only — switching tabs never touches the shared canvas or
-  // other viewers. See viewMode above.
-  const setMode = (mode: CanvasMode) => setViewMode(mode);
+  // other viewers. Deep components (ModeNavContext) request a mode; map it to the
+  // first open document of that type.
+  const setMode = (mode: CanvasMode) => {
+    const d = openDocs.find((o) => DOC_TYPE_TO_MODE[o.type] === mode);
+    if (d) setActiveDocId(d.id);
+  };
 
-  // The canvas's tabs. Empty → no tabs yet → show the template "homepage".
-  const visibleModes = canvasTabs(canvasState, viewMode);
-  const hasTabs = visibleModes.length > 0;
-  // "Following" = no local override, so the view tracks the agent. While
-  // following, the target tab is followMode (where the agent last acted),
-  // falling back to the canvas mode.
-  const following = viewMode === null;
   // Following is armed even before any agent shows up — distinguish "an agent is
   // here" from "on, waiting for one" so the button reads as live, not dead.
   const agentPresent = agentList.length > 0;
-  const followTarget = (followMode ?? (canvasState.mode as CanvasMode)) as CanvasMode;
-  // The active tab: when the user has taken the wheel, their pick; while
-  // following, the agent's tab; else the canvas mode; else the first tab. With
-  // no tabs at all we sit on "welcome" (the template homepage).
-  const effectiveMode: CanvasMode = !hasTabs
-    ? "welcome"
-    : !following && viewMode && visibleModes.includes(viewMode)
-    ? viewMode
-    : following && visibleModes.includes(followTarget)
-    ? followTarget
-    : visibleModes.includes(canvasState.mode as CanvasMode)
-    ? (canvasState.mode as CanvasMode)
-    : visibleModes[0];
-  effectiveModeRef.current = effectiveMode;
-  // The homepage shows iff the canvas has zero tabs.
+  // The homepage shows iff the canvas has zero open tabs.
   const inWelcome = !hasTabs;
-  // Toggling off pins the view to whatever's showing right now.
-  const toggleFollow = () => setViewMode(following ? effectiveMode : null);
+  // Toggling off pins the view to the current tab; on resumes following.
+  const toggleFollow = () => setActiveDocId(following ? effectiveDocId : null);
   const theme = modeTheme(effectiveMode);
-  // Modes not yet shown as a tab — the "+" dropdown offers exactly these.
-  const addableModes = MODES.filter((m) => !visibleModes.includes(m.id));
 
-  // Add an empty tab: persist it (so it survives + the agent sees it in
-  // state.read) and locally switch this viewer to it.
-  function addTab(mode: CanvasMode) {
-    sendOp({ op: "mode.enable", mode });
-    setViewMode(mode);
-    setAddTabOpen(false);
-    setModeMenuOpen(false);
+  // ── Document tab actions ────────────────────────────────────────────────────
+  function selectDoc(id: string) {
+    setActiveDocId(id);
+  }
+  // Close = hide locally + remember it's closed so the sync won't reopen it.
+  // Non-destructive: the document still exists (reopen via reload for now).
+  function closeDoc(id: string) {
+    setClosedDocIds((prev) => new Set(prev).add(id));
+    setOpenDocIds((prev) => prev.filter((x) => x !== id));
+    if (activeDocId === id) setActiveDocId(null);
+  }
+  function createDocument(type: DocumentType) {
+    activateNextNewDocRef.current = true;
+    sendOp({ op: "document.add", data: { type } });
+  }
+  // Explorer → open a document as a tab and focus it. Clears any prior "closed"
+  // mark so the sync effect keeps it open; adds it to the open set immediately.
+  function openDoc(id: string) {
+    setClosedDocIds((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+    setOpenDocIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+    setActiveDocId(id);
+  }
+  // Explorer → delete a document for everyone. The doc (and its child entities,
+  // via the DB cascade) disappears on the next state push; the sync effect drops
+  // it from the open set. If it was the focused tab, resume following the agent.
+  function deleteDoc(id: string) {
+    sendOp({ op: "document.delete", id });
+    setClosedDocIds((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+    if (activeDocId === id) setActiveDocId(null);
   }
 
   return (
@@ -660,151 +802,8 @@ export default function App() {
           clearLog={notify.clearLog}
         />
 
-        {/* Tab bar — always present once a canvas is loaded. On the template
-            homepage (zero tabs) only the "+" shows, so you can create a tab
-            right from the homepage. */}
-        <>
-            <div className="hidden w-px h-4 bg-gray-200 mx-1.5 shrink-0 sm:block" />
-
-            {/* Desktop: all modes laid out inline as accent-tinted pills. */}
-            <div className="hidden sm:flex items-center gap-0.5">
-              {MODES.filter((m) => visibleModes.includes(m.id)).map((m) => {
-                const active = effectiveMode === m.id;
-                const t = modeTheme(m.id);
-                return (
-                  <button
-                    key={m.id}
-                    onClick={() => setMode(m.id)}
-                    className={[
-                      "rounded-lg px-3 py-1 text-sm font-medium transition-colors",
-                      active ? "" : "text-gray-500 hover:bg-gray-900/5 hover:text-gray-800",
-                    ].join(" ")}
-                    style={active ? { backgroundColor: t.soft, color: t.solid } : undefined}
-                  >
-                    {m.label}
-                  </button>
-                );
-              })}
-              {addableModes.length > 0 && (
-                <div className="relative">
-                  <button
-                    onClick={() => setAddTabOpen((o) => !o)}
-                    className="ml-0.5 rounded-lg px-2.5 py-1 text-sm font-medium text-gray-400 hover:bg-gray-900/5 hover:text-gray-700 transition-colors"
-                    title="Add a tab"
-                    aria-haspopup="menu"
-                    aria-expanded={addTabOpen}
-                  >
-                    +
-                  </button>
-                  {addTabOpen && (
-                    <>
-                      <div className="fixed inset-0 z-10" onClick={() => setAddTabOpen(false)} />
-                      <div
-                        role="menu"
-                        className="absolute left-0 mt-1.5 z-20 min-w-[11rem] rounded-xl bg-white border border-gray-900/10 shadow-lg shadow-gray-900/5 py-1"
-                      >
-                        <div className="px-3 py-1 text-[11px] font-medium uppercase tracking-wide text-gray-400">
-                          Add a tab
-                        </div>
-                        {addableModes.map((m) => {
-                          const t = modeTheme(m.id);
-                          return (
-                            <button
-                              key={m.id}
-                              role="menuitem"
-                              onClick={() => addTab(m.id)}
-                              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-medium text-gray-700 hover:bg-gray-100"
-                            >
-                              <span
-                                className="h-2 w-2 rounded-full shrink-0"
-                                style={{ backgroundColor: t.solid }}
-                              />
-                              {m.label}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Mobile: a dropdown so every mode is reachable regardless of count. */}
-            <div className="relative shrink-0 sm:hidden">
-              <button
-                onClick={() => setModeMenuOpen((o) => !o)}
-                className="flex items-center gap-1 rounded-lg px-3 py-1 text-sm font-semibold"
-                style={{ backgroundColor: theme.soft, color: theme.solid }}
-                aria-haspopup="menu"
-                aria-expanded={modeMenuOpen}
-              >
-                {hasTabs ? MODES.find((m) => m.id === effectiveMode)?.label ?? "Mode" : "+ Tab"}
-                <ChevronDown
-                  className={`w-3.5 h-3.5 transition-transform ${modeMenuOpen ? "rotate-180" : ""}`}
-                  aria-hidden="true"
-                />
-              </button>
-              {modeMenuOpen && (
-                <>
-                  <div className="fixed inset-0 z-10" onClick={() => setModeMenuOpen(false)} />
-                  <div
-                    role="menu"
-                    className="absolute left-0 mt-1.5 z-20 min-w-[10rem] rounded-xl bg-white border border-gray-900/10 shadow-lg shadow-gray-900/5 py-1"
-                  >
-                    {MODES.filter((m) => visibleModes.includes(m.id)).map((m) => {
-                      const active = effectiveMode === m.id;
-                      const t = modeTheme(m.id);
-                      return (
-                        <button
-                          key={m.id}
-                          role="menuitem"
-                          onClick={() => {
-                            setMode(m.id);
-                            setModeMenuOpen(false);
-                          }}
-                          className="w-full text-left px-3 py-2 text-sm font-medium"
-                          style={active ? { backgroundColor: t.soft, color: t.solid } : undefined}
-                        >
-                          <span className={active ? "" : "text-gray-700"}>{m.label}</span>
-                        </button>
-                      );
-                    })}
-                    {addableModes.length > 0 && (
-                      <>
-                        {visibleModes.length > 0 && (
-                          <div className="my-1 border-t border-gray-100" />
-                        )}
-                        <div className="px-3 py-1 text-[11px] font-medium uppercase tracking-wide text-gray-400">
-                          Add a tab
-                        </div>
-                        {addableModes.map((m) => {
-                          const t = modeTheme(m.id);
-                          return (
-                            <button
-                              key={m.id}
-                              role="menuitem"
-                              onClick={() => addTab(m.id)}
-                              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-medium text-gray-700 hover:bg-gray-100"
-                            >
-                              <span
-                                className="h-2 w-2 rounded-full shrink-0"
-                                style={{ backgroundColor: t.solid }}
-                              />
-                              {m.label}
-                            </button>
-                          );
-                        })}
-                      </>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
-        </>
-
         <div className="ml-auto flex items-center gap-2 shrink-0">
-          <AgentPresence agents={agentList} edit={agentEdit} reading={agentReading} onJump={setViewMode} />
+          <AgentPresence agents={agentList} edit={agentEdit} reading={agentReading} onJump={() => setActiveDocId(null)} />
           <button
             onClick={toggleFollow}
             className={[
@@ -864,23 +863,6 @@ export default function App() {
             </button>
           )}
           <button
-            onClick={() => setTasksOpenPersist(!tasksOpen)}
-            className={[
-              "relative hidden h-8 w-8 items-center justify-center rounded-lg transition-colors sm:flex",
-              tasksOpen ? "bg-ink/10 text-ink" : "text-gray-500 hover:bg-gray-900/5 hover:text-gray-800",
-            ].join(" ")}
-            title="Tasks — the agent work queue"
-            aria-label="Tasks"
-            aria-pressed={tasksOpen}
-          >
-            <ClipboardList size={17} strokeWidth={1.75} />
-            {proposedTaskCount > 0 && (
-              <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#C75B39] px-1 text-[9px] font-bold text-white">
-                {proposedTaskCount}
-              </span>
-            )}
-          </button>
-          <button
             onClick={() => setConnectOpen(true)}
             className="btn-press rounded-md px-3.5 py-1.5 text-sm font-medium bg-ink text-paper shadow-[2px_2px_0_#C75B39]"
           >
@@ -898,17 +880,81 @@ export default function App() {
         </div>
       )}
 
-      {canvas.yourRole === "read" && (
-        <div className="flex items-center justify-center gap-2 border-b border-ink/10 bg-paper px-4 py-1.5 text-center font-code text-[11.5px] text-ink/55">
-          <span className="inline-block h-1.5 w-1.5 rounded-full bg-ink/30" />
-          View only — you can follow along but not edit this canvas.
-        </div>
-      )}
-
       {/* Live agent op-feed popups. Muting is controlled from the header bell. */}
       <AgentToasts toasts={notify.toasts} onDismiss={notify.dismissToast} />
 
+      {/* Main row, flush under the header: the left dock (activity rail + one
+          swappable panel) rises the full height beside the header, and the tab
+          strip lives in the RIGHT column above the mode content — so tabs sit
+          only over the document they switch, not over the sidebar. */}
       <div className="relative flex flex-1 min-h-0">
+        {/* VS Code-style left dock: an always-present icon rail (ActivityBar)
+            plus ONE swappable side panel. Documents, Agent tasks, and Settings
+            share the slot — selecting an icon opens its panel; the active one
+            toggles closed. */}
+        <ActivityBar
+          active={sidebarView}
+          onSelect={selectSidebarView}
+          badges={{ tasks: proposedTaskCount }}
+        />
+        {sidebarView && sidebarOpen && (
+          <SidePanel width={panelWidth} onWidthChange={setPanelWidthPersist} onClose={closeSidebar}>
+            {sidebarView === "documents" && (
+              <DocumentExplorer
+                documents={documents}
+                state={canvasState}
+                openIds={openSet}
+                activeDocId={effectiveDocId}
+                onOpen={openDoc}
+                onDelete={deleteDoc}
+                readOnly={canvas.yourRole === "read"}
+                onClose={closeSidebar}
+              />
+            )}
+            {sidebarView === "tasks" && (
+              <TasksPanel
+                code={canvas.code}
+                state={canvasState}
+                readOnly={canvas.yourRole === "read"}
+                onClose={closeSidebar}
+              />
+            )}
+            {sidebarView === "settings" && <SettingsPanel onClose={closeSidebar} />}
+          </SidePanel>
+        )}
+        {/* Collapsed but a view is still selected → a grab strip at the dock edge
+            so you can drag (or click) the boundary to reopen that view. */}
+        {sidebarView && !sidebarOpen && (
+          <SidePanelReopenHandle defaultWidth={panelWidth} onOpen={openSidebar} />
+        )}
+
+        {/* Right column: tab strip + view-only banner on top, mode content below. */}
+        <div className="flex min-w-0 flex-1 flex-col">
+        {/* Tab strip — VS Code-style, above the mode content. One tab per OPEN
+            document; the "+" creates new ones. Always present once a canvas is
+            loaded, so even on the empty homepage (zero tabs) the "+" is there to
+            start one. z-[75] keeps its add-menu above the mode content but below
+            the header (z-[80]). */}
+        <div className="relative z-[75] flex items-center px-3 py-1 bg-paper/70 backdrop-blur border-b border-gray-900/5 shrink-0 sm:px-4">
+          <DocumentTabs
+            docs={openDocs}
+            activeDocId={effectiveDocId}
+            onSelect={selectDoc}
+            onClose={closeDoc}
+            onCreate={createDocument}
+            readOnly={canvas.yourRole === "read"}
+          />
+        </div>
+
+        {canvas.yourRole === "read" && (
+          <div className="flex items-center justify-center gap-2 border-b border-ink/10 bg-paper px-4 py-1.5 text-center font-code text-[11.5px] text-ink/55">
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-ink/30" />
+            View only — you can follow along but not edit this canvas.
+          </div>
+        )}
+
+        {/* Mode content row: the focused document's view + the QuickLog dock. */}
+        <div className="relative flex flex-1 min-h-0">
         <ErrorBoundary resetKey={`${canvas.id}:${effectiveMode}`}>
         {(["welcome", "map", "itinerary", "docs", "roadmap", "sheets", "charts"] as CanvasMode[]).map((m) => {
           const active = effectiveMode === m;
@@ -919,20 +965,28 @@ export default function App() {
           // internal z-indexes (notably Leaflet's panes/controls, which go up to
           // ~1000) can't escape and paint over the QuickLog dock beside it.
           const wrapperClass = active ? "relative isolate flex flex-1 min-h-0 min-w-0" : "hidden";
+          // Render just the focused document's slice. For a hidden (kept-alive)
+          // mode, fall back to the first open doc of its type so it stays coherent.
+          const docForMode = active ? effectiveDoc : openDocs.find((d) => DOC_TYPE_TO_MODE[d.type] === m);
+          const scopedState = scopeStateToDocument(canvasState, docForMode);
           return (
             <div key={m} className={wrapperClass}>
               {m === "welcome" && (
                 <WelcomeMode
                   canvasName={canvas.name}
                   onOpenConnect={() => setConnectOpen(true)}
-                  onApply={(mode) => setViewMode(mode)}
+                  onApply={() => {
+                    // A template creates content → new documents; focus the first
+                    // one that lands so the clicker follows into their pick.
+                    activateNextNewDocRef.current = true;
+                  }}
                 />
               )}
               {m === "map" && (
                 <MapMode
                   canvasId={canvas.id}
                   mapId={canvas.mapId}
-                  state={canvasState}
+                  state={scopedState}
                   active={active}
                   selectedPinId={selectedPinId}
                   onSelectPin={setSelectedPinId}
@@ -942,23 +996,23 @@ export default function App() {
               )}
               {m === "itinerary" && (
                 <ItineraryMode
-                  state={canvasState}
+                  state={scopedState}
                   canvasCode={canvas.code}
                   canvasName={canvas.name}
                   selectedEventId={selectedEventId}
                   onSelectEvent={setSelectedEventId}
                 />
               )}
-              {m === "docs" && <DocsMode canvasId={canvas.id} state={canvasState} />}
+              {m === "docs" && <DocsMode canvasId={canvas.id} state={scopedState} />}
               {m === "roadmap" && (
                 <RoadmapMode
-                  state={canvasState}
+                  state={scopedState}
                   code={canvas.code}
                   readOnly={canvas.yourRole === "read"}
                 />
               )}
-              {m === "sheets" && <SheetsMode state={canvasState} canvasCode={canvas.code} />}
-              {m === "charts" && <ChartsMode state={canvasState} />}
+              {m === "sheets" && <SheetsMode state={scopedState} canvasCode={canvas.code} />}
+              {m === "charts" && <ChartsMode state={scopedState} />}
             </div>
           );
         })}
@@ -967,17 +1021,8 @@ export default function App() {
         {/* Direct-input layer: quick-log rail + mobile FAB, overlaid on whatever
             mode is showing. Renders the canvas's agent-defined forms. */}
         <QuickLog code={canvas.code} forms={canvasState.forms} />
-
-        {/* Agent work queue: author tasks, approve agent-proposed ones, and see
-            results. In-flow like QuickLog expanded, so the mode reflows. */}
-        {tasksOpen && (
-          <TasksPanel
-            code={canvas.code}
-            state={canvasState}
-            readOnly={canvas.yourRole === "read"}
-            onClose={() => setTasksOpenPersist(false)}
-          />
-        )}
+        </div>
+        </div>
       </div>
 
       {connectOpen && (

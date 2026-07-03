@@ -84,6 +84,30 @@ export async function handleTool(
         mapId: args.mapId,
       });
 
+    // ── Documents ──────────────────────────────────────────────────────────────
+    case "canvas_document_list":
+      return gateway.get("/api/canvas/documents");
+
+    case "canvas_document_add":
+      return gateway.post("/api/canvas/documents", {
+        type: args.type,
+        name: args.name,
+        config: args.config,
+        sortOrder: args.sortOrder,
+        createdBy: "agent",
+      });
+
+    case "canvas_document_update":
+      // {ref} is a document id OR name (url-encoded); server resolves it.
+      return gateway.patch(`/api/canvas/documents/${encodeURIComponent(String(args.document))}`, {
+        name: args.name,
+        sortOrder: args.sortOrder,
+        config: args.config,
+      });
+
+    case "canvas_document_delete":
+      return gateway.del(`/api/canvas/documents/${encodeURIComponent(String(args.document))}`);
+
     // ── Pins ───────────────────────────────────────────────────────────────────
     case "canvas_pin_add":
       return gateway.post("/api/canvas/pins", {
@@ -93,6 +117,7 @@ export async function handleTool(
         label: args.label,
         body: args.body,
         color: args.color,
+        document: args.document,
         createdBy: "agent",
       });
 
@@ -118,6 +143,7 @@ export async function handleTool(
         travelMode: args.travelMode,
         dayTag: args.dayTag,
         cost: args.cost,
+        document: args.document,
         createdBy: "agent",
       });
 
@@ -136,6 +162,7 @@ export async function handleTool(
         imageRefs: args.imageRefs ?? [],
         parentId: args.parentId,
         parentKind: args.parentKind,
+        document: args.document,
         createdBy: "agent",
       });
 
@@ -157,6 +184,7 @@ export async function handleTool(
         stage: args.stage,
         assignee: args.assignee,
         sortOrder: args.sortOrder ?? 0,
+        document: args.document,
         createdBy: "agent",
       });
 
@@ -500,7 +528,7 @@ export const TOOLS = [
           items: {
             type: "string",
             enum: [
-              "pins", "events", "notes", "roadmapItems", "sheets",
+              "documents", "pins", "events", "notes", "roadmapItems", "sheets",
               "sheetRows", "charts", "forms", "actions", "agents",
             ],
           },
@@ -543,6 +571,67 @@ export const TOOLS = [
       required: ["mapId"],
     },
   },
+
+  // ── Documents ────────────────────────────────────────────────────────────────
+  {
+    name: "canvas_document_list",
+    description:
+      "List the canvas's documents (its tabs) — each is {id, type, name, sortOrder, config}, " +
+      "ordered for display. A canvas holds multiple named documents of each type (e.g. a " +
+      "'Japan' map and a 'Budget' sheet). Use this to discover what exists, then address a " +
+      "document by name or id when adding content or editing it.",
+    inputSchema: { type: "object" as const, properties: {} },
+  },
+  {
+    name: "canvas_document_add",
+    description:
+      "Create a new document (a new tab). type is one of map, notes, itinerary, roadmap, sheet. " +
+      "A 'sheet' document also creates its empty backing sheet (add columns/rows next). To create " +
+      "a chart use canvas_chart_add (a chart needs a source sheet). New content added afterward " +
+      "can target this document by its name.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        type: { type: "string", enum: ["map", "notes", "itinerary", "roadmap", "sheet"] },
+        name: { type: "string", description: "Display name / tab title (e.g. \"Japan trip\")." },
+        config: {
+          type: "object",
+          description: "Type-specific settings — e.g. { \"mapId\": \"tokyo\" } for a map document.",
+        },
+        sortOrder: { type: "number", description: "Tab position; omit to append at the end." },
+      },
+      required: ["type"],
+    },
+  },
+  {
+    name: "canvas_document_update",
+    description:
+      "Rename, reorder, or reconfigure a document. Address it by `document` = its id or current " +
+      "name (e.g. \"Budget\"). Set config to change type-specific settings (e.g. a map's base layer).",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        document: { type: "string", description: "Target document — its id or current name." },
+        name: { type: "string", description: "New name." },
+        sortOrder: { type: "number" },
+        config: { type: "object" },
+      },
+      required: ["document"],
+    },
+  },
+  {
+    name: "canvas_document_delete",
+    description:
+      "Delete a document (a tab) and everything in it — addressed by `document` = id or name. " +
+      "Cascades: a map doc takes its pins, a notes doc its notes, a sheet doc its rows, etc. " +
+      "Irreversible.",
+    inputSchema: {
+      type: "object" as const,
+      properties: { document: { type: "string", description: "Target document — its id or name." } },
+      required: ["document"],
+    },
+  },
+
   {
     name: "canvas_pin_add",
     description: "Add a location pin to the canvas map.",
@@ -555,6 +644,12 @@ export const TOOLS = [
         label: { type: "string" },
         body: { type: "string" },
         color: { type: "string" },
+        document: {
+          type: "string",
+          description:
+            "Which map document (tab) to add this pin to — a document id or name (e.g. \"Japan\"). " +
+            "Omit to use the canvas's default map document (created if none exists).",
+        },
       },
       required: ["pinType", "lat", "lng"],
     },
@@ -651,6 +746,12 @@ export const TOOLS = [
             "The itinerary sums these into live per-day and grand totals — set it whenever " +
             "you know a price so the running trip cost stays correct as the plan changes.",
         },
+        document: {
+          type: "string",
+          description:
+            "Which itinerary document (tab) to add this entry to — a document id or name. " +
+            "Omit to use the canvas's default itinerary (created if none exists).",
+        },
       },
       required: ["title", "start"],
     },
@@ -717,6 +818,12 @@ export const TOOLS = [
         parentId: { type: "string" },
         parentKind: { type: "string", enum: ["pin", "event"] },
         imageRefs: { type: "array", items: { type: "string" } },
+        document: {
+          type: "string",
+          description:
+            "Which notes document (tab) to add this note to — a document id or name. " +
+            "Omit to use the canvas's default notes doc (created if none exists).",
+        },
       },
       required: ["body"],
     },
@@ -772,6 +879,12 @@ export const TOOLS = [
             "= a human goal. Omit for a human goal.",
         },
         sortOrder: { type: "number", description: "Position among siblings; higher = later." },
+        document: {
+          type: "string",
+          description:
+            "Which roadmap document (tab) to add this item to — a document id or name. " +
+            "Omit to use the canvas's default roadmap (created if none exists).",
+        },
       },
       required: ["title"],
     },
