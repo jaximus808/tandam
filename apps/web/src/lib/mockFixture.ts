@@ -302,7 +302,7 @@ const initialCanvas: CanvasMeta = {
   code: "MOCKCNV1",
   name: "Mock Canvas (offline)",
   mode: "sheets",
-  mapId: "tokyo",
+  mapId: "us",
   version: 1,
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
@@ -324,7 +324,7 @@ const roadmapDocId = id();
 const sheetDocId = id();
 
 const documents: Document[] = [
-  { id: mapDocId, kind: "document", type: "map", name: "Tokyo map", sortOrder: 0, config: { mapId: "tokyo" }, createdBy: "user", updatedAt: Date.now() },
+  { id: mapDocId, kind: "document", type: "map", name: "US map", sortOrder: 0, config: { mapId: "us" }, createdBy: "user", updatedAt: Date.now() },
   { id: itinDocId, kind: "document", type: "itinerary", name: "Itinerary", sortOrder: 1, config: {}, createdBy: "user", updatedAt: Date.now() },
   { id: notesDocId, kind: "document", type: "notes", name: "Notes", sortOrder: 2, config: {}, createdBy: "user", updatedAt: Date.now() },
   { id: roadmapDocId, kind: "document", type: "roadmap", name: "Roadmap", sortOrder: 3, config: {}, createdBy: "user", updatedAt: Date.now() },

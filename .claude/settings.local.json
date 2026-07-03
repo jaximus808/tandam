@@ -102,7 +102,14 @@
       "mcp__claude_ai_tandem__canvas_task_complete",
       "mcp__agentcanvas__canvas_create",
       "mcp__agentcanvas__canvas_document_list",
-      "mcp__agentcanvas__canvas_document_update"
+      "mcp__agentcanvas__canvas_document_update",
+      "mcp__agentcanvas__canvas_task_list",
+      "mcp__agentcanvas__canvas_task_get",
+      "mcp__agentcanvas__canvas_task_start",
+      "Bash(npx tsc *)",
+      "mcp__agentcanvas__canvas_task_complete",
+      "Bash(echo \"exit: $?\")",
+      "mcp__agentcanvas__canvas_document_add"
     ]
   }
 }

@@ -31,32 +31,18 @@ let listCache: Promise<MapSummary[]> | null = null;
 
 const MOCK_ENABLED = import.meta.env.VITE_MOCK === "1";
 
-// Built-in fallback presets used when running without a backend (VITE_MOCK=1).
-// Keep these in sync with apps/api/internal/maps/assets/*.json.
+// The one built-in preset — the Continental US voyager map. Kept in sync with
+// apps/api/internal/maps/assets/us.json. It's the only available base map (the
+// old world/japan/tokyo presets were dropped), and also the fallback whenever an
+// id can't be resolved — including legacy canvases that still reference a removed
+// preset, so their maps render as US instead of erroring.
 const CARTO_VOYAGER = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png";
 const CARTO_ATTRIBUTION = "© OpenStreetMap contributors © CARTO";
-const BUILTIN_PRESETS: Record<string, MapDefinition> = {
-  world: {
-    id: "world", name: "World", description: "Global view",
-    center: [20, 0], zoom: 2, minZoom: 1, maxZoom: 20,
-    layers: [{ kind: "tile", url: CARTO_VOYAGER, attribution: CARTO_ATTRIBUTION }],
-  },
-  us: {
-    id: "us", name: "United States", description: "Continental US",
-    center: [39.5, -98.35], zoom: 4, minZoom: 3, maxZoom: 20,
-    bounds: [[24.5, -125.0], [49.5, -66.5]],
-    layers: [{ kind: "tile", url: CARTO_VOYAGER, attribution: CARTO_ATTRIBUTION }],
-  },
-  tokyo: {
-    id: "tokyo", name: "Tokyo", description: "Greater Tokyo area",
-    center: [35.6762, 139.6503], zoom: 12, minZoom: 8, maxZoom: 20,
-    layers: [{ kind: "tile", url: CARTO_VOYAGER, attribution: CARTO_ATTRIBUTION }],
-  },
-  japan: {
-    id: "japan", name: "Japan", description: "All of Japan",
-    center: [36.5, 138.0], zoom: 5, minZoom: 4, maxZoom: 20,
-    layers: [{ kind: "tile", url: CARTO_VOYAGER, attribution: CARTO_ATTRIBUTION }],
-  },
+const US_PRESET: MapDefinition = {
+  id: "us", name: "United States", description: "Continental US",
+  center: [39.5, -98.35], zoom: 4, minZoom: 3, maxZoom: 20,
+  bounds: [[24.5, -125.0], [49.5, -66.5]],
+  layers: [{ kind: "tile", url: CARTO_VOYAGER, attribution: CARTO_ATTRIBUTION }],
 };
 
 export function resolveMap(id: string): Promise<MapDefinition> {
@@ -64,19 +50,16 @@ export function resolveMap(id: string): Promise<MapDefinition> {
   if (cached) return cached;
 
   if (MOCK_ENABLED) {
-    const preset = BUILTIN_PRESETS[id] ?? BUILTIN_PRESETS.world;
-    const p = Promise.resolve(preset);
+    const p = Promise.resolve(US_PRESET);
     defCache.set(id, p);
     return p;
   }
 
-  const p = fetch(`/api/maps/${encodeURIComponent(id)}`).then(r => {
-    if (!r.ok) {
-      defCache.delete(id);
-      throw new Error(`map ${id} not found`);
-    }
-    return r.json() as Promise<MapDefinition>;
-  });
+  const p = fetch(`/api/maps/${encodeURIComponent(id)}`)
+    .then(r => (r.ok ? (r.json() as Promise<MapDefinition>) : US_PRESET))
+    // Network error or a removed/legacy preset → fall back to the US map rather
+    // than white-screening the canvas.
+    .catch(() => US_PRESET);
   defCache.set(id, p);
   return p;
 }
@@ -84,9 +67,8 @@ export function resolveMap(id: string): Promise<MapDefinition> {
 export function listMaps(): Promise<MapSummary[]> {
   if (listCache) return listCache;
   if (MOCK_ENABLED) {
-    listCache = Promise.resolve(
-      Object.values(BUILTIN_PRESETS).map(({ id, name, description }) => ({ id, name, description }))
-    );
+    const { id, name, description } = US_PRESET;
+    listCache = Promise.resolve([{ id, name, description }]);
     return listCache;
   }
   listCache = fetch("/api/maps")

@@ -37,6 +37,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { useAgentActivity } from "./lib/useAgentActivity";
 import { useAgentNotifications } from "./lib/useAgentNotifications";
 import { recordRecent } from "./lib/recentCanvases";
+import { loadTabState, saveTabState } from "./lib/tabState";
 import { MOCK_ENABLED, mockCanvas } from "./lib/mockFixture";
 import { modeTheme } from "./lib/modeTheme";
 
@@ -267,14 +268,29 @@ export default function App() {
   // viewer (like tabs in a Google Doc) — never broadcast. closedDocIds remembers
   // tabs this viewer explicitly closed so the sync effect won't reopen them.
   // activeDocId null = "follow the agent"; set = the viewer took the wheel.
-  const [openDocIds, setOpenDocIds] = useState<string[]>([]);
-  const [closedDocIds, setClosedDocIds] = useState<Set<string>>(new Set());
-  const [activeDocId, setActiveDocId] = useState<string | null>(null);
-  const [followDocId, setFollowDocId] = useState<string | null>(null);
+  // Initial values are restored from localStorage (item 11 — smart default-open)
+  // so a reload lands on the tabs you had open. A GENUINE first visit restores
+  // nothing → zero open tabs → the welcome/start page.
+  const initialTabs = useMemo(() => loadTabState(getCodeFromURL()), []);
+  const [openDocIds, setOpenDocIds] = useState<string[]>(() => initialTabs?.open ?? []);
+  const [closedDocIds, setClosedDocIds] = useState<Set<string>>(
+    () => new Set(initialTabs?.closed ?? []),
+  );
+  const [activeDocId, setActiveDocId] = useState<string | null>(() =>
+    initialTabs && !initialTabs.following ? initialTabs.active : null,
+  );
+  const [followDocId, setFollowDocId] = useState<string | null>(() =>
+    initialTabs && initialTabs.following ? initialTabs.active : null,
+  );
   // A created document's server id is unknown until it lands in the next state
   // push; this flags "focus the next brand-new doc that appears".
   const activateNextNewDocRef = useRef(false);
   const prevDocIdsRef = useRef<string[]>([]);
+  // Have we processed the first state snapshot for this canvas yet? On that first
+  // snapshot the pre-existing documents are adopted per the restored open set and
+  // are NOT auto-opened — so a first visit lands at zero tabs. Only documents that
+  // appear AFTER (created live by you or the agent) auto-open. Reset per canvas.
+  const firstSnapshotDoneRef = useRef(false);
 
   // All documents, ordered for display, plus the open subset.
   const documents = useMemo<Document[]>(
@@ -292,19 +308,27 @@ export default function App() {
   const openSet = useMemo(() => new Set(openDocIds), [openDocIds]);
   const openDocs = useMemo(() => documents.filter((d) => openSet.has(d.id)), [documents, openSet]);
 
-  // Keep the open set in sync with the documents that exist: drop deleted ones
-  // and auto-open any new doc the viewer hasn't explicitly closed (so agent- and
-  // "+"-created docs surface). Focuses a doc we just created via activateNext…
+  // Keep the open set in sync with the documents that exist: drop deleted ones,
+  // and auto-open documents that appear AFTER this viewer connected (so a tab the
+  // agent or you create live surfaces on its own) — but NOT the documents that
+  // already existed at connect time, so a first visit lands at zero tabs. Focuses
+  // a doc we just created via activateNext… .
   useEffect(() => {
+    if (!canvasState) return; // wait for the first real snapshot
     const ids = documents.map((d) => d.id);
     const existing = new Set(ids);
-    const newIds = ids.filter((id) => !prevDocIdsRef.current.includes(id));
+    // On the first snapshot after (re)connecting nothing counts as "new": the
+    // restored open set stands as-is. Afterwards, ids absent from the previous
+    // snapshot are freshly-created and auto-open (unless explicitly closed).
+    const firstSnapshot = !firstSnapshotDoneRef.current;
+    firstSnapshotDoneRef.current = true;
+    const newIds = firstSnapshot ? [] : ids.filter((id) => !prevDocIdsRef.current.includes(id));
     prevDocIdsRef.current = ids;
 
     setOpenDocIds((prev) => {
       let next = prev.filter((id) => existing.has(id));
-      for (const d of documents) {
-        if (!next.includes(d.id) && !closedDocIds.has(d.id)) next = [...next, d.id];
+      for (const id of newIds) {
+        if (!next.includes(id) && !closedDocIds.has(id)) next = [...next, id];
       }
       return next.length === prev.length && next.every((v, i) => v === prev[i]) ? prev : next;
     });
@@ -316,7 +340,7 @@ export default function App() {
       activateNextNewDocRef.current = false;
       setActiveDocId(newIds[newIds.length - 1]);
     }
-  }, [documents, closedDocIds]);
+  }, [documents, closedDocIds, canvasState]);
 
   const following = activeDocId === null;
   // The focused document: the viewer's pick if still open; else (following) the
@@ -336,6 +360,21 @@ export default function App() {
     if (!hasTabs) return;
     setVisitedModes((prev) => (prev.has(effectiveMode) ? prev : new Set(prev).add(effectiveMode)));
   }, [effectiveMode, hasTabs]);
+
+  // Persist this viewer's tab state per canvas (item 11) so a reload restores the
+  // same open tabs and focus. Only saves once a canvas is loaded; `active` is the
+  // effective (shown) document, and `following` records whether we were tracking
+  // the agent vs pinned to a tab.
+  const loadedCode = canvas?.code;
+  useEffect(() => {
+    if (!loadedCode) return;
+    saveTabState(loadedCode, {
+      open: openDocIds,
+      closed: [...closedDocIds],
+      active: effectiveDocId,
+      following,
+    });
+  }, [loadedCode, openDocIds, closedDocIds, effectiveDocId, following]);
 
   useEffect(() => {
     if (!canvasCode) return;
@@ -426,6 +465,19 @@ export default function App() {
     if (canvas) recordRecent(canvas.code, canvas.name);
   }, [canvas]);
 
+  // On first open of a canvas, always reveal the Documents explorer — so the
+  // tabs (and the welcome page's "Open all tabs" start) are discoverable, even
+  // if the panel was collapsed on a previous visit. Fires once per canvas.
+  const forcedDocsFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!canvas || forcedDocsFor.current === canvas.code) return;
+    forcedDocsFor.current = canvas.code;
+    setSidebarView("documents");
+    persist(SIDEBAR_VIEW_KEY, "documents");
+    setSidebarOpen(true);
+    persist(SIDEBAR_OPEN_KEY, "1");
+  }, [canvas]);
+
   // resetPerCanvasState clears every piece of UI state scoped to the canvas
   // we're leaving. Without this, a stale selectedPinId / visitedModes /
   // pendingMode from canvas A leaks into canvas B and can render references
@@ -441,9 +493,41 @@ export default function App() {
     setOpenDocIds([]);
     setClosedDocIds(new Set());
     prevDocIdsRef.current = [];
+    firstSnapshotDoneRef.current = false;
     setConnectOpen(false);
     setShareOpen(false);
     setAccessError(null);
+  }
+
+  // Restore this viewer's saved tab state for a canvas we're entering (item 11).
+  // Runs after resetPerCanvasState in handleJoin, so it wins. No saved state → a
+  // genuine first visit: zero open tabs → the welcome/start page. When following,
+  // land back on the doc that was showing (followDocId), still tracking the agent.
+  function hydrateTabsFor(code: string) {
+    const saved = loadTabState(code);
+    prevDocIdsRef.current = [];
+    firstSnapshotDoneRef.current = false;
+    if (saved) {
+      setOpenDocIds(saved.open);
+      setClosedDocIds(new Set(saved.closed));
+      setActiveDocId(saved.following ? null : saved.active);
+      setFollowDocId(saved.following ? saved.active : null);
+    } else {
+      setOpenDocIds([]);
+      setClosedDocIds(new Set());
+      setActiveDocId(null);
+      setFollowDocId(null);
+    }
+  }
+
+  // Welcome-page "Open all tabs" (item 10): surface every document on the canvas
+  // as a tab at once. Clears any explicit closes so the sync effect keeps them.
+  function openAllDocs() {
+    const ids = documents.map((d) => d.id);
+    if (ids.length === 0) return;
+    setClosedDocIds(new Set());
+    setOpenDocIds(ids);
+    setFollowDocId((f) => f ?? ids[0]);
   }
 
   function handleJoin(code: string) {
@@ -466,6 +550,7 @@ export default function App() {
     setCanvasCode(code);
     setCodeInURL(code);
     resetPerCanvasState();
+    hydrateTabsFor(code);
     // A claim token is scoped to the canvas it arrived with — drop it when the
     // user navigates elsewhere so it can't be misapplied to another canvas.
     setClaimToken(null);
@@ -974,12 +1059,12 @@ export default function App() {
               {m === "welcome" && (
                 <WelcomeMode
                   canvasName={canvas.name}
+                  currentCode={canvas.code}
+                  docCount={documents.length}
                   onOpenConnect={() => setConnectOpen(true)}
-                  onApply={() => {
-                    // A template creates content → new documents; focus the first
-                    // one that lands so the clicker follows into their pick.
-                    activateNextNewDocRef.current = true;
-                  }}
+                  onOpenCanvas={handleJoin}
+                  onCreateDoc={createDocument}
+                  onOpenAll={openAllDocs}
                 />
               )}
               {m === "map" && (

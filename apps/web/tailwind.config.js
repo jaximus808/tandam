@@ -21,6 +21,9 @@ module.exports = {
         // The agent signature colour. Humans are ink, agents are terracotta —
         // every agent-authored thing on a surface carries this.
         agent: "#C75B39",
+        // The Tandem brand teal — the mark's colour (see TandemLogo). Used for
+        // neutral brand accents that shouldn't read as "agent" terracotta.
+        brand: "#0D6E66",
       },
     },
   },

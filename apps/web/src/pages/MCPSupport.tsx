@@ -259,7 +259,7 @@ const TOOLS = [
     group: "Mode + map",
     items: [
       ["canvas.mode.set", "Switch view: welcome / map / itinerary / docs."],
-      ["canvas.map.list", "List base-map presets (world, us, tokyo, japan, …)."],
+      ["canvas.map.list", "List base-map presets (currently just the US map)."],
       ["canvas.map.set", "Pick a base map. Also switches into map mode."],
     ],
   },

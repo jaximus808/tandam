@@ -1170,7 +1170,7 @@ func (s *supabaseStore) LeaveWelcomeIfNeeded(ctx context.Context, canvasID uuid.
 	update := map[string]any{"mode": fallbackMode}
 	// If transitioning to map and no preset yet chosen, drop a sensible default
 	if fallbackMode == "map" && c.MapID == nil {
-		update["map_id"] = "world"
+		update["map_id"] = "us"
 	}
 	err = s.exec(s.client.From("canvases").
 		Update(update, "minimal", "").

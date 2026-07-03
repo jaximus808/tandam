@@ -530,7 +530,7 @@ export default function MapMode({
     edge: "left",
   });
 
-  const { map, loading, error } = useMapDefinition(mapId ?? "world");
+  const { map, loading, error } = useMapDefinition(mapId ?? "us");
 
   function handleDragEnd(pin: Pin, e: L.DragEndEvent) {
     const { lat, lng } = (e.target as L.Marker).getLatLng();

@@ -7,7 +7,7 @@ func TestLoadEmbedded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadEmbedded: %v", err)
 	}
-	want := []string{"japan", "tokyo", "us", "world"}
+	want := []string{"us"}
 	got := r.IDs()
 	if len(got) != len(want) {
 		t.Fatalf("IDs len = %d, want %d (%v vs %v)", len(got), len(want), got, want)
@@ -28,8 +28,8 @@ func TestGetUnknown(t *testing.T) {
 
 func TestHas(t *testing.T) {
 	r, _ := LoadEmbedded()
-	if !r.Has("world") {
-		t.Fatal("Has(world) = false")
+	if !r.Has("us") {
+		t.Fatal("Has(us) = false")
 	}
 	if r.Has("nope") {
 		t.Fatal("Has(nope) = true")

@@ -556,15 +556,15 @@ export const TOOLS = [
   {
     name: "canvas_map_list",
     description:
-      "List the available base map presets (world, us, tokyo, japan, etc). " +
+      "List the available base map presets (currently just 'us', the Continental US map). " +
       "Use the returned ids with canvas_map_set.",
     inputSchema: { type: "object" as const, properties: {} },
   },
   {
     name: "canvas_map_set",
     description:
-      "Switch the base map to a registered preset (e.g. 'world', 'us', 'tokyo'). " +
-      "Also switches the canvas into map mode. Call canvas_map_list to enumerate options.",
+      "Switch the base map to a registered preset. The only preset today is 'us' (the " +
+      "Continental US map). Also switches the canvas into map mode. Call canvas_map_list to enumerate options.",
     inputSchema: {
       type: "object" as const,
       properties: { mapId: { type: "string", description: "Preset id from canvas_map_list" } },
@@ -596,7 +596,7 @@ export const TOOLS = [
         name: { type: "string", description: "Display name / tab title (e.g. \"Japan trip\")." },
         config: {
           type: "object",
-          description: "Type-specific settings — e.g. { \"mapId\": \"tokyo\" } for a map document.",
+          description: "Type-specific settings — e.g. { \"mapId\": \"us\" } for a map document.",
         },
         sortOrder: { type: "number", description: "Tab position; omit to append at the end." },
       },
