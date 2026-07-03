@@ -116,7 +116,7 @@ function CopyField({
     <div
       className={[
         "flex items-center gap-2 rounded-md border bg-white py-1.5 pl-3 pr-1.5",
-        accent ? "border-agent/35" : "border-ink/15",
+        accent ? "border-brand/35" : "border-ink/15",
       ].join(" ")}
     >
       <span className="min-w-0 flex-1 break-all font-code text-[12.5px] text-ink">{value}</span>
@@ -124,7 +124,7 @@ function CopyField({
         onClick={onCopy}
         className={[
           "btn-press inline-flex shrink-0 items-center gap-1 rounded-[5px] px-2.5 py-1.5 font-code text-[11px] font-medium text-paper",
-          accent ? "bg-agent" : "bg-ink",
+          accent ? "bg-brand" : "bg-ink",
         ].join(" ")}
       >
         <Icon name={copied ? "check" : "copy"} className="h-3 w-3" />
@@ -236,7 +236,7 @@ export default function ConnectModal({ code, version, agents, onClose, onSwitchC
             <>
               {/* ── Primary: tell the agent to join ──────────────────────── */}
               <div className="mt-4">
-                <div className="flex items-center gap-1.5 text-agent">
+                <div className="flex items-center gap-1.5 text-brand">
                   <Icon name="spark" className="h-3.5 w-3.5" />
                   <span className="font-code text-[11px] font-medium uppercase tracking-[0.12em]">
                     Paste into your agent's chat
@@ -326,7 +326,7 @@ export default function ConnectModal({ code, version, agents, onClose, onSwitchC
                       href="/mcp"
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="mt-2.5 inline-flex items-center gap-1.5 font-code text-[11px] font-medium text-agent transition-colors hover:text-ink"
+                      className="mt-2.5 inline-flex items-center gap-1.5 font-code text-[11px] font-medium text-brand transition-colors hover:text-ink"
                     >
                       Full setup guide — every client
                       <Icon name="external" className="h-3 w-3" />
@@ -343,7 +343,7 @@ export default function ConnectModal({ code, version, agents, onClose, onSwitchC
           {connected ? (
             <button
               onClick={done}
-              className="btn-press inline-flex w-full items-center justify-center gap-2 rounded-md bg-ink px-6 py-2.5 font-medium text-paper shadow-[4px_4px_0_#C75B39]"
+              className="btn-press inline-flex w-full items-center justify-center gap-2 rounded-md bg-ink px-6 py-2.5 font-medium text-paper shadow-[4px_4px_0_#0D6E66]"
             >
               Start working
               <Icon name="arrow" className="h-4 w-4" />

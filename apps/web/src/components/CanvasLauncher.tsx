@@ -123,7 +123,7 @@ export default function CanvasLauncher({ initialMode, onJoin, onClose, onOpenMCP
             <button
               type="submit"
               disabled={creating}
-              className="btn-press w-full rounded-md bg-ink px-5 py-3 font-medium text-paper shadow-[3px_3px_0_#C75B39] disabled:opacity-50"
+              className="btn-press w-full rounded-md bg-ink px-5 py-3 font-medium text-paper shadow-[3px_3px_0_#0D6E66] disabled:opacity-50"
             >
               {creating ? "Creating…" : "Create canvas →"}
             </button>
@@ -165,7 +165,7 @@ export default function CanvasLauncher({ initialMode, onJoin, onClose, onOpenMCP
 
           <button
             onClick={onOpenMCP}
-            className="flex w-full items-center justify-center gap-1.5 rounded-md border border-agent/30 bg-agent/10 px-4 py-2.5 font-code text-[11.5px] font-medium text-agent transition-colors hover:bg-agent/15"
+            className="flex w-full items-center justify-center gap-1.5 rounded-md border border-brand/30 bg-brand/10 px-4 py-2.5 font-code text-[11.5px] font-medium text-brand transition-colors hover:bg-brand/15"
           >
             connecting an AI agent instead? see the guide →
           </button>

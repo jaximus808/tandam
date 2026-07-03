@@ -1133,7 +1133,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
                 <>
                   <button
                     onClick={onShowCanvases}
-                    className="btn-press inline-flex items-center justify-center gap-2 rounded-md bg-ink px-6 py-3 font-medium text-paper shadow-[4px_4px_0_#C75B39]"
+                    className="btn-press inline-flex items-center justify-center gap-2 rounded-md bg-ink px-6 py-3 font-medium text-paper shadow-[4px_4px_0_#0D6E66]"
                   >
                     Go to your dashboard
                     <Icon name="arrow" className="h-4 w-4" />
@@ -1149,7 +1149,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
                 <>
                   <button
                     onClick={() => setLauncher("create")}
-                    className="btn-press inline-flex items-center justify-center gap-2 rounded-md bg-ink px-6 py-3 font-medium text-paper shadow-[4px_4px_0_#C75B39]"
+                    className="btn-press inline-flex items-center justify-center gap-2 rounded-md bg-ink px-6 py-3 font-medium text-paper shadow-[4px_4px_0_#0D6E66]"
                   >
                     Create a canvas
                     <Icon name="arrow" className="h-4 w-4" />
@@ -1521,7 +1521,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
                 <div className="mt-8 flex flex-wrap items-center gap-4">
                   <button
                     onClick={() => setSignInOpen(true)}
-                    className="btn-press inline-flex items-center gap-2 rounded-md bg-paper px-6 py-3 font-medium text-ink shadow-[4px_4px_0_#C75B39]"
+                    className="btn-press inline-flex items-center gap-2 rounded-md bg-paper px-6 py-3 font-medium text-ink shadow-[4px_4px_0_#0D6E66]"
                   >
                     Create your free account
                   </button>
@@ -1582,7 +1582,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
           <div className="mt-10 flex flex-wrap items-center justify-center gap-4">
             <button
               onClick={() => setLauncher("create")}
-              className="btn-press inline-flex items-center gap-2 rounded-md bg-ink px-6 py-3 font-medium text-paper shadow-[4px_4px_0_#C75B39]"
+              className="btn-press inline-flex items-center gap-2 rounded-md bg-ink px-6 py-3 font-medium text-paper shadow-[4px_4px_0_#0D6E66]"
             >
               Start a canvas
               <Icon name="arrow" className="h-4 w-4" />

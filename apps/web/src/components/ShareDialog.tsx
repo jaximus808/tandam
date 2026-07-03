@@ -193,7 +193,7 @@ export default function ShareDialog({ code, canvas, onClose }: Props) {
                 />
               </div>
             )}
-            {postureError && <p className="mt-2 text-[12px] text-[#C75B39]">{postureError}</p>}
+            {postureError && <p className="mt-2 text-[12px] text-red-600">{postureError}</p>}
           </div>
 
           {/* ── Share with specific people ─────────────────────────────────── */}
@@ -223,7 +223,7 @@ export default function ShareDialog({ code, canvas, onClose }: Props) {
                 {inviting ? "…" : "Add"}
               </button>
             </form>
-            {shareError && <p className="mt-2 text-[12px] text-[#C75B39]">{shareError}</p>}
+            {shareError && <p className="mt-2 text-[12px] text-red-600">{shareError}</p>}
 
             <ul className="mt-3 space-y-1.5">
               {/* Owner — always first, can't be removed. */}
@@ -259,7 +259,7 @@ export default function ShareDialog({ code, canvas, onClose }: Props) {
                     </span>
                     <button
                       onClick={() => revoke(m.userId)}
-                      className="rounded px-1.5 py-0.5 text-[11px] text-ink/40 transition-colors hover:bg-ink/5 hover:text-[#C75B39]"
+                      className="rounded px-1.5 py-0.5 text-[11px] text-ink/40 transition-colors hover:bg-ink/5 hover:text-red-600"
                       title="Remove access"
                     >
                       Remove

@@ -949,7 +949,7 @@ export default function App() {
           )}
           <button
             onClick={() => setConnectOpen(true)}
-            className="btn-press rounded-md px-3.5 py-1.5 text-sm font-medium bg-ink text-paper shadow-[2px_2px_0_#C75B39]"
+            className="btn-press rounded-md px-3.5 py-1.5 text-sm font-medium bg-ink text-paper shadow-[2px_2px_0_#0D6E66]"
           >
             Connect
           </button>

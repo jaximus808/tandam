@@ -170,7 +170,7 @@ export default function MyCanvases({ onOpenCanvas, onHome, onOpenMCP }: Props) {
           {load.status === "ready" && (
             <button
               onClick={() => setLauncherOpen(true)}
-              className="btn-press inline-flex items-center gap-1.5 rounded-md bg-ink px-3.5 py-1.5 text-sm font-medium text-paper shadow-[2px_2px_0_#C75B39]"
+              className="btn-press inline-flex items-center gap-1.5 rounded-md bg-ink px-3.5 py-1.5 text-sm font-medium text-paper shadow-[2px_2px_0_#0D6E66]"
             >
               <Plus className="h-4 w-4" />
               <span className="hidden sm:inline">New canvas</span>
@@ -424,7 +424,7 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
       </p>
       <button
         onClick={onCreate}
-        className="btn-press mt-5 inline-flex items-center gap-1.5 rounded-lg bg-ink px-4 py-2 text-sm font-medium text-paper shadow-[2px_2px_0_#C75B39]"
+        className="btn-press mt-5 inline-flex items-center gap-1.5 rounded-lg bg-ink px-4 py-2 text-sm font-medium text-paper shadow-[2px_2px_0_#0D6E66]"
       >
         <Plus className="h-4 w-4" />
         Create a canvas
