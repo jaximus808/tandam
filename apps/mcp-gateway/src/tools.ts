@@ -14,6 +14,24 @@ export async function handleTool(
   // normalize the incoming name before routing.
   toolName = toolName.replace(/\./g, "_");
 
+  // Model-carried binding. The hosted HTTP connector (claude.ai) does not keep
+  // one MCP session alive across an idle gap, so the per-session gateway binding
+  // can be gone by the time a later tool call lands — the classic "not connected"
+  // between calls. To make each call self-sufficient, canvas_connect/create hand
+  // the model an opaque `session` handle and every other tool accepts it back;
+  // adopt it here (before dispatch) so the call targets the right canvas even on
+  // a brand-new gateway. Then strip it so it never leaks into per-tool args.
+  const carried = args.session;
+  if (
+    typeof carried === "string" &&
+    carried &&
+    toolName !== "canvas_connect" &&
+    toolName !== "canvas_create"
+  ) {
+    gateway.adoptSession(carried);
+  }
+  delete args.session;
+
   switch (toolName) {
     // ── Connection ─────────────────────────────────────────────────────────────
     case "canvas_connect": {
@@ -28,6 +46,11 @@ export async function handleTool(
         canvasName: session.canvasName,
         canvasCode: session.canvasCode,
         url: gateway.canvasUrl(session.canvasCode),
+        session: gateway.exportSession(),
+        _session_note:
+          "Pass `session` back as the `session` argument on EVERY later canvas_* call. The hosted " +
+          "MCP connection can reset between calls; carrying this handle keeps your edits on this " +
+          "canvas without having to reconnect.",
       };
     }
 
@@ -42,6 +65,11 @@ export async function handleTool(
         canvasCode: session.canvasCode,
         // Ownership-free view/share link — safe to give anyone.
         url: gateway.canvasUrl(session.canvasCode),
+        session: gateway.exportSession(),
+        _session_note:
+          "Pass `session` back as the `session` argument on EVERY later canvas_* call. The hosted " +
+          "MCP connection can reset between calls; carrying this handle keeps your edits on this " +
+          "canvas without having to reconnect.",
       };
       // For an anonymous create, also surface the PRIVATE claim link so the user
       // can take ownership. Keep the two links distinct in what you tell the user.
@@ -94,6 +122,7 @@ export async function handleTool(
         name: args.name,
         config: args.config,
         sortOrder: args.sortOrder,
+        parentId: args.parentId,
         createdBy: "agent",
       });
 
@@ -103,6 +132,7 @@ export async function handleTool(
         name: args.name,
         sortOrder: args.sortOrder,
         config: args.config,
+        parentId: args.parentId,
       });
 
     case "canvas_document_delete":
@@ -470,7 +500,7 @@ export async function handleTool(
   }
 }
 
-export const TOOLS = [
+const RAW_TOOLS = [
   {
     name: "canvas_connect",
     description:
@@ -576,29 +606,37 @@ export const TOOLS = [
   {
     name: "canvas_document_list",
     description:
-      "List the canvas's documents (its tabs) — each is {id, type, name, sortOrder, config}, " +
+      "List the canvas's documents (its tabs) — each is {id, type, name, parentId?, sortOrder, config}, " +
       "ordered for display. A canvas holds multiple named documents of each type (e.g. a " +
       "'Japan' map and a 'Budget' sheet). Use this to discover what exists, then address a " +
-      "document by name or id when adding content or editing it.",
+      "document by name or id when adding content or editing it. A `type: \"folder\"` document " +
+      "holds no content — it groups others into a tree; a document's `parentId` is the folder it " +
+      "sits under (absent = root level).",
     inputSchema: { type: "object" as const, properties: {} },
   },
   {
     name: "canvas_document_add",
     description:
-      "Create a new document (a new tab). type is one of map, notes, itinerary, roadmap, sheet. " +
-      "A 'sheet' document also creates its empty backing sheet (add columns/rows next). To create " +
-      "a chart use canvas_chart_add (a chart needs a source sheet). New content added afterward " +
-      "can target this document by its name.",
+      "Create a new document (a new tab). type is one of map, notes, itinerary, roadmap, sheet, folder. " +
+      "A 'sheet' document also creates its empty backing sheet (add columns/rows next). A 'folder' " +
+      "holds no content — it groups other documents in the explorer tree; put documents in it by " +
+      "passing their `parentId`. To create a chart use canvas_chart_add (a chart needs a source " +
+      "sheet). New content added afterward can target this document by its name.",
     inputSchema: {
       type: "object" as const,
       properties: {
-        type: { type: "string", enum: ["map", "notes", "itinerary", "roadmap", "sheet"] },
+        type: { type: "string", enum: ["map", "notes", "itinerary", "roadmap", "sheet", "folder"] },
         name: { type: "string", description: "Display name / tab title (e.g. \"Japan trip\")." },
         config: {
           type: "object",
           description: "Type-specific settings — e.g. { \"mapId\": \"us\" } for a map document.",
         },
         sortOrder: { type: "number", description: "Tab position; omit to append at the end." },
+        parentId: {
+          type: "string",
+          description:
+            "Folder to create this document inside — a folder document's id or name. Omit for the root level.",
+        },
       },
       required: ["type"],
     },
@@ -606,8 +644,9 @@ export const TOOLS = [
   {
     name: "canvas_document_update",
     description:
-      "Rename, reorder, or reconfigure a document. Address it by `document` = its id or current " +
-      "name (e.g. \"Budget\"). Set config to change type-specific settings (e.g. a map's base layer).",
+      "Rename, reorder, reconfigure, or move a document. Address it by `document` = its id or current " +
+      "name (e.g. \"Budget\"). Set config to change type-specific settings (e.g. a map's base layer). " +
+      "Set parentId to move it into a folder (or to \"root\" to pull it back to the top level).",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -615,6 +654,12 @@ export const TOOLS = [
         name: { type: "string", description: "New name." },
         sortOrder: { type: "number" },
         config: { type: "object" },
+        parentId: {
+          type: "string",
+          description:
+            "Move into this folder — a folder document's id or name. Pass \"root\" (or \"\") to move it " +
+            "back to the top level. Omit to leave its folder unchanged.",
+        },
       },
       required: ["document"],
     },
@@ -1413,3 +1458,29 @@ export const TOOLS = [
     },
   },
 ];
+
+// The optional handle every non-connector tool accepts so the model can re-bind
+// a call to its canvas even after the hosted MCP connection resets. See the
+// model-carried binding note in handleTool and Gateway.exportSession.
+const SESSION_ARG = {
+  type: "string",
+  description:
+    "Session handle returned by canvas_connect / canvas_create. Pass it on EVERY call so this " +
+    "operation still targets your canvas even if the hosted MCP connection was reset between " +
+    "calls. Omit only if you have not connected yet.",
+} as const;
+
+const CONNECTORS = new Set(["canvas_connect", "canvas_create"]);
+
+// Advertise `session` on every tool except the two that establish the binding.
+export const TOOLS = RAW_TOOLS.map((tool) =>
+  CONNECTORS.has(tool.name)
+    ? tool
+    : {
+        ...tool,
+        inputSchema: {
+          ...tool.inputSchema,
+          properties: { ...tool.inputSchema.properties, session: SESSION_ARG },
+        },
+      }
+);

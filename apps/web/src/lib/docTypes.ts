@@ -11,6 +11,9 @@ export const DOC_TYPE_TO_MODE: Record<DocumentType, CanvasMode> = {
   roadmap: "roadmap",
   sheet: "sheets",
   chart: "charts",
+  // A folder holds no content and never renders as a tab; it only nests other
+  // documents in the explorer tree. This entry keeps the Record total.
+  folder: "welcome",
 };
 
 export const DOC_TYPE_LABEL: Record<DocumentType, string> = {
@@ -20,6 +23,7 @@ export const DOC_TYPE_LABEL: Record<DocumentType, string> = {
   roadmap: "Roadmap",
   sheet: "Sheet",
   chart: "Chart",
+  folder: "Folder",
 };
 
 // Types a user can spin up from the "+" tab menu. Charts are excluded — a chart

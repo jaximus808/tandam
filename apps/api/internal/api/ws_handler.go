@@ -311,6 +311,7 @@ func (wh *WSHandler) handleOp(canvasID uuid.UUID, raw []byte, canWrite bool) {
 			Name      string         `json:"name"`
 			Config    map[string]any `json:"config"`
 			SortOrder int            `json:"sortOrder"`
+			ParentID  *uuid.UUID     `json:"parentId"`
 		}
 		if len(msg.Data) > 0 {
 			if err := json.Unmarshal(msg.Data, &data); err != nil {
@@ -330,9 +331,13 @@ func (wh *WSHandler) handleOp(canvasID uuid.UUID, raw []byte, canWrite bool) {
 			sh := &store.Sheet{ID: uuid.New(), Kind: "sheet", Name: data.Name,
 				Columns: []store.SheetColumn{}, SortOrder: data.SortOrder, CreatedBy: "user"}
 			_, mutErr = wh.store.CreateSheet(ctx, canvasID, sh)
+			if mutErr == nil && data.ParentID != nil && sh.DocumentID != nil {
+				_, mutErr = wh.store.UpdateDocument(ctx, canvasID, *sh.DocumentID,
+					store.DocumentPatch{ParentID: data.ParentID, SetParent: true})
+			}
 		} else {
 			doc := &store.Document{ID: uuid.New(), Kind: "document", Type: data.Type,
-				Name: data.Name, Config: data.Config, SortOrder: data.SortOrder, CreatedBy: "user"}
+				Name: data.Name, Config: data.Config, ParentID: data.ParentID, SortOrder: data.SortOrder, CreatedBy: "user"}
 			_, mutErr = wh.store.CreateDocument(ctx, canvasID, doc)
 		}
 

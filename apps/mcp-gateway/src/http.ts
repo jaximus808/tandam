@@ -40,6 +40,36 @@ interface Session {
 // transparently re-initialize (and re-`canvas_connect`). Fine for beta.
 const sessions = new Map<string, Session>();
 
+// Request tracing for the "not connected between calls" bug: when on, logs one
+// line per /api/mcp request with the mcp-session-id, the JSON-RPC method/tool,
+// and whether that session id hit the in-memory Map. This makes it visible
+// whether claude.ai reuses the canvas_connect session for later tool calls
+// (same sid, hit=yes) or lands them on a fresh/other session (sid changes or
+// hit=no) — the latter is why writes come back "not connected". On by default
+// while we chase it; set MCP_TRACE=0 to silence.
+const TRACE = process.env.MCP_TRACE !== "0";
+
+/** Pull the JSON-RPC method and (for tools/call) the tool name out of a body. */
+function describeRpc(body: unknown): string {
+  if (!body || typeof body !== "object") return "-";
+  const b = body as { method?: unknown; params?: { name?: unknown } };
+  const method = typeof b.method === "string" ? b.method : "?";
+  const tool = typeof b.params?.name === "string" ? b.params.name : undefined;
+  return tool ? `${method}(${tool})` : method;
+}
+
+function trace(
+  method: string | undefined,
+  sid: string | undefined,
+  rpc: string,
+  note: string
+): void {
+  if (!TRACE) return;
+  process.stderr.write(
+    `[tandem-http] ${method ?? "?"} sid=${sid ?? "-"} rpc=${rpc} ${note} sessions=${sessions.size}\n`
+  );
+}
+
 /** Read and JSON-parse a request body. Returns undefined for an empty body. */
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -73,6 +103,7 @@ async function handleMcp(req: IncomingMessage, res: ServerResponse): Promise<voi
   // session; they carry no body to inspect.
   if (req.method === "GET" || req.method === "DELETE") {
     const existing = sid ? sessions.get(sid) : undefined;
+    trace(req.method, sid, "-", existing ? "hit" : "MISS");
     if (!existing) {
       rpcError(res, 400, "Unknown or missing mcp-session-id");
       return;
@@ -87,10 +118,12 @@ async function handleMcp(req: IncomingMessage, res: ServerResponse): Promise<voi
   }
 
   const body = await readJsonBody(req);
+  const rpc = describeRpc(body);
 
   // Existing session: route to its transport.
   if (sid) {
     const existing = sessions.get(sid);
+    trace("POST", sid, rpc, existing ? "hit" : "MISS→404");
     if (!existing) {
       rpcError(res, 404, "Session not found — re-initialize");
       return;
@@ -101,9 +134,12 @@ async function handleMcp(req: IncomingMessage, res: ServerResponse): Promise<voi
 
   // No session id: only an `initialize` request may open a new one.
   if (!isInitializeRequest(body)) {
+    trace("POST", sid, rpc, "no-sid, not-initialize→400");
     rpcError(res, 400, "No mcp-session-id and not an initialize request");
     return;
   }
+
+  trace("POST", sid, rpc, "new-session");
 
   // Fresh session: its own Gateway (canvas binding lives here) + Server.
   const gateway = new Gateway({ apiUrl: API_URL, webUrl: WEB_URL });
@@ -111,6 +147,7 @@ async function handleMcp(req: IncomingMessage, res: ServerResponse): Promise<voi
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: (newId) => {
       sessions.set(newId, { transport, createdAt: Date.now() });
+      trace("POST", newId, "initialize", "session-created");
     },
   });
 

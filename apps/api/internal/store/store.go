@@ -443,12 +443,21 @@ type DocumentPatch struct {
 	Name      *string        `json:"name"`
 	SortOrder *int           `json:"sortOrder"`
 	Config    map[string]any `json:"config"`
+	// Folder membership (item 8.5). SetParent gates whether parent_id is touched
+	// at all — when true, ParentID nil clears it (moves the document to the root),
+	// non-nil moves it into that folder. nil ParentID with SetParent=false leaves
+	// it unchanged. (The REST handler resolves a folder ref into ParentID.)
+	ParentID  *uuid.UUID
+	SetParent bool
 }
 
-// DocumentReorder is one entry in a bulk tab reorder (drag-and-drop).
+// DocumentReorder is one entry in a bulk tab reorder (drag-and-drop). ParentID is
+// always interpreted (nil = root / clear), like RoadmapReorder — so a single
+// reorder both moves a document between folders and positions it among siblings.
 type DocumentReorder struct {
-	ID        uuid.UUID `json:"id"`
-	SortOrder int       `json:"sortOrder"`
+	ID        uuid.UUID  `json:"id"`
+	ParentID  *uuid.UUID `json:"parentId"`
+	SortOrder int        `json:"sortOrder"`
 }
 
 type SheetColumnPatch struct {

@@ -124,6 +124,36 @@ export class Gateway {
     return this.session !== null;
   }
 
+  /**
+   * Serialize the active binding into an opaque handle the model can carry and
+   * pass back on later calls. The hosted HTTP connector (claude.ai) does not
+   * keep one MCP session alive across an idle gap — the in-gateway binding can
+   * vanish between calls — so connect/create hand this back and every other
+   * tool accepts it, making each call self-sufficient. It's the whole session
+   * (JWT included), so adopting it fully restores the binding on a fresh gateway.
+   */
+  exportSession(): string {
+    return Buffer.from(JSON.stringify(this.getSession())).toString("base64url");
+  }
+
+  /** Restore a binding from a handle produced by exportSession. */
+  adoptSession(handle: string): void {
+    let parsed: CanvasSession;
+    try {
+      parsed = JSON.parse(Buffer.from(handle, "base64url").toString("utf8"));
+    } catch {
+      throw new Error(
+        "Invalid session handle. Re-run `canvas_connect` (or `canvas_create`) to get a fresh one."
+      );
+    }
+    if (!parsed?.token || !parsed?.canvasId) {
+      throw new Error(
+        "Invalid session handle. Re-run `canvas_connect` (or `canvas_create`) to get a fresh one."
+      );
+    }
+    this.session = parsed;
+  }
+
   /** Remember the registered agent id on the session (set by agent_register). */
   setAgentId(agentId: string): void {
     if (this.session) this.session.agentId = agentId;
@@ -132,7 +162,9 @@ export class Gateway {
   getSession(): CanvasSession {
     if (!this.session) {
       throw new Error(
-        "Not connected to a canvas. Call the `canvas_connect` tool with a canvas code first."
+        "Not connected to a canvas. If you already connected this session, pass the `session` " +
+          "handle returned by canvas_connect/canvas_create as the `session` argument on this call. " +
+          "Otherwise call `canvas_connect` with a canvas code first."
       );
     }
     return this.session;

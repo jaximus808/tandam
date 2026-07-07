@@ -20,14 +20,16 @@ import (
 
 // docTypesCreatable are the types canvas_document_add can mint directly. Charts
 // are excluded: a chart needs a source sheet, so it's born from canvas_chart_add.
+// A "folder" is creatable — it holds no content, only nests other documents
+// (item 8.5).
 var docTypesCreatable = map[string]bool{
-	"map": true, "notes": true, "itinerary": true, "roadmap": true, "sheet": true,
+	"map": true, "notes": true, "itinerary": true, "roadmap": true, "sheet": true, "folder": true,
 }
 
 // defaultDocNames names an auto-created singleton document when content is added
 // without targeting one (e.g. first pin on a fresh canvas → a "Map" document).
 var defaultDocNames = map[string]string{
-	"map": "Map", "notes": "Notes", "itinerary": "Itinerary", "roadmap": "Roadmap",
+	"map": "Map", "notes": "Notes", "itinerary": "Itinerary", "roadmap": "Roadmap", "folder": "Folder",
 }
 
 // resolveDocumentRef finds a document on the canvas by a ref that may be a UUID
@@ -173,6 +175,22 @@ func typeOrDoc(typeFilter string) string {
 	return typeFilter
 }
 
+// resolveParentFolder turns a parent-folder ref (id or name) into a *uuid.UUID.
+// An empty ref — or the sentinels "root"/"none" — means the root (nil). A
+// non-empty ref must resolve to a `folder` document; anything else errors so a
+// caller can't accidentally nest a document under, say, a sheet.
+func (h *Handler) resolveParentFolder(ctx context.Context, canvasID uuid.UUID, ref string) (*uuid.UUID, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" || strings.EqualFold(ref, "root") || strings.EqualFold(ref, "none") {
+		return nil, nil
+	}
+	folder, err := h.resolveDocumentRef(ctx, canvasID, ref, "folder")
+	if err != nil {
+		return nil, err
+	}
+	return &folder.ID, nil
+}
+
 // attachDocument resolves which document a new child of docType belongs to and
 // returns its id, or writes a 400 and returns ok=false. ref may be a document id
 // or name; empty ref falls back to (or creates) the canvas's default doc of that
@@ -207,6 +225,7 @@ func (h *Handler) CreateDocument(w http.ResponseWriter, r *http.Request) {
 		Name      string         `json:"name"`
 		Config    map[string]any `json:"config"`
 		SortOrder *int           `json:"sortOrder"`
+		ParentID  *string        `json:"parentId"`
 		CreatedBy string         `json:"createdBy"`
 	}
 	if err := decode(r, &body); err != nil {
@@ -219,8 +238,18 @@ func (h *Handler) CreateDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !docTypesCreatable[body.Type] {
-		writeError(w, http.StatusBadRequest, "invalid document type: "+body.Type+" (map, notes, itinerary, roadmap, sheet)")
+		writeError(w, http.StatusBadRequest, "invalid document type: "+body.Type+" (map, notes, itinerary, roadmap, sheet, folder)")
 		return
+	}
+	// Optionally nest the new document under a folder (item 8.5).
+	var parentID *uuid.UUID
+	if body.ParentID != nil {
+		p, err := h.resolveParentFolder(r.Context(), canvasID, *body.ParentID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		parentID = p
 	}
 	if body.CreatedBy == "" {
 		body.CreatedBy = "agent"
@@ -248,6 +277,10 @@ func (h *Handler) CreateDocument(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		if parentID != nil {
+			_, _ = h.store.UpdateDocument(r.Context(), canvasID, *sh.DocumentID,
+				store.DocumentPatch{ParentID: parentID, SetParent: true})
+		}
 		broadcastState(r.Context(), h.store, h.hub, canvasID)
 		doc, _ := h.store.GetDocument(r.Context(), canvasID, *sh.DocumentID)
 		writeJSON(w, http.StatusCreated, map[string]any{"document": doc, "sheetId": sh.ID})
@@ -255,7 +288,7 @@ func (h *Handler) CreateDocument(w http.ResponseWriter, r *http.Request) {
 	}
 
 	doc := &store.Document{ID: uuid.New(), Kind: "document", Type: body.Type,
-		Name: body.Name, Config: body.Config, SortOrder: sortOrder, CreatedBy: body.CreatedBy}
+		Name: body.Name, Config: body.Config, ParentID: parentID, SortOrder: sortOrder, CreatedBy: body.CreatedBy}
 	if _, err := h.store.CreateDocument(r.Context(), canvasID, doc); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -273,10 +306,31 @@ func (h *Handler) UpdateDocument(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	var patch store.DocumentPatch
-	if err := decode(r, &patch); err != nil {
+	var body struct {
+		Name      *string        `json:"name"`
+		SortOrder *int           `json:"sortOrder"`
+		Config    map[string]any `json:"config"`
+		// Folder to move this document into — an id or name, or ""/"root"/"none"
+		// for the top level (item 8.5). Present ⇒ move; absent ⇒ leave unchanged.
+		ParentID *string `json:"parentId"`
+	}
+	if err := decode(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	patch := store.DocumentPatch{Name: body.Name, SortOrder: body.SortOrder, Config: body.Config}
+	if body.ParentID != nil {
+		parentID, err := h.resolveParentFolder(r.Context(), canvasID, *body.ParentID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if parentID != nil && *parentID == doc.ID {
+			writeError(w, http.StatusBadRequest, "a document cannot be its own folder")
+			return
+		}
+		patch.ParentID = parentID
+		patch.SetParent = true
 	}
 	if _, err := h.store.UpdateDocument(r.Context(), canvasID, doc.ID, patch); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())

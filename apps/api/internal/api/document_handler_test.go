@@ -64,6 +64,23 @@ func TestResolveDocInList_Ambiguous(t *testing.T) {
 	}
 }
 
+// A folder is resolvable like any other document, and the "folder" type filter
+// (used when moving a document into a folder, item 8.5) excludes non-folders so a
+// document can't be nested under, say, a sheet that happens to share a name.
+func TestResolveDocInList_Folder(t *testing.T) {
+	trips := doc("folder", "Trips", 0)
+	docs := []*store.Document{trips, doc("sheet", "Trips", 1)}
+
+	got, err := resolveDocInList(docs, "Trips", "folder")
+	if err != nil || got.ID != trips.ID {
+		t.Fatalf("expected the Trips folder, got %v err=%v", got, err)
+	}
+	// A name that only matches a non-folder is out of scope under the folder filter.
+	if _, err := resolveDocInList([]*store.Document{doc("sheet", "Budget", 0)}, "Budget", "folder"); err == nil {
+		t.Fatalf("expected no folder named Budget")
+	}
+}
+
 func TestResolveDocInList_Empty(t *testing.T) {
 	if _, err := resolveDocInList(nil, "  ", ""); err == nil {
 		t.Fatalf("blank ref should error")

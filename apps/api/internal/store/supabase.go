@@ -1226,6 +1226,9 @@ func (s *supabaseStore) UpdateDocument(ctx context.Context, canvasID uuid.UUID, 
 		}
 		m["config"] = json.RawMessage(cfgJSON)
 	}
+	if patch.SetParent {
+		m["parent_id"] = uuidPtrStr(patch.ParentID) // nil → NULL (move to root)
+	}
 	if len(m) == 0 {
 		return 0, nil
 	}
@@ -1253,7 +1256,10 @@ func (s *supabaseStore) DeleteDocument(ctx context.Context, canvasID uuid.UUID, 
 func (s *supabaseStore) ReorderDocuments(ctx context.Context, canvasID uuid.UUID, updates []DocumentReorder) (int, error) {
 	for _, u := range updates {
 		err := s.exec(s.client.From("documents").
-			Update(map[string]any{"sort_order": u.SortOrder}, "minimal", "").
+			Update(map[string]any{
+				"sort_order": u.SortOrder,
+				"parent_id":  uuidPtrStr(u.ParentID), // always interpreted; nil → root
+			}, "minimal", "").
 			Eq("id", u.ID.String()).
 			Eq("canvas_id", canvasID.String()))
 		if err != nil {

@@ -109,7 +109,12 @@
       "Bash(npx tsc *)",
       "mcp__agentcanvas__canvas_task_complete",
       "Bash(echo \"exit: $?\")",
-      "mcp__agentcanvas__canvas_document_add"
+      "mcp__agentcanvas__canvas_document_add",
+      "Bash(cat docker-compose.local.yml)",
+      "Bash(docker ps *)",
+      "Bash(API_URL=https://tandemcanvas.com PUBLIC_URL=https://tandemcanvas.com PORT=8971 MCP_TRACE=1 node dist/http.js)",
+      "Bash(echo \"started pid $!\")",
+      "Bash(curl -s -m 4 http://127.0.0.1:8971/healthz)"
     ]
   }
 }

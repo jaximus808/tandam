@@ -58,7 +58,12 @@ export default function DocumentTabs({
     const toIdx = ids.indexOf(targetId);
     if (fromIdx < 0 || toIdx < 0) return;
     ids.splice(toIdx, 0, ids.splice(fromIdx, 1)[0]);
-    sendOp({ op: "document.reorder", updates: ids.map((id, i) => ({ id, sortOrder: i })) });
+    // Reorder within the tab strip only — keep each document's folder membership.
+    const parentOf = new Map(docs.map((d) => [d.id, d.parentId ?? null]));
+    sendOp({
+      op: "document.reorder",
+      updates: ids.map((id, i) => ({ id, parentId: parentOf.get(id) ?? null, sortOrder: i })),
+    });
   }
 
   return (

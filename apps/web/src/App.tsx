@@ -322,7 +322,11 @@ export default function App() {
     // snapshot are freshly-created and auto-open (unless explicitly closed).
     const firstSnapshot = !firstSnapshotDoneRef.current;
     firstSnapshotDoneRef.current = true;
-    const newIds = firstSnapshot ? [] : ids.filter((id) => !prevDocIdsRef.current.includes(id));
+    // Folders never open as tabs — they only nest documents in the explorer —
+    // so a freshly-created folder must not auto-surface as a tab.
+    const newIds = firstSnapshot
+      ? []
+      : ids.filter((id) => !prevDocIdsRef.current.includes(id) && docsById[id]?.type !== "folder");
     prevDocIdsRef.current = ids;
 
     setOpenDocIds((prev) => {
@@ -523,7 +527,8 @@ export default function App() {
   // Welcome-page "Open all tabs" (item 10): surface every document on the canvas
   // as a tab at once. Clears any explicit closes so the sync effect keeps them.
   function openAllDocs() {
-    const ids = documents.map((d) => d.id);
+    // Folders aren't tabs — open only the real documents.
+    const ids = documents.filter((d) => d.type !== "folder").map((d) => d.id);
     if (ids.length === 0) return;
     setClosedDocIds(new Set());
     setOpenDocIds(ids);
@@ -807,6 +812,22 @@ export default function App() {
     activateNextNewDocRef.current = true;
     sendOp({ op: "document.add", data: { type } });
   }
+  // Explorer → create an (empty) folder to organize documents. Not a tab, so we
+  // don't arm activateNextNewDoc; it surfaces in the explorer tree on the next
+  // state push.
+  function createFolder() {
+    sendOp({ op: "document.add", data: { type: "folder", name: "New folder" } });
+  }
+  // Explorer → move a document into a folder (parentId) or back to the root
+  // (parentId null). Keeps its own sortOrder so relative order is preserved.
+  function moveDoc(id: string, parentId: string | null) {
+    const doc = docsById[id];
+    if (!doc || (doc.parentId ?? null) === parentId) return;
+    sendOp({
+      op: "document.reorder",
+      updates: [{ id, parentId, sortOrder: doc.sortOrder }],
+    });
+  }
   // Explorer → open a document as a tab and focus it. Clears any prior "closed"
   // mark so the sync effect keeps it open; adds it to the open set immediately.
   function openDoc(id: string) {
@@ -992,6 +1013,8 @@ export default function App() {
                 activeDocId={effectiveDocId}
                 onOpen={openDoc}
                 onDelete={deleteDoc}
+                onCreateFolder={createFolder}
+                onMove={moveDoc}
                 readOnly={canvas.yourRole === "read"}
                 onClose={closeSidebar}
               />
@@ -1060,7 +1083,7 @@ export default function App() {
                 <WelcomeMode
                   canvasName={canvas.name}
                   currentCode={canvas.code}
-                  docCount={documents.length}
+                  docCount={documents.filter((d) => d.type !== "folder").length}
                   onOpenConnect={() => setConnectOpen(true)}
                   onOpenCanvas={handleJoin}
                   onCreateDoc={createDocument}

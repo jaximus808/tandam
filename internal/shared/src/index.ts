@@ -250,15 +250,18 @@ export interface Form {
 // documents, each an instance of a `type`, with a `name` and `sortOrder`. Child
 // entities (pins/events/notes/roadmap items/sheets/charts) point back via their
 // `documentId`. `config` carries type-specific settings — e.g. { mapId } for a
-// map document. `parentId` is reserved for a future folder tree (the document
-// explorer sidebar); it is always absent today — flat now, tree-ready.
-export type DocumentType = "map" | "notes" | "itinerary" | "roadmap" | "sheet" | "chart";
+// map document. `parentId` nests a document under a `folder` document (roadmap
+// item 8.5) — the document explorer renders these as a tree. A folder holds no
+// content; it exists only to group other documents (and nested folders).
+export type DocumentType = "map" | "notes" | "itinerary" | "roadmap" | "sheet" | "chart" | "folder";
 
 export interface Document {
   id: EntityId;
   kind: "document";
   type: DocumentType;
   name: string;
+  // Folder membership: the id of the `folder` document this one lives under, or
+  // absent for a root-level document (item 8.5).
   parentId?: EntityId;
   sortOrder: number;
   config: Record<string, unknown>;
@@ -341,7 +344,14 @@ export type WSClientMessage =
   | { op: "chart.delete"; id: EntityId }
   | {
       op: "document.add";
-      data: { type: DocumentType; name?: string; config?: Record<string, unknown>; sortOrder?: number };
+      data: {
+        type: DocumentType;
+        name?: string;
+        config?: Record<string, unknown>;
+        sortOrder?: number;
+        // Create the document inside this folder (item 8.5); omit for root level.
+        parentId?: EntityId;
+      };
     }
   | {
       op: "document.update";
@@ -349,7 +359,12 @@ export type WSClientMessage =
       partial: { name?: string; sortOrder?: number; config?: Record<string, unknown> };
     }
   | { op: "document.delete"; id: EntityId }
-  | { op: "document.reorder"; updates: { id: EntityId; sortOrder: number }[] }
+  // Reorder AND re-parent in one op (mirrors roadmap.reorder): parentId is always
+  // interpreted — a folder id to move the document into, or null for the root.
+  | {
+      op: "document.reorder";
+      updates: { id: EntityId; parentId: EntityId | null; sortOrder: number }[];
+    }
   | { op: "mode.set"; mode: CanvasMode }
   | { op: "mode.enable"; mode: CanvasMode }
   | { op: "map.set"; mapId: string }
