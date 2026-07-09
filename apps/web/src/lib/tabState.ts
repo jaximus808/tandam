@@ -5,6 +5,8 @@
    same tabs — instead of re-opening every document and focusing whatever sorts
    first ("why does it open to sheets"). Keyed by canvas code. */
 
+import { touchViewState, viewStateExpired } from "./viewState";
+
 const KEY_PREFIX = "tandem.tabs.";
 
 export interface TabState {
@@ -24,6 +26,7 @@ function keyFor(code: string): string {
 
 export function loadTabState(code: string | null): TabState | null {
   if (!code) return null;
+  if (viewStateExpired()) return null; // lapsed after hours away → open clean
   try {
     const raw = localStorage.getItem(keyFor(code));
     if (!raw) return null;
@@ -45,6 +48,7 @@ export function loadTabState(code: string | null): TabState | null {
 export function saveTabState(code: string, state: TabState) {
   try {
     localStorage.setItem(keyFor(code), JSON.stringify(state));
+    touchViewState(); // refresh the expiry clock on every save (sliding window)
   } catch {
     // ignore quota / disabled-storage errors
   }

@@ -462,17 +462,27 @@ export async function handleTool(
         }>;
       };
       // Compact projection: no bodies, no linkedIds. canvas_task_get has the rest.
-      return {
-        tasks: (res.actions ?? []).map((a) => ({
-          id: a.id,
-          title: a.payload?.title ?? "",
-          state: a.state,
-          assignee: a.payload?.assignee ?? "agent",
-          proposedBy: a.proposedBy,
-          ...(a.result ? { result: a.result } : {}),
-          createdAt: a.createdAt,
-        })),
-      };
+      const tasks = (res.actions ?? []).map((a) => ({
+        id: a.id,
+        title: a.payload?.title ?? "",
+        state: a.state,
+        assignee: a.payload?.assignee ?? "agent",
+        proposedBy: a.proposedBy,
+        ...(a.result ? { result: a.result } : {}),
+        createdAt: a.createdAt,
+      }));
+      // Contextual fan-out nudge: only when there's a real batch of ready work.
+      // Subagents are a HARNESS capability (e.g. Claude Code's Agent tool), not
+      // something this server can start — so this just tells the agent it may
+      // offer it. Each subagent should agent_register (role "executor",
+      // parentAgentId = the orchestrator's id) so the fan-out shows on the board
+      // rather than the orchestrator narrating what it's doing.
+      const approvedCount = tasks.filter((t) => t.state === "approved").length;
+      const hint =
+        approvedCount >= 2
+          ? `${approvedCount} approved tasks are ready. If you're in a harness with subagents (e.g. Claude Code), you can offer the user to spin up one subagent per task and execute them in parallel — have each subagent connect, agent_register (role "executor", parentAgentId = your registered agent id), then task_start → work → task_complete. Skip this if your harness has no subagent primitive.`
+          : undefined;
+      return { tasks, ...(hint ? { hint } : {}) };
     }
 
     case "canvas_task_get":

@@ -4,6 +4,7 @@ import remarkGfm from "remark-gfm";
 import type { CanvasState, Note } from "../types";
 import { imageUrl } from "../lib/api";
 import { sendOp } from "../lib/ws";
+import { htmlToMarkdown } from "../lib/paste";
 import EmptyState from "../components/EmptyState";
 import { modeTheme } from "../lib/modeTheme";
 
@@ -109,6 +110,31 @@ function NoteCard({
     setEditing(false);
   }
 
+  // Rich-text paste: if the clipboard carries HTML (a webpage or Google-Docs
+  // selection), convert it to Markdown and splice it in at the cursor. Notes
+  // render Markdown, so this preserves headings/links/lists/tables instead of
+  // flattening them. Plain-text paste falls through to the default (item 13).
+  function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const html = e.clipboardData.getData("text/html");
+    if (!html.trim()) return;
+    const md = htmlToMarkdown(html);
+    if (!md) return;
+    e.preventDefault();
+    const el = e.currentTarget;
+    const start = el.selectionStart ?? draft.length;
+    const end = el.selectionEnd ?? draft.length;
+    const next = draft.slice(0, start) + md + draft.slice(end);
+    setDraft(next);
+    const caret = start + md.length;
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current;
+      if (ta) {
+        ta.selectionStart = ta.selectionEnd = caret;
+        ta.focus();
+      }
+    });
+  }
+
   function handleKey(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Escape") {
       e.preventDefault();
@@ -166,6 +192,7 @@ function NoteCard({
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onBlur={commit}
+              onPaste={handlePaste}
               onKeyDown={handleKey}
               autoFocus
               placeholder="Start typing… Markdown supported (tables too)."

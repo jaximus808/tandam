@@ -27,6 +27,7 @@ import type {
   SheetRow,
 } from "../types";
 import { sendOp } from "../lib/ws";
+import { parseClipboardGrid } from "../lib/paste";
 import { MOCK_ENABLED } from "../lib/mockFixture";
 import EmptyState from "../components/EmptyState";
 import { modeTheme } from "../lib/modeTheme";
@@ -335,6 +336,54 @@ function SheetTable({ sheet, rows }: { sheet: Sheet; rows: SheetRow[] }) {
     sendOp({ op: "sheet.row.reorder", sheetId: sheet.id, updates });
   }
 
+  // Paste a TSV/Excel block anchored at (startRow, startCol), auto-growing the
+  // sheet: new text columns to the right and new rows below as the block needs
+  // (item 13). Client-side and non-atomic (one op per new column / row), which
+  // is fine for the small sheets this app deals in. New columns carry a
+  // client-minted id so the row ops below can key cells to them immediately —
+  // the server honours a supplied column id (see sheet.column.add).
+  function handlePasteGrid(startRow: number, startCol: number, grid: string[][]) {
+    const width = Math.max(...grid.map((r) => r.length));
+
+    // Absolute column index → column id (+ type for parsing). Extend as needed.
+    const colId: string[] = columns.map((c) => c.id);
+    const colType: SheetColumnType[] = columns.map((c) => c.type);
+    let colSort = columns.length
+      ? Math.max(...columns.map((c) => c.sortOrder))
+      : -1;
+    for (let ci = columns.length; ci < startCol + width; ci++) {
+      const id = crypto.randomUUID();
+      colSort += 1;
+      colId[ci] = id;
+      colType[ci] = "text";
+      sendOp({
+        op: "sheet.column.add",
+        sheetId: sheet.id,
+        column: { id, name: `Column ${ci + 1}`, type: "text", sortOrder: colSort },
+      });
+    }
+
+    let rowSort = orderedRows.length
+      ? Math.max(...orderedRows.map((r) => r.sortOrder))
+      : -1;
+    grid.forEach((cells, ri) => {
+      const data: Record<string, SheetCellValue> = {};
+      cells.forEach((raw, cj) => {
+        const absCol = startCol + cj;
+        const id = colId[absCol];
+        if (!id) return;
+        data[id] = parseFromInput(colType[absCol], raw);
+      });
+      const absRow = startRow + ri;
+      if (absRow < orderedRows.length) {
+        sendOp({ op: "sheet.row.update", id: orderedRows[absRow].id, partial: { data } });
+      } else {
+        rowSort += 1;
+        sendOp({ op: "sheet.row.add", sheetId: sheet.id, data, sortOrder: rowSort });
+      }
+    });
+  }
+
   const rowIds = useMemo(() => orderedRows.map((r) => r.id), [orderedRows]);
 
   return (
@@ -361,8 +410,14 @@ function SheetTable({ sheet, rows }: { sheet: Sheet; rows: SheetRow[] }) {
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
           <SortableContext items={rowIds} strategy={verticalListSortingStrategy}>
             <tbody>
-              {orderedRows.map((row) => (
-                <SortableTableRow key={row.id} row={row} columns={columns} />
+              {orderedRows.map((row, rowIndex) => (
+                <SortableTableRow
+                  key={row.id}
+                  row={row}
+                  rowIndex={rowIndex}
+                  columns={columns}
+                  onPasteGrid={handlePasteGrid}
+                />
               ))}
               {orderedRows.length === 0 && (
                 <tr>
@@ -532,7 +587,17 @@ function ColumnHeader({ sheetId, column }: { sheetId: string; column: SheetColum
 
 // ── Sortable row + cells ────────────────────────────────────────────────────
 
-function SortableTableRow({ row, columns }: { row: SheetRow; columns: SheetColumn[] }) {
+function SortableTableRow({
+  row,
+  rowIndex,
+  columns,
+  onPasteGrid,
+}: {
+  row: SheetRow;
+  rowIndex: number;
+  columns: SheetColumn[];
+  onPasteGrid: (startRow: number, startCol: number, grid: string[][]) => void;
+}) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: row.id,
   });
@@ -556,13 +621,16 @@ function SortableTableRow({ row, columns }: { row: SheetRow; columns: SheetColum
       <td className="w-8 border-r border-gray-100 text-center align-middle">
         <DragHandle attributes={attributes} listeners={listeners} />
       </td>
-      {columns.map((col) => (
+      {columns.map((col, colIndex) => (
         <Cell
           key={col.id}
           rowId={row.id}
           columnId={col.id}
           type={col.type}
           value={row.data[col.id] ?? null}
+          rowIndex={rowIndex}
+          colIndex={colIndex}
+          onPasteGrid={onPasteGrid}
         />
       ))}
       <td className="border-l border-gray-100 text-center align-middle w-8">
@@ -612,11 +680,17 @@ function Cell({
   columnId,
   type,
   value,
+  rowIndex,
+  colIndex,
+  onPasteGrid,
 }: {
   rowId: string;
   columnId: string;
   type: SheetColumnType;
   value: SheetCellValue;
+  rowIndex: number;
+  colIndex: number;
+  onPasteGrid: (startRow: number, startCol: number, grid: string[][]) => void;
 }) {
   // Local draft state so typing doesn't fight the WS echo. Commit on blur/Enter;
   // sync from server on mismatch.
@@ -637,6 +711,16 @@ function Cell({
     });
   }
 
+  // Intercept multi-cell clipboard content (TSV/Excel) and spread it across the
+  // grid from this cell; a single value falls through to the normal paste.
+  function handlePaste(e: React.ClipboardEvent) {
+    const grid = parseClipboardGrid(e.clipboardData.getData("text/plain"));
+    if (grid.length === 0) return;
+    if (grid.length === 1 && grid[0].length <= 1) return;
+    e.preventDefault();
+    onPasteGrid(rowIndex, colIndex, grid);
+  }
+
   const baseCell = "border-r border-gray-100 last:border-r-0 align-middle";
 
   if (type === "checkbox") {
@@ -647,6 +731,7 @@ function Cell({
           type="checkbox"
           checked={checked}
           onChange={(e) => commit(e.target.checked)}
+          onPaste={handlePaste}
           className="cursor-pointer"
         />
       </td>
@@ -665,6 +750,7 @@ function Cell({
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={() => commit(draft)}
+        onPaste={handlePaste}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
             e.preventDefault();

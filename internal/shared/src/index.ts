@@ -318,7 +318,10 @@ export type WSClientMessage =
   | { op: "sheet.add"; data: { name?: string; columns?: Omit<SheetColumn, "id">[]; sortOrder?: number } }
   | { op: "sheet.update"; id: EntityId; partial: { name?: string; sortOrder?: number } }
   | { op: "sheet.delete"; id: EntityId }
-  | { op: "sheet.column.add"; sheetId: EntityId; column: Omit<SheetColumn, "id"> }
+  // `id` is normally minted server-side, but the client may supply one so a
+  // paste that creates several columns can immediately key row data to them
+  // without waiting for a round-trip (item 13 — paste power).
+  | { op: "sheet.column.add"; sheetId: EntityId; column: Omit<SheetColumn, "id"> & { id?: string } }
   | { op: "sheet.column.update"; sheetId: EntityId; columnId: string; partial: Partial<Omit<SheetColumn, "id">> }
   | { op: "sheet.column.delete"; sheetId: EntityId; columnId: string }
   | { op: "sheet.row.add"; sheetId: EntityId; data?: Record<string, SheetCellValue>; sortOrder?: number }

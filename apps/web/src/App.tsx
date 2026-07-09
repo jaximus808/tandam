@@ -38,6 +38,7 @@ import { useAgentActivity } from "./lib/useAgentActivity";
 import { useAgentNotifications } from "./lib/useAgentNotifications";
 import { recordRecent } from "./lib/recentCanvases";
 import { loadTabState, saveTabState } from "./lib/tabState";
+import { touchViewState, viewStateExpired } from "./lib/viewState";
 import { MOCK_ENABLED, mockCanvas } from "./lib/mockFixture";
 import { modeTheme } from "./lib/modeTheme";
 
@@ -160,6 +161,7 @@ export default function App() {
   // remembered across reloads.
   const [sidebarView, setSidebarView] = useState<SidebarView | null>(() => {
     try {
+      if (viewStateExpired()) return null; // lapsed after hours away → collapsed
       return parseSidebarView(localStorage.getItem(SIDEBAR_VIEW_KEY));
     } catch {
       return null;
@@ -167,6 +169,7 @@ export default function App() {
   });
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(() => {
     try {
+      if (viewStateExpired()) return false; // lapsed → open clean, panel collapsed
       const raw = localStorage.getItem(SIDEBAR_OPEN_KEY);
       if (raw === "1") return true;
       if (raw === "0") return false;
@@ -180,6 +183,7 @@ export default function App() {
   function persist(key: string, value: string) {
     try {
       localStorage.setItem(key, value);
+      touchViewState(); // refresh the expiry clock on every save (sliding window)
     } catch {
       /* ignore */
     }
@@ -469,13 +473,18 @@ export default function App() {
     if (canvas) recordRecent(canvas.code, canvas.name);
   }, [canvas]);
 
-  // On first open of a canvas, always reveal the Documents explorer — so the
-  // tabs (and the welcome page's "Open all tabs" start) are discoverable, even
-  // if the panel was collapsed on a previous visit. Fires once per canvas.
+  // On a genuine first open of a canvas, reveal the Documents explorer — so the
+  // tabs (and the welcome page's "Open all tabs" start) are discoverable. But
+  // respect a remembered sidebar view: if you left it on Agent tasks, a refresh
+  // should land you back there, not slam you back to Documents. Fires once per
+  // canvas; skips the force when there's a saved, unexpired view to restore.
   const forcedDocsFor = useRef<string | null>(null);
   useEffect(() => {
     if (!canvas || forcedDocsFor.current === canvas.code) return;
     forcedDocsFor.current = canvas.code;
+    const restored =
+      !viewStateExpired() && parseSidebarView(localStorage.getItem(SIDEBAR_VIEW_KEY));
+    if (restored) return; // keep the view (and open/closed state) we restored on mount
     setSidebarView("documents");
     persist(SIDEBAR_VIEW_KEY, "documents");
     setSidebarOpen(true);

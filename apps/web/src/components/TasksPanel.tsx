@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { Bot, Check, ChevronsLeft, Link2, Pencil, Plus, Trash2, User, X } from "lucide-react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Bot, Check, ChevronDown, ChevronsLeft, ChevronUp, Link2, Pencil, Plus, Trash2, User, X } from "lucide-react";
 import type { Action, CanvasState, TaskPayload } from "../types";
 import {
   approveAction,
@@ -277,6 +277,44 @@ function AssigneeChip({ assignee }: { assignee?: "agent" | "human" }) {
   );
 }
 
+// Task body: clamped to 3 lines by default, but expandable — the full brief
+// (often a multi-paragraph spec) is otherwise unreadable. The "Show more"
+// toggle only appears when the text actually overflows the clamp.
+function TaskBody({ body }: { body: string }) {
+  const ref = useRef<HTMLParagraphElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || expanded) return; // only measurable while clamped
+    setOverflows(el.scrollHeight > el.clientHeight + 1);
+  }, [body, expanded]);
+
+  return (
+    <div className="mt-1">
+      <p
+        ref={ref}
+        onClick={() => overflows && setExpanded((v) => !v)}
+        className={`whitespace-pre-wrap text-[12px] leading-snug text-ink/55 ${
+          expanded ? "" : "line-clamp-3"
+        } ${overflows ? "cursor-pointer" : ""}`}
+      >
+        {body}
+      </p>
+      {(overflows || expanded) && (
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          className="mt-0.5 flex items-center gap-0.5 text-[11px] font-medium text-ink/40 transition-colors hover:text-ink/70"
+        >
+          {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function TaskCard({
   task,
   labelFor,
@@ -327,7 +365,7 @@ function TaskCard({
           </span>
         </span>
       </div>
-      {p.body && <p className="mt-1 line-clamp-3 text-[12px] leading-snug text-ink/55">{p.body}</p>}
+      {p.body && <TaskBody body={p.body} />}
       {(p.linkedIds ?? []).length > 0 && (
         <div className="mt-1.5 flex flex-wrap gap-1">
           {(p.linkedIds ?? []).map((id) => (
