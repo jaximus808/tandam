@@ -114,7 +114,10 @@
       "Bash(docker ps *)",
       "Bash(API_URL=https://tandemcanvas.com PUBLIC_URL=https://tandemcanvas.com PORT=8971 MCP_TRACE=1 node dist/http.js)",
       "Bash(echo \"started pid $!\")",
-      "Bash(curl -s -m 4 http://127.0.0.1:8971/healthz)"
+      "Bash(curl -s -m 4 http://127.0.0.1:8971/healthz)",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(echo \"TSC_EXIT=$?\")",
+      "Bash(echo \"GO_EXIT=$?\")"
     ]
   }
 }

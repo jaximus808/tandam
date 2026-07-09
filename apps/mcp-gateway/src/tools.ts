@@ -1472,15 +1472,47 @@ const SESSION_ARG = {
 
 const CONNECTORS = new Set(["canvas_connect", "canvas_create"]);
 
-// Advertise `session` on every tool except the two that establish the binding.
-export const TOOLS = RAW_TOOLS.map((tool) =>
-  CONNECTORS.has(tool.name)
-    ? tool
-    : {
-        ...tool,
-        inputSchema: {
-          ...tool.inputSchema,
-          properties: { ...tool.inputSchema.properties, session: SESSION_ARG },
-        },
-      }
-);
+/**
+ * MCP tool annotations (behaviour hints). Clients — notably the Claude.ai web
+ * connector — use these to decide how to gate a call for user consent: a
+ * `readOnlyHint` tool can be auto-approved / batched instead of prompting for
+ * each one, which is what was stalling read-heavy sessions with the connector's
+ * per-call "approve?" gate. Derived by name so we don't hand-annotate ~60 tools:
+ *   - *_read / *_list / *_get           → read-only
+ *   - *_delete                          → write + destructive
+ *   - everything else (add/update/set…) → write, non-destructive
+ * `openWorldHint: false` on all of them — every tool acts on the bound canvas,
+ * a closed system, not the open internet.
+ */
+function annotationsFor(name: string): {
+  readOnlyHint: boolean;
+  destructiveHint: boolean;
+  openWorldHint: boolean;
+} {
+  const readOnly = /_(read|list|get)$/.test(name);
+  const destructive = /_delete$/.test(name);
+  return {
+    readOnlyHint: readOnly,
+    // Only meaningful when not read-only; keep it false for plain writes so
+    // clients don't over-warn on routine add/update calls.
+    destructiveHint: destructive,
+    openWorldHint: false,
+  };
+}
+
+// Advertise `session` on every tool except the two that establish the binding,
+// and attach behaviour annotations to every tool.
+export const TOOLS = RAW_TOOLS.map((tool) => {
+  const annotations = annotationsFor(tool.name);
+  if (CONNECTORS.has(tool.name)) {
+    return { ...tool, annotations };
+  }
+  return {
+    ...tool,
+    annotations,
+    inputSchema: {
+      ...tool.inputSchema,
+      properties: { ...tool.inputSchema.properties, session: SESSION_ARG },
+    },
+  };
+});
