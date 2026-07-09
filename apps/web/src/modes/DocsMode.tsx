@@ -72,43 +72,64 @@ function NoteCard({
   canvasId: string;
   state: CanvasState;
 }) {
-  const [editing, setEditing] = useState(note.body === "");
+  // No edit/read mode gate: the note is a live surface. When it isn't focused we
+  // render the Markdown; the moment you click in, the same box becomes the
+  // editable source at that caret. Nothing to "open", nothing to "save".
+  const [focused, setFocused] = useState(note.body === "");
   const [draft, setDraft] = useState(note.body);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Latest draft, so a debounced/blur flush always saves what's on screen even
+  // if state has moved on.
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
 
-  // Keep the draft in sync when the server pushes a new body (e.g. Claude
-  // updated this note). Last-write-wins: any in-progress local edits get
-  // overwritten, which matches the user's explicit current-behavior preference.
+  // Keep the draft in sync when the server pushes a new body (e.g. Claude edited
+  // this note) — but only while we're NOT typing, so an agent edit never yanks
+  // text out from under the caret. On blur our copy saves (last-write-wins).
   useEffect(() => {
-    setDraft(note.body);
-  }, [note.body]);
+    if (!focused) setDraft(note.body);
+  }, [note.body, focused]);
 
-  // Autosize the textarea to its content so editing feels like a doc rather
-  // than a chat input.
+  // Autosize the textarea to its content so it reads like a page, not an input.
   useEffect(() => {
-    if (!editing) return;
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = "auto";
     el.style.height = `${el.scrollHeight}px`;
-  }, [editing, draft]);
+  }, [draft, focused]);
 
   const parent =
     note.parentId
       ? state.pins[note.parentId] ?? state.events[note.parentId]
       : null;
 
-  function commit() {
-    if (draft !== note.body) {
-      sendOp({ op: "note.update", id: note.id, partial: { body: draft } });
+  // Persist the current draft if it changed. Called by the autosave debounce and
+  // on blur — there is no explicit save action.
+  function flush() {
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current);
+      saveTimer.current = null;
     }
-    setEditing(false);
+    if (draftRef.current !== note.body) {
+      sendOp({ op: "note.update", id: note.id, partial: { body: draftRef.current } });
+    }
   }
 
-  function cancel() {
-    setDraft(note.body);
-    setEditing(false);
+  function onChange(next: string) {
+    setDraft(next);
+    // Autosave: coalesce keystrokes, then push. Feels continuously saved.
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      saveTimer.current = null;
+      if (draftRef.current !== note.body) {
+        sendOp({ op: "note.update", id: note.id, partial: { body: draftRef.current } });
+      }
+    }, 500);
   }
+
+  // Flush any pending autosave if the card unmounts (tab switch, deletion).
+  useEffect(() => () => flush(), []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Rich-text paste: if the clipboard carries HTML (a webpage or Google-Docs
   // selection), convert it to Markdown and splice it in at the cursor. Notes
@@ -124,7 +145,7 @@ function NoteCard({
     const start = el.selectionStart ?? draft.length;
     const end = el.selectionEnd ?? draft.length;
     const next = draft.slice(0, start) + md + draft.slice(end);
-    setDraft(next);
+    onChange(next);
     const caret = start + md.length;
     requestAnimationFrame(() => {
       const ta = textareaRef.current;
@@ -135,20 +156,18 @@ function NoteCard({
     });
   }
 
-  function handleKey(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      cancel();
-    } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-      e.preventDefault();
-      commit();
-    }
-  }
-
   function handleDelete() {
     if (!confirm("Delete this note?")) return;
     sendOp({ op: "note.delete", id: note.id });
   }
+
+  // Clicking the rendered view swaps to the source textarea and focuses it.
+  function enterEditing() {
+    setFocused(true);
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }
+
+  const showSource = focused || !note.body.trim();
 
   return (
     <div
@@ -165,69 +184,39 @@ function NoteCard({
         ) : (
           <span />
         )}
-        <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-          {!editing && (
-            <button
-              onClick={() => setEditing(true)}
-              className="text-xs text-gray-500 hover:text-gray-700"
-            >
-              Edit
-            </button>
-          )}
-          <button
-            onClick={handleDelete}
-            className="text-xs text-gray-400 hover:text-red-600"
-            title="Delete note"
-          >
-            ✕
-          </button>
-        </div>
+        <button
+          onClick={handleDelete}
+          className="text-xs text-gray-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
+          title="Delete note"
+        >
+          ✕
+        </button>
       </div>
 
       <div className="px-4 pb-4 pt-2">
-        {editing ? (
-          <div className="space-y-2">
-            <textarea
-              ref={textareaRef}
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onBlur={commit}
-              onPaste={handlePaste}
-              onKeyDown={handleKey}
-              autoFocus
-              placeholder="Start typing… Markdown supported (tables too)."
-              className="w-full min-h-[120px] text-sm text-gray-800 font-mono leading-relaxed bg-transparent resize-none focus:outline-none"
-            />
-            <div className="flex items-center justify-between text-xs text-gray-400">
-              <span>Markdown · ⌘⏎ save · Esc cancel</span>
-              <div className="flex gap-2">
-                <button onClick={cancel} className="hover:text-gray-600">Cancel</button>
-                <button
-                  onClick={commit}
-                  className="font-medium transition-opacity hover:opacity-80"
-                  style={{ color: ACCENT.solid }}
-                >
-                  Done
-                </button>
-              </div>
-            </div>
-          </div>
+        {showSource ? (
+          <textarea
+            ref={textareaRef}
+            value={draft}
+            onChange={(e) => onChange(e.target.value)}
+            onFocus={() => setFocused(true)}
+            onBlur={() => {
+              flush();
+              setFocused(false);
+            }}
+            onPaste={handlePaste}
+            autoFocus={note.body === ""}
+            placeholder="Start typing… Markdown supported (tables too)."
+            className="w-full min-h-[1.5rem] text-sm text-gray-800 font-mono leading-relaxed bg-transparent resize-none focus:outline-none"
+          />
         ) : (
           <div
-            onClick={() => setEditing(true)}
-            className="cursor-text min-h-[1.5rem]"
+            onClick={enterEditing}
+            className="cursor-text min-h-[1.5rem] prose prose-sm max-w-none text-gray-800"
           >
-            {note.body.trim() ? (
-              <div className="prose prose-sm max-w-none text-gray-800">
-                <ReactMarkdown remarkPlugins={MARKDOWN_PLUGINS}>
-                  {note.body}
-                </ReactMarkdown>
-              </div>
-            ) : (
-              <p className="text-sm text-gray-400 italic">
-                Empty note — click to start writing.
-              </p>
-            )}
+            <ReactMarkdown remarkPlugins={MARKDOWN_PLUGINS}>
+              {note.body}
+            </ReactMarkdown>
           </div>
         )}
 

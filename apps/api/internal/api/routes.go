@@ -177,13 +177,60 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 }
 
 // spaHandler serves static files and falls back to index.html for SPA routing.
+//
+// The web app is a single static index.html whose <head> hard-codes a canonical
+// of https://tandemcanvas.com/ and never rewrites it client-side. That's fine for
+// the landing page, but crawlable routes that are also listed in the sitemap (e.g.
+// /mcp) would otherwise serve that same canonical and get folded into "/" by Google
+// — so the extra pages never get indexed. For those routes we serve a variant of
+// index.html with a self-referencing canonical + a route-specific <title>, so each
+// indexable URL returns 200 at its own canonical. Everything else falls through to
+// the default index.html and the SPA renders the right view from the path.
 func spaHandler(distPath string) http.Handler {
+	indexPath := filepath.Join(distPath, "index.html")
+	base, _ := os.ReadFile(indexPath)
+	variants := buildRouteVariants(base)
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := filepath.Join(distPath, r.URL.Path)
 		if fi, err := os.Stat(path); err == nil && !fi.IsDir() {
 			http.ServeFile(w, r, path)
 			return
 		}
-		http.ServeFile(w, r, filepath.Join(distPath, "index.html"))
+		if html, ok := variants[strings.TrimRight(r.URL.Path, "/")]; ok {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Write(html)
+			return
+		}
+		http.ServeFile(w, r, indexPath)
 	})
+}
+
+// buildRouteVariants precomputes per-route index.html variants with a
+// self-referencing canonical and a route-specific title, keyed by request path
+// (no trailing slash). Returns nil if index.html couldn't be read, in which case
+// spaHandler just serves the default for every route.
+func buildRouteVariants(base []byte) map[string][]byte {
+	if len(base) == 0 {
+		return nil
+	}
+	const origin = "https://tandemcanvas.com"
+	rewrite := func(path, title string) []byte {
+		html := string(base)
+		// Point the canonical + og:url at this route instead of the apex.
+		html = strings.ReplaceAll(html,
+			`<link rel="canonical" href="`+origin+`/" />`,
+			`<link rel="canonical" href="`+origin+path+`" />`)
+		html = strings.ReplaceAll(html,
+			`<meta property="og:url" content="`+origin+`/" />`,
+			`<meta property="og:url" content="`+origin+path+`" />`)
+		// Give the route its own title (also used as og/twitter title).
+		const homeTitle = "Tandem Canvas — one canvas for your team and your AI agents"
+		html = strings.ReplaceAll(html, homeTitle, title)
+		return []byte(html)
+	}
+	return map[string][]byte{
+		"/mcp": rewrite("/mcp",
+			"Connect your AI agent — Tandem Canvas MCP"),
+	}
 }

@@ -1,3 +1,12 @@
+# Canonicalize the host: www → apex. `www` resolves to this server (DNS), so
+# without its own site block Caddy has no cert for it — https://www would TLS-error
+# and http://www would 308 into that broken host. Giving www a block lets Caddy
+# provision a cert and 308-redirect every www URL to the apex, so search engines
+# see a single canonical host instead of a redirecting/broken duplicate.
+www.{$DOMAIN_NAME} {
+	redir https://{$DOMAIN_NAME}{uri} permanent
+}
+
 {$DOMAIN_NAME} {
 	# Hosted MCP Streamable HTTP endpoint → the Node sidecar. Exact-path match so
 	# /api/mcp/auth (the Go token-exchange endpoint used by the stdio CLI) still

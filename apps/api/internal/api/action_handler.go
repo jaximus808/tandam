@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/agentcanvas/api/internal/store"
 	"github.com/go-chi/chi/v5"
@@ -199,6 +200,15 @@ func (h *Handler) transitionAction(w http.ResponseWriter, r *http.Request, to st
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
+	// Idempotency: a client whose request timed out while the server was still
+	// finishing (see broadcastStateAsync) may retry a transition that already
+	// landed. Re-requesting the state the action is already in is a no-op success,
+	// not an "illegal transition: done → done" error — the retry should look like
+	// the (missed) first response.
+	if current.State == to {
+		writeJSON(w, http.StatusOK, map[string]any{"action": current})
+		return
+	}
 	if !canTransition(current.State, to) {
 		writeError(w, http.StatusBadRequest, "illegal transition: "+current.State+" → "+to)
 		return
@@ -208,13 +218,27 @@ func (h *Handler) transitionAction(w http.ResponseWriter, r *http.Request, to st
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	broadcastState(r.Context(), h.store, h.hub, canvasID)
-	fresh, err := h.store.GetAction(r.Context(), canvasID, id)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+	// The transition is persisted — respond now and fan the new state out to WS
+	// viewers asynchronously so a slow full-canvas broadcast can't stall (and time
+	// out) the caller. Reflect the patch onto the loaded action to answer without a
+	// second round-trip.
+	fresh := *current
+	fresh.State = to
+	if patch.Result != nil {
+		fresh.Result = patch.Result
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"action": fresh})
+	if patch.Error != nil {
+		fresh.Error = patch.Error
+	}
+	if patch.ApprovedBy != nil {
+		fresh.ApprovedBy = patch.ApprovedBy
+	}
+	if len(patch.Payload) > 0 {
+		fresh.Payload = patch.Payload
+	}
+	fresh.UpdatedAt = time.Now().UTC()
+	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
+	writeJSON(w, http.StatusOK, map[string]any{"action": &fresh})
 }
 
 // POST /api/canvas/actions/{id}/approve  — human gate: proposed → approved.

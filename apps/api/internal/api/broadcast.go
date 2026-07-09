@@ -29,6 +29,19 @@ func broadcastState(ctx context.Context, st store.Store, hub *ws.Hub, canvasID u
 	broadcastStateBy(ctx, st, hub, canvasID, "agent")
 }
 
+// broadcastStateAsync fans out the same full-state push as broadcastState but off
+// the request goroutine. broadcastStateBy loads the entire canvas and marshals it
+// before touching the WS hub, which is slow on large canvases — doing it inline
+// made write handlers (notably canvas_task_complete over the MCP gateway) time out
+// on the client even though the mutation had already been persisted. On a write
+// path whose only remaining work is the broadcast, the state is already durable,
+// so viewers converging a moment later is fine and the caller gets its response
+// immediately. The request context is detached so it isn't cancelled on return.
+func broadcastStateAsync(ctx context.Context, st store.Store, hub *ws.Hub, canvasID uuid.UUID) {
+	ctx = context.WithoutCancel(ctx)
+	go broadcastState(ctx, st, hub, canvasID)
+}
+
 // activityMsg is a lightweight, stateless signal to viewers — e.g. an agent
 // reading the canvas — so the UI can show live presence (a "reading" pulse)
 // without paying for a full state push. Carries no canvas data.

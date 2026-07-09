@@ -403,6 +403,10 @@ type EventPatch struct {
 	TravelMode *string      `json:"travelMode"`
 	DayTag     *string      `json:"dayTag"`
 	Cost       *float64     `json:"cost"`
+	// Explicit clears — a nil pointer can't be distinguished from JSON null, so
+	// removing an optional field (rather than setting it) rides its own flag.
+	ClearEnd  bool `json:"clearEnd"`
+	ClearCost bool `json:"clearCost"`
 }
 
 type NotePatch struct {

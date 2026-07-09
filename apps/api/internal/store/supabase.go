@@ -1448,6 +1448,13 @@ func (s *supabaseStore) UpdateEvent(ctx context.Context, canvasID uuid.UUID, id 
 	if patch.Cost != nil {
 		m["cost"] = *patch.Cost
 	}
+	// Clears win over sets and write a SQL NULL (nil map value → JSON null).
+	if patch.ClearEnd {
+		m["end_time"] = nil
+	}
+	if patch.ClearCost {
+		m["cost"] = nil
+	}
 	if len(m) == 0 {
 		return 0, nil
 	}

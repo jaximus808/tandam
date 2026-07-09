@@ -303,7 +303,16 @@ export type WSClientMessage =
   | { op: "pin.update"; id: EntityId; partial: Partial<Omit<Pin, "id" | "kind">> }
   | { op: "pin.delete"; id: EntityId }
   | { op: "event.add"; data: Omit<CanvasEvent, "id" | "kind" | "createdBy" | "updatedAt"> }
-  | { op: "event.update"; id: EntityId; partial: Partial<Omit<CanvasEvent, "id" | "kind">> }
+  | {
+      op: "event.update";
+      id: EntityId;
+      // clearEnd / clearCost remove an optional field (a nil pointer can't be
+      // told from JSON null server-side, so clearing rides an explicit flag).
+      partial: Partial<Omit<CanvasEvent, "id" | "kind">> & {
+        clearEnd?: boolean;
+        clearCost?: boolean;
+      };
+    }
   | { op: "event.delete"; id: EntityId }
   | { op: "note.add"; data: Omit<Note, "id" | "kind" | "createdBy" | "updatedAt"> }
   | { op: "note.update"; id: EntityId; partial: Partial<Omit<Note, "id" | "kind">> }

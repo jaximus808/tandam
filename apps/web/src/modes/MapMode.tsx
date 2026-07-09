@@ -726,16 +726,8 @@ export default function MapMode({
               >
                 <Popup maxWidth={320} minWidth={220} autoPan>
                   <div className="space-y-2">
-                    {pin.label && (
-                      <div className="font-semibold text-gray-900">{pin.label}</div>
-                    )}
-                    {pin.body && (
-                      <div className="text-sm text-gray-700 prose prose-sm max-w-none">
-                        <ReactMarkdown remarkPlugins={MARKDOWN_PLUGINS}>
-                          {pin.body}
-                        </ReactMarkdown>
-                      </div>
-                    )}
+                    <PinLabelEdit pin={pin} />
+                    <PinBodyEdit pin={pin} />
 
                     {events.length > 0 && (
                       <div>
@@ -787,10 +779,6 @@ export default function MapMode({
                           ))}
                         </div>
                       </div>
-                    )}
-
-                    {!pin.body && notes.length === 0 && events.length === 0 && (
-                      <p className="text-xs text-gray-400">No details yet.</p>
                     )}
                   </div>
                 </Popup>
@@ -982,6 +970,110 @@ export default function MapMode({
             ))}
           </div>
         </aside>
+      )}
+    </div>
+  );
+}
+
+// Click-to-edit pin label inside the popup. Commits on blur / Enter (pin.update),
+// reverts on Escape — no save button.
+function PinLabelEdit({ pin }: { pin: Pin }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(pin.label ?? "");
+  const ref = useRef<HTMLInputElement>(null);
+
+  useEffect(() => setDraft(pin.label ?? ""), [pin.label]);
+  useEffect(() => {
+    if (editing) ref.current?.select();
+  }, [editing]);
+
+  function commit() {
+    setEditing(false);
+    const next = draft.trim();
+    if (next !== (pin.label ?? "")) {
+      sendOp({ op: "pin.update", id: pin.id, partial: { label: next } });
+    }
+  }
+
+  if (editing) {
+    return (
+      <input
+        ref={ref}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") { e.preventDefault(); commit(); }
+          else if (e.key === "Escape") { e.preventDefault(); setDraft(pin.label ?? ""); setEditing(false); }
+        }}
+        placeholder="Pin name"
+        className="w-full font-semibold text-gray-900 bg-transparent rounded px-1 -mx-1 outline-none caret-gray-900"
+      />
+    );
+  }
+
+  return (
+    <div
+      onClick={() => setEditing(true)}
+      className={`font-semibold cursor-text rounded px-1 -mx-1 hover:bg-gray-50 ${
+        pin.label ? "text-gray-900" : "text-gray-400 italic"
+      }`}
+    >
+      {pin.label || "Name this pin"}
+    </div>
+  );
+}
+
+// Click-to-edit pin body (Markdown). Renders Markdown when idle; a textarea when
+// editing. Commits on blur / ⌘⏎, reverts on Escape.
+function PinBodyEdit({ pin }: { pin: Pin }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(pin.body ?? "");
+  const ref = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => setDraft(pin.body ?? ""), [pin.body]);
+  useEffect(() => {
+    if (!editing) return;
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [editing, draft]);
+
+  function commit() {
+    setEditing(false);
+    const next = draft.trim();
+    if (next !== (pin.body ?? "")) {
+      sendOp({ op: "pin.update", id: pin.id, partial: { body: next } });
+    }
+  }
+
+  if (editing) {
+    return (
+      <textarea
+        ref={ref}
+        value={draft}
+        autoFocus
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") { e.preventDefault(); setDraft(pin.body ?? ""); setEditing(false); }
+          else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); commit(); }
+        }}
+        placeholder="Add details… (Markdown)"
+        className="w-full min-h-[60px] text-sm text-gray-800 font-mono leading-relaxed bg-transparent rounded -mx-1 px-1 resize-none outline-none caret-gray-900"
+      />
+    );
+  }
+
+  return (
+    <div onClick={() => setEditing(true)} className="cursor-text rounded -mx-1 px-1 hover:bg-gray-50">
+      {pin.body ? (
+        <div className="text-sm text-gray-700 prose prose-sm max-w-none">
+          <ReactMarkdown remarkPlugins={MARKDOWN_PLUGINS}>{pin.body}</ReactMarkdown>
+        </div>
+      ) : (
+        <p className="text-sm text-gray-400 italic">Add details…</p>
       )}
     </div>
   );
