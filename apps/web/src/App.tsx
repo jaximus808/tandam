@@ -41,6 +41,7 @@ import { loadTabState, saveTabState } from "./lib/tabState";
 import { touchViewState, viewStateExpired } from "./lib/viewState";
 import { MOCK_ENABLED, mockCanvas } from "./lib/mockFixture";
 import { modeTheme } from "./lib/modeTheme";
+import posthog from "./lib/posthog";
 
 // A canvas is a bag of named documents (migration 0024). Each document renders
 // through its type's existing mode component; to show ONE document we hand that
@@ -561,6 +562,7 @@ export default function App() {
       disconnectFromCanvas();
       setAutoOpenedFor(null);
     }
+    posthog.capture("canvas_joined", { canvas_code: code });
     setCanvasCode(code);
     setCodeInURL(code);
     resetPerCanvasState();
@@ -581,8 +583,10 @@ export default function App() {
     setCopying(true);
     try {
       const copy = await copyCanvas(canvas.code);
+      posthog.capture("canvas_copied_to_account", { source_canvas_code: canvas.code, new_canvas_code: copy.code });
       handleJoin(copy.code);
     } catch (err) {
+      posthog.captureException(err instanceof Error ? err : new Error(String(err)));
       alert(err instanceof Error ? err.message : "Copy failed");
     } finally {
       setCopying(false);
@@ -608,6 +612,7 @@ export default function App() {
       .then((updated) => {
         // Reflect new ownership immediately so the "Copy to my account" button
         // disappears; WS updates will keep meta fresh after this.
+        posthog.capture("canvas_claimed", { canvas_code: updated.code });
         setCanvas((prev) =>
           prev && prev.code === updated.code ? { ...prev, ...updated } : prev,
         );
@@ -818,6 +823,7 @@ export default function App() {
     if (activeDocId === id) setActiveDocId(null);
   }
   function createDocument(type: DocumentType) {
+    posthog.capture("document_created", { document_type: type, canvas_code: canvas?.code });
     activateNextNewDocRef.current = true;
     sendOp({ op: "document.add", data: { type } });
   }

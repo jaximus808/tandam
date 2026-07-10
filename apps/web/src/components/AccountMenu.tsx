@@ -7,6 +7,7 @@ import {
   type AppNotification,
 } from "../lib/api";
 import SignInModal from "./SignInModal";
+import posthog from "../lib/posthog";
 
 // AccountMenu shows the signed-in user's avatar (with a sign-out dropdown), or a
 // "Sign in" button that opens SignInModal when signed out. Renders nothing if
@@ -45,6 +46,7 @@ export default function AccountMenu({
       if (cancelled) return;
       setUser(u);
       setReady(true);
+      if (u) posthog.identify(u.id, { name: u.displayName });
       onUserChange?.(u);
     });
     return () => {
@@ -99,6 +101,8 @@ export default function AccountMenu({
 
   async function handleLogout() {
     await logout();
+    posthog.capture("user_signed_out");
+    posthog.reset();
     window.google?.accounts.id.disableAutoSelect();
     setUser(null);
     setMenuOpen(false);

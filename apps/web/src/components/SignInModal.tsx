@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Sparkles, Save, MonitorSmartphone, Copy, type LucideIcon } from "lucide-react";
 import { loadGoogleId, loginWithGoogle, GOOGLE_CLIENT_ID, type User } from "../lib/auth";
 import TandemLogo from "./TandemLogo";
+import posthog from "../lib/posthog";
 
 interface Props {
   onClose: () => void;
@@ -60,9 +61,12 @@ export default function SignInModal({ onClose, onSignedIn }: Props) {
           callback: async (resp) => {
             try {
               const u = await loginWithGoogle(resp.credential);
+              posthog.identify(u.id, { name: u.displayName });
+              posthog.capture("user_signed_in", { method: "google" });
               onSignedIn(u);
             } catch (e) {
               console.error("Google sign-in failed:", e);
+              posthog.captureException(e instanceof Error ? e : new Error(String(e)));
             }
           },
         });

@@ -1,4 +1,5 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import posthog from "../lib/posthog";
 import { Bot, Check, ChevronDown, ChevronsLeft, ChevronUp, Link2, Pencil, Plus, Trash2, User, X } from "lucide-react";
 import type { Action, CanvasState, TaskPayload } from "../types";
 import {
@@ -154,7 +155,10 @@ export default function TasksPanel({
           ) : (
             <div className="mt-2 flex gap-1.5">
               <button
-                onClick={() => void run(t.id, () => approveAction(code, t.id))}
+                onClick={() => void run(t.id, async () => {
+                  await approveAction(code, t.id);
+                  posthog.capture("agent_task_approved", { canvas_code: code, task_title: taskPayload(t).title });
+                })}
                 disabled={busyId === t.id}
                 className="flex flex-1 items-center justify-center gap-1 rounded-lg bg-ink px-2 py-1.5 text-xs font-semibold text-paper transition-opacity disabled:opacity-40"
               >

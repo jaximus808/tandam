@@ -36,6 +36,12 @@ COPY apps/web apps/web
 # (slow) pnpm install layer above. Passed in via docker-compose build.args.
 ARG VITE_GOOGLE_CLIENT_ID
 ENV VITE_GOOGLE_CLIENT_ID=$VITE_GOOGLE_CLIENT_ID
+# PostHog analytics: public client key + ingestion host, also inlined by Vite at
+# build time. Absent → posthog.ts skips init and the prod bundle captures nothing.
+ARG VITE_POSTHOG_KEY
+ENV VITE_POSTHOG_KEY=$VITE_POSTHOG_KEY
+ARG VITE_POSTHOG_HOST
+ENV VITE_POSTHOG_HOST=$VITE_POSTHOG_HOST
 
 RUN pnpm --filter @agentcanvas/shared build \
  && pnpm --filter web build

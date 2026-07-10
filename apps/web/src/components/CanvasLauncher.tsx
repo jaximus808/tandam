@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import TandemLogo from "./TandemLogo";
+import posthog from "../lib/posthog";
 
 interface Props {
   initialMode: "create" | "join";
@@ -58,8 +59,10 @@ export default function CanvasLauncher({ initialMode, onJoin, onClose, onOpenMCP
         throw new Error(res.status >= 500 ? "Server error — try again." : detail);
       }
       const canvas = (await res.json()) as { code: string };
+      posthog.capture("canvas_created", { canvas_code: canvas.code });
       onJoin(canvas.code);
     } catch (err) {
+      posthog.captureException(err instanceof Error ? err : new Error(String(err)));
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setCreating(false);

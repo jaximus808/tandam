@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { CanvasMeta } from "../types";
+import posthog from "../lib/posthog";
 import {
   addCanvasAccess,
   listCanvasAccess,
@@ -97,6 +98,7 @@ export default function ShareDialog({ code, canvas, onClose }: Props) {
     setPublicRole(next.publicRole);
     try {
       await setCanvasVisibility(code, next.visibility, next.publicRole);
+      posthog.capture("canvas_visibility_changed", { canvas_code: code, visibility: next.visibility, public_role: next.publicRole });
     } catch (err) {
       setVisibility(prev.visibility);
       setPublicRole(prev.publicRole);
@@ -114,6 +116,7 @@ export default function ShareDialog({ code, canvas, onClose }: Props) {
     setShareError(null);
     try {
       const entry = await addCanvasAccess(code, addr, inviteRole);
+      posthog.capture("canvas_shared", { canvas_code: code, role: inviteRole });
       setAccess((rows) => {
         const others = (rows ?? []).filter((r) => r.userId !== entry.userId);
         return [...others, entry];

@@ -28,6 +28,7 @@ jobs:
           JWT_TOKEN_TTL: ${{ secrets.JWT_TOKEN_TTL }}
           DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
         run: |
           echo "Writing secrets to .env file..."
           cat <<EOF > .env
@@ -37,6 +38,7 @@ jobs:
           JWT_TOKEN_TTL=$JWT_TOKEN_TTL
           DOMAIN_NAME=$DOMAIN_NAME
           GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID
+          POSTHOG_KEY=$POSTHOG_KEY
           EOF
           
       - name: Clean up for transfer
