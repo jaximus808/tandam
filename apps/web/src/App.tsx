@@ -119,12 +119,12 @@ const SIDEBAR_VIEW_KEY = "tandem.sidebar.view";
 const SIDEBAR_OPEN_KEY = "tandem.sidebar.open";
 const SIDEBAR_WIDTH_KEY = "tandem.sidebar.width";
 
-type Route = "home" | "mcp" | "me" | "stats";
+type Route = "home" | "mcp" | "dashboard" | "stats";
 
 function routeFromPath(): Route {
   const p = window.location.pathname.replace(/\/$/, "");
   if (p === "/mcp") return "mcp";
-  if (p === "/me") return "me";
+  if (p === "/dashboard") return "dashboard";
   if (p === "/stats") return "stats";
   return "home";
 }
@@ -573,8 +573,8 @@ export default function App() {
   }
 
   function showMyCanvases() {
-    window.history.pushState(null, "", "/me");
-    setRoute("me");
+    window.history.pushState(null, "", "/dashboard");
+    setRoute("dashboard");
   }
 
   // Deep-copy the current canvas into my account, then open the owned copy.
@@ -728,7 +728,7 @@ export default function App() {
     );
   }
 
-  if (route === "me") {
+  if (route === "dashboard") {
     return (
       <MyCanvases
         onOpenCanvas={(code) => {
