@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CanvasMeta, CanvasMode, CanvasState, Document, DocumentType } from "./types";
 import { connectToCanvas, disconnectFromCanvas, onStateUpdate, onAccessError, onRoleChange, sendOp, setCanvasReadOnly, type AccessStatus, type ChangeActor } from "./lib/ws";
 import { ModeNavContext } from "./lib/modeNav";
-import { parseSidebarView, type SidebarView } from "./lib/sidebar";
+import { type SidebarView } from "./lib/sidebar";
 import DocumentTabs from "./components/DocumentTabs";
 import ActivityBar from "./components/ActivityBar";
 import SidePanel, { SidePanelReopenHandle, SIDE_PANEL_MIN, SIDE_PANEL_MAX, SIDE_PANEL_DEFAULT } from "./components/SidePanel";
@@ -38,7 +38,7 @@ import { useAgentActivity } from "./lib/useAgentActivity";
 import { useAgentNotifications } from "./lib/useAgentNotifications";
 import { recordRecent } from "./lib/recentCanvases";
 import { loadTabState, saveTabState } from "./lib/tabState";
-import { touchViewState, viewStateExpired } from "./lib/viewState";
+import { loadSidebarState, saveSidebarState } from "./lib/sidebarState";
 import { MOCK_ENABLED, mockCanvas } from "./lib/mockFixture";
 import { modeTheme } from "./lib/modeTheme";
 import posthog from "./lib/posthog";
@@ -115,8 +115,9 @@ function stripClaimFromURL() {
   window.history.replaceState(null, "", url.pathname + url.search + url.hash);
 }
 
-const SIDEBAR_VIEW_KEY = "tandem.sidebar.view";
-const SIDEBAR_OPEN_KEY = "tandem.sidebar.open";
+// Panel width is a genuine size preference — global (one value for the whole app)
+// and not expiry-gated. Which view is selected and whether the panel is open are
+// per-canvas position, stored via lib/sidebarState instead.
 const SIDEBAR_WIDTH_KEY = "tandem.sidebar.width";
 
 type Route = "home" | "mcp" | "dashboard" | "stats";
@@ -158,64 +159,38 @@ export default function App() {
   // tasks / Settings) and whether the panel is OPEN are tracked separately: the
   // selection is what the rail highlights, and it survives a close — so collapsing
   // keeps the icon lit and clicking it again re-opens the same view. The activity
-  // bar (lib/sidebar) is the holder future "extension" panels attach to. Both are
-  // remembered across reloads.
-  const [sidebarView, setSidebarView] = useState<SidebarView | null>(() => {
-    try {
-      if (viewStateExpired()) return null; // lapsed after hours away → collapsed
-      return parseSidebarView(localStorage.getItem(SIDEBAR_VIEW_KEY));
-    } catch {
-      return null;
-    }
-  });
-  const [sidebarOpen, setSidebarOpen] = useState<boolean>(() => {
-    try {
-      if (viewStateExpired()) return false; // lapsed → open clean, panel collapsed
-      const raw = localStorage.getItem(SIDEBAR_OPEN_KEY);
-      if (raw === "1") return true;
-      if (raw === "0") return false;
-      // No stored preference → open if a view was previously selected (migration
-      // from the old single-key model, where a stored view meant "open").
-      return parseSidebarView(localStorage.getItem(SIDEBAR_VIEW_KEY)) !== null;
-    } catch {
-      return false;
-    }
-  });
-  function persist(key: string, value: string) {
-    try {
-      localStorage.setItem(key, value);
-      touchViewState(); // refresh the expiry clock on every save (sliding window)
-    } catch {
-      /* ignore */
-    }
-  }
+  // bar (lib/sidebar) is the holder future "extension" panels attach to.
+  //
+  // Both are PER-CANVAS position (lib/sidebarState), keyed by code — each canvas is
+  // its own playground, so collapsing the panel on one board never touches another.
+  // Restored on mount for the URL's canvas; a GENUINE first visit (nothing saved,
+  // or lapsed) defaults to the Documents explorer open so the tabs are immediately
+  // discoverable. Switching canvases re-hydrates via hydrateSidebarFor; edits are
+  // written back by the save effect below.
+  const initialSidebar = useMemo(() => loadSidebarState(getCodeFromURL()), []);
+  const [sidebarView, setSidebarView] = useState<SidebarView | null>(
+    () => initialSidebar?.view ?? "documents",
+  );
+  const [sidebarOpen, setSidebarOpen] = useState<boolean>(() => initialSidebar?.open ?? true);
   // Rail click: same icon toggles the panel open/closed (selection stays lit);
   // a different icon selects that view and opens it.
   function selectSidebarView(view: SidebarView) {
     if (view === sidebarView) {
-      setSidebarOpen((o) => {
-        const next = !o;
-        persist(SIDEBAR_OPEN_KEY, next ? "1" : "0");
-        return next;
-      });
+      setSidebarOpen((o) => !o);
       return;
     }
     setSidebarView(view);
-    persist(SIDEBAR_VIEW_KEY, view);
     setSidebarOpen(true);
-    persist(SIDEBAR_OPEN_KEY, "1");
   }
   // Collapse the panel but KEEP the selection so the rail stays highlighted and
   // the same view re-opens on the next click (X button + drag-to-close).
   function closeSidebar() {
     setSidebarOpen(false);
-    persist(SIDEBAR_OPEN_KEY, "0");
   }
   // Reopen the collapsed panel (drag/click the edge strip), optionally at a width.
   function openSidebar(width?: number) {
     if (width !== undefined) setPanelWidthPersist(width);
     setSidebarOpen(true);
-    persist(SIDEBAR_OPEN_KEY, "1");
   }
   // The side panel's width, drag-resized and remembered across reloads.
   const [panelWidth, setPanelWidth] = useState<number>(() => {
@@ -385,6 +360,14 @@ export default function App() {
     });
   }, [loadedCode, openDocIds, closedDocIds, effectiveDocId, following]);
 
+  // Persist this viewer's sidebar position per canvas, mirroring the tab-state save
+  // above — so a reload (and re-entry) restores the same view + open/closed state
+  // for THIS canvas, and marks it "visited" so the first-visit force fires only once.
+  useEffect(() => {
+    if (!loadedCode) return;
+    saveSidebarState(loadedCode, { view: sidebarView, open: sidebarOpen });
+  }, [loadedCode, sidebarView, sidebarOpen]);
+
   useEffect(() => {
     if (!canvasCode) return;
     connectToCanvas(canvasCode);
@@ -474,24 +457,6 @@ export default function App() {
     if (canvas) recordRecent(canvas.code, canvas.name);
   }, [canvas]);
 
-  // On a genuine first open of a canvas, reveal the Documents explorer — so the
-  // tabs (and the welcome page's "Open all tabs" start) are discoverable. But
-  // respect a remembered sidebar view: if you left it on Agent tasks, a refresh
-  // should land you back there, not slam you back to Documents. Fires once per
-  // canvas; skips the force when there's a saved, unexpired view to restore.
-  const forcedDocsFor = useRef<string | null>(null);
-  useEffect(() => {
-    if (!canvas || forcedDocsFor.current === canvas.code) return;
-    forcedDocsFor.current = canvas.code;
-    const restored =
-      !viewStateExpired() && parseSidebarView(localStorage.getItem(SIDEBAR_VIEW_KEY));
-    if (restored) return; // keep the view (and open/closed state) we restored on mount
-    setSidebarView("documents");
-    persist(SIDEBAR_VIEW_KEY, "documents");
-    setSidebarOpen(true);
-    persist(SIDEBAR_OPEN_KEY, "1");
-  }, [canvas]);
-
   // resetPerCanvasState clears every piece of UI state scoped to the canvas
   // we're leaving. Without this, a stale selectedPinId / visitedModes /
   // pendingMode from canvas A leaks into canvas B and can render references
@@ -534,6 +499,21 @@ export default function App() {
     }
   }
 
+  // Restore this viewer's saved sidebar position for a canvas we're entering, or —
+  // on a genuine first visit (nothing saved / lapsed) — reveal the Documents
+  // explorer so the tabs are discoverable. Mirrors hydrateTabsFor: each canvas is
+  // its own playground, so a collapse on one board doesn't follow you to another.
+  function hydrateSidebarFor(code: string) {
+    const saved = loadSidebarState(code);
+    if (saved) {
+      setSidebarView(saved.view);
+      setSidebarOpen(saved.open);
+    } else {
+      setSidebarView("documents");
+      setSidebarOpen(true);
+    }
+  }
+
   // Welcome-page "Open all tabs" (item 10): surface every document on the canvas
   // as a tab at once. Clears any explicit closes so the sync effect keeps them.
   function openAllDocs() {
@@ -567,6 +547,7 @@ export default function App() {
     setCodeInURL(code);
     resetPerCanvasState();
     hydrateTabsFor(code);
+    hydrateSidebarFor(code);
     // A claim token is scoped to the canvas it arrived with — drop it when the
     // user navigates elsewhere so it can't be misapplied to another canvas.
     setClaimToken(null);

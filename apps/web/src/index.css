@@ -43,6 +43,15 @@
   width: 100%;
 }
 
+/* Rich-text note editor (DocsMode): a muted placeholder on the empty
+   contentEditable surface, so a blank doc reads like a Google-Docs page
+   rather than a dead box. Only shows while the surface is truly empty. */
+.rich-editor:empty::before {
+  content: attr(data-placeholder);
+  color: rgb(156 163 175); /* gray-400 */
+  pointer-events: none;
+}
+
 /* Tandem logo entrance: the mark assembles once on mount — the two arcs
    draw in, the bar connects them, then the beads pop. Timings adapted from
    the brand pack's looping animation (assets/tandem-logo-animated.html),
