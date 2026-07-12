@@ -22,6 +22,8 @@ interface Props {
   onOpenCanvas: (code: string) => void;
   onHome: () => void;
   onOpenMCP: () => void;
+  onShowSettings: () => void;
+  onShowAbout: () => void;
 }
 
 type Load =
@@ -87,7 +89,7 @@ function sortCanvases(list: CanvasMeta[], key: SortKey): CanvasMeta[] {
   return out;
 }
 
-export default function MyCanvases({ onOpenCanvas, onHome, onOpenMCP }: Props) {
+export default function MyCanvases({ onOpenCanvas, onHome, onOpenMCP, onShowSettings, onShowAbout }: Props) {
   const [user, setUser] = useState<User | null>(null);
   const [load, setLoad] = useState<Load>({ status: "loading" });
   const [query, setQuery] = useState("");
@@ -176,7 +178,7 @@ export default function MyCanvases({ onOpenCanvas, onHome, onOpenMCP }: Props) {
               <span className="hidden sm:inline">New canvas</span>
             </button>
           )}
-          <AccountMenu onUserChange={setUser} onOpenCanvas={onOpenCanvas} />
+          <AccountMenu onShowSettings={onShowSettings} onShowAbout={onShowAbout} onUserChange={setUser} onOpenCanvas={onOpenCanvas} />
         </div>
       </header>
 
@@ -186,14 +188,14 @@ export default function MyCanvases({ onOpenCanvas, onHome, onOpenMCP }: Props) {
             {Array.from({ length: 6 }).map((_, i) => (
               <div
                 key={i}
-                className="h-28 animate-pulse rounded-2xl border border-ink/10 bg-white/60"
+                className="h-28 animate-pulse rounded-2xl border border-ink/10 bg-surface/60"
               />
             ))}
           </div>
         )}
 
         {load.status === "signedOut" && (
-          <div className="mx-auto max-w-md rounded-2xl border border-ink/10 bg-white px-8 py-10 text-center">
+          <div className="mx-auto max-w-md rounded-2xl border border-ink/10 bg-surface px-8 py-10 text-center">
             <p className="font-display text-lg font-medium">Sign in to see your canvases</p>
             <p className="mt-1.5 text-sm text-ink/55">
               Canvases you create while signed in are saved to your account and show up here on every
@@ -239,7 +241,7 @@ export default function MyCanvases({ onOpenCanvas, onHome, onOpenMCP }: Props) {
                 />
 
                 {visible.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-ink/20 bg-white/60 px-8 py-12 text-center">
+                  <div className="rounded-2xl border border-dashed border-ink/20 bg-surface/60 px-8 py-12 text-center">
                     <p className="font-display text-base font-medium">No canvases match</p>
                     <p className="mt-1 text-sm text-ink/55">Try a different search or filter.</p>
                     <button
@@ -247,7 +249,7 @@ export default function MyCanvases({ onOpenCanvas, onHome, onOpenMCP }: Props) {
                         setQuery("");
                         setModeFilter("all");
                       }}
-                      className="mt-4 rounded-lg border border-ink/20 px-3 py-1.5 text-sm font-medium text-ink/70 hover:bg-white"
+                      className="mt-4 rounded-lg border border-ink/20 px-3 py-1.5 text-sm font-medium text-ink/70 hover:bg-surface"
                     >
                       Clear filters
                     </button>
@@ -327,7 +329,7 @@ function Toolbar({
           value={query}
           onChange={(e) => onQuery(e.target.value)}
           placeholder="Search by name or code…"
-          className="w-full rounded-lg border border-ink/15 bg-white py-2 pl-9 pr-8 text-sm placeholder:text-ink/35 focus:border-ink/40 focus:outline-none focus:ring-1 focus:ring-ink/20"
+          className="w-full rounded-lg border border-ink/15 bg-surface py-2 pl-9 pr-8 text-sm placeholder:text-ink/35 focus:border-ink/40 focus:outline-none focus:ring-1 focus:ring-ink/20"
         />
         {query && (
           <button
@@ -357,7 +359,7 @@ function Toolbar({
           options={SORTS.map((s) => ({ value: s.key, label: s.label }))}
         />
         {/* view toggle */}
-        <div className="flex shrink-0 overflow-hidden rounded-lg border border-ink/15 bg-white">
+        <div className="flex shrink-0 overflow-hidden rounded-lg border border-ink/15 bg-surface">
           <button
             onClick={() => onView("grid")}
             aria-label="Grid view"
@@ -399,7 +401,7 @@ function Select({
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="h-[38px] cursor-pointer appearance-none rounded-lg border border-ink/15 bg-white py-2 pl-3 pr-8 text-sm font-medium text-ink/70 focus:border-ink/40 focus:outline-none focus:ring-1 focus:ring-ink/20"
+        className="h-[38px] cursor-pointer appearance-none rounded-lg border border-ink/15 bg-surface py-2 pl-3 pr-8 text-sm font-medium text-ink/70 focus:border-ink/40 focus:outline-none focus:ring-1 focus:ring-ink/20"
       >
         {options.map((o) => (
           <option key={o.value} value={o.value}>
@@ -416,7 +418,7 @@ function Select({
 
 function EmptyState({ onCreate }: { onCreate: () => void }) {
   return (
-    <div className="rounded-2xl border border-dashed border-ink/20 bg-white/60 px-8 py-14 text-center">
+    <div className="rounded-2xl border border-dashed border-ink/20 bg-surface/60 px-8 py-14 text-center">
       <p className="font-display text-lg font-medium">No canvases yet</p>
       <p className="mx-auto mt-1.5 max-w-md text-sm text-ink/55">
         Create a canvas while signed in and it’ll live here. Already have an anonymous canvas? Open it
@@ -466,7 +468,7 @@ function CanvasCard({
     <li>
       <button
         onClick={() => onOpen(c.code)}
-        className="group relative block w-full overflow-hidden rounded-2xl border border-ink/10 bg-white p-4 text-left transition-all hover:-translate-y-0.5 hover:border-ink/20 hover:shadow-md"
+        className="group relative block w-full overflow-hidden rounded-2xl border border-ink/10 bg-surface p-4 text-left transition-all hover:-translate-y-0.5 hover:border-ink/20 hover:shadow-md"
       >
         <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: t.solid }} />
         <div className="flex items-start justify-between gap-3">
@@ -508,7 +510,7 @@ function CanvasTable({
   onOpen: (code: string) => void;
 }) {
   return (
-    <div className="overflow-hidden rounded-2xl border border-ink/10 bg-white">
+    <div className="overflow-hidden rounded-2xl border border-ink/10 bg-surface">
       {/* header row (desktop only) */}
       <div className="hidden grid-cols-[1fr_7rem_6rem_8rem_6rem] gap-3 border-b border-ink/10 bg-paper px-4 py-2.5 font-code text-[10px] font-medium uppercase tracking-[0.14em] text-ink/40 sm:grid">
         <span>Name</span>

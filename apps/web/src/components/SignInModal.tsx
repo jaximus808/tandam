@@ -27,8 +27,8 @@ function FeatureRow({
         <Icon className="w-4 h-4" />
       </div>
       <div className="min-w-0">
-        <div className="text-sm font-medium text-gray-900">{title}</div>
-        <div className="text-xs text-gray-500 leading-snug">{desc}</div>
+        <div className="text-sm font-medium text-ink">{title}</div>
+        <div className="text-xs text-ink/55 leading-snug">{desc}</div>
       </div>
     </div>
   );
@@ -100,10 +100,13 @@ export default function SignInModal({ onClose, onSignedIn }: Props) {
         role="dialog"
         aria-modal="true"
         aria-labelledby="signin-title"
-        className="w-full max-w-sm bg-white rounded-2xl shadow-xl overflow-hidden"
+        className="w-full max-w-sm bg-surface rounded-2xl shadow-xl overflow-hidden"
       >
-        {/* Banner: the orbit logo doubles as "agents around a canvas". */}
-        <div className="relative h-32 bg-gradient-to-br from-sky-100 via-blue-50 to-indigo-100 overflow-hidden">
+        {/* Banner: the orbit logo doubles as "agents around a canvas". The
+            gradient is a fixed light pastel, so pin the banner to the light
+            palette — otherwise the token-based pill + close button flip dark and
+            go unreadable on the still-light banner in dark mode. */}
+        <div className="theme-light relative h-32 bg-gradient-to-br from-sky-100 via-blue-50 to-indigo-100 overflow-hidden">
           <div
             aria-hidden="true"
             className="absolute -top-8 -left-6 w-28 h-28 rounded-full bg-sky-300/40 blur-2xl"
@@ -115,13 +118,13 @@ export default function SignInModal({ onClose, onSignedIn }: Props) {
           <button
             onClick={onClose}
             aria-label="Close"
-            className="absolute top-2 right-2 z-10 w-7 h-7 flex items-center justify-center rounded-full bg-white/70 text-gray-500 hover:bg-white hover:text-gray-700 backdrop-blur transition"
+            className="absolute top-2 right-2 z-10 w-7 h-7 flex items-center justify-center rounded-full bg-surface/70 text-ink/55 hover:bg-surface hover:text-ink/70 backdrop-blur transition"
           >
             ✕
           </button>
           <div className="relative h-full flex flex-col items-center justify-center gap-2">
             <TandemLogo size={52} />
-            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-white/80 text-[11px] font-semibold text-blue-700 shadow-sm backdrop-blur">
+            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-surface/80 text-[11px] font-semibold text-blue-700 shadow-sm backdrop-blur">
               <Sparkles className="w-3 h-3" />
               Your canvases, saved
             </span>
@@ -130,10 +133,10 @@ export default function SignInModal({ onClose, onSignedIn }: Props) {
 
         {/* Content */}
         <div className="p-6 pt-5">
-          <h2 id="signin-title" className="text-lg font-semibold text-gray-900">
+          <h2 id="signin-title" className="text-lg font-semibold text-ink">
             Sign in to Tandem
           </h2>
-          <p className="mt-1 text-sm text-gray-600 leading-relaxed">
+          <p className="mt-1 text-sm text-ink/60 leading-relaxed">
             Create a free account to keep your canvases:
           </p>
 
@@ -166,7 +169,7 @@ export default function SignInModal({ onClose, onSignedIn }: Props) {
             )}
           </div>
 
-          <p className="mt-4 text-center text-xs text-gray-400">More sign-in options coming soon.</p>
+          <p className="mt-4 text-center text-xs text-ink/45">More sign-in options coming soon.</p>
         </div>
       </div>
     </div>,

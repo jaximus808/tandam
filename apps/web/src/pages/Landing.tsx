@@ -10,6 +10,8 @@ interface Props {
   onJoin: (code: string) => void;
   onOpenMCP: () => void;
   onShowCanvases: () => void;
+  onShowSettings: () => void;
+  onAbout: () => void;
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -377,7 +379,7 @@ function SelectionFrame({
   tag,
   tagKind = "human",
   className = "",
-  color = INK,
+  color = "rgb(var(--color-ink))",
 }: {
   children: React.ReactNode;
   tag?: string;
@@ -713,7 +715,14 @@ function MorphCanvas({
   const { accent } = scene;
 
   return (
-    <div className="relative w-full">
+    // theme-light: the demo canvas is a hand-tuned illustration (hardcoded card
+    // colours, severity dots, map gradient) — pin it light so it reads as a
+    // bright product shot instead of half-flipping. dark:brightness knocks the
+    // pure-white slab down to a comfortable off-white on the dark page so it
+    // doesn't glare (the cards are hardcoded white, so a filter is the only lever
+    // that dims them all at once). Tailwind's `dark:` still keys off html.dark
+    // even inside the theme-light token scope.
+    <div className="theme-light relative w-full dark:brightness-[0.82]">
       {/* scene switcher — mono, like view tabs on a surface */}
       <div className="mb-3 flex flex-wrap gap-1.5">
         {SCENES.map((s, i) => {
@@ -915,7 +924,7 @@ const ACCOUNT_PERKS: { icon: string; title: string; desc: string }[] = [
 
 /* ── the page ────────────────────────────────────────────────────────────────── */
 
-export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
+export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSettings, onAbout }: Props) {
   const reduced = usePrefersReducedMotion();
   const [sceneIdx, setSceneIdx] = useState(0);
   const [launcher, setLauncher] = useState<null | "create" | "join">(null);
@@ -970,6 +979,10 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
   }
 
   return (
+    // The page follows the global theme (light/dark). Two things stay pinned to
+    // the light palette with `theme-light`: the hardcoded hero illustration
+    // (MorphCanvas) reads as a bright product shot, and the intentionally-dark
+    // bands (bg-ink text-paper) would otherwise INVERT to light in dark mode.
     <div className="min-h-screen overflow-x-clip scroll-smooth bg-paper font-brand text-ink [text-rendering:optimizeLegibility] antialiased">
       {/* Nav */}
       <header className="sticky top-0 z-40 border-b border-ink/10 bg-paper/85 backdrop-blur">
@@ -998,14 +1011,12 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
             >
               Modes
             </a>
-            <a
-              href="https://github.com/jaximus808/tandam"
-              target="_blank"
-              rel="noopener noreferrer"
+            <button
+              onClick={onAbout}
               className="hidden rounded-md px-3 py-1.5 text-ink/55 transition-colors hover:bg-ink/5 hover:text-ink sm:inline"
             >
-              GitHub
-            </a>
+              About
+            </button>
             <button
               onClick={onOpenMCP}
               className="rounded-md px-3 py-1.5 font-medium text-ink/80 transition-colors hover:bg-ink/5"
@@ -1015,7 +1026,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
             {user && (
               <button
                 onClick={onShowCanvases}
-                className="inline-flex items-center gap-1.5 rounded-md border-[1.5px] border-ink bg-white px-3 py-1.5 font-medium text-ink shadow-[2px_2px_0_rgba(28,25,23,0.15)] transition-transform hover:-translate-y-px"
+                className="inline-flex items-center gap-1.5 rounded-md border-[1.5px] border-ink bg-surface px-3 py-1.5 font-medium text-ink shadow-[2px_2px_0_rgba(28,25,23,0.15)] transition-transform hover:-translate-y-px"
               >
                 Dashboard
                 <Icon name="arrow" className="h-3.5 w-3.5" />
@@ -1023,6 +1034,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
             )}
             <AccountMenu
               onShowCanvases={onShowCanvases}
+              onShowSettings={onShowSettings}
               onUserChange={setUser}
               onOpenCanvas={onJoin}
             />
@@ -1140,7 +1152,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
                   </button>
                   <button
                     onClick={() => setLauncher("create")}
-                    className="btn-press rounded-md border-[1.5px] border-ink bg-white px-6 py-3 font-medium text-ink shadow-[4px_4px_0_rgba(28,25,23,0.15)]"
+                    className="btn-press rounded-md border-[1.5px] border-ink bg-surface px-6 py-3 font-medium text-ink shadow-[4px_4px_0_rgba(28,25,23,0.15)]"
                   >
                     Create a canvas
                   </button>
@@ -1156,7 +1168,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
                   </button>
                   <button
                     onClick={() => setLauncher("join")}
-                    className="btn-press rounded-md border-[1.5px] border-ink bg-white px-6 py-3 font-medium text-ink shadow-[4px_4px_0_rgba(28,25,23,0.15)]"
+                    className="btn-press rounded-md border-[1.5px] border-ink bg-surface px-6 py-3 font-medium text-ink shadow-[4px_4px_0_rgba(28,25,23,0.15)]"
                   >
                     Join with a code
                   </button>
@@ -1205,7 +1217,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
       </section>
 
       {/* "Becomes anything" marquee */}
-      <section className="border-y border-ink/10 bg-white py-5">
+      <section className="border-y border-ink/10 bg-surface py-5">
         <div className="mx-auto mb-3 max-w-6xl px-6">
           <SysLabel>One canvas → anything your team and agents do</SysLabel>
         </div>
@@ -1232,7 +1244,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
             <h2 className="mb-2">
               <SysLabel>Jump back in</SysLabel>
             </h2>
-            <ul className="overflow-hidden rounded-md border border-ink/15 bg-white">
+            <ul className="overflow-hidden rounded-md border border-ink/15 bg-surface">
               {recents.map((r, i) => (
                 <li
                   key={r.code}
@@ -1284,7 +1296,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
             {AUDIENCES.map((a) => (
               <div
                 key={a.title}
-                className={`group relative rounded-md border-[1.5px] border-ink/80 bg-white p-6 transition-all duration-300 lg:hover:rotate-0 lg:hover:translate-y-0 hover:shadow-[6px_6px_0_rgba(28,25,23,0.12)] ${a.tilt}`}
+                className={`group relative rounded-md border-[1.5px] border-ink/80 bg-surface p-6 transition-all duration-300 lg:hover:rotate-0 lg:hover:translate-y-0 hover:shadow-[6px_6px_0_rgba(28,25,23,0.12)] ${a.tilt}`}
               >
                 <span
                   aria-hidden="true"
@@ -1309,8 +1321,10 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
         </div>
       </section>
 
-      {/* Shared memory / multi-agent — the wire. Dark room. */}
-      <section className="bg-ink text-paper">
+      {/* Shared memory / multi-agent — the wire. Dark room. theme-light pins the
+          light palette so `bg-ink text-paper` stays a dark band in both themes
+          (without it, the tokens flip and the room inverts to light). */}
+      <section className="theme-light bg-ink text-paper">
         <div className="mx-auto grid max-w-6xl items-center gap-14 px-6 py-24 lg:grid-cols-2">
           <div>
             <span className="font-code text-[11px] uppercase tracking-[0.22em] text-agent">
@@ -1431,7 +1445,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
       </section>
 
       {/* Modes */}
-      <section id="modes" className="relative overflow-hidden border-y border-ink/10 bg-white">
+      <section id="modes" className="relative overflow-hidden border-y border-ink/10 bg-surface">
         <div aria-hidden="true" className="surface-grid-faint absolute inset-0 opacity-60" />
         <div className="relative mx-auto max-w-6xl px-6 py-24">
           <div className="max-w-2xl">
@@ -1454,7 +1468,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
               >
                 <div className="flex items-center gap-2">
                   <span
-                    className="grid h-8 w-8 place-items-center rounded-[5px] border border-ink/10 bg-white"
+                    className="grid h-8 w-8 place-items-center rounded-[5px] border border-ink/10 bg-surface"
                     style={{ color: m.color }}
                   >
                     <Icon name={m.kind} className="h-4 w-4" />
@@ -1468,8 +1482,9 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
               </div>
             ))}
 
-            {/* Bring-your-own-agent card — a terminal on the surface */}
-            <div className="flex flex-col overflow-hidden rounded-md border-[1.5px] border-ink bg-ink text-paper shadow-[5px_5px_0_rgba(199,91,57,0.5)]">
+            {/* Bring-your-own-agent card — a terminal on the surface. theme-light
+                keeps the terminal dark in both themes (else it inverts to light). */}
+            <div className="theme-light flex flex-col overflow-hidden rounded-md border-[1.5px] border-ink bg-ink text-paper shadow-[5px_5px_0_rgba(199,91,57,0.5)]">
               <div className="flex items-center gap-2 border-b border-paper/10 px-4 py-2.5">
                 <span className="h-2 w-2 rounded-full bg-paper/20" />
                 <span className="h-2 w-2 rounded-full bg-paper/20" />
@@ -1501,10 +1516,20 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
         </div>
       </section>
 
-      {/* Sign-up pitch — only for visitors who aren't already signed in */}
+      {/* Sign-up pitch — only for visitors who aren't already signed in.
+          A full-bleed dark band (rather than a black card floating on the paper)
+          so the transition reads as an intentional section, not a naked hard edge. */}
       {showSignUp && (
-        <section className="mx-auto max-w-6xl px-6 py-24">
-          <div className="relative rounded-md border-[1.5px] border-ink bg-ink px-8 py-12 text-paper shadow-[8px_8px_0_rgba(28,25,23,0.15)] sm:px-12">
+        <section className="theme-light relative overflow-hidden bg-ink text-paper">
+          {/* Warm glow + hairline so the flat slab has depth and the top edge
+              eases in instead of hard-cutting from paper to black. */}
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0"
+            style={{ background: "radial-gradient(120% 90% at 12% 0%, rgba(199,91,57,0.12), transparent 55%)" }}
+          />
+          <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-px bg-paper/10" />
+          <div className="relative mx-auto max-w-6xl px-6 py-24 sm:px-12">
             <div className="grid items-center gap-10 lg:grid-cols-[1fr_1.1fr]">
               <div>
                 <span className="font-code text-[11px] uppercase tracking-[0.22em] text-agent">
@@ -1589,7 +1614,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
             </button>
             <button
               onClick={onOpenMCP}
-              className="btn-press rounded-md border-[1.5px] border-ink bg-white px-6 py-3 font-medium text-ink shadow-[4px_4px_0_rgba(28,25,23,0.15)]"
+              className="btn-press rounded-md border-[1.5px] border-ink bg-surface px-6 py-3 font-medium text-ink shadow-[4px_4px_0_rgba(28,25,23,0.15)]"
             >
               Connect an agent
             </button>
@@ -1598,22 +1623,19 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases }: Props) {
       </section>
 
       {/* Footer */}
-      <footer className="border-t border-ink/10 bg-white">
+      <footer className="border-t border-ink/10 bg-surface">
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-6 py-8 font-code text-[11px] text-ink/40 sm:flex-row">
           <div className="flex items-center gap-2">
             <TandemLogo size={18} animate={false} />
             <span>Tandem — you and your agents, in tandem.</span>
           </div>
           <div className="flex items-center gap-4">
-            <a
-              href="https://github.com/jaximus808/tandam"
-              target="_blank"
-              rel="noopener noreferrer"
+            <button
+              onClick={onAbout}
               className="inline-flex items-center gap-1.5 transition-colors hover:text-ink"
             >
-              <Icon name="github" className="h-4 w-4" />
-              GitHub
-            </a>
+              About
+            </button>
             <p>
               made with <span className="text-agent">♥</span> by{" "}
               <a

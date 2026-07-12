@@ -1,8 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import TandemLogo from "../components/TandemLogo";
+import SiteHeader from "../components/SiteHeader";
 
 interface Props {
   onHome: () => void;
+  onOpenMCP: () => void;
+  onShowCanvases: () => void;
+  onShowSettings: () => void;
+  onShowAbout: () => void;
+  onOpenCanvas: (code: string) => void;
 }
 
 interface Stats {
@@ -76,7 +81,7 @@ function StatCard({
   );
 }
 
-export default function StatsPage({ onHome }: Props) {
+export default function StatsPage({ onHome, onOpenMCP, onShowCanvases, onShowSettings, onShowAbout, onOpenCanvas }: Props) {
   const [load, setLoad] = useState<Load>({ status: "loading" });
   const reqId = useRef(0);
 
@@ -101,25 +106,26 @@ export default function StatsPage({ onHome }: Props) {
 
   const ready = load.status === "ready" ? load.stats : null;
 
+  // theme-light on the root locks this page to light — not dark-ready yet.
   return (
-    <div className="flex min-h-screen flex-col bg-paper font-brand text-gray-900">
-      <header className="flex items-center gap-2 border-b border-gray-900/5 px-4 py-3">
-        <button onClick={onHome} className="group flex items-center gap-1.5" title="Back to home">
-          <TandemLogo size={28} animate={false} />
-          <span className="hidden font-semibold tracking-tight transition-colors group-hover:text-sky-600 sm:inline">
-            Tandem
-          </span>
-        </button>
-        <span className="text-gray-200">/</span>
-        <span className="font-display text-[15px] font-medium">By the numbers</span>
+    <div className="theme-light flex min-h-screen flex-col bg-paper font-brand text-gray-900">
+      <SiteHeader
+        onHome={onHome}
+        label="By the numbers"
+        onOpenMCP={onOpenMCP}
+        onShowCanvases={onShowCanvases}
+        onShowSettings={onShowSettings}
+        onShowAbout={onShowAbout}
+        onOpenCanvas={onOpenCanvas}
+      >
         <button
           onClick={refresh}
-          className="ml-auto rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50"
+          className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50"
           title="Refresh"
         >
           Refresh
         </button>
-      </header>
+      </SiteHeader>
 
       <main className="mx-auto w-full max-w-4xl flex-1 px-6 py-10">
         <div className="mb-8">

@@ -116,7 +116,7 @@ function CopyField({
   return (
     <div
       className={[
-        "flex items-center gap-2 rounded-md border bg-white py-1.5 pl-3 pr-1.5",
+        "flex items-center gap-2 rounded-md border bg-surface py-1.5 pl-3 pr-1.5",
         accent ? "border-brand/35" : "border-ink/15",
       ].join(" ")}
     >
@@ -197,7 +197,7 @@ export default function ConnectModal({ code, version, agents, onClose, onSwitchC
       "rounded-md border px-2.5 py-1 font-code text-[11px] font-medium transition-colors",
       active
         ? "border-ink bg-ink text-paper"
-        : "border-ink/15 bg-white text-ink/50 hover:border-ink/35 hover:text-ink",
+        : "border-ink/15 bg-surface text-ink/50 hover:border-ink/35 hover:text-ink",
     ].join(" ");
   }
 
@@ -214,7 +214,7 @@ export default function ConnectModal({ code, version, agents, onClose, onSwitchC
         role="dialog"
         aria-modal="true"
         aria-labelledby="connect-title"
-        className="relative flex max-h-[88vh] w-full max-w-md flex-col overflow-hidden rounded-lg border-[1.5px] border-ink bg-white text-ink shadow-[10px_10px_0_rgba(28,25,23,0.12)] outline-none"
+        className="relative flex max-h-[88vh] w-full max-w-md flex-col overflow-hidden rounded-lg border-[1.5px] border-ink bg-surface text-ink shadow-[10px_10px_0_rgba(28,25,23,0.12)] outline-none"
       >
         <div className="overflow-y-auto px-5 pb-5 pt-5">
           {/* ── Header ─────────────────────────────────────────────────────── */}
@@ -320,7 +320,7 @@ export default function ConnectModal({ code, version, agents, onClose, onSwitchC
                           </pre>
                           <button
                             onClick={() => copy(config, "config")}
-                            className="btn-press absolute right-2 top-2 inline-flex items-center gap-1 rounded-[5px] bg-white/15 px-2 py-1 font-code text-[10.5px] font-medium text-paper hover:bg-white/25"
+                            className="btn-press absolute right-2 top-2 inline-flex items-center gap-1 rounded-[5px] bg-surface/15 px-2 py-1 font-code text-[10.5px] font-medium text-paper hover:bg-surface/25"
                           >
                             <Icon name={copied === "config" ? "check" : "copy"} className="h-3 w-3" />
                             {copied === "config" ? "Copied" : "Copy"}
@@ -359,7 +359,7 @@ export default function ConnectModal({ code, version, agents, onClose, onSwitchC
             <div className="flex items-center gap-3">
               <button
                 onClick={done}
-                className="btn-press flex-1 rounded-md border-[1.5px] border-ink bg-white py-2.5 font-medium text-ink shadow-[3px_3px_0_rgba(28,25,23,0.15)]"
+                className="btn-press flex-1 rounded-md border-[1.5px] border-ink bg-surface py-2.5 font-medium text-ink shadow-[3px_3px_0_rgba(28,25,23,0.15)]"
               >
                 Done
               </button>

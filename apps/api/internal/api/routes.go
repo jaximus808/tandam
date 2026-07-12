@@ -232,5 +232,7 @@ func buildRouteVariants(base []byte) map[string][]byte {
 	return map[string][]byte{
 		"/mcp": rewrite("/mcp",
 			"Connect your AI agent — Tandem Canvas MCP"),
+		"/about": rewrite("/about",
+			"About — the person behind Tandem Canvas"),
 	}
 }

@@ -38,7 +38,7 @@ export default class ErrorBoundary extends Component<Props, State> {
     if (this.state.error) {
       return (
         <div className="flex flex-1 items-center justify-center p-6">
-          <div className="max-w-sm rounded-2xl border border-ink/10 bg-white px-6 py-5 text-center shadow-[3px_4px_0_rgba(17,17,17,0.08)]">
+          <div className="max-w-sm rounded-2xl border border-ink/10 bg-surface px-6 py-5 text-center shadow-[3px_4px_0_rgba(17,17,17,0.08)]">
             <p className="text-sm font-semibold text-ink">Something glitched rendering the canvas</p>
             <p className="mt-1 text-xs text-ink/50">
               The connection is fine — this view hit a snag. Try again, and it'll pick up the latest state.

@@ -7,6 +7,22 @@
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="theme-color" content="#0D6E66" />
 
+    <!-- Theme boot: set the `.dark` class before first paint so there's no
+         light-mode flash. Reads the saved override ('light'|'dark'), else falls
+         back to the OS preference. Kept in sync afterward by lib/theme.ts. -->
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem("tandem.theme");
+          var dark =
+            saved === "dark" ||
+            ((saved === null || saved === "system") &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.classList.toggle("dark", dark);
+        } catch (e) {}
+      })();
+    </script>
+
     <!-- Primary SEO. Title/description lead with "Tandem Canvas" so the brand
          people actually search (and the domain) is reinforced; the bare word
          "Tandem" is too crowded to target. -->

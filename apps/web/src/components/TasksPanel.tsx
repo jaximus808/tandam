@@ -106,7 +106,7 @@ export default function TasksPanel({
     if (editingId === t.id) {
       const p = taskPayload(t);
       return (
-        <div key={t.id} className="rounded-xl border border-ink/20 bg-white p-2.5">
+        <div key={t.id} className="rounded-xl border border-ink/20 bg-surface p-2.5">
           <Composer
             targets={targets}
             initial={{ title: p.title ?? "", body: p.body, linkedIds: p.linkedIds, assignee: p.assignee }}
@@ -337,7 +337,7 @@ function TaskCard({
   const terminal = task.state === "done" || task.state === "failed" || task.state === "rejected";
 
   return (
-    <div className="group/task rounded-xl border border-ink/10 bg-white p-2.5">
+    <div className="group/task rounded-xl border border-ink/10 bg-surface p-2.5">
       <div className="flex items-start justify-between gap-2">
         <span className={`text-[13px] font-semibold leading-snug ${terminal ? "text-ink/55" : "text-ink"}`}>
           {p.title || "Untitled task"}
@@ -458,7 +458,7 @@ function RejectForm({
           if (e.key === "Escape") onCancel();
         }}
         placeholder="Why reject? (optional)"
-        className="w-full rounded-lg border border-ink/15 bg-white px-2.5 py-1.5 text-[12px] text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
+        className="w-full rounded-lg border border-ink/15 bg-surface px-2.5 py-1.5 text-[12px] text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
       />
       <div className="flex gap-1.5">
         <button
@@ -539,7 +539,7 @@ function Composer({
               onClick={() => setAssignee(a)}
               className={[
                 "flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1 text-xs font-semibold transition-colors",
-                active ? "bg-white text-ink shadow-sm" : "text-ink/40 hover:text-ink/65",
+                active ? "bg-surface text-ink shadow-sm" : "text-ink/40 hover:text-ink/65",
               ].join(" ")}
             >
               {a === "agent" ? <Bot size={13} /> : <User size={13} />}
@@ -554,14 +554,14 @@ function Composer({
         onChange={(e) => setTitle(e.target.value)}
         onKeyDown={(e) => e.key === "Enter" && void submit()}
         placeholder={assignee === "agent" ? "What should the agent do?" : "What do you need to do?"}
-        className="w-full rounded-lg border border-ink/15 bg-white px-2.5 py-1.5 text-sm text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
+        className="w-full rounded-lg border border-ink/15 bg-surface px-2.5 py-1.5 text-sm text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
       />
       <textarea
         value={body}
         onChange={(e) => setBody(e.target.value)}
         placeholder="Brief: what, why, acceptance criteria (optional)"
         rows={3}
-        className="w-full resize-none rounded-lg border border-ink/15 bg-white px-2.5 py-1.5 text-[13px] text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
+        className="w-full resize-none rounded-lg border border-ink/15 bg-surface px-2.5 py-1.5 text-[13px] text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
       />
 
       {targets.length > 0 && (

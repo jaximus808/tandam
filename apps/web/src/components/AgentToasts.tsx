@@ -28,7 +28,7 @@ function Toast({ t, onDismiss }: { t: Notification; onDismiss: (id: number) => v
   const accent = modeTheme(t.mode).solid;
   return (
     <div
-      className="tandem-toast-in pointer-events-auto relative overflow-hidden rounded-[7px] border border-ink/10 bg-white/95 backdrop-blur shadow-[3px_3px_0_#C75B39]"
+      className="tandem-toast-in pointer-events-auto relative overflow-hidden rounded-[7px] border border-ink/10 bg-surface/95 backdrop-blur shadow-[3px_3px_0_#C75B39]"
       role="status"
     >
       <button

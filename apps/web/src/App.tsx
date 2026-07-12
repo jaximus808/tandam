@@ -18,8 +18,10 @@ import ChartsMode from "./modes/ChartsMode";
 import WelcomeMode from "./modes/WelcomeMode";
 import Landing from "./pages/Landing";
 import MCPSupport from "./pages/MCPSupport";
+import About from "./pages/About";
 import MyCanvases from "./pages/MyCanvases";
 import StatsPage from "./pages/StatsPage";
+import UserSettings from "./pages/UserSettings";
 import { fetchMe, type User } from "./lib/auth";
 import { copyCanvas, claimCanvas } from "./lib/api";
 import ConnectModal, { hasDismissedConnect } from "./components/ConnectModal";
@@ -120,13 +122,15 @@ function stripClaimFromURL() {
 // per-canvas position, stored via lib/sidebarState instead.
 const SIDEBAR_WIDTH_KEY = "tandem.sidebar.width";
 
-type Route = "home" | "mcp" | "dashboard" | "stats";
+type Route = "home" | "mcp" | "dashboard" | "stats" | "settings" | "about";
 
 function routeFromPath(): Route {
   const p = window.location.pathname.replace(/\/$/, "");
   if (p === "/mcp") return "mcp";
   if (p === "/dashboard") return "dashboard";
   if (p === "/stats") return "stats";
+  if (p === "/me") return "settings";
+  if (p === "/about") return "about";
   return "home";
 }
 
@@ -558,6 +562,16 @@ export default function App() {
     setRoute("dashboard");
   }
 
+  function showSettings() {
+    window.history.pushState(null, "", "/me");
+    setRoute("settings");
+  }
+
+  function showAbout() {
+    window.history.pushState(null, "", "/about");
+    setRoute("about");
+  }
+
   // Deep-copy the current canvas into my account, then open the owned copy.
   async function handleCopyToAccount() {
     if (!canvas || copying) return;
@@ -698,12 +712,61 @@ export default function App() {
     );
   }
 
+  if (route === "about") {
+    return (
+      <About
+        onBack={() => {
+          window.history.pushState(null, "", "/");
+          setRoute("home");
+        }}
+        onOpenMCP={() => {
+          setMCPInURL();
+          setRoute("mcp");
+        }}
+        onShowCanvases={showMyCanvases}
+        onShowSettings={showSettings}
+        onOpenCanvas={(code) => {
+          setRoute("home");
+          handleJoin(code);
+        }}
+      />
+    );
+  }
+
   if (route === "stats") {
     return (
       <StatsPage
         onHome={() => {
           window.history.pushState(null, "", "/");
           setRoute("home");
+        }}
+        onOpenMCP={() => {
+          setMCPInURL();
+          setRoute("mcp");
+        }}
+        onShowCanvases={showMyCanvases}
+        onShowSettings={showSettings}
+        onShowAbout={showAbout}
+        onOpenCanvas={(code) => {
+          setRoute("home");
+          handleJoin(code);
+        }}
+      />
+    );
+  }
+
+  if (route === "settings") {
+    return (
+      <UserSettings
+        onHome={() => {
+          setRoute("home");
+          handleJoin("");
+        }}
+        onShowCanvases={showMyCanvases}
+        onShowAbout={showAbout}
+        onOpenCanvas={(code) => {
+          setRoute("home");
+          handleJoin(code);
         }}
       />
     );
@@ -724,6 +787,8 @@ export default function App() {
           setMCPInURL();
           setRoute("mcp");
         }}
+        onShowSettings={showSettings}
+        onShowAbout={showAbout}
       />
     );
   }
@@ -737,6 +802,8 @@ export default function App() {
           setRoute("mcp");
         }}
         onShowCanvases={showMyCanvases}
+        onShowSettings={showSettings}
+        onAbout={showAbout}
       />
     );
   }
@@ -768,7 +835,7 @@ export default function App() {
         />
         <TandemLogo size={56} />
         <p className="relative mt-6 text-sm font-medium text-ink/70">Joining canvas</p>
-        <p className="relative mt-2 rounded-[4px] border border-ink/15 bg-white px-2.5 py-1 font-code text-xs tracking-[0.3em] text-ink/50">
+        <p className="relative mt-2 rounded-[4px] border border-ink/15 bg-surface px-2.5 py-1 font-code text-xs tracking-[0.3em] text-ink/50">
           {canvasCode}
         </p>
       </div>
@@ -852,10 +919,10 @@ export default function App() {
 
   return (
     <ModeNavContext.Provider value={setMode}>
-    <div className="flex flex-col h-screen bg-paper font-brand text-gray-900 overflow-hidden">
+    <div className="flex flex-col h-screen bg-paper font-brand text-ink overflow-hidden">
       {/* z-[80] so the header (and its bell dropdown) sits above the agent
           cursor overlay (z-[70]); modals are z-[2000] and still cover it. */}
-      <header className="relative z-[80] flex items-center gap-1.5 px-3 py-2.5 bg-paper/85 backdrop-blur border-b border-gray-900/5 shrink-0 sm:gap-2 sm:px-4">
+      <header className="relative z-[80] flex items-center gap-1.5 px-3 py-2.5 bg-paper/85 backdrop-blur border-b border-ink/5 shrink-0 sm:gap-2 sm:px-4">
         {/* Accent rule across the top of the chrome — picks up the active mode's
             colour and eases between them as you switch views. */}
         <span
@@ -870,16 +937,16 @@ export default function App() {
           title="Back to home"
         >
           <TandemLogo size={28} animate={false} />
-          <span className="hidden font-semibold tracking-tight text-gray-900 transition-colors group-hover:text-sky-600 sm:inline">
+          <span className="hidden font-semibold tracking-tight text-ink transition-colors group-hover:text-sky-600 sm:inline">
             Tandem
           </span>
         </button>
-        <span className="hidden text-gray-200 shrink-0 sm:inline">/</span>
+        <span className="hidden text-ink/20 shrink-0 sm:inline">/</span>
         <div className="flex items-center gap-2 min-w-0">
-          <span className="font-display text-[15px] font-medium leading-tight text-gray-900 truncate">
+          <span className="font-display text-[15px] font-medium leading-tight text-ink truncate">
             {canvas.name}
           </span>
-          <span className="hidden rounded-[3px] border border-ink/10 bg-white px-1.5 py-px font-code text-[10px] tracking-[0.14em] text-ink/40 shrink-0 sm:inline">
+          <span className="hidden rounded-[3px] border border-ink/10 bg-surface px-1.5 py-px font-code text-[10px] tracking-[0.14em] text-ink/40 shrink-0 sm:inline">
             {canvas.code}
           </span>
           {canvas.yourRole === "read" && (
@@ -910,7 +977,7 @@ export default function App() {
             onClick={toggleFollow}
             className={[
               "inline-flex items-center gap-1.5 rounded-lg h-8 px-3 text-sm font-medium transition-colors",
-              following ? "" : "text-gray-500 hover:bg-gray-900/5 hover:text-gray-800",
+              following ? "" : "text-ink/55 hover:bg-ink/5 hover:text-ink/80",
             ].join(" ")}
             style={following ? { backgroundColor: theme.soft, color: theme.solid } : undefined}
             title={
@@ -948,7 +1015,7 @@ export default function App() {
               <button
                 onClick={handleCopyToAccount}
                 disabled={copying}
-                className="hidden rounded-md border border-ink/20 px-3 py-1.5 text-sm font-medium text-ink/75 transition-colors hover:border-ink/50 hover:bg-white disabled:opacity-60 sm:inline-block"
+                className="hidden rounded-md border border-ink/20 px-3 py-1.5 text-sm font-medium text-ink/75 transition-colors hover:border-ink/50 hover:bg-surface disabled:opacity-60 sm:inline-block"
                 title="Save a copy of this canvas to your account so it shows up in My canvases on every device"
               >
                 {copying ? "Copying…" : "Copy to my account"}
@@ -958,7 +1025,7 @@ export default function App() {
           {me && canvas.ownerUserId === me.id && (
             <button
               onClick={() => setShareOpen(true)}
-              className="rounded-md border border-ink/20 px-3 py-1.5 text-sm font-medium text-ink/75 transition-colors hover:border-ink/50 hover:bg-white"
+              className="rounded-md border border-ink/20 px-3 py-1.5 text-sm font-medium text-ink/75 transition-colors hover:border-ink/50 hover:bg-surface"
               title="Control who can open and edit this canvas"
             >
               Share
@@ -970,7 +1037,7 @@ export default function App() {
           >
             Connect
           </button>
-          <AccountMenu onShowCanvases={showMyCanvases} onUserChange={setMe} onOpenCanvas={handleJoin} />
+          <AccountMenu onShowCanvases={showMyCanvases} onShowSettings={showSettings} onShowAbout={showAbout} onUserChange={setMe} onOpenCanvas={handleJoin} />
         </div>
       </header>
 
@@ -1039,7 +1106,7 @@ export default function App() {
             loaded, so even on the empty homepage (zero tabs) the "+" is there to
             start one. z-[75] keeps its add-menu above the mode content but below
             the header (z-[80]). */}
-        <div className="relative z-[75] flex items-center px-3 py-1 bg-paper/70 backdrop-blur border-b border-gray-900/5 shrink-0 sm:px-4">
+        <div className="relative z-[75] flex items-center px-3 py-1 bg-paper/70 backdrop-blur border-b border-ink/5 shrink-0 sm:px-4">
           <DocumentTabs
             docs={openDocs}
             activeDocId={effectiveDocId}
@@ -1057,8 +1124,11 @@ export default function App() {
           </div>
         )}
 
-        {/* Mode content row: the focused document's view + the QuickLog dock. */}
-        <div className="relative flex flex-1 min-h-0">
+        {/* Mode content row: the focused document's view + the QuickLog dock.
+            theme-light: the mode components + QuickLog aren't dark-mode-ready
+            yet, so the worksurface is locked to light — a coherent light canvas
+            inside the themed chrome — until each mode gets its own dark pass. */}
+        <div className="theme-light relative flex flex-1 min-h-0 bg-paper text-ink">
         <ErrorBoundary resetKey={`${canvas.id}:${effectiveMode}`}>
         {(["welcome", "map", "itinerary", "docs", "roadmap", "sheets", "charts"] as CanvasMode[]).map((m) => {
           const active = effectiveMode === m;

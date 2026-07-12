@@ -50,7 +50,7 @@ export default function NotificationBell({ log, unread, muted, toggleMute, markR
         onClick={toggleOpen}
         className={[
           "relative grid h-8 w-8 place-items-center rounded-lg transition-colors",
-          open ? "bg-ink/[0.06] text-ink" : "text-gray-500 hover:bg-gray-900/5 hover:text-gray-800",
+          open ? "bg-ink/[0.06] text-ink" : "text-ink/55 hover:bg-ink/5 hover:text-ink/80",
         ].join(" ")}
         title={muted ? "Agent alerts — popups muted" : "Agent activity"}
         aria-haspopup="menu"
@@ -72,7 +72,7 @@ export default function NotificationBell({ log, unread, muted, toggleMute, markR
           <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
           <div
             role="menu"
-            className="tandem-fade-in absolute left-0 z-40 mt-1.5 w-[18rem] max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-xl border border-ink/10 bg-white shadow-[4px_4px_0_rgba(28,25,23,0.06)]"
+            className="tandem-fade-in absolute left-0 z-40 mt-1.5 w-[18rem] max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-xl border border-ink/10 bg-surface shadow-[4px_4px_0_rgba(28,25,23,0.06)]"
           >
             {/* Header — title + the popup mute toggle the bell controls. */}
             <div className="flex items-center justify-between gap-2 border-b border-ink/[0.07] px-3 py-2">

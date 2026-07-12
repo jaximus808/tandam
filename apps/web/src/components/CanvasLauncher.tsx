@@ -81,7 +81,7 @@ export default function CanvasLauncher({ initialMode, onJoin, onClose, onOpenMCP
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[2000] flex items-center justify-center bg-gray-900/40 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-[2000] flex items-center justify-center bg-ink/40 p-4 backdrop-blur-sm"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -90,7 +90,7 @@ export default function CanvasLauncher({ initialMode, onJoin, onClose, onOpenMCP
         role="dialog"
         aria-modal="true"
         aria-labelledby="launcher-title"
-        className="w-full max-w-md overflow-hidden rounded-lg border-[1.5px] border-ink bg-white font-brand shadow-[8px_8px_0_rgba(28,25,23,0.35)]"
+        className="w-full max-w-md overflow-hidden rounded-lg border-[1.5px] border-ink bg-surface font-brand shadow-[8px_8px_0_rgba(28,25,23,0.35)]"
       >
         {/* header */}
         <div className="flex items-center gap-2 border-b border-ink/10 bg-paper px-6 py-4">
@@ -121,7 +121,7 @@ export default function CanvasLauncher({ initialMode, onJoin, onClose, onOpenMCP
                 setError("");
               }}
               placeholder="Name a canvas — anything at all"
-              className="w-full rounded-md border border-ink/20 bg-white px-4 py-3 text-sm focus:border-ink focus:outline-none focus:ring-1 focus:ring-ink"
+              className="w-full rounded-md border border-ink/20 bg-surface px-4 py-3 text-sm focus:border-ink focus:outline-none focus:ring-1 focus:ring-ink"
             />
             <button
               type="submit"
@@ -153,11 +153,11 @@ export default function CanvasLauncher({ initialMode, onJoin, onClose, onOpenMCP
                 }}
                 placeholder="TOKYO7X3K"
                 maxLength={8}
-                className="flex-1 rounded-md border border-ink/20 bg-white px-4 py-3 font-code text-sm uppercase tracking-[0.2em] focus:border-ink focus:outline-none focus:ring-1 focus:ring-ink"
+                className="flex-1 rounded-md border border-ink/20 bg-surface px-4 py-3 font-code text-sm uppercase tracking-[0.2em] focus:border-ink focus:outline-none focus:ring-1 focus:ring-ink"
               />
               <button
                 type="submit"
-                className="btn-press shrink-0 rounded-md border-[1.5px] border-ink bg-white px-5 py-3 font-medium text-ink shadow-[3px_3px_0_rgba(28,25,23,0.15)]"
+                className="btn-press shrink-0 rounded-md border-[1.5px] border-ink bg-surface px-5 py-3 font-medium text-ink shadow-[3px_3px_0_rgba(28,25,23,0.15)]"
               >
                 Open
               </button>

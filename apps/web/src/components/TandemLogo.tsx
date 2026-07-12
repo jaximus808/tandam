@@ -31,31 +31,37 @@ export default function TandemLogo({
       {/* The brand tile scales the drawing to 84% for clear space; inline we
           want the mark to fill the box, so no down-scale here. */}
       <g>
+        {/* Butt caps (not round): the arcs stop flush at the bead edges instead
+            of overhanging with rounded nubs that poke through the hollow bead. */}
         <path
           className={a ? "tandem-arc tandem-arc-1" : undefined}
           pathLength={100}
           d="M85.3 37.3 A34 34 0 0 1 52.9 93.3"
           stroke={color}
-          strokeWidth="9"
-          strokeLinecap="round"
+          strokeWidth="8"
+          strokeLinecap="butt"
         />
         <path
           className={a ? "tandem-arc tandem-arc-2" : undefined}
           pathLength={100}
           d="M34.7 82.7 A34 34 0 0 1 67.1 26.7"
           stroke={color}
-          strokeWidth="9"
-          strokeLinecap="round"
+          strokeWidth="8"
+          strokeLinecap="butt"
         />
+        {/* Bar connects the two beads EDGE-to-edge, not centre-to-centre —
+            otherwise it runs to the middle of the hollow human bead and reads as
+            a pin stabbing through the ring. Endpoints = bead centre ± r·(unit
+            vector between the beads), r=11, unit ≈ (0.506, -0.863). */}
         <line
           className={a ? "tandem-arc tandem-bar" : undefined}
           pathLength={100}
-          x1="43"
-          y1="89"
-          x2="77"
-          y2="31"
+          x1="48.6"
+          y1="79.5"
+          x2="71.4"
+          y2="40.5"
           stroke={color}
-          strokeWidth="5"
+          strokeWidth="4.5"
           strokeLinecap="round"
         />
         {/* agent bead — solid */}

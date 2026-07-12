@@ -10,7 +10,7 @@ interface Props {
 export default function EmptyState({ title, hint, action }: Props) {
   return (
     <div className="surface-grid-faint flex flex-1 items-center justify-center p-6">
-      <div className="tandem-mode-enter relative max-w-sm border-[1.5px] border-dashed border-ink/30 bg-white/70 px-9 py-8 text-center backdrop-blur-[1px]">
+      <div className="tandem-mode-enter relative max-w-sm border-[1.5px] border-dashed border-ink/30 bg-surface/70 px-9 py-8 text-center backdrop-blur-[1px]">
         <span aria-hidden="true" className="sel-handle" style={{ top: -4, left: -4 }} />
         <span aria-hidden="true" className="sel-handle" style={{ top: -4, right: -4 }} />
         <span aria-hidden="true" className="sel-handle" style={{ bottom: -4, left: -4 }} />
@@ -20,7 +20,7 @@ export default function EmptyState({ title, hint, action }: Props) {
         {action && (
           <button
             onClick={action.onClick}
-            className="mt-4 rounded-md bg-ink px-3.5 py-1.5 text-sm font-medium text-white transition-opacity hover:opacity-90"
+            className="mt-4 rounded-md bg-ink px-3.5 py-1.5 text-sm font-medium text-paper transition-opacity hover:opacity-90"
           >
             {action.label}
           </button>

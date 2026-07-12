@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronLeft, Inbox } from "lucide-react";
+import { ChevronLeft, Inbox, Settings, Info } from "lucide-react";
 import { fetchMe, logout, GOOGLE_CLIENT_ID, type User } from "../lib/auth";
 import {
   listNotifications,
@@ -7,6 +7,7 @@ import {
   type AppNotification,
 } from "../lib/api";
 import SignInModal from "./SignInModal";
+import ThemeToggle from "./ThemeToggle";
 import posthog from "../lib/posthog";
 
 // AccountMenu shows the signed-in user's avatar (with a sign-out dropdown), or a
@@ -19,10 +20,17 @@ import posthog from "../lib/posthog";
 // list of invites (shared canvases). Pass `onOpenCanvas` to make those clickable.
 export default function AccountMenu({
   onShowCanvases,
+  onShowSettings,
+  onShowAbout,
   onUserChange,
   onOpenCanvas,
 }: {
   onShowCanvases?: () => void;
+  // Navigate to the account settings page (/me). Rendered as a "Settings" row
+  // when provided; omitted where there's nowhere to route to.
+  onShowSettings?: () => void;
+  // Navigate to the About page (/about). Rendered as an "About" row when provided.
+  onShowAbout?: () => void;
   // Notified whenever the signed-in user changes (initial load, sign-in,
   // sign-out) so a parent can keep its own copy of `me` in sync — e.g. App
   // needs this to auto-claim a canvas the moment a visitor signs in.
@@ -130,7 +138,7 @@ export default function AccountMenu({
       <>
         <button
           onClick={() => setSignInOpen(true)}
-          className="px-3 py-1.5 rounded-lg text-sm font-medium border border-gray-300 text-gray-700 hover:bg-gray-50 transition-colors shrink-0"
+          className="px-3 py-1.5 rounded-lg text-sm font-medium border border-ink/20 text-ink/70 hover:bg-ink/5 transition-colors shrink-0"
         >
           Sign in
         </button>
@@ -179,23 +187,23 @@ export default function AccountMenu({
       {menuOpen && (
         <div
           role="menu"
-          className="absolute right-0 mt-1.5 z-50 w-72 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl shadow-ink/10"
+          className="absolute right-0 mt-1.5 z-50 w-72 overflow-hidden rounded-xl border border-ink/15 bg-surface shadow-xl shadow-ink/10"
         >
           {panel === "menu" ? (
             <>
-              <div className="px-3 py-2.5 border-b border-gray-100">
-                <div className="text-sm font-medium text-gray-900 truncate">
+              <div className="px-3 py-2.5 border-b border-ink/10">
+                <div className="text-sm font-medium text-ink truncate">
                   {user.displayName || "Account"}
                 </div>
-                <div className="text-xs text-gray-400 truncate">{user.email}</div>
+                <div className="text-xs text-ink/45 truncate">{user.email}</div>
               </div>
               <div className="py-1">
                 <button
                   role="menuitem"
                   onClick={openInbox}
-                  className="flex w-full items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                  className="flex w-full items-center gap-2.5 px-3 py-2 text-sm text-ink/70 hover:bg-ink/5"
                 >
-                  <Inbox className="h-4 w-4 text-gray-400" aria-hidden="true" />
+                  <Inbox className="h-4 w-4 text-ink/45" aria-hidden="true" />
                   <span>Inbox</span>
                   {unread > 0 && (
                     <span className="ml-auto flex min-w-[18px] items-center justify-center rounded-full bg-[#C75B39] px-1.5 text-[10px] font-semibold leading-[18px] text-white">
@@ -210,15 +218,50 @@ export default function AccountMenu({
                       setMenuOpen(false);
                       onShowCanvases();
                     }}
-                    className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                    className="w-full text-left px-3 py-2 text-sm text-ink/70 hover:bg-ink/5"
                   >
                     My canvases
                   </button>
                 )}
+                {onShowSettings && (
+                  <button
+                    role="menuitem"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onShowSettings();
+                    }}
+                    className="flex w-full items-center gap-2.5 px-3 py-2 text-sm text-ink/70 hover:bg-ink/5"
+                  >
+                    <Settings className="h-4 w-4 text-ink/45" aria-hidden="true" />
+                    <span>Settings</span>
+                  </button>
+                )}
+                {onShowAbout && (
+                  <button
+                    role="menuitem"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onShowAbout();
+                    }}
+                    className="flex w-full items-center gap-2.5 px-3 py-2 text-sm text-ink/70 hover:bg-ink/5"
+                  >
+                    <Info className="h-4 w-4 text-ink/45" aria-hidden="true" />
+                    <span>About</span>
+                  </button>
+                )}
+              </div>
+              {/* Theme — Light / System / Dark, switchable without leaving the menu. */}
+              <div className="border-t border-ink/10 px-3 py-2.5">
+                <div className="mb-1.5 text-[11px] font-medium uppercase tracking-[0.08em] text-ink/40">
+                  Theme
+                </div>
+                <ThemeToggle fullWidth alwaysLabel />
+              </div>
+              <div className="border-t border-ink/10 py-1">
                 <button
                   role="menuitem"
                   onClick={handleLogout}
-                  className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                  className="w-full text-left px-3 py-2 text-sm text-ink/70 hover:bg-ink/5"
                 >
                   Sign out
                 </button>
@@ -226,22 +269,22 @@ export default function AccountMenu({
             </>
           ) : (
             <>
-              <div className="flex items-center gap-2 border-b border-gray-100 px-2 py-2">
+              <div className="flex items-center gap-2 border-b border-ink/10 px-2 py-2">
                 <button
                   onClick={() => setPanel("menu")}
                   aria-label="Back"
-                  className="flex h-7 w-7 items-center justify-center rounded-md text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+                  className="flex h-7 w-7 items-center justify-center rounded-md text-ink/45 hover:bg-ink/5 hover:text-ink/70"
                 >
                   <ChevronLeft className="h-4 w-4" />
                 </button>
-                <span className="font-display text-sm font-medium text-gray-900">Inbox</span>
+                <span className="font-display text-sm font-medium text-ink">Inbox</span>
               </div>
               {notes.length === 0 ? (
-                <div className="px-4 py-8 text-center text-[13px] text-gray-400">
+                <div className="px-4 py-8 text-center text-[13px] text-ink/45">
                   Nothing yet. When someone shares a canvas with you, it’ll show up here.
                 </div>
               ) : (
-                <ul className="max-h-[60vh] divide-y divide-gray-100 overflow-y-auto">
+                <ul className="max-h-[60vh] divide-y divide-ink/10 overflow-y-auto">
                   {notes.map((n) => (
                     <li key={n.id}>
                       <button
@@ -251,7 +294,7 @@ export default function AccountMenu({
                         }}
                         disabled={!n.canvasCode || !onOpenCanvas}
                         className={[
-                          "flex w-full items-start gap-2.5 px-3 py-3 text-left transition-colors hover:bg-gray-50 disabled:cursor-default disabled:hover:bg-transparent",
+                          "flex w-full items-start gap-2.5 px-3 py-3 text-left transition-colors hover:bg-ink/5 disabled:cursor-default disabled:hover:bg-transparent",
                           n.read ? "" : "bg-[#C75B39]/[0.04]",
                         ].join(" ")}
                       >
@@ -259,11 +302,11 @@ export default function AccountMenu({
                           <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#C75B39]" />
                         )}
                         <span className={n.read ? "min-w-0 pl-4" : "min-w-0"}>
-                          <span className="block text-[13px] leading-snug text-gray-800">
+                          <span className="block text-[13px] leading-snug text-ink/80">
                             <span className="font-medium">{n.actorName || "Someone"}</span> shared{" "}
                             <span className="font-medium">{n.canvasName || "a canvas"}</span> with you
                           </span>
-                          <span className="mt-0.5 block font-code text-[11px] text-gray-400">
+                          <span className="mt-0.5 block font-code text-[11px] text-ink/45">
                             {n.role === "write" ? "Can edit" : "View only"} · {timeAgo(n.createdAt)}
                           </span>
                         </span>

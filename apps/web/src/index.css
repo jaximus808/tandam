@@ -2,6 +2,50 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Theme tokens ────────────────────────────────────────────────────────────
+   Semantic colours live here as space-separated RGB channels so Tailwind's
+   `rgb(var(--color-x) / <alpha-value>)` can apply any opacity (see
+   tailwind.config.js). Light values match the original hard-coded hex exactly,
+   so light mode is unchanged. `.dark` (set on <html> by the boot script +
+   lib/theme.ts) flips the neutrals to a warm dark palette; the agent/brand
+   accents are nudged brighter so they hold contrast on a dark surface. */
+:root {
+  --color-paper: 251 250 248; /* #FBFAF8 */
+  --color-surface: 255 255 255; /* white cards */
+  --color-ink: 28 25 23; /* #1C1917 */
+  --color-agent: 199 91 57; /* #C75B39 */
+  --color-brand: 13 110 102; /* #0D6E66 */
+  color-scheme: light;
+}
+:root.dark {
+  --color-paper: 24 22 20; /* warm near-black page */
+  --color-surface: 33 30 28; /* slightly-elevated card */
+  --color-ink: 237 234 229; /* warm off-white text */
+  --color-agent: 224 122 84; /* lifted terracotta */
+  --color-brand: 42 157 143; /* lifted teal */
+  color-scheme: dark;
+}
+
+/* Opt a subtree OUT of dark mode by re-asserting the light channel values.
+   Used for surfaces not yet dark-ready (the marketing Landing hero, Stats) so
+   they render consistently light instead of half-flipped — until each gets its
+   own dark-mode pass. Remove the class from a page once it's fully converted. */
+.theme-light {
+  --color-paper: 251 250 248;
+  --color-surface: 255 255 255;
+  --color-ink: 28 25 23;
+  --color-agent: 199 91 57;
+  --color-brand: 13 110 102;
+  color-scheme: light;
+}
+
+/* Paint the page background from the token immediately, so the area behind the
+   React root (and any overscroll) matches the active theme. */
+html,
+body {
+  background-color: rgb(var(--color-paper));
+}
+
 /* Brand-wide selection + a calmer, paper-friendly scrollbar so the canvas
    chrome feels finished rather than default-OS. */
 ::selection {
@@ -48,7 +92,7 @@
    rather than a dead box. Only shows while the surface is truly empty. */
 .rich-editor:empty::before {
   content: attr(data-placeholder);
-  color: rgb(156 163 175); /* gray-400 */
+  color: rgb(var(--color-ink) / 0.4); /* muted, theme-aware */
   pointer-events: none;
 }
 
@@ -127,11 +171,11 @@
 
 /* The dot-grid worksurface itself. Layer over bg-paper. */
 .surface-grid {
-  background-image: radial-gradient(rgba(28, 25, 23, 0.13) 1.1px, transparent 1.1px);
+  background-image: radial-gradient(rgb(var(--color-ink) / 0.13) 1.1px, transparent 1.1px);
   background-size: 22px 22px;
 }
 .surface-grid-faint {
-  background-image: radial-gradient(rgba(28, 25, 23, 0.08) 1px, transparent 1px);
+  background-image: radial-gradient(rgb(var(--color-ink) / 0.08) 1px, transparent 1px);
   background-size: 22px 22px;
 }
 

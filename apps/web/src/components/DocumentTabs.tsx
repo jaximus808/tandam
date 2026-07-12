@@ -87,7 +87,7 @@ export default function DocumentTabs({
             onClick={() => onSelect(doc.id)}
             className={[
               "group flex items-center gap-1.5 rounded-lg pl-2.5 pr-1.5 py-1 text-sm font-medium shrink-0 cursor-pointer transition-colors",
-              active ? "" : "text-gray-500 hover:bg-gray-900/5 hover:text-gray-800",
+              active ? "" : "text-ink/55 hover:bg-ink/5 hover:text-ink/80",
             ].join(" ")}
             style={active ? { backgroundColor: t.soft, color: t.solid } : undefined}
             title={DOC_TYPE_LABEL[doc.type]}
@@ -104,7 +104,7 @@ export default function DocumentTabs({
                   if (e.key === "Enter") commitRename(doc.id);
                   if (e.key === "Escape") setRenamingId(null);
                 }}
-                className="w-24 bg-white/80 rounded px-1 py-0 text-sm text-gray-900 outline-none ring-1 ring-gray-900/15"
+                className="w-24 bg-surface/80 rounded px-1 py-0 text-sm text-ink outline-none ring-1 ring-ink/15"
               />
             ) : (
               <span
@@ -120,7 +120,7 @@ export default function DocumentTabs({
                   e.stopPropagation();
                   onClose(doc.id);
                 }}
-                className="flex h-4 w-4 items-center justify-center rounded text-current/50 opacity-0 hover:bg-gray-900/10 group-hover:opacity-100"
+                className="flex h-4 w-4 items-center justify-center rounded text-current/50 opacity-0 hover:bg-ink/10 group-hover:opacity-100"
                 title="Close tab"
                 aria-label={`Close ${doc.name}`}
               >
@@ -136,7 +136,7 @@ export default function DocumentTabs({
         <div className="relative shrink-0">
           <button
             onClick={() => setAddOpen((o) => !o)}
-            className="ml-0.5 flex h-7 w-7 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-900/5 hover:text-gray-700 transition-colors"
+            className="ml-0.5 flex h-7 w-7 items-center justify-center rounded-lg text-ink/45 hover:bg-ink/5 hover:text-ink/70 transition-colors"
             title="New document"
             aria-haspopup="menu"
             aria-expanded={addOpen}
@@ -148,9 +148,9 @@ export default function DocumentTabs({
               <div className="fixed inset-0 z-10" onClick={() => setAddOpen(false)} />
               <div
                 role="menu"
-                className="absolute left-0 mt-1.5 z-20 min-w-[11rem] rounded-xl bg-white border border-gray-900/10 shadow-lg shadow-gray-900/5 py-1"
+                className="absolute left-0 mt-1.5 z-20 min-w-[11rem] rounded-xl bg-surface border border-ink/10 shadow-lg shadow-ink/5 py-1"
               >
-                <div className="px-3 py-1 text-[11px] font-medium uppercase tracking-wide text-gray-400">
+                <div className="px-3 py-1 text-[11px] font-medium uppercase tracking-wide text-ink/45">
                   New document
                 </div>
                 {CREATABLE_DOC_TYPES.map((type) => {
@@ -163,7 +163,7 @@ export default function DocumentTabs({
                         onCreate(type);
                         setAddOpen(false);
                       }}
-                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-medium text-gray-700 hover:bg-gray-100"
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-medium text-ink/70 hover:bg-ink/10"
                     >
                       <span className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: t.solid }} />
                       {DOC_TYPE_LABEL[type]}

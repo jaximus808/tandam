@@ -152,7 +152,7 @@ export default function ShareDialog({ code, canvas, onClose }: Props) {
         role="dialog"
         aria-modal="true"
         aria-labelledby="share-title"
-        className="relative flex max-h-[88vh] w-full max-w-md flex-col overflow-hidden rounded-lg border-[1.5px] border-ink bg-white text-ink shadow-[10px_10px_0_rgba(28,25,23,0.12)] outline-none"
+        className="relative flex max-h-[88vh] w-full max-w-md flex-col overflow-hidden rounded-lg border-[1.5px] border-ink bg-surface text-ink shadow-[10px_10px_0_rgba(28,25,23,0.12)] outline-none"
       >
         <div className="overflow-y-auto px-5 pb-5 pt-5">
           <Kicker>Share · {code}</Kicker>
@@ -208,7 +208,7 @@ export default function ShareDialog({ code, canvas, onClose }: Props) {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="name@email.com"
-                className="min-w-0 flex-1 rounded-md border border-ink/20 bg-white px-3 py-1.5 text-[13px] text-ink outline-none focus:border-ink/50"
+                className="min-w-0 flex-1 rounded-md border border-ink/20 bg-surface px-3 py-1.5 text-[13px] text-ink outline-none focus:border-ink/50"
               />
               <Segmented<Role>
                 value={inviteRole}
@@ -277,7 +277,7 @@ export default function ShareDialog({ code, canvas, onClose }: Props) {
         <div className="border-t border-ink/10 px-5 py-3.5">
           <button
             onClick={onClose}
-            className="btn-press w-full rounded-md border-[1.5px] border-ink bg-white py-2.5 font-medium text-ink shadow-[3px_3px_0_rgba(28,25,23,0.15)]"
+            className="btn-press w-full rounded-md border-[1.5px] border-ink bg-surface py-2.5 font-medium text-ink shadow-[3px_3px_0_rgba(28,25,23,0.15)]"
           >
             Done
           </button>

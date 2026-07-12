@@ -39,7 +39,7 @@ export default function AccessDenied({
       </header>
 
       <main className="flex flex-1 items-center justify-center px-6">
-        <div className="w-full max-w-md rounded-2xl border-[1.5px] border-ink/15 bg-white px-8 py-10 text-center shadow-[8px_8px_0_rgba(28,25,23,0.06)]">
+        <div className="w-full max-w-md rounded-2xl border-[1.5px] border-ink/15 bg-surface px-8 py-10 text-center shadow-[8px_8px_0_rgba(28,25,23,0.06)]">
           <div className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-ink/[0.06] text-ink/60">
             <Lock className="h-5 w-5" aria-hidden="true" />
           </div>
@@ -65,7 +65,7 @@ export default function AccessDenied({
           <div className="mt-6 flex items-center justify-center gap-2">
             <button
               onClick={onHome}
-              className="btn-press rounded-md border-[1.5px] border-ink bg-white px-4 py-2 text-sm font-medium text-ink shadow-[3px_3px_0_rgba(28,25,23,0.15)]"
+              className="btn-press rounded-md border-[1.5px] border-ink bg-surface px-4 py-2 text-sm font-medium text-ink shadow-[3px_3px_0_rgba(28,25,23,0.15)]"
             >
               Back to home
             </button>

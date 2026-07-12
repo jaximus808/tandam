@@ -316,7 +316,7 @@ export default function DocumentExplorer({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search documents"
-            className="w-full rounded-lg border border-ink/15 bg-white py-1.5 pl-8 pr-2.5 text-[13px] text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
+            className="w-full rounded-lg border border-ink/15 bg-surface py-1.5 pl-8 pr-2.5 text-[13px] text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
           />
         </div>
       </div>
@@ -426,7 +426,7 @@ function FolderRow({
             if (e.key === "Enter") s.onCommitRename(folder.id);
             if (e.key === "Escape") s.onCancelRename();
           }}
-          className="w-full rounded bg-white px-1.5 py-0.5 text-[13px] text-ink outline-none ring-1 ring-ink/20"
+          className="w-full rounded bg-surface px-1.5 py-0.5 text-[13px] text-ink outline-none ring-1 ring-ink/20"
         />
       </div>
     );
@@ -556,7 +556,7 @@ function DocRow({
             if (e.key === "Enter") s.onCommitRename(doc.id);
             if (e.key === "Escape") s.onCancelRename();
           }}
-          className="w-full rounded bg-white px-1.5 py-0.5 text-[13px] text-ink outline-none ring-1 ring-ink/20"
+          className="w-full rounded bg-surface px-1.5 py-0.5 text-[13px] text-ink outline-none ring-1 ring-ink/20"
         />
       </div>
     );
