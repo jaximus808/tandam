@@ -23,9 +23,10 @@ import MyCanvases from "./pages/MyCanvases";
 import StatsPage from "./pages/StatsPage";
 import UserSettings from "./pages/UserSettings";
 import { fetchMe, getCachedUser, type User } from "./lib/auth";
-import { copyCanvas, claimCanvas } from "./lib/api";
+import { copyCanvas, claimCanvas, setCanvasName } from "./lib/api";
 import ConnectModal, { hasDismissedConnect } from "./components/ConnectModal";
 import ShareDialog from "./components/ShareDialog";
+import CanvasNameEditor from "./components/CanvasNameEditor";
 import AccessDenied from "./components/AccessDenied";
 import TandemLogo from "./components/TandemLogo";
 import AccountMenu from "./components/AccountMenu";
@@ -954,9 +955,23 @@ export default function App() {
         </button>
         <span className="hidden text-ink/20 shrink-0 sm:inline">/</span>
         <div className="flex items-center gap-2 min-w-0">
-          <span className="font-display text-[15px] font-medium leading-tight text-ink truncate">
-            {canvas.name}
-          </span>
+          <CanvasNameEditor
+            name={canvas.name}
+            canEdit={!!me && canvas.ownerUserId === me.id}
+            onSubmit={async (newName) => {
+              const prevName = canvas.name;
+              // Optimistic: show the new name immediately, revert if the PATCH
+              // fails. On success the server broadcasts fresh state, which
+              // reconciles this and every other connected viewer.
+              setCanvas((prev) => (prev ? { ...prev, name: newName } : prev));
+              try {
+                await setCanvasName(canvas.code, newName);
+              } catch (err) {
+                setCanvas((prev) => (prev ? { ...prev, name: prevName } : prev));
+                throw err;
+              }
+            }}
+          />
           <span className="hidden rounded-[3px] border border-ink/10 bg-surface px-1.5 py-px font-code text-[10px] tracking-[0.14em] text-ink/40 shrink-0 sm:inline">
             {canvas.code}
           </span>

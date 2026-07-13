@@ -808,6 +808,17 @@ func (s *supabaseStore) SetCanvasVisibility(ctx context.Context, canvasID uuid.U
 	return s.bumpVersion(ctx, canvasID)
 }
 
+func (s *supabaseStore) SetCanvasName(ctx context.Context, canvasID uuid.UUID, name string) (int, error) {
+	err := s.exec(s.client.From("canvases").
+		Update(map[string]string{"name": name}, "minimal", "").
+		Eq("id", canvasID.String()))
+	if err != nil {
+		return 0, err
+	}
+	// Bump version so connected boards re-fetch state and pick up the new name.
+	return s.bumpVersion(ctx, canvasID)
+}
+
 func (s *supabaseStore) ListCanvasAccess(_ context.Context, canvasID uuid.UUID) ([]*CanvasAccess, error) {
 	var rows []dbCanvasAccess
 	_, err := s.client.From("canvas_access").

@@ -70,6 +70,42 @@ func (h *Handler) SetCanvasVisibility(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"visibility": body.Visibility, "publicRole": body.PublicRole})
 }
 
+// maxCanvasNameLen caps a canvas name. Names are short human labels rendered in
+// the header and dashboard cards; 120 chars is plenty and keeps a pasted essay
+// out of the title slot.
+const maxCanvasNameLen = 120
+
+// PATCH /api/canvases/{code}/name — body { name }. Owner-only rename.
+func (h *Handler) SetCanvasName(w http.ResponseWriter, r *http.Request) {
+	canvas, ok := h.requireCanvasOwner(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if len(name) > maxCanvasNameLen {
+		writeError(w, http.StatusBadRequest, "name is too long (max 120 characters)")
+		return
+	}
+	if _, err := h.store.SetCanvasName(r.Context(), canvas.ID, name); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// Push fresh state so every connected board picks up the new name live.
+	broadcastState(r.Context(), h.store, h.hub, canvas.ID)
+	writeJSON(w, http.StatusOK, map[string]string{"name": name})
+}
+
 // GET /api/canvases/{code}/access — owner-only member list.
 func (h *Handler) ListCanvasAccess(w http.ResponseWriter, r *http.Request) {
 	canvas, ok := h.requireCanvasOwner(w, r)

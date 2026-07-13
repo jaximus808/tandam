@@ -258,6 +258,18 @@ export async function setCanvasVisibility(
   if (!res.ok) throw await apiError(res, "Could not update visibility");
 }
 
+// Rename a canvas (owner-only). The backend broadcasts fresh state over WS, so
+// connected boards pick up the new name live; the caller updates optimistically.
+export async function setCanvasName(code: string, name: string): Promise<void> {
+  const res = await fetch(`/api/canvases/${code}/name`, {
+    method: "PATCH",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw await apiError(res, "Could not rename canvas");
+}
+
 export async function listCanvasAccess(code: string): Promise<CanvasAccessEntry[]> {
   const res = await fetch(`/api/canvases/${code}/access`, { credentials: "same-origin" });
   if (!res.ok) throw await apiError(res, "Could not load who this is shared with");
