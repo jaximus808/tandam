@@ -65,18 +65,18 @@ function StatCard({
 }) {
   const shown = useCountUp(value, animate);
   return (
-    <div className="relative overflow-hidden rounded-2xl border border-gray-900/10 bg-white px-6 py-7">
+    <div className="relative overflow-hidden rounded-2xl border border-ink/10 bg-surface px-6 py-7">
       <span aria-hidden className="absolute inset-x-0 top-0 h-1" style={{ backgroundColor: accent }} />
       <div className="flex items-baseline gap-1">
-        <span className="font-display text-5xl font-semibold tracking-tight tabular-nums text-gray-900 sm:text-6xl">
+        <span className="font-display text-5xl font-semibold tracking-tight tabular-nums text-ink sm:text-6xl">
           {shown.toLocaleString()}
         </span>
         {suffix && (
-          <span className="font-display text-2xl font-medium tabular-nums text-gray-400">{suffix}</span>
+          <span className="font-display text-2xl font-medium tabular-nums text-ink/40">{suffix}</span>
         )}
       </div>
-      <div className="mt-2 font-display text-sm font-medium text-gray-900">{label}</div>
-      {hint && <div className="mt-0.5 text-xs leading-snug text-gray-400">{hint}</div>}
+      <div className="mt-2 font-display text-sm font-medium text-ink">{label}</div>
+      {hint && <div className="mt-0.5 text-xs leading-snug text-ink/40">{hint}</div>}
     </div>
   );
 }
@@ -106,9 +106,8 @@ export default function StatsPage({ onHome, onOpenMCP, onShowCanvases, onShowSet
 
   const ready = load.status === "ready" ? load.stats : null;
 
-  // theme-light on the root locks this page to light — not dark-ready yet.
   return (
-    <div className="theme-light flex min-h-screen flex-col bg-paper font-brand text-gray-900">
+    <div className="flex min-h-screen flex-col bg-paper font-brand text-ink">
       <SiteHeader
         onHome={onHome}
         label="By the numbers"
@@ -120,7 +119,7 @@ export default function StatsPage({ onHome, onOpenMCP, onShowCanvases, onShowSet
       >
         <button
           onClick={refresh}
-          className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50"
+          className="rounded-lg border border-ink/15 px-3 py-1.5 text-xs font-medium text-ink/60 transition-colors hover:bg-ink/5"
           title="Refresh"
         >
           Refresh
@@ -130,17 +129,20 @@ export default function StatsPage({ onHome, onOpenMCP, onShowCanvases, onShowSet
       <main className="mx-auto w-full max-w-4xl flex-1 px-6 py-10">
         <div className="mb-8">
           <h1 className="font-display text-2xl font-medium tracking-tight">Tandem, by the numbers</h1>
-          <p className="mt-1 text-sm text-gray-500">
+          <p className="mt-1 text-sm text-ink/50">
             Private dashboard — not linked from the homepage. Refresh to pull live counts.
           </p>
         </div>
 
-        {load.status === "loading" && <p className="text-sm text-gray-500">Pulling numbers…</p>}
+        {load.status === "loading" && <p className="text-sm text-ink/50">Pulling numbers…</p>}
 
         {load.status === "error" && (
           <div className="rounded-2xl border border-red-200 bg-red-50 px-6 py-5">
             <p className="text-sm font-medium text-red-700">Couldn’t load stats</p>
             <p className="mt-1 font-code text-xs text-red-500">{load.message}</p>
+            {/* Error card is a fixed light-red island in both themes (like the
+                danger tiles), so its hint text stays a fixed gray — not ink/*,
+                which would flip light and vanish on the light-red bg. */}
             <p className="mt-2 text-xs text-gray-500">
               If this is local, the API has to be running and reachable at <code>/api/stats</code>.
             </p>
@@ -175,22 +177,22 @@ export default function StatsPage({ onHome, onOpenMCP, onShowCanvases, onShowSet
             </div>
 
             {/* The recurrence bar — the one number that actually matters. */}
-            <div className="mt-8 rounded-2xl border border-gray-900/10 bg-white px-6 py-5">
+            <div className="mt-8 rounded-2xl border border-ink/10 bg-surface px-6 py-5">
               <div className="flex items-center justify-between">
-                <span className="font-display text-sm font-medium text-gray-900">
+                <span className="font-display text-sm font-medium text-ink">
                   Recurrence — the success metric
                 </span>
                 <span className="font-display text-sm font-semibold tabular-nums text-amber-600">
                   {ready.recurringPct}%
                 </span>
               </div>
-              <div className="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-gray-100">
+              <div className="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-ink/10">
                 <div
                   className="h-full rounded-full bg-amber-500 transition-[width] duration-700 ease-out"
                   style={{ width: `${Math.min(100, ready.recurringPct)}%` }}
                 />
               </div>
-              <p className="mt-3 text-xs leading-relaxed text-gray-500">
+              <p className="mt-3 text-xs leading-relaxed text-ink/50">
                 Share of canvases touched again on a <span className="font-medium">later day</span> than they
                 were created — a proxy for “someone came back.” It’s canvas-level (no per-user identity on edits
                 yet) and counts last-touch only, so it <span className="font-medium">undercounts</span> on
@@ -198,7 +200,7 @@ export default function StatsPage({ onHome, onOpenMCP, onShowCanvases, onShowSet
               </p>
             </div>
 
-            <p className="mt-6 text-xs text-gray-400">
+            <p className="mt-6 text-xs text-ink/40">
               Last refreshed {new Date(load.status === "ready" ? load.at : Date.now()).toLocaleString()}
             </p>
           </>
