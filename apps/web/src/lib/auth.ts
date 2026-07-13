@@ -3,6 +3,9 @@ export interface User {
   email: string;
   displayName: string;
   avatarUrl: string;
+  // Preference for whether canvases this user creates start "public" (anyone
+  // with the code) or "private" (owner + shared accounts). Defaults "public".
+  defaultCanvasVisibility?: "public" | "private";
   createdAt?: string;
   lastSeenAt?: string;
 }
@@ -72,6 +75,27 @@ export async function loginWithGoogle(credential: string): Promise<User> {
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
     throw new Error(detail || "Sign-in failed");
+  }
+  const user = (await res.json()) as User;
+  cacheUser(user);
+  return user;
+}
+
+// setDefaultCanvasVisibility PATCHes the signed-in user's default-visibility
+// preference and returns the server-confirmed user (also refreshing the identity
+// cache). Throws on failure so callers can revert an optimistic UI.
+export async function setDefaultCanvasVisibility(
+  visibility: "public" | "private",
+): Promise<User> {
+  const res = await fetch("/api/auth/me", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    body: JSON.stringify({ defaultCanvasVisibility: visibility }),
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(detail || "Failed to update setting");
   }
   const user = (await res.json()) as User;
   cacheUser(user);

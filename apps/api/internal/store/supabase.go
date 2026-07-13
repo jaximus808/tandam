@@ -192,13 +192,14 @@ type dbAgent struct {
 }
 
 type dbUser struct {
-	ID          string `json:"id"`
-	GoogleSub   string `json:"google_sub"`
-	Email       string `json:"email"`
-	DisplayName string `json:"display_name"`
-	AvatarURL   string `json:"avatar_url"`
-	CreatedAt   string `json:"created_at"`
-	LastSeenAt  string `json:"last_seen_at"`
+	ID                      string `json:"id"`
+	GoogleSub               string `json:"google_sub"`
+	Email                   string `json:"email"`
+	DisplayName             string `json:"display_name"`
+	AvatarURL               string `json:"avatar_url"`
+	DefaultCanvasVisibility string `json:"default_canvas_visibility"`
+	CreatedAt               string `json:"created_at"`
+	LastSeenAt              string `json:"last_seen_at"`
 }
 
 type dbPendingEdit struct {
@@ -491,7 +492,8 @@ func toUser(d dbUser) *User {
 	return &User{
 		ID: id, GoogleSub: d.GoogleSub, Email: d.Email,
 		DisplayName: d.DisplayName, AvatarURL: d.AvatarURL,
-		CreatedAt: parseTime(d.CreatedAt), LastSeenAt: parseTime(d.LastSeenAt),
+		DefaultCanvasVisibility: d.DefaultCanvasVisibility,
+		CreatedAt:               parseTime(d.CreatedAt), LastSeenAt: parseTime(d.LastSeenAt),
 	}
 }
 
@@ -551,7 +553,7 @@ func (s *supabaseStore) exec(b interface{ Execute() ([]byte, int64, error) }) er
 
 // ── Canvas ────────────────────────────────────────────────────────────────────
 
-func (s *supabaseStore) CreateCanvas(_ context.Context, name string, ownerUserID *uuid.UUID) (*Canvas, error) {
+func (s *supabaseStore) CreateCanvas(_ context.Context, name string, ownerUserID *uuid.UUID, visibility string) (*Canvas, error) {
 	// An anonymous create (no owner — the MCP/gateway path) gets a claim token so
 	// the human can later make it theirs. A logged-in create is already owned, so
 	// it needs none (NULL claim_token = "not claimable this way").
@@ -566,6 +568,11 @@ func (s *supabaseStore) CreateCanvas(_ context.Context, name string, ownerUserID
 			row["owner_user_id"] = ownerUserID.String()
 		} else {
 			row["claim_token"] = claimToken
+		}
+		// Owner's default posture. Empty = accept the column default ('public'),
+		// which keeps anonymous/MCP creates fully open as before.
+		if visibility != "" {
+			row["visibility"] = visibility
 		}
 		var rows []dbCanvas
 		_, err := s.client.From("canvases").
@@ -2595,6 +2602,24 @@ func (s *supabaseStore) GetUserByEmail(_ context.Context, email string) (*User, 
 	_, err := s.client.From("users").
 		Select("*", "", false).
 		Ilike("email", strings.TrimSpace(email)).
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, ErrUserNotFound
+	}
+	return toUser(rows[0]), nil
+}
+
+// UpdateUserDefaultVisibility sets the user's default_canvas_visibility and
+// returns the refreshed row (representation) so the caller can echo the fresh
+// user back to the client.
+func (s *supabaseStore) UpdateUserDefaultVisibility(_ context.Context, id uuid.UUID, visibility string) (*User, error) {
+	var rows []dbUser
+	_, err := s.client.From("users").
+		Update(map[string]string{"default_canvas_visibility": visibility}, "representation", "").
+		Eq("id", id.String()).
 		ExecuteTo(&rows)
 	if err != nil {
 		return nil, err

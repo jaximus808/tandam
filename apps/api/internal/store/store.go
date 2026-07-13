@@ -329,8 +329,11 @@ type User struct {
 	Email       string    `json:"email"`
 	DisplayName string    `json:"displayName"`
 	AvatarURL   string    `json:"avatarUrl"`
-	CreatedAt   time.Time `json:"createdAt"`
-	LastSeenAt  time.Time `json:"lastSeenAt"`
+	// DefaultCanvasVisibility is the user's preference ('public'|'private') for
+	// how canvases they create start out — applied in CreateCanvas.
+	DefaultCanvasVisibility string    `json:"defaultCanvasVisibility"`
+	CreatedAt               time.Time `json:"createdAt"`
+	LastSeenAt              time.Time `json:"lastSeenAt"`
 }
 
 type PendingEdit struct {
@@ -519,7 +522,9 @@ type ActionStatePatch struct {
 
 type Store interface {
 	// Canvas
-	CreateCanvas(ctx context.Context, name string, ownerUserID *uuid.UUID) (*Canvas, error)
+	// visibility ('public'|'private', or "" to accept the DB default of public)
+	// is the owner's chosen starting posture for the new canvas.
+	CreateCanvas(ctx context.Context, name string, ownerUserID *uuid.UUID, visibility string) (*Canvas, error)
 	ListCanvasesByOwner(ctx context.Context, ownerUserID uuid.UUID) ([]*Canvas, error)
 	CopyCanvas(ctx context.Context, srcID, ownerUserID uuid.UUID, name string) (*Canvas, error)
 	// ClaimCanvas atomically transfers an unowned canvas to ownerUserID iff the
@@ -637,6 +642,9 @@ type Store interface {
 	// GetUserByEmail powers share-by-email; returns ErrUserNotFound when no
 	// account uses that address (they must have signed in at least once).
 	GetUserByEmail(ctx context.Context, email string) (*User, error)
+	// UpdateUserDefaultVisibility sets the user's default_canvas_visibility
+	// preference ('public'|'private') and returns the refreshed row.
+	UpdateUserDefaultVisibility(ctx context.Context, id uuid.UUID, visibility string) (*User, error)
 
 	// Pending edits
 	CreatePendingEdit(ctx context.Context, canvasID uuid.UUID, entityID uuid.UUID, instruction string) (*PendingEdit, error)

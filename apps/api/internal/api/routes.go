@@ -52,6 +52,9 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 	// ── Account-scoped (user session required) ───────────────────────────────────
 	r.Group(func(r chi.Router) {
 		r.Use(RequireUser(authSvc))
+		// Account preferences (e.g. default canvas visibility). RequireUser puts
+		// the user id in context for UpdateMe.
+		r.Patch("/api/auth/me", authH.UpdateMe)
 		r.Get("/api/me/canvases", h.MeCanvases)
 		// Recipient-side of sharing: canvases shared with me + the inbox that
 		// tells me a share happened.

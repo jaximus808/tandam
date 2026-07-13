@@ -111,6 +111,35 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, user)
 }
 
+// PATCH /api/auth/me — update the signed-in user's account preferences. Sits
+// behind RequireUser, so the user id comes from the validated session context.
+// Today the only editable field is defaultCanvasVisibility. Returns the fresh
+// user so the client can reconcile its identity cache.
+func (h *AuthHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
+	uid, ok := UserIDFromCtx(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "not signed in")
+		return
+	}
+	var body struct {
+		DefaultCanvasVisibility string `json:"defaultCanvasVisibility"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if body.DefaultCanvasVisibility != "public" && body.DefaultCanvasVisibility != "private" {
+		writeError(w, http.StatusBadRequest, "defaultCanvasVisibility must be 'public' or 'private'")
+		return
+	}
+	user, err := h.store.UpdateUserDefaultVisibility(r.Context(), uid, body.DefaultCanvasVisibility)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, user)
+}
+
 // POST /api/auth/logout — clears the session cookie.
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	h.clearSessionCookie(w)

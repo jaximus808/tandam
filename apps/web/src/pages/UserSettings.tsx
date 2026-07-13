@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { LogOut, Bell, Lock, Trash2 } from "lucide-react";
-import { fetchMe, getCachedUser, logout, type User } from "../lib/auth";
+import { LogOut, Bell, Lock, Globe, Trash2 } from "lucide-react";
+import { fetchMe, getCachedUser, logout, setDefaultCanvasVisibility, type User } from "../lib/auth";
 import TandemLogo from "../components/TandemLogo";
 import AccountMenu from "../components/AccountMenu";
 import ThemeToggle from "../components/ThemeToggle";
@@ -61,6 +61,25 @@ export default function UserSettings({ onHome, onShowCanvases, onShowAbout, onOp
     posthog.reset();
     window.google?.accounts.id.disableAutoSelect();
     setLoad({ status: "signedOut" });
+  }
+
+  // Optimistically flip the default-visibility preference, then reconcile with
+  // the server; revert the toggle if the PATCH fails.
+  const [savingVisibility, setSavingVisibility] = useState(false);
+  async function handleVisibilityChange(next: "public" | "private") {
+    if (load.status !== "ready") return;
+    const prev = load.user;
+    if ((prev.defaultCanvasVisibility ?? "public") === next) return;
+    setLoad({ status: "ready", user: { ...prev, defaultCanvasVisibility: next } });
+    setSavingVisibility(true);
+    try {
+      const updated = await setDefaultCanvasVisibility(next);
+      setLoad({ status: "ready", user: updated });
+    } catch {
+      setLoad({ status: "ready", user: prev });
+    } finally {
+      setSavingVisibility(false);
+    }
   }
 
   const user = load.status === "ready" ? load.user : null;
@@ -170,18 +189,31 @@ export default function UserSettings({ onHome, onShowCanvases, onShowAbout, onOp
               </div>
             </section>
 
-            {/* Placeholder homes for account-level settings — each is a follow-up
+            {/* Default canvas visibility — per-account preference applied to
+                canvases you create. Reads from `me`, PATCHes optimistically. */}
+            <section className="mt-6 rounded-2xl border border-ink/10 bg-surface p-5 sm:p-6">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-ink">Default canvas visibility</div>
+                  <div className="text-xs text-ink/50">
+                    Whether new canvases you create start private or open to anyone with the code.
+                  </div>
+                </div>
+                <VisibilitySegmented
+                  value={user.defaultCanvasVisibility ?? "public"}
+                  disabled={savingVisibility}
+                  onChange={handleVisibilityChange}
+                />
+              </div>
+            </section>
+
+            {/* Placeholder home for the remaining account setting — a follow-up
                 task. Kept visible (disabled) so the shell reads as intentional. */}
             <section className="mt-6 overflow-hidden rounded-2xl border border-ink/10 bg-surface">
               <SettingRow
                 icon={Bell}
                 title="Notifications"
                 desc="Choose what agent activity and canvas invites email you."
-              />
-              <SettingRow
-                icon={Lock}
-                title="Default canvas visibility"
-                desc="Whether new canvases start private or open to anyone with the code."
               />
             </section>
 
@@ -231,6 +263,46 @@ function SettingRow({
       <span className="ml-auto shrink-0 rounded-full border border-ink/10 bg-ink/[0.03] px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.1em] text-ink/40">
         Soon
       </span>
+    </div>
+  );
+}
+
+// A Private / Public segmented control. Controlled — `value` reflects the saved
+// preference (optimistically updated by the parent), `disabled` while a save is
+// in flight so a rapid double-toggle can't race.
+function VisibilitySegmented({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: "public" | "private";
+  disabled?: boolean;
+  onChange: (v: "public" | "private") => void;
+}) {
+  const opts: { key: "private" | "public"; label: string; icon: typeof Lock }[] = [
+    { key: "private", label: "Private", icon: Lock },
+    { key: "public", label: "Public", icon: Globe },
+  ];
+  return (
+    <div className="inline-flex shrink-0 rounded-lg border border-ink/10 bg-ink/[0.03] p-0.5">
+      {opts.map(({ key, label, icon: Icon }) => {
+        const active = value === key;
+        return (
+          <button
+            key={key}
+            type="button"
+            disabled={disabled}
+            aria-pressed={active}
+            onClick={() => onChange(key)}
+            className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+              active ? "bg-paper text-ink shadow-sm" : "text-ink/50 hover:text-ink"
+            }`}
+          >
+            <Icon className="h-3.5 w-3.5" />
+            {label}
+          </button>
+        );
+      })}
     </div>
   );
 }
