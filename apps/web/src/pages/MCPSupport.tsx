@@ -34,16 +34,7 @@ const INSTALL_METHODS: InstallMethod[] = [
       "Don't install anything — your MCP client fetches and runs the package on demand. Works in any MCP-aware client (Claude Code, Cursor, Codex, custom).",
     steps: [
       {
-        text: "Paste this into your MCP client config. That's it — npx fetches the package the first time it runs.",
-        lang: "json",
-        code: `{
-  "mcpServers": {
-    "tandem": {
-      "command": "npx",
-      "args": ["-y", "@jaximus/tandem-mcp"]
-    }
-  }
-}`,
+        text: "Nothing to install. npx fetches and runs the package the first time your client launches it — so the whole setup is just the client config in the wiring step below.",
       },
     ],
   },
@@ -59,15 +50,7 @@ const INSTALL_METHODS: InstallMethod[] = [
         code: "npm install -g @jaximus/tandem-mcp",
       },
       {
-        text: "Then in your MCP client config:",
-        lang: "json",
-        code: `{
-  "mcpServers": {
-    "tandem": {
-      "command": "tandem-mcp"
-    }
-  }
-}`,
+        text: "That puts a `tandem-mcp` binary on your PATH. In the wiring step below, use `\"command\": \"tandem-mcp\"` with no `args` instead of the npx form.",
       },
     ],
   },
@@ -251,6 +234,72 @@ await client.callTool({
   },
 ];
 
+// Clients that can connect straight to the hosted Streamable-HTTP endpoint by
+// URL — no local process, no npm package. This is the recommended path for the
+// editors/agents that support remote MCP servers. Codex (stdio-only today) is
+// intentionally absent; it lives in CLIENT_TABS with the local gateway.
+const REMOTE_CLIENTS: ClientTab[] = [
+  {
+    id: "claude-code",
+    label: "Claude Code",
+    blurb:
+      "One command — Claude Code speaks the Streamable-HTTP transport natively.",
+    config: `claude mcp add --transport http tandem https://tandemcanvas.com/api/mcp`,
+  },
+  {
+    id: "cursor",
+    label: "Cursor / Windsurf",
+    blurb:
+      "A remote server in the client's MCP settings is just a `url` — no command to spawn.",
+    config: `{
+  "mcpServers": {
+    "tandem": {
+      "url": "https://tandemcanvas.com/api/mcp"
+    }
+  }
+}`,
+  },
+  {
+    id: "openai-agents",
+    label: "OpenAI Agents SDK",
+    blurb:
+      "Use the Streamable-HTTP server class. The canvas.* tools show up as agent tools, same as the stdio form.",
+    config: `# Python
+from agents import Agent, Runner
+from agents.mcp import MCPServerStreamableHttp
+
+tandem = MCPServerStreamableHttp(
+    params={"url": "https://tandemcanvas.com/api/mcp"},
+)
+
+agent = Agent(
+    name="planner",
+    instructions="Use canvas.connect first, then build the trip on the canvas.",
+    mcp_servers=[tandem],
+)
+
+await Runner.run(agent, "Plan a 5-day Tokyo trip on canvas TOKYO7X3K")`,
+  },
+  {
+    id: "raw-http",
+    label: "Custom orchestrator",
+    blurb:
+      "Any MCP client SDK can connect to the URL with the Streamable-HTTP transport — no process to manage.",
+    config: `// TypeScript — @modelcontextprotocol/sdk
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+
+const transport = new StreamableHTTPClientTransport(
+  new URL("https://tandemcanvas.com/api/mcp"),
+);
+
+const client = new Client({ name: "my-orchestrator", version: "0.1.0" });
+await client.connect(transport);
+
+await client.callTool({ name: "canvas.connect", arguments: { code: "TOKYO7X3K" } });`,
+  },
+];
+
 const TOOLS = [
   {
     group: "Connection",
@@ -361,10 +410,12 @@ export default function MCPSupport({
   const [pathTab, setPathTab] = useState<"connector" | "gateway">("connector");
   const [installTab, setInstallTab] = useState<string>(INSTALL_METHODS[0].id);
   const [clientTab, setClientTab] = useState<string>(CLIENT_TABS[0].id);
+  const [remoteTab, setRemoteTab] = useState<string>(REMOTE_CLIENTS[0].id);
   const [copied, setCopied] = useState<string | null>(null);
 
   const activeInstall = INSTALL_METHODS.find((m) => m.id === installTab) ?? INSTALL_METHODS[0];
   const activeClient = CLIENT_TABS.find((t) => t.id === clientTab) ?? CLIENT_TABS[0];
+  const activeRemote = REMOTE_CLIENTS.find((t) => t.id === remoteTab) ?? REMOTE_CLIENTS[0];
 
   function copy(text: string, key: string) {
     navigator.clipboard.writeText(text).then(() => {
@@ -514,18 +565,92 @@ export default function MCPSupport({
           <div className="space-y-8">
             <div>
               <h2 className="font-display text-2xl font-medium tracking-tight text-gray-900">
-                Run the MCP gateway
+                Wire Tandem into your editor or agent
               </h2>
               <p className="mt-1 text-sm text-gray-500">
-                A stdio server for Claude Code, Cursor, Codex, the OpenAI Agents
-                SDK, and bespoke orchestrators.
+                Two ways in, same tool surface: point your client straight at the
+                hosted URL (nothing to install), or run the gateway as a local
+                process. Prefer the URL if your client supports it.
               </p>
             </div>
 
-          {/* 1. Install */}
+          {/* ── A. Remote URL (recommended) ─────────────────────────────────── */}
           <div className="space-y-4">
           <div>
-            <h2 className="font-display text-2xl font-medium tracking-tight text-gray-900">1. Install the gateway</h2>
+            <h3 className="flex items-center gap-2 font-display text-xl font-medium tracking-tight text-gray-900">
+              Connect by URL
+              <span className="text-[10px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded bg-sky-100 text-sky-700">
+                Recommended
+              </span>
+            </h3>
+            <p className="mt-1 text-sm text-gray-500">
+              For clients that support remote MCP servers. Point them at the
+              hosted Streamable-HTTP endpoint — no Node, no npx, nothing to
+              install.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2 rounded-lg border border-sky-200 bg-white py-1.5 pl-3 pr-1.5">
+            <span className="flex-1 truncate font-code text-sm text-gray-900">
+              {CONNECTOR_URL}
+            </span>
+            <button
+              onClick={() => copy(CONNECTOR_URL, "gateway-url")}
+              className="shrink-0 rounded-md bg-gray-900 px-2.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-gray-700"
+            >
+              {copied === "gateway-url" ? "Copied!" : "Copy"}
+            </button>
+          </div>
+
+          <div className="flex flex-wrap gap-1.5">
+            {REMOTE_CLIENTS.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => setRemoteTab(t.id)}
+                className={[
+                  "px-3 py-1.5 rounded-md text-sm font-medium transition-colors",
+                  remoteTab === t.id
+                    ? "bg-gray-900 text-white"
+                    : "bg-white border border-gray-200 text-gray-600 hover:bg-gray-50",
+                ].join(" ")}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-3">
+            <p className="text-sm text-gray-600">{activeRemote.blurb}</p>
+            <CodeBlock
+              code={activeRemote.config}
+              copyKey={`remote-${activeRemote.id}`}
+              copied={copied}
+              onCopy={copy}
+            />
+          </div>
+          <p className="text-xs text-gray-400">
+            Client not listed, stdio-only (e.g. Codex), or pointing at a
+            self-hosted backend? Use the local gateway below.
+          </p>
+          </div>
+
+          {/* ── B. Local stdio gateway (fallback) ───────────────────────────── */}
+          <div className="space-y-8 border-t border-gray-200 pt-8">
+            <div>
+              <h3 className="font-display text-xl font-medium tracking-tight text-gray-900">
+                Or run the local stdio gateway
+              </h3>
+              <p className="mt-1 text-sm text-gray-500">
+                A stdio server you run locally — for clients that only speak
+                stdio, or when you want to point at a self-hosted{" "}
+                <span className="font-medium text-gray-500">API_URL</span>.
+              </p>
+            </div>
+
+          {/* Install */}
+          <div className="space-y-4">
+          <div>
+            <h4 className="font-display text-lg font-medium tracking-tight text-gray-900">Install the gateway</h4>
             <p className="mt-1 text-sm text-gray-500">
               Pick whichever fits your setup — the npx form is the easiest and
               works for almost everyone.
@@ -589,10 +714,10 @@ export default function MCPSupport({
           </div>
           </div>
 
-          {/* 2. Wire */}
+          {/* Wire */}
           <div id="wire" className="space-y-4 scroll-mt-20">
           <div>
-            <h2 className="font-display text-2xl font-medium tracking-tight text-gray-900">2. Wire it into your client</h2>
+            <h4 className="font-display text-lg font-medium tracking-tight text-gray-900">Wire it into your client</h4>
             <p className="mt-1 text-sm text-gray-500">
               These snippets all use the npx form. Swap to <span className="font-code text-xs">tandem-mcp</span>{" "}
               if you installed globally, or to a full path if you built from source.
@@ -626,10 +751,11 @@ export default function MCPSupport({
             />
           </div>
           </div>
+          </div>
 
-          {/* 3. Connect */}
+          {/* Connect — shared by both paths */}
           <div id="connect" className="space-y-3 scroll-mt-20">
-          <h2 className="font-display text-2xl font-medium tracking-tight text-gray-900">3. Connect to a canvas</h2>
+          <h2 className="font-display text-2xl font-medium tracking-tight text-gray-900">Connect to a canvas</h2>
           <p className="text-sm text-gray-600 leading-relaxed">
             Create a canvas in your browser (it'll give you an 8-character code
             like <span className="font-code text-xs">TOKYO7X3K</span>), then tell your
