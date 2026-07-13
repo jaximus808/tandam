@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { listRecent, removeRecent } from "../lib/recentCanvases";
-import { fetchMe, GOOGLE_CLIENT_ID, type User } from "../lib/auth";
+import { fetchMe, getCachedUser, GOOGLE_CLIENT_ID, type User } from "../lib/auth";
 import TandemLogo from "../components/TandemLogo";
-import AccountMenu from "../components/AccountMenu";
+import LandingNav from "../components/LandingNav";
 import CanvasLauncher from "../components/CanvasLauncher";
 import SignInModal from "../components/SignInModal";
 
@@ -25,7 +25,6 @@ interface Props {
    lockstep. `sceneIdx` lives up here in the page so everything stays in sync.
    ───────────────────────────────────────────────────────────────────────────── */
 
-const INK = "#1C1917";
 const AGENT = "#C75B39";
 
 interface Accent {
@@ -320,7 +319,7 @@ function PointerGlyph({ color }: { color: string }) {
       <path
         d="M2 1.5l13.5 6.2-5.6 1.6-2 5.7z"
         fill={color}
-        stroke="#fff"
+        className="stroke-paper"
         strokeWidth="1.4"
         strokeLinejoin="round"
       />
@@ -330,11 +329,15 @@ function PointerGlyph({ color }: { color: string }) {
 
 /** A multiplayer name tag — square corners, mono, agent vs human colour. */
 function NameTag({ name, kind, color }: { name: string; kind: "human" | "agent"; color?: string }) {
-  const bg = color ?? (kind === "agent" ? AGENT : INK);
+  // Default human tag mirrors the real canvas "you" chip (bg-ink/text-paper) so
+  // it inverts with the theme; an explicit color (or the agent terracotta) is a
+  // fixed colored bg that keeps white text in both themes.
+  const inkText = !color && kind === "human";
+  const bg = color ?? (kind === "agent" ? AGENT : "rgb(var(--color-ink))");
   return (
     <span
-      className="inline-flex items-center gap-1 rounded-[3px] px-1.5 py-0.5 font-code text-[10px] font-medium leading-none text-white"
-      style={{ backgroundColor: bg }}
+      className="inline-flex items-center gap-1 rounded-[3px] px-1.5 py-0.5 font-code text-[10px] font-medium leading-none"
+      style={{ backgroundColor: bg, color: inkText ? "rgb(var(--color-paper))" : "#fff" }}
     >
       {kind === "agent" && <Icon name="spark" className="h-2.5 w-2.5" />}
       {name}
@@ -356,7 +359,7 @@ function RoamingCursor({
   className?: string;
   style?: React.CSSProperties;
 }) {
-  const color = kind === "agent" ? AGENT : INK;
+  const color = kind === "agent" ? AGENT : "rgb(var(--color-ink))";
   return (
     <div
       aria-hidden="true"
@@ -436,7 +439,7 @@ function Cursor({ editor, accent }: { editor: Editor; accent: Accent }) {
 function Pill({ label, accent, tone }: { label: string; accent: Accent; tone: "accent" | "done" | "muted" }) {
   if (tone === "done") {
     return (
-      <span className="inline-flex items-center gap-1 rounded-[3px] bg-emerald-50 px-2 py-0.5 font-code text-[9px] font-medium text-emerald-600">
+      <span className="inline-flex items-center gap-1 rounded-[3px] bg-emerald-500/15 px-2 py-0.5 font-code text-[9px] font-medium text-emerald-600">
         <Icon name="check" className="w-2.5 h-2.5" />
         done
       </span>
@@ -495,7 +498,7 @@ function OpsBody() {
           {col.cards.map((card) => (
             <div
               key={card.name}
-              className="rounded-md border border-ink/10 bg-white px-2.5 py-2"
+              className="rounded-md border border-ink/10 bg-surface px-2.5 py-2"
             >
               <div className="flex items-center gap-1.5">
                 <span
@@ -528,13 +531,13 @@ function BuildBody({ accent }: { accent: Accent }) {
       {rows.map((row) => (
         <div
           key={row.name}
-          className="flex items-center gap-2 rounded-md border border-ink/10 bg-white px-3 py-2"
+          className="flex items-center gap-2 rounded-md border border-ink/10 bg-surface px-3 py-2"
         >
           <span
             className="h-2.5 w-2.5 shrink-0 rounded-[3px]"
             style={{
               backgroundColor:
-                row.tone === "done" ? "#10B981" : row.tone === "accent" ? accent.solid : "#D6D3D1",
+                row.tone === "done" ? "#10B981" : row.tone === "accent" ? accent.solid : "rgb(var(--color-ink) / 0.25)",
             }}
           />
           <span className="flex-1 truncate text-[12px] font-medium text-ink/85">{row.name}</span>
@@ -568,10 +571,10 @@ function LifeBody({ accent }: { accent: Accent }) {
               {it.when}
             </span>
             <span
-              className="z-10 h-2.5 w-2.5 shrink-0 rounded-full ring-4 ring-white"
+              className="z-10 h-2.5 w-2.5 shrink-0 rounded-full ring-4 ring-surface"
               style={{ backgroundColor: it.color }}
             />
-            <div className="flex-1 rounded-md border border-ink/10 bg-white px-2.5 py-1.5">
+            <div className="flex-1 rounded-md border border-ink/10 bg-surface px-2.5 py-1.5">
               <div className="text-[11px] font-semibold text-ink/85">{it.what}</div>
               <div className="font-code text-[8.5px] text-ink/35">{it.note}</div>
             </div>
@@ -590,10 +593,7 @@ function ResearchBody({ accent }: { accent: Accent }) {
   ];
   return (
     <div className="flex h-full gap-3 p-4">
-      <div
-        className="relative flex-1 overflow-hidden rounded-md border border-ink/10"
-        style={{ background: "linear-gradient(135deg,#ecfdf5,#e0f2fe)" }}
-      >
+      <div className="morph-map relative flex-1 overflow-hidden rounded-md border border-ink/10">
         <div
           aria-hidden="true"
           className="tandem-grid-pan absolute inset-0 opacity-70"
@@ -617,7 +617,7 @@ function ResearchBody({ accent }: { accent: Accent }) {
                 />
                 <circle cx="9" cy="9" r="3.2" fill="#fff" />
               </svg>
-              <span className="mt-0.5 rounded-[3px] bg-white/90 px-1 py-0.5 font-code text-[8.5px] font-medium text-ink/70">
+              <span className="mt-0.5 rounded-[3px] bg-surface/90 px-1 py-0.5 font-code text-[8.5px] font-medium text-ink/70">
                 {p.label}
               </span>
             </div>
@@ -629,7 +629,7 @@ function ResearchBody({ accent }: { accent: Accent }) {
         {["Findings.md", "Shortlist", "Pricing grid"].map((d) => (
           <div
             key={d}
-            className="flex items-center gap-1.5 rounded-md border border-ink/10 bg-white px-2 py-1.5"
+            className="flex items-center gap-1.5 rounded-md border border-ink/10 bg-surface px-2 py-1.5"
           >
             <span style={{ color: accent.solid }}>
               <Icon name="docs" className="h-3 w-3" />
@@ -661,7 +661,7 @@ function OpFeed({ scene }: { scene: Scene }) {
   return (
     <div
       key={scene.key}
-      className="mt-3 overflow-hidden rounded-md border border-ink/15 bg-white"
+      className="mt-3 overflow-hidden rounded-md border border-ink/15 bg-surface"
     >
       <div className="flex items-center gap-2 border-b border-ink/10 bg-paper px-3 py-1.5">
         <span className="relative flex h-1.5 w-1.5">
@@ -683,7 +683,7 @@ function OpFeed({ scene }: { scene: Scene }) {
             <span className="text-ink/30">{line.t}</span>
             <span
               className="font-medium"
-              style={{ color: line.kind === "agent" ? AGENT : INK }}
+              style={{ color: line.kind === "agent" ? AGENT : "rgb(var(--color-ink))" }}
             >
               {line.actor}
             </span>
@@ -715,14 +715,12 @@ function MorphCanvas({
   const { accent } = scene;
 
   return (
-    // theme-light: the demo canvas is a hand-tuned illustration (hardcoded card
-    // colours, severity dots, map gradient) — pin it light so it reads as a
-    // bright product shot instead of half-flipping. dark:brightness knocks the
-    // pure-white slab down to a comfortable off-white on the dark page so it
-    // doesn't glare (the cards are hardcoded white, so a filter is the only lever
-    // that dims them all at once). Tailwind's `dark:` still keys off html.dark
-    // even inside the theme-light token scope.
-    <div className="theme-light relative w-full dark:brightness-[0.82]">
+    // The demo canvas follows the page theme so it previews the real dark
+    // worksurface visitors get (not a blinding white slab on the dark page).
+    // Card/title/tab surfaces use paper/surface/ink tokens that flip; scene
+    // accents (severity dots, pin colours) and the map gradient are theme-aware
+    // (the map via `.morph-map` in index.css).
+    <div className="relative w-full">
       {/* scene switcher — mono, like view tabs on a surface */}
       <div className="mb-3 flex flex-wrap gap-1.5">
         {SCENES.map((s, i) => {
@@ -735,7 +733,7 @@ function MorphCanvas({
                 "rounded-md border px-3 py-1 font-code text-[11px] font-medium transition-colors",
                 active
                   ? "border-ink bg-ink text-paper"
-                  : "border-ink/15 bg-white text-ink/50 hover:border-ink/35 hover:text-ink",
+                  : "border-ink/15 bg-surface text-ink/50 hover:border-ink/35 hover:text-ink",
               ].join(" ")}
             >
               {active && (
@@ -750,7 +748,7 @@ function MorphCanvas({
         })}
       </div>
 
-      <div className="relative overflow-hidden rounded-lg border-[1.5px] border-ink bg-white shadow-[8px_8px_0_rgba(28,25,23,0.10)]">
+      <div className="relative overflow-hidden rounded-lg border-[1.5px] border-ink bg-surface shadow-[8px_8px_0_rgba(28,25,23,0.10)]">
         {/* title bar */}
         <div className="flex items-center gap-2.5 border-b border-ink/10 bg-paper px-3.5 py-2">
           <span className="truncate font-display text-[13px] font-medium text-ink">
@@ -786,7 +784,7 @@ function MorphCanvas({
                 style={
                   active
                     ? { backgroundColor: accent.soft, color: accent.solid, boxShadow: `inset 0 0 0 1px ${accent.line}` }
-                    : { color: "rgba(28,25,23,0.35)" }
+                    : { color: "rgb(var(--color-ink) / 0.35)" }
                 }
               >
                 {m.toLowerCase()}
@@ -798,7 +796,7 @@ function MorphCanvas({
         {/* body — re-keyed on scene so it replays the entrance animation */}
         <div className="surface-grid-faint relative h-[300px]">
           {/* "editing" pill — bottom corner so it never covers the first row */}
-          <div className="absolute bottom-3 left-3 z-30 flex items-center gap-2 rounded-[4px] border border-ink/10 bg-white/95 px-2 py-1 backdrop-blur">
+          <div className="absolute bottom-3 left-3 z-30 flex items-center gap-2 rounded-[4px] border border-ink/10 bg-surface/95 px-2 py-1 backdrop-blur">
             <span className="relative flex h-1.5 w-1.5">
               <span className="tandem-ping absolute inline-flex h-full w-full rounded-full bg-agent opacity-70" />
               <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-agent" />
@@ -929,7 +927,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
   const [sceneIdx, setSceneIdx] = useState(0);
   const [launcher, setLauncher] = useState<null | "create" | "join">(null);
   const [recents, setRecents] = useState(() => listRecent());
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<User | null>(getCachedUser);
   const [signInOpen, setSignInOpen] = useState(false);
   const [canvasCount, setCanvasCount] = useState<number | null>(null);
 
@@ -979,68 +977,22 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
   }
 
   return (
-    // The page follows the global theme (light/dark). Two things stay pinned to
-    // the light palette with `theme-light`: the hardcoded hero illustration
-    // (MorphCanvas) reads as a bright product shot, and the intentionally-dark
-    // bands (bg-ink text-paper) would otherwise INVERT to light in dark mode.
+    // The page follows the global theme (light/dark). The hero illustration
+    // (MorphCanvas) now follows the theme too, so it previews the real dark
+    // worksurface. What stays pinned with `theme-light`: the intentionally-dark
+    // bands (bg-ink text-paper) that would otherwise INVERT to light in dark mode.
     <div className="min-h-screen overflow-x-clip scroll-smooth bg-paper font-brand text-ink [text-rendering:optimizeLegibility] antialiased">
-      {/* Nav */}
-      <header className="sticky top-0 z-40 border-b border-ink/10 bg-paper/85 backdrop-blur">
-        <div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-6">
-          <div className="flex items-center gap-2 text-[16px] font-semibold tracking-tight">
-            <TandemLogo size={32} />
-            <span>Tandem</span>
-            <span className="ml-1 hidden items-center gap-1.5 rounded-[3px] border border-ink/10 px-1.5 py-0.5 font-code text-[9px] uppercase tracking-[0.14em] text-ink/40 md:inline-flex">
-              <span className="relative flex h-1 w-1">
-                <span className="tandem-ping absolute inline-flex h-full w-full rounded-full bg-agent opacity-70" />
-                <span className="relative inline-flex h-1 w-1 rounded-full bg-agent" />
-              </span>
-              multiplayer
-            </span>
-          </div>
-          <nav className="ml-auto flex items-center gap-1 text-sm sm:gap-1.5">
-            <a
-              href="#use-cases"
-              className="hidden rounded-md px-3 py-1.5 text-ink/55 transition-colors hover:bg-ink/5 hover:text-ink sm:inline"
-            >
-              Use cases
-            </a>
-            <a
-              href="#modes"
-              className="hidden rounded-md px-3 py-1.5 text-ink/55 transition-colors hover:bg-ink/5 hover:text-ink sm:inline"
-            >
-              Modes
-            </a>
-            <button
-              onClick={onAbout}
-              className="hidden rounded-md px-3 py-1.5 text-ink/55 transition-colors hover:bg-ink/5 hover:text-ink sm:inline"
-            >
-              About
-            </button>
-            <button
-              onClick={onOpenMCP}
-              className="rounded-md px-3 py-1.5 font-medium text-ink/80 transition-colors hover:bg-ink/5"
-            >
-              Connect an agent
-            </button>
-            {user && (
-              <button
-                onClick={onShowCanvases}
-                className="inline-flex items-center gap-1.5 rounded-md border-[1.5px] border-ink bg-surface px-3 py-1.5 font-medium text-ink shadow-[2px_2px_0_rgba(28,25,23,0.15)] transition-transform hover:-translate-y-px"
-              >
-                Dashboard
-                <Icon name="arrow" className="h-3.5 w-3.5" />
-              </button>
-            )}
-            <AccountMenu
-              onShowCanvases={onShowCanvases}
-              onShowSettings={onShowSettings}
-              onUserChange={setUser}
-              onOpenCanvas={onJoin}
-            />
-          </nav>
-        </div>
-      </header>
+      {/* Nav — shared across Landing / MCP / About via LandingNav. */}
+      <LandingNav
+        onHome={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+        onJoin={onJoin}
+        onOpenMCP={onOpenMCP}
+        onShowCanvases={onShowCanvases}
+        onShowSettings={onShowSettings}
+        onAbout={onAbout}
+        onUserChange={setUser}
+        samePageAnchors
+      />
 
       {/* Hero — the worksurface */}
       <section className="relative overflow-hidden">

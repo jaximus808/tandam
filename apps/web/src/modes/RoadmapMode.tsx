@@ -106,7 +106,7 @@ function PhaseNameDialog({
   return (
     <div className="fixed inset-0 z-[2000] flex items-start justify-center pt-[18vh]" role="dialog" aria-modal="true">
       <div className="absolute inset-0 bg-ink/25 backdrop-blur-[1px]" onClick={onClose} />
-      <div className="relative w-[340px] max-w-[92vw] rounded-2xl border border-ink/10 bg-white p-4 shadow-[4px_6px_0_rgba(17,17,17,0.08)]">
+      <div className="relative w-[340px] max-w-[92vw] rounded-2xl border border-ink/10 bg-surface p-4 shadow-[4px_6px_0_rgba(17,17,17,0.08)]">
         <h3 className="text-sm font-semibold text-ink">{title}</h3>
         <input
           autoFocus
@@ -117,7 +117,7 @@ function PhaseNameDialog({
             if (e.key === "Escape") onClose();
           }}
           placeholder="e.g. Now, Next, Later, v1, v2"
-          className="mt-2.5 w-full rounded-lg border border-ink/15 bg-white px-2.5 py-1.5 text-sm text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
+          className="mt-2.5 w-full rounded-lg border border-ink/15 bg-surface px-2.5 py-1.5 text-sm text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
         />
         {hint && <p className="mt-1.5 text-[11px] leading-snug text-ink/40">{hint}</p>}
         <div className="mt-3 flex justify-end gap-1.5">
@@ -396,7 +396,7 @@ export default function RoadmapMode({ state, code, readOnly }: Props) {
       <div className="shrink-0 max-w-5xl mx-auto w-full px-4 pt-6 pb-3 sm:px-6">
         <div className="flex items-center justify-between gap-2 mb-3">
           <div className="flex min-w-0 items-center gap-2 sm:gap-3">
-            <h1 className="font-display text-xl font-medium tracking-tight text-gray-900">Roadmap</h1>
+            <h1 className="font-display text-xl font-medium tracking-tight text-ink">Roadmap</h1>
             <ViewToggle view={view} onChange={setView} />
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
@@ -427,15 +427,15 @@ export default function RoadmapMode({ state, code, readOnly }: Props) {
           </div>
         </div>
 
-        <div className="flex items-center flex-wrap gap-x-4 gap-y-1 px-2 py-1.5 text-xs text-gray-500 bg-gray-100/70 rounded-md border border-gray-200">
-          <span className="font-medium text-gray-600">Legend:</span>
+        <div className="flex items-center flex-wrap gap-x-4 gap-y-1 px-2 py-1.5 text-xs text-ink/55 bg-ink/10 rounded-md border border-ink/15">
+          <span className="font-medium text-ink/60">Legend:</span>
           {STATUS_CYCLE.map((s) => (
             <span key={s} className="inline-flex items-center gap-1.5">
               <StatusIcon status={s} />
               <span>{STATUS_LABELS[s]}</span>
             </span>
           ))}
-          <span className="ml-auto text-gray-400">
+          <span className="ml-auto text-ink/40">
             {view === "board"
               ? "Click a title to edit · click a status icon to cycle · + adds a sub-item"
               : "Drag rows to reorder · drag across a phase to re-file · click icon to cycle"}
@@ -531,13 +531,13 @@ function ViewToggle({
   onChange: (v: "list" | "board") => void;
 }) {
   return (
-    <div className="inline-flex rounded-lg border border-gray-300 overflow-hidden text-xs font-medium">
+    <div className="inline-flex rounded-lg border border-ink/20 overflow-hidden text-xs font-medium">
       {(["board", "list"] as const).map((v) => (
         <button
           key={v}
           onClick={() => onChange(v)}
           className={`px-2.5 py-1 capitalize transition-colors ${
-            view === v ? "text-white" : "bg-white text-gray-600 hover:bg-gray-50"
+            view === v ? "text-white" : "bg-surface text-ink/60 hover:bg-ink/5"
           }`}
           style={view === v ? { backgroundColor: ACCENT.solid } : undefined}
         >
@@ -659,7 +659,7 @@ function Row({
 
   return (
     <div
-      className="group relative flex items-center gap-1.5 py-1 pr-2 rounded hover:bg-gray-50"
+      className="group relative flex items-center gap-1.5 py-1 pr-2 rounded hover:bg-ink/5"
       style={{ paddingLeft: depth * INDENT_PX + 4 }}
     >
       {/* Indent guide lines for each ancestor depth */}
@@ -667,7 +667,7 @@ function Row({
         <span
           key={i}
           aria-hidden
-          className="absolute top-0 bottom-0 w-px bg-gray-200"
+          className="absolute top-0 bottom-0 w-px bg-ink/10"
           style={{ left: i * INDENT_PX + 14 }}
         />
       ))}
@@ -675,7 +675,7 @@ function Row({
       {depth > 0 && (
         <span
           aria-hidden
-          className="absolute h-px w-3 bg-gray-300"
+          className="absolute h-px w-3 bg-ink/20"
           style={{ left: (depth - 1) * INDENT_PX + 14, top: 14 }}
         />
       )}
@@ -684,7 +684,7 @@ function Row({
       <button
         {...dragAttributes}
         {...dragListeners}
-        className="shrink-0 w-4 h-4 flex items-center justify-center text-gray-300 hover:text-gray-600 cursor-grab active:cursor-grabbing touch-none"
+        className="shrink-0 w-4 h-4 flex items-center justify-center text-ink/30 hover:text-ink/60 cursor-grab active:cursor-grabbing touch-none"
         aria-label="Drag to reorder"
         title="Drag to reorder"
       >
@@ -702,7 +702,7 @@ function Row({
       {hasChildren ? (
         <button
           onClick={onToggleCollapse}
-          className="shrink-0 w-4 h-4 flex items-center justify-center text-gray-400 hover:text-gray-700"
+          className="shrink-0 w-4 h-4 flex items-center justify-center text-ink/40 hover:text-ink/70"
           aria-label={collapsed ? "Expand" : "Collapse"}
         >
           <svg
@@ -749,16 +749,16 @@ function Row({
             }
           }}
           placeholder="Untitled item"
-          className="flex-1 text-sm text-gray-900 bg-transparent focus:outline-none border-b border-blue-300"
+          className="flex-1 text-sm text-ink bg-transparent focus:outline-none border-b border-blue-300"
         />
       ) : (
         <span
           onClick={() => setEditing(true)}
           className={`flex-1 cursor-text ${
-            status === "done" ? "text-gray-500 line-through decoration-gray-400" : "text-gray-900"
+            status === "done" ? "text-ink/55 line-through decoration-ink/40" : "text-ink"
           } ${hasChildren ? "font-medium" : ""}`}
         >
-          {item.title || <span className="text-gray-400 italic font-normal">Untitled item</span>}
+          {item.title || <span className="text-ink/40 italic font-normal">Untitled item</span>}
         </span>
       )}
 
@@ -770,7 +770,7 @@ function Row({
           className={`shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded transition-colors ${
             item.stage?.trim()
               ? ""
-              : "opacity-0 group-hover:opacity-100 border border-dashed border-gray-300 text-gray-400 hover:text-gray-700"
+              : "opacity-0 group-hover:opacity-100 border border-dashed border-ink/20 text-ink/40 hover:text-ink/70"
           }`}
           style={item.stage?.trim() ? { backgroundColor: ACCENT.soft, color: ACCENT.hover } : undefined}
           title="Set the phase for this goal"
@@ -792,14 +792,14 @@ function Row({
       <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
         <button
           onClick={onAddChild}
-          className="text-xs text-gray-500 hover:text-blue-600 px-1.5 py-0.5 rounded hover:bg-blue-50"
+          className="text-xs text-ink/55 hover:text-blue-600 px-1.5 py-0.5 rounded hover:bg-blue-500/10"
           title="Add child item"
         >
           + child
         </button>
         <button
           onClick={handleDelete}
-          className="text-gray-400 hover:text-red-600 px-1.5 py-0.5 rounded hover:bg-red-50"
+          className="text-ink/40 hover:text-red-600 px-1.5 py-0.5 rounded hover:bg-red-500/10"
           title="Delete item"
         >
           <svg width="12" height="12" viewBox="0 0 12 12">
@@ -819,7 +819,7 @@ function Row({
 // A second view over the same roadmap items — no schema change.
 
 const STATUS_ACCENT: Record<RoadmapStatus, string> = {
-  todo: "bg-gray-300",
+  todo: "bg-ink/20",
   in_progress: "bg-blue-400",
   done: "bg-green-400",
   blocked: "bg-red-400",
@@ -903,16 +903,16 @@ function RoadmapBoard({ items }: { items: Record<string, RoadmapItem> }) {
             <div className="flex items-center gap-2 mb-2">
               <h2
                 className="text-xs font-semibold uppercase tracking-wider"
-                style={{ color: g.stage ? ACCENT.solid : "#9ca3af" }}
+                style={{ color: g.stage ? ACCENT.solid : "rgb(var(--color-ink) / 0.4)" }}
               >
                 {g.stage ?? "No stage"}
               </h2>
-              <span className="text-[11px] text-gray-400">
+              <span className="text-[11px] text-ink/40">
                 {g.roots.length} {g.roots.length === 1 ? "goal" : "goals"}
               </span>
               <span
                 className="flex-1 h-px"
-                style={{ backgroundColor: g.stage ? ACCENT.line : "#e5e7eb" }}
+                style={{ backgroundColor: g.stage ? ACCENT.line : "rgb(var(--color-ink) / 0.12)" }}
               />
             </div>
             <div className="tandem-scroll flex gap-4 overflow-x-auto pb-1 items-start">
@@ -956,7 +956,7 @@ function StageSelect({ item, stages }: { item: RoadmapItem; stages: string[] }) 
         value={current}
         onChange={onChange}
         title="Phase / stage for this goal"
-        className="max-w-full text-[11px] rounded border border-gray-200 bg-gray-50 px-1.5 py-0.5 text-gray-600 hover:border-gray-300 focus:outline-none"
+        className="max-w-full text-[11px] rounded border border-ink/15 bg-ink/5 px-1.5 py-0.5 text-ink/60 hover:border-ink/20 focus:outline-none"
         style={current ? { color: ACCENT.hover, borderColor: ACCENT.line } : undefined}
       >
         <option value="">No stage</option>
@@ -1024,19 +1024,19 @@ function RoadmapColumn({
   return (
     <div
       data-agent-target={root.id}
-      className={`w-72 shrink-0 flex flex-col rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden ${
+      className={`w-72 shrink-0 flex flex-col rounded-xl border border-ink/15 bg-surface shadow-sm overflow-hidden ${
         compact ? "max-h-[26rem]" : "max-h-full"
       }`}
     >
       <div className={`h-1 shrink-0 ${STATUS_ACCENT[status]}`} />
-      <div className="group shrink-0 px-3 pt-2.5 pb-3 border-b border-gray-100">
+      <div className="group shrink-0 px-3 pt-2.5 pb-3 border-b border-ink/10">
         <div className="flex items-start gap-2">
           <StatusButton item={root} className="mt-0.5" />
           <EditableTitle
             item={root}
             placeholder="Untitled goal"
             className={`flex-1 min-w-0 text-sm font-semibold leading-snug ${
-              status === "done" ? "line-through decoration-gray-400 text-gray-500" : "text-gray-900"
+              status === "done" ? "line-through decoration-ink/40 text-ink/55" : "text-ink"
             }`}
           />
           <div className="flex shrink-0 items-center gap-1">
@@ -1045,7 +1045,7 @@ function RoadmapColumn({
               onClick={deleteGoal}
               title="Delete goal"
               aria-label="Delete goal"
-              className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-600 transition-opacity"
+              className="opacity-0 group-hover:opacity-100 text-ink/30 hover:text-red-600 transition-opacity"
             >
               <svg width="12" height="12" viewBox="0 0 12 12">
                 <path d="M3 3 L 9 9 M 9 3 L 3 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
@@ -1064,7 +1064,7 @@ function RoadmapColumn({
         ))}
         <button
           onClick={addSubItem}
-          className="mt-0.5 flex items-center gap-1 self-start rounded px-2 py-1 text-xs text-gray-400 transition-colors hover:bg-gray-50 hover:text-gray-700"
+          className="mt-0.5 flex items-center gap-1 self-start rounded px-2 py-1 text-xs text-ink/40 transition-colors hover:bg-ink/5 hover:text-ink/70"
         >
           + Add sub-item
         </button>
@@ -1100,15 +1100,15 @@ function BoardRow({
   return (
     <div
       data-agent-target={item.id}
-      className="group flex items-start gap-1.5 py-1 pr-1.5 rounded hover:bg-gray-50"
+      className="group flex items-start gap-1.5 py-1 pr-1.5 rounded hover:bg-ink/5"
       style={{ paddingLeft: 6 + depth * 16 }}
     >
-      {depth > 0 && <span aria-hidden className="self-stretch w-px bg-gray-200 ml-0.5 mr-0.5" />}
+      {depth > 0 && <span aria-hidden className="self-stretch w-px bg-ink/10 ml-0.5 mr-0.5" />}
       <StatusButton item={item} className="mt-0.5" />
       <EditableTitle
         item={item}
         className={`flex-1 min-w-0 text-xs leading-snug ${
-          status === "done" ? "line-through decoration-gray-400 text-gray-400" : "text-gray-700"
+          status === "done" ? "line-through decoration-ink/40 text-ink/40" : "text-ink/70"
         }`}
       />
       <AgentControls item={item} size="xs" />
@@ -1117,7 +1117,7 @@ function BoardRow({
           onClick={addChild}
           title="Add sub-item"
           aria-label="Add sub-item"
-          className="rounded px-1 text-xs text-gray-400 hover:bg-blue-50 hover:text-blue-600"
+          className="rounded px-1 text-xs text-ink/40 hover:bg-blue-500/10 hover:text-blue-600"
         >
           +
         </button>
@@ -1125,7 +1125,7 @@ function BoardRow({
           onClick={del}
           title="Delete item"
           aria-label="Delete item"
-          className="rounded px-0.5 text-gray-400 hover:bg-red-50 hover:text-red-600"
+          className="rounded px-0.5 text-ink/40 hover:bg-red-500/10 hover:text-red-600"
         >
           <svg width="11" height="11" viewBox="0 0 12 12">
             <path d="M3 3 L 9 9 M 9 3 L 3 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
@@ -1140,13 +1140,13 @@ function ProgressBar({ done, total }: { done: number; total: number }) {
   const pct = total > 0 ? Math.round((done / total) * 100) : 0;
   return (
     <div className="mt-2">
-      <div className="flex items-center justify-between text-[10px] text-gray-400 mb-0.5">
+      <div className="flex items-center justify-between text-[10px] text-ink/40 mb-0.5">
         <span>
           {done}/{total} done
         </span>
         <span className="tabular-nums">{pct}%</span>
       </div>
-      <div className="h-1 rounded-full bg-gray-100 overflow-hidden">
+      <div className="h-1 rounded-full bg-ink/10 overflow-hidden">
         <div className="h-full bg-green-400 transition-all" style={{ width: `${pct}%` }} />
       </div>
     </div>
@@ -1191,10 +1191,9 @@ function AgentTaskToggle({ item, size = "sm" }: { item: RoadmapItem; size?: "sm"
       onClick={toggle}
       className={`shrink-0 inline-flex items-center gap-1 font-medium rounded transition-colors ${pad} ${
         isAgent
-          ? ""
-          : "opacity-0 group-hover:opacity-100 border border-dashed border-gray-300 text-gray-400 hover:text-gray-700"
+          ? "bg-sky-500/10 text-sky-600"
+          : "opacity-0 group-hover:opacity-100 border border-dashed border-ink/20 text-ink/40 hover:text-ink/70"
       }`}
-      style={isAgent ? { backgroundColor: "#0EA5E914", color: "#0369A1" } : undefined}
       title={isAgent ? "Agent task — click to unmark" : "Mark as an agent task"}
     >
       <Bot size={size === "xs" ? 10 : 11} />
@@ -1221,7 +1220,7 @@ function AgentControls({ item, size = "sm" }: { item: RoadmapItem; size?: "sm" |
       {isAgent && ctx && !ctx.readOnly && (
         tasked ? (
           <span
-            className="inline-flex shrink-0 items-center gap-1 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700"
+            className="inline-flex shrink-0 items-center gap-1 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600"
             title={`${linked.length} agent task${linked.length > 1 ? "s" : ""} linked — open the Tasks panel to see ${linked.length > 1 ? "them" : "it"}`}
           >
             <Check size={icon} />
@@ -1233,7 +1232,7 @@ function AgentControls({ item, size = "sm" }: { item: RoadmapItem; size?: "sm" |
               e.stopPropagation();
               ctx.openCreateTask(item);
             }}
-            className="inline-flex shrink-0 items-center gap-1 rounded border border-dashed border-sky-300 px-1.5 py-0.5 text-[10px] font-medium text-sky-600 transition-colors hover:bg-sky-50 hover:text-sky-700"
+            className="inline-flex shrink-0 items-center gap-1 rounded border border-dashed border-sky-300 px-1.5 py-0.5 text-[10px] font-medium text-sky-600 transition-colors hover:bg-sky-500/10 hover:text-sky-700"
             title="Create an agent task from this item — born ready, no approval needed"
           >
             <Plus size={icon} />
@@ -1288,7 +1287,7 @@ function CreateTaskDialog({
       aria-modal="true"
     >
       <div className="absolute inset-0 bg-ink/25 backdrop-blur-[1px]" onClick={onClose} />
-      <div className="relative w-[440px] max-w-[92vw] rounded-2xl border border-ink/10 bg-white p-4 shadow-[4px_6px_0_rgba(17,17,17,0.08)]">
+      <div className="relative w-[440px] max-w-[92vw] rounded-2xl border border-ink/10 bg-surface p-4 shadow-[4px_6px_0_rgba(17,17,17,0.08)]">
         <div className="flex items-center gap-2">
           <Bot size={15} style={{ color: ACCENT.solid }} />
           <h3 className="text-sm font-semibold text-ink">Create agent task</h3>
@@ -1305,14 +1304,14 @@ function CreateTaskDialog({
             if (e.key === "Escape") onClose();
           }}
           placeholder="What should the agent do?"
-          className="mt-2.5 w-full rounded-lg border border-ink/15 bg-white px-2.5 py-1.5 text-sm text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
+          className="mt-2.5 w-full rounded-lg border border-ink/15 bg-surface px-2.5 py-1.5 text-sm text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
         />
         <textarea
           value={body}
           onChange={(e) => setBody(e.target.value)}
           placeholder="Brief: what, why, acceptance criteria (optional)"
           rows={4}
-          className="mt-2 w-full resize-none rounded-lg border border-ink/15 bg-white px-2.5 py-1.5 text-[13px] text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
+          className="mt-2 w-full resize-none rounded-lg border border-ink/15 bg-surface px-2.5 py-1.5 text-[13px] text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
         />
         <div className="mt-2 inline-flex max-w-full items-center gap-1 rounded-[4px] border border-ink/10 bg-ink/[0.03] px-1.5 py-0.5 text-[10px] text-ink/50">
           <Link2 size={10} className="shrink-0" />
@@ -1407,7 +1406,7 @@ function EditableTitle({
       }}
       className={`cursor-text ${className}`}
     >
-      {item.title || <span className="text-gray-400 italic font-normal">{placeholder}</span>}
+      {item.title || <span className="text-ink/40 italic font-normal">{placeholder}</span>}
     </span>
   );
 }
@@ -1499,22 +1498,22 @@ function SectionHeader({
         onClick={() => setRenameOpen(true)}
         disabled={!onRename}
         className={`text-xs font-semibold uppercase tracking-wider ${onRename ? "hover:underline" : "cursor-default"}`}
-        style={{ color: stage ? ACCENT.solid : "#9ca3af" }}
+        style={{ color: stage ? ACCENT.solid : "rgb(var(--color-ink) / 0.4)" }}
         title={onRename ? "Rename phase" : undefined}
       >
         {stage ?? "No phase"}
       </button>
-      <span className="text-[11px] text-gray-400">
+      <span className="text-[11px] text-ink/40">
         {count} {count === 1 ? "goal" : "goals"}
       </span>
       <span
         className="h-px flex-1"
-        style={{ backgroundColor: stage ? ACCENT.line : "#e5e7eb" }}
+        style={{ backgroundColor: stage ? ACCENT.line : "rgb(var(--color-ink) / 0.12)" }}
       />
       <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover/hdr:opacity-100">
         <button
           onClick={onAddGoal}
-          className="rounded px-1.5 py-0.5 text-[11px] text-gray-500 hover:bg-gray-100 hover:text-gray-800"
+          className="rounded px-1.5 py-0.5 text-[11px] text-ink/55 hover:bg-ink/10 hover:text-ink/80"
           title="Add a goal to this phase"
         >
           + goal
@@ -1522,7 +1521,7 @@ function SectionHeader({
         {onClear && (
           <button
             onClick={onClear}
-            className="rounded px-1.5 py-0.5 text-[11px] text-gray-400 hover:bg-red-50 hover:text-red-600"
+            className="rounded px-1.5 py-0.5 text-[11px] text-ink/40 hover:bg-red-500/10 hover:text-red-600"
             title="Dissolve phase (unstage its goals)"
           >
             dissolve

@@ -12,13 +12,53 @@ export interface User {
 export const GOOGLE_CLIENT_ID = (import.meta.env as Record<string, string | undefined>)
   .VITE_GOOGLE_CLIENT_ID;
 
+// Optimistic identity cache. Every page mount used to start from `null` and
+// flip to the real user once /api/auth/me resolved — a disorienting logged-out→
+// logged-in flash on each navigation. We instead persist the last-known user and
+// hydrate initial state from it synchronously (see getCachedUser), so the signed-
+// in chrome paints immediately and fetchMe only reconciles differences (e.g. a
+// changed avatar) or clears it on a definitive sign-out.
+const USER_CACHE_KEY = "tandem.user";
+
+// The last user the server confirmed, read synchronously — pass as the lazy
+// initializer to useState so components render signed-in on first paint.
+export function getCachedUser(): User | null {
+  try {
+    const raw = localStorage.getItem(USER_CACHE_KEY);
+    return raw ? (JSON.parse(raw) as User) : null;
+  } catch {
+    return null;
+  }
+}
+
+function cacheUser(user: User | null): void {
+  try {
+    if (user) localStorage.setItem(USER_CACHE_KEY, JSON.stringify(user));
+    else localStorage.removeItem(USER_CACHE_KEY);
+  } catch {
+    /* storage disabled / over quota — cache is best-effort */
+  }
+}
+
 export async function fetchMe(): Promise<User | null> {
   try {
     const res = await fetch("/api/auth/me", { credentials: "same-origin" });
-    if (!res.ok) return null;
-    return (await res.json()) as User;
+    if (res.ok) {
+      const user = (await res.json()) as User;
+      cacheUser(user);
+      return user;
+    }
+    // A definitive "not authenticated" is the only thing that clears the cache —
+    // this is the server "correcting" us to logged-out. Any other non-OK status
+    // (5xx, proxy hiccup) is treated as transient: keep the last-known identity.
+    if (res.status === 401 || res.status === 403) {
+      cacheUser(null);
+      return null;
+    }
+    return getCachedUser();
   } catch {
-    return null;
+    // Network error — don't flap to logged-out; hold the optimistic identity.
+    return getCachedUser();
   }
 }
 
@@ -33,11 +73,17 @@ export async function loginWithGoogle(credential: string): Promise<User> {
     const detail = await res.text().catch(() => "");
     throw new Error(detail || "Sign-in failed");
   }
-  return (await res.json()) as User;
+  const user = (await res.json()) as User;
+  cacheUser(user);
+  return user;
 }
 
 export async function logout(): Promise<void> {
-  await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" });
+  try {
+    await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" });
+  } finally {
+    cacheUser(null);
+  }
 }
 
 // ── Google Identity Services loader ──────────────────────────────────────────

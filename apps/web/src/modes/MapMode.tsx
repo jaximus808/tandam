@@ -539,7 +539,7 @@ export default function MapMode({
 
   if (loading) {
     return (
-      <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">
+      <div className="flex-1 flex items-center justify-center text-ink/40 text-sm">
         Loading map…
       </div>
     );
@@ -548,9 +548,9 @@ export default function MapMode({
   if (error || !map) {
     return (
       <div className="flex-1 flex items-center justify-center text-sm">
-        <div className="bg-white rounded-xl border border-red-100 px-6 py-4 text-center">
+        <div className="bg-surface rounded-xl border border-red-100 px-6 py-4 text-center">
           <p className="text-red-600 font-medium">Couldn't load map</p>
-          <p className="text-gray-500 text-xs mt-1">{error?.message ?? "unknown error"}</p>
+          <p className="text-ink/55 text-xs mt-1">{error?.message ?? "unknown error"}</p>
         </div>
       </div>
     );
@@ -570,7 +570,7 @@ export default function MapMode({
           className={[
             "w-full text-left py-2.5 transition-colors max-sm:py-1.5",
             indent ? "pl-8 pr-4 max-sm:pl-6 max-sm:pr-3" : "px-4 max-sm:px-3",
-            isSelected ? "bg-blue-50" : "hover:bg-gray-50",
+            isSelected ? "bg-blue-500/10" : "hover:bg-ink/5",
           ].join(" ")}
         >
           <div className="flex items-center gap-2">
@@ -578,16 +578,16 @@ export default function MapMode({
               className="w-2.5 h-2.5 rounded-full shrink-0 max-sm:w-2 max-sm:h-2"
               style={{ background: pin.color ?? "#3b82f6" }}
             />
-            <span className="font-medium text-sm text-gray-900 truncate max-sm:text-[13px]">
+            <span className="font-medium text-sm text-ink truncate max-sm:text-[13px]">
               {pin.label ?? "Pin"}
             </span>
           </div>
           {/* Preview blurb is desktop-only — on the compact mobile card it's noise. */}
           {preview && (
-            <p className="mt-1 text-xs text-gray-500 line-clamp-2 pl-[18px] max-sm:hidden">{preview}</p>
+            <p className="mt-1 text-xs text-ink/55 line-clamp-2 pl-[18px] max-sm:hidden">{preview}</p>
           )}
           {notes.length > 0 && (
-            <div className="mt-1 text-[10px] text-gray-400 pl-[18px] max-sm:hidden">
+            <div className="mt-1 text-[10px] text-ink/40 pl-[18px] max-sm:hidden">
               {notes.length} note{notes.length === 1 ? "" : "s"}
             </div>
           )}
@@ -731,14 +731,14 @@ export default function MapMode({
 
                     {events.length > 0 && (
                       <div>
-                        <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mt-1">
+                        <div className="text-[10px] font-semibold text-ink/55 uppercase tracking-wide mt-1">
                           Events
                         </div>
-                        <ul className="text-xs text-gray-700 space-y-0.5">
+                        <ul className="text-xs text-ink/70 space-y-0.5">
                           {events.map((ev) => (
                             <li key={ev.id}>
                               <span className="font-medium">{ev.title}</span>
-                              <span className="text-gray-400 ml-1">
+                              <span className="text-ink/40 ml-1">
                                 {new Date(ev.start).toLocaleString(undefined, {
                                   month: "short",
                                   day: "numeric",
@@ -755,14 +755,14 @@ export default function MapMode({
 
                     {notes.length > 0 && (
                       <div>
-                        <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mt-1">
+                        <div className="text-[10px] font-semibold text-ink/55 uppercase tracking-wide mt-1">
                           Notes
                         </div>
                         <div className="space-y-2">
                           {notes.map((note) => (
                             <div
                               key={note.id}
-                              className="text-xs text-gray-700 prose prose-sm max-w-none"
+                              className="text-xs text-ink/70 prose prose-sm max-w-none"
                             >
                               <ReactMarkdown remarkPlugins={MARKDOWN_PLUGINS}>
                                 {note.body}
@@ -789,8 +789,8 @@ export default function MapMode({
 
         {pins.length === 0 && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <div className="bg-white/90 rounded-xl px-6 py-4 text-center shadow text-gray-500 text-sm">
-              <div className="font-medium text-gray-700">{map.name}</div>
+            <div className="bg-surface/90 rounded-xl px-6 py-4 text-center shadow text-ink/55 text-sm">
+              <div className="font-medium text-ink/70">{map.name}</div>
               <div className="text-xs mt-1">Ask Claude to add locations.</div>
             </div>
           </div>
@@ -811,7 +811,7 @@ export default function MapMode({
               "flex items-center justify-center w-9 h-9 rounded-lg border shadow-sm transition-colors",
               autoFollow
                 ? "bg-blue-500 text-white border-blue-500 hover:bg-blue-600"
-                : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50",
+                : "bg-surface text-ink/60 border-ink/15 hover:bg-ink/5",
             ].join(" ")}
           >
             <svg
@@ -839,11 +839,11 @@ export default function MapMode({
               onClick={() => dir.setCollapsed(false)}
               aria-label="Show pin directory"
               title="Show pins"
-              className="hidden items-center gap-1.5 bg-white hover:bg-gray-50 border border-gray-200 shadow-sm rounded-lg px-2.5 py-1.5 text-xs font-medium text-gray-700 sm:flex"
+              className="hidden items-center gap-1.5 bg-surface hover:bg-ink/5 border border-ink/15 shadow-sm rounded-lg px-2.5 py-1.5 text-xs font-medium text-ink/70 sm:flex"
             >
               <span aria-hidden>‹</span>
               <span>Pins</span>
-              <span className="text-gray-400">{pins.length}</span>
+              <span className="text-ink/40">{pins.length}</span>
             </button>
           )}
         </div>
@@ -854,7 +854,7 @@ export default function MapMode({
             onClick={() => dir.setCollapsed(false)}
             aria-label="Show pins"
             title="Show pins"
-            className="absolute bottom-3 right-3 z-[1000] flex items-center gap-1.5 rounded-full bg-white border border-gray-200 shadow-lg pl-2.5 pr-3 py-2 text-sm font-semibold text-gray-800 sm:hidden"
+            className="absolute bottom-3 right-3 z-[1000] flex items-center gap-1.5 rounded-full bg-surface border border-ink/15 shadow-lg pl-2.5 pr-3 py-2 text-sm font-semibold text-ink/80 sm:hidden"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
               <path
@@ -874,14 +874,14 @@ export default function MapMode({
           style={{ width: dir.width }}
           className={[
             // Desktop: a resizable, full-height right rail.
-            "relative shrink-0 border-l border-gray-200 bg-white flex flex-col overflow-hidden",
+            "relative shrink-0 border-l border-ink/15 bg-surface flex flex-col overflow-hidden",
             // Mobile: a floating card tucked into the bottom-right corner — inset
             // from every edge so it never collides with iOS swipe gestures, and
             // narrow enough to leave the map visible around it. The arbitrary
             // !w override beats the inline desktop pixel width.
             "max-sm:absolute max-sm:bottom-3 max-sm:right-3 max-sm:left-auto max-sm:top-auto",
             "max-sm:z-[1000] max-sm:max-h-[44vh] max-sm:!w-[min(58vw,232px)]",
-            "max-sm:rounded-2xl max-sm:border max-sm:border-gray-200 max-sm:shadow-2xl",
+            "max-sm:rounded-2xl max-sm:border max-sm:border-ink/15 max-sm:shadow-2xl",
           ].join(" ")}
         >
           {/* Drag handle on the LEFT edge of the right-docked panel (desktop only) */}
@@ -895,16 +895,16 @@ export default function MapMode({
             ].join(" ")}
           />
 
-          <div className="px-4 py-2.5 border-b border-gray-100 flex items-center justify-between max-sm:px-3 max-sm:py-2 sm:py-3">
+          <div className="px-4 py-2.5 border-b border-ink/10 flex items-center justify-between max-sm:px-3 max-sm:py-2 sm:py-3">
             <div className="flex items-center gap-2">
-              <h2 className="font-display text-base font-medium tracking-tight text-gray-900 max-sm:text-sm">Pins</h2>
-              <span className="font-code text-[11px] text-gray-400">{pins.length}</span>
+              <h2 className="font-display text-base font-medium tracking-tight text-ink max-sm:text-sm">Pins</h2>
+              <span className="font-code text-[11px] text-ink/40">{pins.length}</span>
             </div>
             <button
               onClick={() => dir.setCollapsed(true)}
               aria-label="Hide pin directory"
               title="Hide"
-              className="flex items-center justify-center text-gray-400 hover:text-gray-600 px-1"
+              className="flex items-center justify-center text-ink/40 hover:text-ink/60 px-1"
             >
               {/* Down chevron on mobile (card tucks into corner); right on desktop (docks right). */}
               <svg
@@ -936,11 +936,11 @@ export default function MapMode({
             {ungrouped.length > 0 && (
               <div>
                 {dayGroups.length > 0 && (
-                  <div className="px-4 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400 max-sm:px-3 max-sm:pt-2">
-                    Ungrouped <span className="text-gray-300">· {ungrouped.length}</span>
+                  <div className="px-4 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-ink/40 max-sm:px-3 max-sm:pt-2">
+                    Ungrouped <span className="text-ink/30">· {ungrouped.length}</span>
                   </div>
                 )}
-                <ul className="divide-y divide-gray-50">
+                <ul className="divide-y divide-ink/5">
                   {ungrouped.map((p) => renderPinRow(p))}
                 </ul>
               </div>
@@ -948,20 +948,20 @@ export default function MapMode({
 
             {dayGroups.map(({ day, entries }) => (
               <div key={day}>
-                <div className="px-4 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400 border-t border-gray-100 max-sm:px-3 max-sm:pt-2">
+                <div className="px-4 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-ink/40 border-t border-ink/10 max-sm:px-3 max-sm:pt-2">
                   {formatDay(day)}
                 </div>
                 {entries.map(({ event, pins: entryPins }) => (
                   <div key={event.id}>
                     <div className="px-4 pt-1.5 pb-0.5 flex items-baseline gap-2 max-sm:px-3">
-                      <span className="text-xs font-medium text-gray-700 truncate">
+                      <span className="text-xs font-medium text-ink/70 truncate">
                         {event.title}
                       </span>
-                      <span className="text-[10px] text-gray-400 shrink-0">
+                      <span className="text-[10px] text-ink/40 shrink-0">
                         {formatTime(event.start, event.timezone)}
                       </span>
                     </div>
-                    <ul className="divide-y divide-gray-50">
+                    <ul className="divide-y divide-ink/5">
                       {entryPins.map((p) => renderPinRow(p, true))}
                     </ul>
                   </div>
@@ -1007,7 +1007,7 @@ function PinLabelEdit({ pin }: { pin: Pin }) {
           else if (e.key === "Escape") { e.preventDefault(); setDraft(pin.label ?? ""); setEditing(false); }
         }}
         placeholder="Pin name"
-        className="w-full font-semibold text-gray-900 bg-transparent rounded px-1 -mx-1 outline-none caret-gray-900"
+        className="w-full font-semibold text-ink bg-transparent rounded px-1 -mx-1 outline-none caret-ink"
       />
     );
   }
@@ -1015,8 +1015,8 @@ function PinLabelEdit({ pin }: { pin: Pin }) {
   return (
     <div
       onClick={() => setEditing(true)}
-      className={`font-semibold cursor-text rounded px-1 -mx-1 hover:bg-gray-50 ${
-        pin.label ? "text-gray-900" : "text-gray-400 italic"
+      className={`font-semibold cursor-text rounded px-1 -mx-1 hover:bg-ink/5 ${
+        pin.label ? "text-ink" : "text-ink/40 italic"
       }`}
     >
       {pin.label || "Name this pin"}
@@ -1061,19 +1061,19 @@ function PinBodyEdit({ pin }: { pin: Pin }) {
           else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); commit(); }
         }}
         placeholder="Add details… (Markdown)"
-        className="w-full min-h-[60px] text-sm text-gray-800 font-mono leading-relaxed bg-transparent rounded -mx-1 px-1 resize-none outline-none caret-gray-900"
+        className="w-full min-h-[60px] text-sm text-ink/80 font-mono leading-relaxed bg-transparent rounded -mx-1 px-1 resize-none outline-none caret-ink"
       />
     );
   }
 
   return (
-    <div onClick={() => setEditing(true)} className="cursor-text rounded -mx-1 px-1 hover:bg-gray-50">
+    <div onClick={() => setEditing(true)} className="cursor-text rounded -mx-1 px-1 hover:bg-ink/5">
       {pin.body ? (
-        <div className="text-sm text-gray-700 prose prose-sm max-w-none">
+        <div className="text-sm text-ink/70 prose prose-sm max-w-none">
           <ReactMarkdown remarkPlugins={MARKDOWN_PLUGINS}>{pin.body}</ReactMarkdown>
         </div>
       ) : (
-        <p className="text-sm text-gray-400 italic">Add details…</p>
+        <p className="text-sm text-ink/40 italic">Add details…</p>
       )}
     </div>
   );

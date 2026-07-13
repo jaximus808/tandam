@@ -1,8 +1,13 @@
 import { useState } from "react";
-import TandemLogo from "../components/TandemLogo";
+import LandingNav from "../components/LandingNav";
 
 interface Props {
   onBack: () => void;
+  onOpenMCP: () => void;
+  onShowCanvases: () => void;
+  onShowSettings: () => void;
+  onAbout: () => void;
+  onOpenCanvas: (code: string) => void;
 }
 
 interface InstallMethod {
@@ -345,7 +350,14 @@ function pathPill(active: boolean): string {
   ].join(" ");
 }
 
-export default function MCPSupport({ onBack }: Props) {
+export default function MCPSupport({
+  onBack,
+  onOpenMCP,
+  onShowCanvases,
+  onShowSettings,
+  onAbout,
+  onOpenCanvas,
+}: Props) {
   const [pathTab, setPathTab] = useState<"connector" | "gateway">("connector");
   const [installTab, setInstallTab] = useState<string>(INSTALL_METHODS[0].id);
   const [clientTab, setClientTab] = useState<string>(CLIENT_TABS[0].id);
@@ -362,23 +374,19 @@ export default function MCPSupport({ onBack }: Props) {
   }
 
   return (
-    <div className="min-h-screen bg-[#FBFAF8] font-brand text-gray-900 antialiased overflow-y-auto scroll-smooth">
-      <header className="sticky top-0 z-10 bg-[#FBFAF8]/85 backdrop-blur border-b border-gray-900/5">
-        <div className="max-w-4xl mx-auto px-6 py-3 flex items-center gap-3">
-          <button
-            onClick={onBack}
-            className="flex items-center gap-2 font-semibold text-gray-900 text-sm hover:text-sky-600 transition-colors"
-            title="Back to home"
-          >
-            <TandemLogo size={28} />
-            <span>Tandem</span>
-          </button>
-          <div className="w-px h-4 bg-gray-200" />
-          <span className="font-code text-[11px] uppercase tracking-[0.2em] text-gray-400">
-            MCP support
-          </span>
-        </div>
-      </header>
+    // theme-light: the MCP page body is hard-coded light (gray palette, not yet
+    // dark-converted). Pinning the token scope light keeps the token-based
+    // LandingNav coherent with it. The class lives on the scroll root so the
+    // nav's sticky positioning still spans the page.
+    <div className="theme-light min-h-screen bg-[#FBFAF8] font-brand text-gray-900 antialiased overflow-y-auto scroll-smooth">
+      <LandingNav
+        onHome={onBack}
+        onJoin={onOpenCanvas}
+        onOpenMCP={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+        onShowCanvases={onShowCanvases}
+        onShowSettings={onShowSettings}
+        onAbout={onAbout}
+      />
 
       <div className="max-w-4xl mx-auto px-6 py-12 space-y-14">
         {/* Hero */}

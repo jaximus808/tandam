@@ -72,7 +72,7 @@ export default function WelcomeMode({
       <div className="relative mx-auto max-w-5xl space-y-12 px-6 py-14">
         <div className="tandem-mode-enter text-center">
           <div>
-            <span className="inline-flex items-center gap-2 rounded-md border border-ink/15 bg-white px-3 py-1 font-code text-[10.5px] text-ink/55">
+            <span className="inline-flex items-center gap-2 rounded-md border border-ink/15 bg-surface px-3 py-1 font-code text-[10.5px] text-ink/55">
               <span className="relative flex h-1.5 w-1.5">
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand opacity-70" />
                 <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-brand" />
@@ -89,7 +89,7 @@ export default function WelcomeMode({
               <span aria-hidden="true" className="sel-handle" style={{ bottom: -15, left: -19 }} />
               <span aria-hidden="true" className="sel-handle" style={{ bottom: -15, right: -19 }} />
               <span className="pointer-events-none absolute -left-4 -top-3 -translate-y-[calc(100%+5px)]">
-                <span className="inline-flex items-center rounded-[3px] bg-ink px-1.5 py-0.5 font-code text-[10px] font-medium leading-none text-white">
+                <span className="inline-flex items-center rounded-[3px] bg-ink px-1.5 py-0.5 font-code text-[10px] font-medium leading-none text-paper">
                   you
                 </span>
               </span>
@@ -147,7 +147,7 @@ export default function WelcomeMode({
                 <button
                   key={type}
                   onClick={() => onCreateDoc(type)}
-                  className="group inline-flex items-center gap-1.5 rounded-md border border-ink/15 bg-white px-2.5 py-1.5 text-[13px] font-medium text-ink/75 transition-colors hover:border-ink/50 hover:text-ink"
+                  className="group inline-flex items-center gap-1.5 rounded-md border border-ink/15 bg-surface px-2.5 py-1.5 text-[13px] font-medium text-ink/75 transition-colors hover:border-ink/50 hover:text-ink"
                 >
                   <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: t.solid }} />
                   {DOC_TYPE_LABEL[type]}
@@ -181,7 +181,7 @@ export default function WelcomeMode({
             <h2 className="mb-3 font-code text-[11px] font-medium uppercase tracking-[0.22em] text-ink/40">
               More prompts to start
             </h2>
-            <ul className="overflow-hidden rounded-md border border-ink/15 bg-white">
+            <ul className="overflow-hidden rounded-md border border-ink/15 bg-surface">
               {STARTER_PROMPTS.map((p, idx) => (
                 <li
                   key={idx}
@@ -209,14 +209,14 @@ export default function WelcomeMode({
               Recent canvases
             </h2>
             {recents.length === 0 ? (
-              <div className="rounded-md border border-dashed border-ink/15 bg-white/50 px-4 py-6 text-center">
+              <div className="rounded-md border border-dashed border-ink/15 bg-surface/50 px-4 py-6 text-center">
                 <Clock size={16} className="mx-auto mb-2 text-ink/25" />
                 <p className="text-[12px] leading-relaxed text-ink/45">
                   Canvases you open show up here for quick re-entry.
                 </p>
               </div>
             ) : (
-              <ul className="overflow-hidden rounded-md border border-ink/15 bg-white">
+              <ul className="overflow-hidden rounded-md border border-ink/15 bg-surface">
                 {recents.map((c, idx) => (
                   <li key={c.code} className={idx > 0 ? "border-t border-ink/10" : ""}>
                     <button
@@ -266,7 +266,7 @@ function CapabilityCard({
     <button
       onClick={onCopy}
       title="Copy this prompt"
-      className="group relative flex flex-col rounded-md border border-ink/15 bg-white p-4 text-left transition-all hover:-translate-y-0.5 hover:border-ink/70 hover:shadow-[4px_4px_0_rgba(28,25,23,0.12)]"
+      className="group relative flex flex-col rounded-md border border-ink/15 bg-surface p-4 text-left transition-all hover:-translate-y-0.5 hover:border-ink/70 hover:shadow-[4px_4px_0_rgba(28,25,23,0.12)]"
     >
       <div className="flex items-center gap-2.5">
         <div className="inline-grid h-9 w-9 place-items-center rounded-[5px] border border-ink/10 bg-paper text-xl" aria-hidden>

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { LogOut, Bell, Lock, Trash2 } from "lucide-react";
-import { fetchMe, logout, type User } from "../lib/auth";
+import { fetchMe, getCachedUser, logout, type User } from "../lib/auth";
 import TandemLogo from "../components/TandemLogo";
 import AccountMenu from "../components/AccountMenu";
 import ThemeToggle from "../components/ThemeToggle";
@@ -31,7 +31,13 @@ function shortDate(iso?: string): string {
 // prefs, default canvas visibility, delete account) so each is a follow-up task
 // rather than a rebuild. Signed-out visitors get a prompt to sign in instead.
 export default function UserSettings({ onHome, onShowCanvases, onShowAbout, onOpenCanvas }: Props) {
-  const [load, setLoad] = useState<Load>({ status: "loading" });
+  // Seed from the optimistic identity cache so a signed-in return visit paints
+  // the account immediately instead of flashing the loading state; fetchMe below
+  // still reconciles (updated profile, or a server-confirmed sign-out).
+  const [load, setLoad] = useState<Load>(() => {
+    const cached = getCachedUser();
+    return cached ? { status: "ready", user: cached } : { status: "loading" };
+  });
 
   useEffect(() => {
     let cancelled = false;

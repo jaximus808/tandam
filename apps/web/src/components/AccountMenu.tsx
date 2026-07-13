@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronLeft, Inbox, Settings, Info } from "lucide-react";
-import { fetchMe, logout, GOOGLE_CLIENT_ID, type User } from "../lib/auth";
+import { fetchMe, getCachedUser, logout, GOOGLE_CLIENT_ID, type User } from "../lib/auth";
 import {
   listNotifications,
   markNotificationsRead,
@@ -38,7 +38,7 @@ export default function AccountMenu({
   // Open a canvas from a notification (e.g. an invite someone sent).
   onOpenCanvas?: (code: string) => void;
 } = {}) {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<User | null>(getCachedUser);
   const [ready, setReady] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [signInOpen, setSignInOpen] = useState(false);

@@ -102,13 +102,13 @@ export default function SheetsMode({ state, canvasCode }: Props) {
     <div className="flex-1 flex flex-col min-h-0 min-w-0 bg-paper">
       <div className="max-w-5xl mx-auto w-full px-4 py-6 sm:px-6 flex-1 flex flex-col min-h-0 min-w-0">
         <div className="flex items-center justify-between mb-3 shrink-0">
-          <h1 className="font-display text-xl font-medium tracking-tight text-gray-900">Sheets</h1>
+          <h1 className="font-display text-xl font-medium tracking-tight text-ink">Sheets</h1>
           <div className="flex items-center gap-2">
             {activeSheet && (
               <button
                 onClick={handleExport}
                 disabled={MOCK_ENABLED}
-                className="text-sm px-3 py-1.5 rounded-md border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
+                className="text-sm px-3 py-1.5 rounded-md border border-ink/20 text-ink/70 font-medium hover:bg-ink/5 disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
                 title={MOCK_ENABLED ? "Export unavailable in mock mode" : `Download "${activeSheet.name}" as .xlsx`}
               >
                 <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden>
@@ -170,7 +170,7 @@ function SheetTabs({
   onAdd: () => void;
 }) {
   return (
-    <div className="flex items-end gap-1 border-b border-gray-200 shrink-0 overflow-x-auto">
+    <div className="flex items-end gap-1 border-b border-ink/15 shrink-0 overflow-x-auto">
       {sheets.map((sheet) => (
         <SheetTab
           key={sheet.id}
@@ -181,7 +181,7 @@ function SheetTabs({
       ))}
       <button
         onClick={onAdd}
-        className="ml-1 mb-1 px-2 py-1 text-sm text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
+        className="ml-1 mb-1 px-2 py-1 text-sm text-ink/40 hover:text-blue-600 hover:bg-blue-500/10 rounded transition-colors"
         title="New sheet"
       >
         +
@@ -230,8 +230,8 @@ function SheetTab({
       onDoubleClick={() => active && setEditing(true)}
       className={`group cursor-pointer flex items-center gap-1.5 px-3 py-1.5 rounded-t-md text-sm border-b-2 -mb-px ${
         active
-          ? "text-gray-900 font-medium bg-white"
-          : "border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50"
+          ? "text-ink font-medium bg-surface"
+          : "border-transparent text-ink/55 hover:text-ink/70 hover:bg-ink/5"
       }`}
       style={active ? { borderColor: ACCENT.solid } : undefined}
     >
@@ -259,7 +259,7 @@ function SheetTab({
       {active && !editing && (
         <button
           onClick={handleDelete}
-          className="text-gray-300 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
+          className="text-ink/30 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
           title="Delete sheet"
         >
           <svg width="10" height="10" viewBox="0 0 12 12">
@@ -387,19 +387,19 @@ function SheetTable({ sheet, rows }: { sheet: Sheet; rows: SheetRow[] }) {
   const rowIds = useMemo(() => orderedRows.map((r) => r.id), [orderedRows]);
 
   return (
-    <div className="flex-1 overflow-auto mt-3 border border-gray-200 rounded-md bg-white [-webkit-overflow-scrolling:touch]">
+    <div className="flex-1 overflow-auto mt-3 border border-ink/15 rounded-md bg-surface [-webkit-overflow-scrolling:touch]">
       <table className="min-w-full border-collapse">
-        <thead className="bg-gray-50 sticky top-0 z-10">
+        <thead className="bg-ink/5 sticky top-0 z-10">
           <tr>
             {/* drag-handle column header (empty) */}
-            <th className="w-8 border-b border-gray-200" aria-hidden />
+            <th className="w-8 border-b border-ink/15" aria-hidden />
             {columns.map((col) => (
               <ColumnHeader key={col.id} sheetId={sheet.id} column={col} />
             ))}
-            <th className="border-b border-gray-200 p-1 text-left">
+            <th className="border-b border-ink/15 p-1 text-left">
               <button
                 onClick={handleAddColumn}
-                className="text-xs text-gray-400 hover:text-blue-600 px-2 py-0.5 rounded hover:bg-blue-50"
+                className="text-xs text-ink/40 hover:text-blue-600 px-2 py-0.5 rounded hover:bg-blue-500/10"
                 title="Add column"
               >
                 + col
@@ -423,7 +423,7 @@ function SheetTable({ sheet, rows }: { sheet: Sheet; rows: SheetRow[] }) {
                 <tr>
                   <td
                     colSpan={columns.length + 2}
-                    className="p-4 text-center text-sm text-gray-400 italic"
+                    className="p-4 text-center text-sm text-ink/40 italic"
                   >
                     {columns.length === 0
                       ? "Add a column to get started."
@@ -435,11 +435,11 @@ function SheetTable({ sheet, rows }: { sheet: Sheet; rows: SheetRow[] }) {
           </SortableContext>
         </DndContext>
       </table>
-      <div className="border-t border-gray-200 px-2 py-1.5 bg-gray-50/50">
+      <div className="border-t border-ink/15 px-2 py-1.5 bg-ink/5">
         <button
           onClick={handleAddRow}
           disabled={columns.length === 0}
-          className="text-xs text-gray-500 hover:text-blue-600 px-2 py-0.5 rounded hover:bg-blue-50 disabled:opacity-40 disabled:cursor-not-allowed"
+          className="text-xs text-ink/55 hover:text-blue-600 px-2 py-0.5 rounded hover:bg-blue-500/10 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           + Row
         </button>
@@ -504,7 +504,7 @@ function ColumnHeader({ sheetId, column }: { sheetId: string; column: SheetColum
   }
 
   return (
-    <th className="border-b border-gray-200 border-r last:border-r-0 px-2 py-1 text-left font-medium text-gray-700 text-xs uppercase tracking-wide min-w-[120px]">
+    <th className="border-b border-ink/15 border-r last:border-r-0 px-2 py-1 text-left font-medium text-ink/70 text-xs uppercase tracking-wide min-w-[120px]">
       <div className="flex items-center gap-1">
         {editing ? (
           <input
@@ -533,11 +533,11 @@ function ColumnHeader({ sheetId, column }: { sheetId: string; column: SheetColum
             {column.name || "Untitled"}
           </span>
         )}
-        <span className="text-[10px] font-normal text-gray-400 lowercase">{column.type}</span>
+        <span className="text-[10px] font-normal text-ink/40 lowercase">{column.type}</span>
         <div className="relative" ref={menuRef}>
           <button
             onClick={() => setMenuOpen((o) => !o)}
-            className="text-gray-300 hover:text-gray-700 px-0.5"
+            className="text-ink/30 hover:text-ink/70 px-0.5"
             title="Column options"
           >
             <svg width="12" height="12" viewBox="0 0 12 12">
@@ -547,33 +547,33 @@ function ColumnHeader({ sheetId, column }: { sheetId: string; column: SheetColum
             </svg>
           </button>
           {menuOpen && (
-            <div className="absolute right-0 top-full mt-1 z-20 bg-white border border-gray-200 rounded-md shadow-lg py-1 w-40 text-xs normal-case font-normal tracking-normal">
+            <div className="absolute right-0 top-full mt-1 z-20 bg-surface border border-ink/15 rounded-md shadow-lg py-1 w-40 text-xs normal-case font-normal tracking-normal">
               <button
                 onClick={() => {
                   setMenuOpen(false);
                   setEditing(true);
                 }}
-                className="w-full text-left px-3 py-1.5 text-gray-700 hover:bg-gray-50"
+                className="w-full text-left px-3 py-1.5 text-ink/70 hover:bg-ink/5"
               >
                 Rename
               </button>
-              <div className="border-t border-gray-100 my-1" />
-              <div className="px-3 py-1 text-[10px] text-gray-400 uppercase tracking-wide">Type</div>
+              <div className="border-t border-ink/10 my-1" />
+              <div className="px-3 py-1 text-[10px] text-ink/40 uppercase tracking-wide">Type</div>
               {COLUMN_TYPES.map((t) => (
                 <button
                   key={t.value}
                   onClick={() => setType(t.value)}
-                  className={`w-full text-left px-3 py-1.5 hover:bg-gray-50 ${
-                    column.type === t.value ? "text-blue-600 font-medium" : "text-gray-700"
+                  className={`w-full text-left px-3 py-1.5 hover:bg-ink/5 ${
+                    column.type === t.value ? "text-blue-600 font-medium" : "text-ink/70"
                   }`}
                 >
                   {t.label}
                 </button>
               ))}
-              <div className="border-t border-gray-100 my-1" />
+              <div className="border-t border-ink/10 my-1" />
               <button
                 onClick={handleDelete}
-                className="w-full text-left px-3 py-1.5 text-red-600 hover:bg-red-50"
+                className="w-full text-left px-3 py-1.5 text-red-600 hover:bg-red-500/10"
               >
                 Delete column
               </button>
@@ -616,9 +616,9 @@ function SortableTableRow({
       ref={setNodeRef}
       data-agent-target={row.id}
       style={style}
-      className="group border-b border-gray-100 last:border-b-0 hover:bg-blue-50/30"
+      className="group border-b border-ink/10 last:border-b-0 hover:bg-blue-500/[0.07]"
     >
-      <td className="w-8 border-r border-gray-100 text-center align-middle">
+      <td className="w-8 border-r border-ink/10 text-center align-middle">
         <DragHandle attributes={attributes} listeners={listeners} />
       </td>
       {columns.map((col, colIndex) => (
@@ -633,10 +633,10 @@ function SortableTableRow({
           onPasteGrid={onPasteGrid}
         />
       ))}
-      <td className="border-l border-gray-100 text-center align-middle w-8">
+      <td className="border-l border-ink/10 text-center align-middle w-8">
         <button
           onClick={handleDelete}
-          className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-600 px-1"
+          className="opacity-0 group-hover:opacity-100 text-ink/30 hover:text-red-600 px-1"
           title="Delete row"
         >
           <svg width="11" height="11" viewBox="0 0 12 12">
@@ -659,7 +659,7 @@ function DragHandle({
     <button
       {...attributes}
       {...listeners}
-      className="text-gray-200 hover:text-gray-500 cursor-grab active:cursor-grabbing touch-none px-1"
+      className="text-ink/20 hover:text-ink/55 cursor-grab active:cursor-grabbing touch-none px-1"
       aria-label="Drag to reorder row"
       title="Drag to reorder"
     >
@@ -721,7 +721,7 @@ function Cell({
     onPasteGrid(rowIndex, colIndex, grid);
   }
 
-  const baseCell = "border-r border-gray-100 last:border-r-0 align-middle";
+  const baseCell = "border-r border-ink/10 last:border-r-0 align-middle";
 
   if (type === "checkbox") {
     const checked = value === true;
@@ -740,7 +740,7 @@ function Cell({
 
   const inputType = type === "number" ? "number" : type === "date" ? "date" : "text";
   const inputClass =
-    "w-full bg-transparent focus:outline-none focus:bg-white focus:ring-1 focus:ring-blue-400 px-2 py-1 text-sm " +
+    "w-full bg-transparent focus:outline-none focus:bg-surface focus:ring-1 focus:ring-blue-400 px-2 py-1 text-sm " +
     (type === "number" ? "text-right tabular-nums" : "");
 
   return (

@@ -204,7 +204,7 @@ export default function QuickLog({ code, forms }: { code: string; forms?: Record
               </div>
             )}
 
-            <div className="flex flex-col items-center gap-2 rounded-2xl border border-ink/10 bg-white/85 p-1.5 shadow-[2px_3px_0_rgba(17,17,17,0.06)] backdrop-blur">
+            <div className="flex flex-col items-center gap-2 rounded-2xl border border-ink/10 bg-surface/85 p-1.5 shadow-[2px_3px_0_rgba(17,17,17,0.06)] backdrop-blur">
               <button
                 onClick={() => setExpandedPersist(true)}
                 title="Expand log"
@@ -247,7 +247,7 @@ export default function QuickLog({ code, forms }: { code: string; forms?: Record
       {/* ── Desktop EXPANDED: full-height right column; in-flow so the mode
             reflows narrower beside it (not overlaid). Forms on top, log below. */}
       {expanded && (
-        <div className="z-20 hidden w-[300px] shrink-0 flex-col border-l border-ink/10 bg-white/90 backdrop-blur sm:flex">
+        <div className="z-20 hidden w-[300px] shrink-0 flex-col border-l border-ink/10 bg-surface/90 backdrop-blur sm:flex">
           <div className="flex items-center justify-between border-b border-ink/10 px-3 py-3 pl-4">
             <span className="flex items-center gap-2 text-sm font-semibold text-ink">
               {openForm ? (
@@ -277,7 +277,7 @@ export default function QuickLog({ code, forms }: { code: string; forms?: Record
                   <button
                     key={f.id}
                     onClick={() => setOpenId(f.id)}
-                    className="flex items-center gap-3 rounded-xl border border-ink/10 bg-white p-2.5 text-left transition-colors hover:border-ink/20"
+                    className="flex items-center gap-3 rounded-xl border border-ink/10 bg-surface p-2.5 text-left transition-colors hover:border-ink/20"
                   >
                     <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg" style={{ backgroundColor: tint(f.accent, "1A") }}>
                       <f.Icon size={17} strokeWidth={1.75} style={{ color: f.accent }} />
@@ -346,7 +346,7 @@ export default function QuickLog({ code, forms }: { code: string; forms?: Record
                     <button
                       key={f.id}
                       onClick={() => setOpenId(f.id)}
-                      className="flex items-center gap-3 rounded-xl border border-ink/10 bg-white p-3 text-left active:scale-[0.99]"
+                      className="flex items-center gap-3 rounded-xl border border-ink/10 bg-surface p-3 text-left active:scale-[0.99]"
                     >
                       <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg" style={{ backgroundColor: tint(f.accent, "1A") }}>
                         <f.Icon size={19} strokeWidth={1.75} style={{ color: f.accent }} />
@@ -374,7 +374,7 @@ export default function QuickLog({ code, forms }: { code: string; forms?: Record
         {toasts.map((t) => (
           <div
             key={t.id}
-            className="pointer-events-auto flex max-w-[92vw] items-center gap-2.5 rounded-xl border border-ink/10 bg-white px-3.5 py-2.5 shadow-[3px_4px_0_rgba(17,17,17,0.08)] animate-[quicklog-up_160ms_ease-out]"
+            className="pointer-events-auto flex max-w-[92vw] items-center gap-2.5 rounded-xl border border-ink/10 bg-surface px-3.5 py-2.5 shadow-[3px_4px_0_rgba(17,17,17,0.08)] animate-[quicklog-up_160ms_ease-out]"
           >
             <span className="flex h-7 w-7 items-center justify-center rounded-lg" style={{ backgroundColor: tint(t.accent, "1A") }}>
               <t.Icon size={15} strokeWidth={1.75} style={{ color: t.accent }} />
@@ -427,7 +427,7 @@ function FormCard({
   const missingRequired = form.fields.some((f) => f.required && (values[f.key] === undefined || values[f.key] === ""));
 
   return (
-    <div className={flat ? "" : "rounded-2xl border border-ink/10 bg-white p-3.5 shadow-[3px_4px_0_rgba(17,17,17,0.08)]"}>
+    <div className={flat ? "" : "rounded-2xl border border-ink/10 bg-surface p-3.5 shadow-[3px_4px_0_rgba(17,17,17,0.08)]"}>
       <div className="mb-2.5 flex items-center gap-2">
         <span className="flex h-7 w-7 items-center justify-center rounded-lg" style={{ backgroundColor: tint(form.accent, "1A") }}>
           <form.Icon size={15} strokeWidth={1.75} style={{ color: form.accent }} />
@@ -451,7 +451,7 @@ function FormCard({
               <select
                 value={(values[f.key] as string) ?? ""}
                 onChange={(e) => set(f.key, e.target.value)}
-                className="w-full rounded-lg border border-ink/15 bg-white px-2.5 py-1.5 text-sm text-ink outline-none focus:border-ink/40"
+                className="w-full rounded-lg border border-ink/15 bg-surface px-2.5 py-1.5 text-sm text-ink outline-none focus:border-ink/40"
               >
                 <option value="">Choose…</option>
                 {f.options?.map((o) => (
@@ -483,7 +483,7 @@ function FormCard({
                 value={(values[f.key] as string) ?? ""}
                 placeholder={f.placeholder}
                 onChange={(e) => set(f.key, e.target.value)}
-                className="w-full rounded-lg border border-ink/15 bg-white px-2.5 py-1.5 text-sm text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
+                className="w-full rounded-lg border border-ink/15 bg-surface px-2.5 py-1.5 text-sm text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
               />
             )}
           </label>

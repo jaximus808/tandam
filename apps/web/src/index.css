@@ -87,6 +87,63 @@ body {
   width: 100%;
 }
 
+/* Leaflet popups are Tandem UI (pin label/body editing), so they follow the
+   theme — a dark card on the light map in dark mode, matching the map toolbar
+   and sidebar. The raster tiles + baked annotation pills stay light (a
+   deliberate light frame); only Tandem-rendered chrome inverts. Leaflet's own
+   stylesheet hardcodes a white wrapper, so override it against our tokens. */
+.leaflet-popup-content-wrapper,
+.leaflet-popup-tip {
+  background: rgb(var(--color-surface));
+  color: rgb(var(--color-ink));
+}
+.leaflet-popup-content-wrapper {
+  box-shadow: 0 3px 14px rgb(0 0 0 / 0.28);
+}
+.leaflet-container a.leaflet-popup-close-button {
+  color: rgb(var(--color-ink) / 0.5);
+}
+.leaflet-container a.leaflet-popup-close-button:hover {
+  color: rgb(var(--color-ink));
+}
+
+/* Landing hero mock-map (MorphCanvas ResearchBody): a faux basemap gradient.
+   Theme-aware so the demo canvas previews the real dark worksurface instead of
+   glaring white on the dark page. Light = mint→sky; dark = deep teal→slate. */
+.morph-map {
+  background: linear-gradient(135deg, #ecfdf5, #e0f2fe);
+}
+.dark .morph-map {
+  background: linear-gradient(135deg, #16231f, #14202b);
+}
+
+/* Tailwind Typography (`prose`, used by DocsMode notes + rendered markdown in
+   MapMode/ItineraryMode) hardcodes its heading/bold/link/list-marker colors to
+   dark grays via its own `--tw-prose-*` variables. Those are more specific than
+   the container's `text-ink/NN` utility, so on a dark surface headings, bold
+   runs, and links go near-black and vanish (plain body text still inherits the
+   readable utility color). Rebase every prose color variable onto our theme
+   tokens so prose content stays legible in BOTH themes automatically — the
+   tokens flip with `.dark`, no `prose-invert` needed. */
+.prose {
+  --tw-prose-body: rgb(var(--color-ink) / 0.8);
+  --tw-prose-headings: rgb(var(--color-ink));
+  --tw-prose-lead: rgb(var(--color-ink) / 0.7);
+  --tw-prose-links: rgb(var(--color-brand));
+  --tw-prose-bold: rgb(var(--color-ink));
+  --tw-prose-counters: rgb(var(--color-ink) / 0.55);
+  --tw-prose-bullets: rgb(var(--color-ink) / 0.3);
+  --tw-prose-hr: rgb(var(--color-ink) / 0.15);
+  --tw-prose-quotes: rgb(var(--color-ink) / 0.8);
+  --tw-prose-quote-borders: rgb(var(--color-ink) / 0.15);
+  --tw-prose-captions: rgb(var(--color-ink) / 0.55);
+  --tw-prose-code: rgb(var(--color-ink));
+  --tw-prose-pre-code: rgb(var(--color-ink) / 0.9);
+  --tw-prose-pre-bg: rgb(var(--color-ink) / 0.06);
+  --tw-prose-th-borders: rgb(var(--color-ink) / 0.2);
+  --tw-prose-td-borders: rgb(var(--color-ink) / 0.1);
+}
+
 /* Rich-text note editor (DocsMode): a muted placeholder on the empty
    contentEditable surface, so a blank doc reads like a Google-Docs page
    rather than a dead box. Only shows while the surface is truly empty. */

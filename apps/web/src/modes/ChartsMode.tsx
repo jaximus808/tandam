@@ -75,7 +75,7 @@ export default function ChartsMode({ state }: Props) {
     <div className="flex-1 flex flex-col min-h-0 bg-paper">
       <div className="shrink-0 max-w-5xl mx-auto w-full px-6 pt-6 pb-3">
         <div className="flex items-center justify-between">
-          <h1 className="font-display text-xl font-medium tracking-tight text-gray-900">Charts</h1>
+          <h1 className="font-display text-xl font-medium tracking-tight text-ink">Charts</h1>
           <button
             onClick={handleAddChart}
             disabled={sheets.length === 0}
@@ -135,26 +135,26 @@ function ChartCard({
   return (
     <div
       data-agent-target={chart.id}
-      className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden flex flex-col"
+      className="rounded-xl border border-ink/15 bg-surface shadow-sm overflow-hidden flex flex-col"
     >
-      <div className="flex items-center justify-between gap-2 px-4 py-2.5 border-b border-gray-100">
+      <div className="flex items-center justify-between gap-2 px-4 py-2.5 border-b border-ink/10">
         <input
           value={chart.name}
           onChange={(e) => sendOp({ op: "chart.update", id: chart.id, partial: { name: e.target.value } })}
           placeholder="Untitled chart"
-          className="text-sm font-semibold text-gray-900 bg-transparent focus:outline-none focus:border-b focus:border-blue-300 min-w-0 flex-1"
+          className="text-sm font-semibold text-ink bg-transparent focus:outline-none focus:border-b focus:border-blue-300 min-w-0 flex-1"
         />
         <div className="flex items-center gap-1 shrink-0">
           <button
             onClick={() => setEditing((v) => !v)}
-            className={`text-xs px-2 py-1 rounded ${editing ? "bg-blue-50 text-blue-700" : "text-gray-500 hover:bg-gray-100"}`}
+            className={`text-xs px-2 py-1 rounded ${editing ? "bg-blue-500/15 text-blue-600" : "text-ink/55 hover:bg-ink/10"}`}
             title="Configure chart"
           >
             Edit
           </button>
           <button
             onClick={handleDelete}
-            className="text-gray-400 hover:text-red-600 px-1.5 py-1 rounded hover:bg-red-50"
+            className="text-ink/40 hover:text-red-600 px-1.5 py-1 rounded hover:bg-red-500/10"
             title="Delete chart"
           >
             <svg width="12" height="12" viewBox="0 0 12 12">
@@ -203,13 +203,13 @@ function ChartEditor({
   }
 
   return (
-    <div className="px-4 py-3 bg-gray-50/70 border-b border-gray-100 grid grid-cols-2 gap-3 text-xs">
+    <div className="px-4 py-3 bg-ink/5 border-b border-ink/10 grid grid-cols-2 gap-3 text-xs">
       <label className="flex flex-col gap-1">
-        <span className="text-gray-500 font-medium">Source sheet</span>
+        <span className="text-ink/55 font-medium">Source sheet</span>
         <select
           value={chart.sheetId}
           onChange={(e) => update({ sheetId: e.target.value })}
-          className="border border-gray-300 rounded px-2 py-1 bg-white"
+          className="border border-ink/20 rounded px-2 py-1 bg-surface"
         >
           {sheets.map((s) => (
             <option key={s.id} value={s.id}>
@@ -220,11 +220,11 @@ function ChartEditor({
       </label>
 
       <label className="flex flex-col gap-1">
-        <span className="text-gray-500 font-medium">Chart type</span>
+        <span className="text-ink/55 font-medium">Chart type</span>
         <select
           value={chart.chartType}
           onChange={(e) => update({ chartType: e.target.value as ChartType })}
-          className="border border-gray-300 rounded px-2 py-1 bg-white"
+          className="border border-ink/20 rounded px-2 py-1 bg-surface"
         >
           {CHART_TYPES.map((t) => (
             <option key={t.value} value={t.value}>
@@ -235,11 +235,11 @@ function ChartEditor({
       </label>
 
       <label className="flex flex-col gap-1">
-        <span className="text-gray-500 font-medium">{chart.chartType === "pie" ? "Categories (x)" : "X axis"}</span>
+        <span className="text-ink/55 font-medium">{chart.chartType === "pie" ? "Categories (x)" : "X axis"}</span>
         <select
           value={chart.xColumn}
           onChange={(e) => update({ xColumn: e.target.value })}
-          className="border border-gray-300 rounded px-2 py-1 bg-white"
+          className="border border-ink/20 rounded px-2 py-1 bg-surface"
         >
           <option value="">— none —</option>
           {cols.map((c) => (
@@ -251,12 +251,12 @@ function ChartEditor({
       </label>
 
       <div className="flex flex-col gap-1">
-        <span className="text-gray-500 font-medium">
+        <span className="text-ink/55 font-medium">
           {chart.chartType === "pie" ? "Value (y) — first used" : "Y series"}
         </span>
-        <div className="flex flex-col gap-0.5 max-h-28 overflow-y-auto border border-gray-200 rounded bg-white px-2 py-1">
+        <div className="flex flex-col gap-0.5 max-h-28 overflow-y-auto border border-ink/15 rounded bg-surface px-2 py-1">
           {cols.length === 0 ? (
-            <span className="text-gray-400 italic py-0.5">No columns</span>
+            <span className="text-ink/40 italic py-0.5">No columns</span>
           ) : (
             cols.map((c) => {
               const idx = chart.yColumns.indexOf(c.id);
@@ -269,7 +269,7 @@ function ChartEditor({
                       style={{ background: SERIES_COLORS[idx % SERIES_COLORS.length] }}
                     />
                   )}
-                  <span className={c.type === "number" ? "text-gray-700" : "text-gray-400"}>
+                  <span className={c.type === "number" ? "text-ink/70" : "text-ink/40"}>
                     {c.name || "Untitled"}
                   </span>
                 </label>
@@ -361,15 +361,15 @@ function AxisChart({
           const y = yScale(t);
           return (
             <g key={t}>
-              <line x1={M.left} y1={y} x2={M.left + PW} y2={y} stroke="#eef2f7" strokeWidth={1} />
-              <text x={M.left - 8} y={y + 3} textAnchor="end" fontSize={10} fill="#94a3b8">
+              <line x1={M.left} y1={y} x2={M.left + PW} y2={y} className="stroke-ink/10" strokeWidth={1} />
+              <text x={M.left - 8} y={y + 3} textAnchor="end" fontSize={10} className="fill-ink/40">
                 {formatNum(t)}
               </text>
             </g>
           );
         })}
         {/* zero baseline emphasized if negatives exist */}
-        {yMin < 0 && <line x1={M.left} y1={baseY} x2={M.left + PW} y2={baseY} stroke="#cbd5e1" strokeWidth={1} />}
+        {yMin < 0 && <line x1={M.left} y1={baseY} x2={M.left + PW} y2={baseY} className="stroke-ink/20" strokeWidth={1} />}
 
         {/* series */}
         {type === "bar"
@@ -410,10 +410,10 @@ function AxisChart({
             })}
 
         {/* x axis line + labels */}
-        <line x1={M.left} y1={M.top + PH} x2={M.left + PW} y2={M.top + PH} stroke="#cbd5e1" strokeWidth={1} />
+        <line x1={M.left} y1={M.top + PH} x2={M.left + PW} y2={M.top + PH} className="stroke-ink/20" strokeWidth={1} />
         {categories.map((c, i) =>
           i % labelEvery === 0 ? (
-            <text key={i} x={xCenter(i)} y={M.top + PH + 16} textAnchor="middle" fontSize={10} fill="#64748b">
+            <text key={i} x={xCenter(i)} y={M.top + PH + 16} textAnchor="middle" fontSize={10} className="fill-ink/55">
               {truncate(c, 12)}
             </text>
           ) : null,
@@ -461,7 +461,7 @@ function PieChart({ categories, series }: { categories: string[]; series: Series
               key={i}
               d={`M ${cx} ${cy} L ${x0} ${y0} A ${r} ${r} 0 ${large} 1 ${x1} ${y1} Z`}
               fill={s.color}
-              stroke="#fff"
+              className="stroke-surface"
               strokeWidth={1.5}
             />
           );
@@ -471,10 +471,10 @@ function PieChart({ categories, series }: { categories: string[]; series: Series
         {slices.map((s, i) => (
           <div key={i} className="flex items-center gap-1.5 min-w-0">
             <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: s.color }} />
-            <span className="truncate text-gray-700" title={s.label}>
+            <span className="truncate text-ink/70" title={s.label}>
               {s.label || "—"}
             </span>
-            <span className="ml-auto tabular-nums text-gray-400 shrink-0">
+            <span className="ml-auto tabular-nums text-ink/40 shrink-0">
               {Math.round((s.value / total) * 100)}%
             </span>
           </div>
@@ -489,7 +489,7 @@ function PieChart({ categories, series }: { categories: string[]; series: Series
 function Legend({ series }: { series: Series[] }) {
   if (series.length <= 1) return null;
   return (
-    <div className="flex items-center flex-wrap gap-x-4 gap-y-1 mt-1 px-2 text-xs text-gray-600">
+    <div className="flex items-center flex-wrap gap-x-4 gap-y-1 mt-1 px-2 text-xs text-ink/60">
       {series.map((s, i) => (
         <span key={i} className="inline-flex items-center gap-1.5">
           <span className="w-2.5 h-2.5 rounded-sm" style={{ background: s.color }} />
@@ -502,7 +502,7 @@ function Legend({ series }: { series: Series[] }) {
 
 function ChartNotice({ text }: { text: string }) {
   return (
-    <div className="h-48 flex items-center justify-center text-center text-sm text-gray-400 px-6">
+    <div className="h-48 flex items-center justify-center text-center text-sm text-ink/40 px-6">
       {text}
     </div>
   );

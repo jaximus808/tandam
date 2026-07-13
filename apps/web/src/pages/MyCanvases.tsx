@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import type { CanvasMeta, CanvasMode } from "../types";
 import { listMyCanvases, listSharedWithMe } from "../lib/api";
-import { fetchMe, type User } from "../lib/auth";
+import { fetchMe, getCachedUser, type User } from "../lib/auth";
 import { modeTheme } from "../lib/modeTheme";
 import TandemLogo from "../components/TandemLogo";
 import AccountMenu from "../components/AccountMenu";
@@ -90,7 +90,7 @@ function sortCanvases(list: CanvasMeta[], key: SortKey): CanvasMeta[] {
 }
 
 export default function MyCanvases({ onOpenCanvas, onHome, onOpenMCP, onShowSettings, onShowAbout }: Props) {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<User | null>(getCachedUser);
   const [load, setLoad] = useState<Load>({ status: "loading" });
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("updated");

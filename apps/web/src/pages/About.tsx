@@ -1,6 +1,6 @@
 import type { ComponentType } from "react";
 import { Globe, ArrowUpRight } from "lucide-react";
-import SiteHeader from "../components/SiteHeader";
+import LandingNav from "../components/LandingNav";
 
 // Brand marks (GitHub / LinkedIn). lucide-react dropped brand icons, so these
 // are inlined as filled SVGs — matching Landing's own icon approach.
@@ -40,13 +40,13 @@ const GITHUB_URL = "https://github.com/jaximus808";
 export default function About({ onBack, onOpenMCP, onShowCanvases, onShowSettings, onOpenCanvas }: Props) {
   return (
     <div className="min-h-screen bg-paper font-brand text-ink antialiased">
-      <SiteHeader
+      <LandingNav
         onHome={onBack}
-        label="About"
+        onJoin={onOpenCanvas}
         onOpenMCP={onOpenMCP}
         onShowCanvases={onShowCanvases}
         onShowSettings={onShowSettings}
-        onOpenCanvas={onOpenCanvas}
+        onAbout={() => window.scrollTo({ top: 0, behavior: "smooth" })}
       />
 
       <main className="mx-auto max-w-3xl px-6 py-16 sm:py-24">

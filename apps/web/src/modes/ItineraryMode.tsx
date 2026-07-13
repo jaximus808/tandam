@@ -126,8 +126,8 @@ export default function ItineraryMode({
       <div className="max-w-2xl mx-auto w-full px-6 py-6">
         <div className="flex items-center justify-between gap-3 mb-4 -mt-2">
           {hasCost ? (
-            <span className="text-sm font-medium text-gray-900">
-              Total <span className="text-emerald-700">{formatCost(grandTotal)}</span>
+            <span className="text-sm font-medium text-ink">
+              Total <span className="text-emerald-600">{formatCost(grandTotal)}</span>
             </span>
           ) : (
             <span />
@@ -136,14 +136,14 @@ export default function ItineraryMode({
           <a
             href={icsPath}
             download={downloadFilename}
-            className="text-xs text-gray-500 hover:text-gray-800 underline underline-offset-2"
+            className="text-xs text-ink/55 hover:text-ink/80 underline underline-offset-2"
             title="Download a one-time .ics file. Import into Google / Apple / Outlook calendar."
           >
             Download .ics
           </a>
           <button
             onClick={copySubscribeUrl}
-            className="text-xs text-gray-500 hover:text-gray-800 underline underline-offset-2"
+            className="text-xs text-ink/55 hover:text-ink/80 underline underline-offset-2"
             title="Copy a calendar subscription URL. Paste into Google Calendar → Other calendars → From URL — the trip will stay in sync as you edit Tandem."
           >
             {copied ? "Copied!" : "Copy subscribe URL"}
@@ -155,10 +155,10 @@ export default function ItineraryMode({
           const dayTz = dayEvents.find((e) => e.timezone)?.timezone;
           return (
           <section key={day} className="mb-8">
-            <h2 className="font-display text-lg font-medium tracking-tight text-gray-900 mb-3 sticky top-0 bg-paper/90 backdrop-blur py-1.5 z-10 flex items-baseline justify-between gap-3">
+            <h2 className="font-display text-lg font-medium tracking-tight text-ink mb-3 sticky top-0 bg-paper/90 backdrop-blur py-1.5 z-10 flex items-baseline justify-between gap-3">
               <span>{formatDay(day)}</span>
               {sumCost(dayEvents) > 0 && (
-                <span className="text-sm font-normal text-gray-400">{formatCost(sumCost(dayEvents))}</span>
+                <span className="text-sm font-normal text-ink/40">{formatCost(sumCost(dayEvents))}</span>
               )}
             </h2>
             <div className="space-y-3">
@@ -175,7 +175,7 @@ export default function ItineraryMode({
               ))}
               <button
                 onClick={() => addEvent(day, dayTz)}
-                className="w-full flex items-center justify-center gap-1.5 rounded-lg border border-dashed border-gray-200 py-2 text-xs font-medium text-gray-400 hover:border-gray-300 hover:text-gray-600 transition-colors"
+                className="w-full flex items-center justify-center gap-1.5 rounded-lg border border-dashed border-ink/15 py-2 text-xs font-medium text-ink/40 hover:border-ink/20 hover:text-ink/60 transition-colors"
               >
                 <Plus size={13} /> Add event
               </button>
@@ -215,8 +215,8 @@ function EventCard({
       data-agent-target={ev.id}
       onClick={onSelect}
       className={[
-        "group/ev relative bg-white rounded-lg border p-4 cursor-pointer transition-colors",
-        isSelected ? "border-gray-300 ring-1 ring-gray-200" : "border-gray-200 hover:border-gray-300",
+        "group/ev relative bg-surface rounded-lg border p-4 cursor-pointer transition-colors",
+        isSelected ? "border-ink/20 ring-1 ring-ink/15" : "border-ink/15 hover:border-ink/20",
       ].join(" ")}
       style={isTravel && travelStyle ? { borderLeft: `4px solid ${travelStyle.color}` } : undefined}
     >
@@ -226,7 +226,7 @@ function EventCard({
           if (confirm("Delete this event?")) sendOp({ op: "event.delete", id: ev.id });
         }}
         title="Delete event"
-        className="absolute top-2 right-2 z-10 opacity-0 group-hover/ev:opacity-100 text-gray-300 hover:text-red-600 transition-opacity p-1"
+        className="absolute top-2 right-2 z-10 opacity-0 group-hover/ev:opacity-100 text-ink/30 hover:text-red-600 transition-opacity p-1"
       >
         <Trash2 size={14} />
       </button>
@@ -236,7 +236,7 @@ function EventCard({
           value={ev.title}
           placeholder="Untitled event"
           onCommit={(title) => title !== ev.title && updateEvent(ev.id, { title })}
-          className="font-medium text-gray-900"
+          className="font-medium text-ink"
         />
         <span className="flex flex-col items-end shrink-0">
           {editingTime ? (
@@ -247,13 +247,13 @@ function EventCard({
                 e.stopPropagation();
                 setEditingTime(true);
               }}
-              className="text-sm text-gray-400 hover:text-gray-700 whitespace-nowrap rounded px-1 -mr-1 hover:bg-gray-50"
+              className="text-sm text-ink/40 hover:text-ink/70 whitespace-nowrap rounded px-1 -mr-1 hover:bg-ink/5"
               title="Edit time"
             >
               {formatTime(ev.start, ev.timezone)}
               {ev.end && ` – ${formatTime(ev.end, ev.timezone)}`}
               {tzAbbrev(ev.start, ev.timezone) && (
-                <span className="ml-1 text-gray-300">{tzAbbrev(ev.start, ev.timezone)}</span>
+                <span className="ml-1 text-ink/30">{tzAbbrev(ev.start, ev.timezone)}</span>
               )}
             </button>
           )}
@@ -281,8 +281,7 @@ function EventCard({
           {eventPins.map((p) => (
             <span
               key={p!.id}
-              className="inline-flex items-center gap-1 text-xs rounded-full px-2 py-0.5"
-              style={{ backgroundColor: "rgba(245,158,11,0.12)", color: "#B45309" }}
+              className="inline-flex items-center gap-1 text-xs rounded-full px-2 py-0.5 bg-amber-500/10 text-amber-600"
             >
               <span
                 className="w-2 h-2 rounded-full shrink-0"
@@ -295,11 +294,11 @@ function EventCard({
       )}
 
       {notes.length > 0 && (
-        <div className="mt-3 space-y-2 border-t border-gray-100 pt-3">
+        <div className="mt-3 space-y-2 border-t border-ink/10 pt-3">
           {notes.map((note) => (
             <div
               key={note.id}
-              className="text-sm text-gray-600 prose prose-sm max-w-none"
+              className="text-sm text-ink/60 prose prose-sm max-w-none"
             >
               <ReactMarkdown remarkPlugins={MARKDOWN_PLUGINS}>
                 {note.body}
@@ -359,7 +358,7 @@ function InlineText({
           }
         }}
         placeholder={placeholder}
-        className={`${className} bg-transparent rounded px-1 -mx-1 outline-none min-w-0 w-full caret-gray-900`}
+        className={`${className} bg-transparent rounded px-1 -mx-1 outline-none min-w-0 w-full caret-ink`}
       />
     );
   }
@@ -370,8 +369,8 @@ function InlineText({
         e.stopPropagation();
         setEditing(true);
       }}
-      className={`${className} cursor-text rounded px-1 -mx-1 hover:bg-gray-50 ${
-        value ? "" : "text-gray-400 italic"
+      className={`${className} cursor-text rounded px-1 -mx-1 hover:bg-ink/5 ${
+        value ? "" : "text-ink/40 italic"
       }`}
     >
       {value || placeholder}
@@ -425,7 +424,7 @@ function CostField({ ev }: { ev: CanvasEvent }) {
           }
         }}
         placeholder="0"
-        className="mt-0.5 w-20 text-right text-xs font-semibold text-emerald-700 bg-transparent rounded px-1 outline-none caret-emerald-700"
+        className="mt-0.5 w-20 text-right text-xs font-semibold text-emerald-600 bg-transparent rounded px-1 outline-none caret-emerald-600"
       />
     );
   }
@@ -438,8 +437,8 @@ function CostField({ ev }: { ev: CanvasEvent }) {
       }}
       className={
         typeof ev.cost === "number"
-          ? "mt-0.5 text-xs font-semibold text-emerald-700 whitespace-nowrap rounded px-1 -mr-1 hover:bg-emerald-50"
-          : "mt-0.5 text-xs font-medium text-gray-300 opacity-0 group-hover/ev:opacity-100 hover:text-emerald-700 rounded px-1 -mr-1 transition-opacity"
+          ? "mt-0.5 text-xs font-semibold text-emerald-600 whitespace-nowrap rounded px-1 -mr-1 hover:bg-emerald-500/10"
+          : "mt-0.5 text-xs font-medium text-ink/30 opacity-0 group-hover/ev:opacity-100 hover:text-emerald-600 rounded px-1 -mr-1 transition-opacity"
       }
       title="Edit cost"
     >
@@ -486,7 +485,7 @@ function TimeEditor({ ev, onClose }: { ev: CanvasEvent; onClose: () => void }) {
             if (e.key === "Enter") { e.preventDefault(); commitStart(); onClose(); }
             else if (e.key === "Escape") { e.preventDefault(); onClose(); }
           }}
-          className="text-xs text-gray-700 bg-blue-50/60 rounded px-1 outline-none ring-1 ring-blue-200"
+          className="text-xs text-ink/70 bg-blue-500/10 rounded px-1 outline-none ring-1 ring-blue-400/40"
         />
         <button
           onClick={() => { commitStart(); commitEnd(); onClose(); }}
@@ -506,7 +505,7 @@ function TimeEditor({ ev, onClose }: { ev: CanvasEvent; onClose: () => void }) {
           if (e.key === "Enter") { e.preventDefault(); commitEnd(); onClose(); }
           else if (e.key === "Escape") { e.preventDefault(); onClose(); }
         }}
-        className="text-xs text-gray-500 bg-white rounded px-1 outline-none ring-1 ring-gray-200"
+        className="text-xs text-ink/55 bg-surface rounded px-1 outline-none ring-1 ring-ink/15"
       />
     </div>
   );

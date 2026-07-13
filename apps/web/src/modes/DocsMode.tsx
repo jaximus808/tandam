@@ -52,7 +52,7 @@ export default function DocsMode({ canvasId, state }: Props) {
     <div className="tandem-scroll flex-1 overflow-y-auto bg-paper">
       <div className="max-w-3xl mx-auto w-full px-6 py-6">
         <div className="flex items-center justify-between mb-4">
-          <h1 className="font-display text-xl font-medium tracking-tight text-gray-900">Docs</h1>
+          <h1 className="font-display text-xl font-medium tracking-tight text-ink">Docs</h1>
           <button
             onClick={handleAddNote}
             className="text-sm px-3.5 py-1.5 rounded-lg text-white font-medium shadow-sm transition-opacity hover:opacity-90"
@@ -180,11 +180,11 @@ function NoteCard({
   return (
     <div
       data-agent-target={note.id}
-      className="group bg-white rounded-lg border border-gray-200 hover:border-gray-300 transition-colors"
+      className="group bg-surface rounded-lg border border-ink/15 hover:border-ink/20 transition-colors"
     >
       <div className="flex items-center justify-between px-4 pt-3">
         {parent ? (
-          <span className="text-xs bg-gray-100 text-gray-600 rounded-full px-2 py-0.5">
+          <span className="text-xs bg-ink/10 text-ink/60 rounded-full px-2 py-0.5">
             {parent.kind === "pin"
               ? `Pin · ${parent.label ?? "Unnamed"}`
               : `Event · ${"title" in parent ? parent.title : ""}`}
@@ -194,7 +194,7 @@ function NoteCard({
         )}
         <button
           onClick={handleDelete}
-          className="text-xs text-gray-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
+          className="text-xs text-ink/40 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
           title="Delete note"
         >
           ✕
@@ -221,14 +221,14 @@ function NoteCard({
                 key={ref}
                 src={imageUrl(canvasId, ref)}
                 alt=""
-                className="rounded max-h-48 object-cover border border-gray-100"
+                className="rounded max-h-48 object-cover border border-ink/10"
               />
             ))}
           </div>
         )}
 
         {saveState !== "idle" && (
-          <div className="mt-2 text-[11px] text-gray-400 select-none">
+          <div className="mt-2 text-[11px] text-ink/40 select-none">
             {saveState === "saving" || savedAt === null
               ? "Saving…"
               : `Saved at ${formatSavedAt(savedAt)}`}
@@ -322,7 +322,7 @@ function RichTextEditor({
         onBlur={onBlur}
         onPaste={handlePaste}
         data-placeholder="Start typing…"
-        className="rich-editor cursor-text min-h-[1.5rem] prose prose-sm max-w-none text-gray-800 focus:outline-none"
+        className="rich-editor cursor-text min-h-[1.5rem] prose prose-sm max-w-none text-ink/80 focus:outline-none"
       />
     </div>
   );
@@ -347,7 +347,7 @@ function Toolbar({
       title={title}
       onMouseDown={(e) => e.preventDefault()}
       onClick={() => onCommand(command, value)}
-      className="px-2 py-1 rounded text-xs text-gray-600 hover:bg-gray-100 transition-colors"
+      className="px-2 py-1 rounded text-xs text-ink/60 hover:bg-ink/10 transition-colors"
     >
       {label}
     </button>
@@ -359,10 +359,10 @@ function Toolbar({
       {item("H1", "formatBlock", "<h1>", "Heading 1")}
       {item("H2", "formatBlock", "<h2>", "Heading 2")}
       {item("H3", "formatBlock", "<h3>", "Heading 3")}
-      <span className="w-px h-4 bg-gray-200 mx-1" />
+      <span className="w-px h-4 bg-ink/10 mx-1" />
       {item(<span className="font-bold">B</span>, "bold", undefined, "Bold")}
       {item(<span className="italic">I</span>, "italic", undefined, "Italic")}
-      <span className="w-px h-4 bg-gray-200 mx-1" />
+      <span className="w-px h-4 bg-ink/10 mx-1" />
       {item("• List", "insertUnorderedList", undefined, "Bulleted list")}
       {item("1. List", "insertOrderedList", undefined, "Numbered list")}
     </div>

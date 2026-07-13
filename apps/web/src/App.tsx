@@ -22,7 +22,7 @@ import About from "./pages/About";
 import MyCanvases from "./pages/MyCanvases";
 import StatsPage from "./pages/StatsPage";
 import UserSettings from "./pages/UserSettings";
-import { fetchMe, type User } from "./lib/auth";
+import { fetchMe, getCachedUser, type User } from "./lib/auth";
 import { copyCanvas, claimCanvas } from "./lib/api";
 import ConnectModal, { hasDismissedConnect } from "./components/ConnectModal";
 import ShareDialog from "./components/ShareDialog";
@@ -222,7 +222,7 @@ export default function App() {
   const [accessError, setAccessError] = useState<AccessStatus | null>(null);
   // The signed-in user (or null). Drives the "Copy to my account" button —
   // shown when this canvas isn't already owned by me.
-  const [me, setMe] = useState<User | null>(null);
+  const [me, setMe] = useState<User | null>(getCachedUser);
   const [copying, setCopying] = useState(false);
   // Pending claim token from a /c/CODE?claim=… link. Held in state (not just the
   // URL) so it survives the URL being stripped and a later sign-in.
@@ -708,6 +708,17 @@ export default function App() {
           window.history.pushState(null, "", "/");
           setRoute("home");
         }}
+        onOpenMCP={() => {
+          setMCPInURL();
+          setRoute("mcp");
+        }}
+        onShowCanvases={showMyCanvases}
+        onShowSettings={showSettings}
+        onAbout={showAbout}
+        onOpenCanvas={(code) => {
+          setRoute("home");
+          handleJoin(code);
+        }}
       />
     );
   }
@@ -1125,10 +1136,12 @@ export default function App() {
         )}
 
         {/* Mode content row: the focused document's view + the QuickLog dock.
-            theme-light: the mode components + QuickLog aren't dark-mode-ready
-            yet, so the worksurface is locked to light — a coherent light canvas
-            inside the themed chrome — until each mode gets its own dark pass. */}
-        <div className="theme-light relative flex flex-1 min-h-0 bg-paper text-ink">
+            The mode components + QuickLog are dark-mode-ready (grays swept to
+            paper/surface/ink tokens), so the worksurface follows the active
+            theme. MapMode is a deliberate exception: the raster tiles + baked
+            annotation pills stay light (a light map framed by dark chrome),
+            while its toolbar, sidebar, and popups follow the theme. */}
+        <div className="relative flex flex-1 min-h-0 bg-paper text-ink">
         <ErrorBoundary resetKey={`${canvas.id}:${effectiveMode}`}>
         {(["welcome", "map", "itinerary", "docs", "roadmap", "sheets", "charts"] as CanvasMode[]).map((m) => {
           const active = effectiveMode === m;
