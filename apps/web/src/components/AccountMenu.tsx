@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronLeft, Inbox, Settings, Info } from "lucide-react";
+import { ChevronLeft, Inbox, Settings } from "lucide-react";
 import { fetchMe, getCachedUser, logout, GOOGLE_CLIENT_ID, type User } from "../lib/auth";
 import {
   listNotifications,
@@ -21,7 +21,6 @@ import posthog from "../lib/posthog";
 export default function AccountMenu({
   onShowCanvases,
   onShowSettings,
-  onShowAbout,
   onUserChange,
   onOpenCanvas,
 }: {
@@ -29,7 +28,8 @@ export default function AccountMenu({
   // Navigate to the account settings page (/me). Rendered as a "Settings" row
   // when provided; omitted where there's nowhere to route to.
   onShowSettings?: () => void;
-  // Navigate to the About page (/about). Rendered as an "About" row when provided.
+  // Accepted for caller compatibility but no longer rendered — the About row was
+  // removed from the dropdown (About still lives in the top nav).
   onShowAbout?: () => void;
   // Notified whenever the signed-in user changes (initial load, sign-in,
   // sign-out) so a parent can keep its own copy of `me` in sync — e.g. App
@@ -234,19 +234,6 @@ export default function AccountMenu({
                   >
                     <Settings className="h-4 w-4 text-ink/45" aria-hidden="true" />
                     <span>Settings</span>
-                  </button>
-                )}
-                {onShowAbout && (
-                  <button
-                    role="menuitem"
-                    onClick={() => {
-                      setMenuOpen(false);
-                      onShowAbout();
-                    }}
-                    className="flex w-full items-center gap-2.5 px-3 py-2 text-sm text-ink/70 hover:bg-ink/5"
-                  >
-                    <Info className="h-4 w-4 text-ink/45" aria-hidden="true" />
-                    <span>About</span>
                   </button>
                 )}
               </div>
