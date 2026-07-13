@@ -15,6 +15,12 @@ export interface GatewayConfig {
   // Distinct from apiUrl because the sidecar talks to the API over the internal
   // network but must hand users the public domain. Defaults to apiUrl.
   webUrl?: string;
+  // Optional personal access token (TANDEM_TOKEN). When set, the gateway acts as
+  // the user who minted it: forwarded on the auth handshake so the API resolves
+  // that user's real role on their private / shared-with-them canvases instead of
+  // anonymous. Only used on the stdio path — the multi-tenant HTTP sidecar leaves
+  // this unset (it can't hold one user's secret for every client).
+  userToken?: string;
 }
 
 export interface CanvasSession {
@@ -35,21 +41,57 @@ export interface CanvasSession {
 export class Gateway {
   private config: GatewayConfig;
   private session: CanvasSession | null = null;
+  // Per-request user credential for the multi-tenant HTTP sidecar: the OAuth
+  // access token from the incoming Authorization header, set by http.ts before
+  // each dispatch. Takes precedence over config.userToken (the stdio env token),
+  // so one shared gateway process still acts as whichever user made the call.
+  private sessionUserToken?: string;
 
   constructor(config: GatewayConfig) {
     this.config = config;
+  }
+
+  /**
+   * Set (or clear) the per-request user token. Called by the HTTP sidecar with
+   * the bearer from the incoming request so connect/create forward it and the
+   * API resolves that user. No-op token clears it (anonymous).
+   */
+  setUserToken(token?: string): void {
+    this.sessionUserToken = token && token.trim() ? token.trim() : undefined;
+  }
+
+  /**
+   * Credential headers for the PRE-JWT calls (auth handshake + create). Carries
+   * the personal access token when configured so the API resolves the user's real
+   * role; empty otherwise (anonymous → public canvases only). Not used on
+   * canvas-scoped calls, which authenticate with the issued canvas JWT.
+   */
+  private userAuthHeaders(): Record<string, string> {
+    // Per-request token (sidecar, from the request) wins over the env token (stdio).
+    const token = this.sessionUserToken ?? this.config.userToken;
+    return token ? { Authorization: `Bearer ${token}` } : {};
   }
 
   /** Exchange canvas code for JWT. Called by the `canvas_connect` tool. */
   async connectWithCode(code: string): Promise<CanvasSession> {
     const res = await this.safeFetch("/api/mcp/auth", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...this.userAuthHeaders() },
       body: JSON.stringify({ code }),
     });
 
     if (!res.ok) {
       const body = await res.text();
+      // 403 = the canvas is private/shared and this caller resolved as anonymous
+      // (no user credential). Surface an actionable message: on the hosted
+      // connector the user needs to authorize their account; on stdio they set
+      // TANDEM_TOKEN. Keeps public canvases seamless while pointing the way in.
+      if (res.status === 403) {
+        throw new Error(
+          `This canvas is private or shared, so it needs your account. ` +
+            `Authorize Tandem for this connector (or set a TANDEM_TOKEN) and try again. (${body})`
+        );
+      }
       throw new Error(`Auth failed (${res.status}): ${body}`);
     }
 
@@ -83,7 +125,7 @@ export class Gateway {
   async createCanvas(name: string): Promise<CanvasSession> {
     const res = await this.safeFetch("/api/canvases", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...this.userAuthHeaders() },
       body: JSON.stringify({ name }),
     });
     if (!res.ok) {

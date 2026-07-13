@@ -1,8 +1,16 @@
 import { useEffect, useState } from "react";
-import { LogOut, Bell, Lock, Globe, Trash2 } from "lucide-react";
-import { fetchMe, getCachedUser, logout, setDefaultCanvasVisibility, type User } from "../lib/auth";
+import { LogOut, Bell, Lock, Globe, Trash2, Eye, Pencil } from "lucide-react";
+import {
+  fetchMe,
+  getCachedUser,
+  logout,
+  setDefaultCanvasVisibility,
+  setDefaultPublicRole,
+  type User,
+} from "../lib/auth";
 import TandemLogo from "../components/TandemLogo";
 import AccountMenu from "../components/AccountMenu";
+import AccessTokensSection from "../components/AccessTokensSection";
 import ThemeToggle from "../components/ThemeToggle";
 import posthog from "../lib/posthog";
 
@@ -79,6 +87,24 @@ export default function UserSettings({ onHome, onShowCanvases, onShowAbout, onOp
       setLoad({ status: "ready", user: prev });
     } finally {
       setSavingVisibility(false);
+    }
+  }
+
+  // Same optimistic pattern for the default public-role preference.
+  const [savingRole, setSavingRole] = useState(false);
+  async function handleRoleChange(next: "read" | "write") {
+    if (load.status !== "ready") return;
+    const prev = load.user;
+    if ((prev.defaultPublicRole ?? "read") === next) return;
+    setLoad({ status: "ready", user: { ...prev, defaultPublicRole: next } });
+    setSavingRole(true);
+    try {
+      const updated = await setDefaultPublicRole(next);
+      setLoad({ status: "ready", user: updated });
+    } catch {
+      setLoad({ status: "ready", user: prev });
+    } finally {
+      setSavingRole(false);
     }
   }
 
@@ -207,6 +233,30 @@ export default function UserSettings({ onHome, onShowCanvases, onShowAbout, onOp
               </div>
             </section>
 
+            {/* Default public access — for canvases created public, whether a bare
+                code-holder can edit or only view. Owners and people you share with
+                keep their own access regardless. */}
+            <section className="mt-6 rounded-2xl border border-ink/10 bg-surface p-5 sm:p-6">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-ink">Default public access</div>
+                  <div className="text-xs text-ink/50">
+                    For public canvases, whether someone with just the link can edit or only view.
+                    People you share with (and you) always keep full access.
+                  </div>
+                </div>
+                <PublicRoleSegmented
+                  value={user.defaultPublicRole ?? "read"}
+                  disabled={savingRole}
+                  onChange={handleRoleChange}
+                />
+              </div>
+            </section>
+
+            {/* Access tokens — user-scoped MCP credentials so an agent can act
+                as this user on their private / shared canvases. */}
+            <AccessTokensSection />
+
             {/* Placeholder home for the remaining account setting — a follow-up
                 task. Kept visible (disabled) so the shell reads as intentional. */}
             <section className="mt-6 overflow-hidden rounded-2xl border border-ink/10 bg-surface">
@@ -282,6 +332,45 @@ function VisibilitySegmented({
   const opts: { key: "private" | "public"; label: string; icon: typeof Lock }[] = [
     { key: "private", label: "Private", icon: Lock },
     { key: "public", label: "Public", icon: Globe },
+  ];
+  return (
+    <div className="inline-flex shrink-0 rounded-lg border border-ink/10 bg-ink/[0.03] p-0.5">
+      {opts.map(({ key, label, icon: Icon }) => {
+        const active = value === key;
+        return (
+          <button
+            key={key}
+            type="button"
+            disabled={disabled}
+            aria-pressed={active}
+            onClick={() => onChange(key)}
+            className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+              active ? "bg-paper text-ink shadow-sm" : "text-ink/50 hover:text-ink"
+            }`}
+          >
+            <Icon className="h-3.5 w-3.5" />
+            {label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// A View-only / Can edit segmented control for the default public role. Same
+// mechanics as VisibilitySegmented.
+function PublicRoleSegmented({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: "read" | "write";
+  disabled?: boolean;
+  onChange: (v: "read" | "write") => void;
+}) {
+  const opts: { key: "read" | "write"; label: string; icon: typeof Eye }[] = [
+    { key: "read", label: "View only", icon: Eye },
+    { key: "write", label: "Can edit", icon: Pencil },
   ];
   return (
     <div className="inline-flex shrink-0 rounded-lg border border-ink/10 bg-ink/[0.03] p-0.5">

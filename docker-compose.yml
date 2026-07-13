@@ -25,6 +25,9 @@ services:
       JWT_TOKEN_TTL: ${JWT_TOKEN_TTL:-24h}
       # Runtime: the Go server verifies Google ID tokens against this audience.
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?set GOOGLE_CLIENT_ID in .env}
+      # Public origin — the OAuth issuer + base for the authorization-server
+      # metadata URLs. Must be the externally-reachable domain (behind Caddy).
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://tandemcanvas.com}
     volumes:
       # FIX: Hardcoded the absolute path on the container side (/app/canvas-images)
       - canvas-images:/app/canvas-images

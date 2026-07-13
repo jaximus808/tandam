@@ -33,6 +33,79 @@ func TestClaimTokenFormatDistinctFromCode(t *testing.T) {
 	}
 }
 
+// A personal access token must carry its namespace prefix (so the auth
+// middleware can prefix-gate the DB lookup), be high-entropy, and hash
+// deterministically to a fixed-width digest — the property the hash-at-rest
+// storage model in migration 0027 relies on.
+func TestGeneratePATFormatAndHash(t *testing.T) {
+	seen := map[string]bool{}
+	for range 200 {
+		tok := GeneratePAT()
+		if !strings.HasPrefix(tok, PATPrefix) {
+			t.Fatalf("PAT missing %q prefix: %q", PATPrefix, tok)
+		}
+		hexPart := strings.TrimPrefix(tok, PATPrefix)
+		if len(hexPart) != 64 { // 32 bytes => 64 hex chars
+			t.Fatalf("PAT hex part = %d chars, want 64: %q", len(hexPart), tok)
+		}
+		if seen[tok] {
+			t.Fatalf("PAT collision — generator not random: %q", tok)
+		}
+		seen[tok] = true
+
+		// Hash is deterministic, fixed-width (sha256 hex), and never the plaintext.
+		h := HashToken(tok)
+		if len(h) != 64 {
+			t.Fatalf("token hash = %d chars, want 64 (sha256 hex): %q", len(h), h)
+		}
+		if h != HashToken(tok) {
+			t.Fatalf("HashToken not deterministic for %q", tok)
+		}
+		if h == tok || strings.Contains(h, tok) {
+			t.Fatalf("hash leaks the plaintext token")
+		}
+		if LastFour(tok) != tok[len(tok)-4:] {
+			t.Fatalf("LastFour(%q) = %q, want last 4 chars", tok, LastFour(tok))
+		}
+	}
+}
+
+// OAuth secrets must carry their namespacing prefixes (so the auth middleware
+// can prefix-gate and so token classes never collide) and be high-entropy.
+func TestOAuthGeneratorsFormat(t *testing.T) {
+	checks := []struct {
+		name   string
+		gen    func() string
+		prefix string
+		hexLen int
+	}{
+		{"access", GenerateAccessToken, OAuthAccessPrefix, 64},
+		{"refresh", GenerateRefreshToken, oauthRefreshPrefix, 64},
+		{"code", GenerateAuthCode, oauthCodePrefix, 64},
+		{"client", GenerateOAuthClientID, oauthClientIDPrefix, 32},
+	}
+	seen := map[string]bool{}
+	for _, c := range checks {
+		for range 100 {
+			tok := c.gen()
+			if !strings.HasPrefix(tok, c.prefix) {
+				t.Fatalf("%s token missing prefix %q: %q", c.name, c.prefix, tok)
+			}
+			if got := len(strings.TrimPrefix(tok, c.prefix)); got != c.hexLen {
+				t.Fatalf("%s token hex len = %d, want %d: %q", c.name, got, c.hexLen, tok)
+			}
+			if seen[tok] {
+				t.Fatalf("%s token collision — generator not random: %q", c.name, tok)
+			}
+			seen[tok] = true
+		}
+	}
+	// Access tokens carry the prefix the middleware gates on, distinct from PATs.
+	if strings.HasPrefix(GenerateAccessToken(), PATPrefix) {
+		t.Fatal("OAuth access token collides with the PAT prefix")
+	}
+}
+
 func TestResolveRowData(t *testing.T) {
 	cols := []SheetColumn{
 		{ID: "col-task", Name: "Task", Type: "text"},

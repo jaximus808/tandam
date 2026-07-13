@@ -6,6 +6,10 @@ export interface User {
   // Preference for whether canvases this user creates start "public" (anyone
   // with the code) or "private" (owner + shared accounts). Defaults "public".
   defaultCanvasVisibility?: "public" | "private";
+  // Preference for what a bare code-holder gets on a PUBLIC canvas this user
+  // creates: "read" (view only) or "write" (can edit). Defaults "read". Does not
+  // affect the owner or shared members, who keep their own role.
+  defaultPublicRole?: "read" | "write";
   createdAt?: string;
   lastSeenAt?: string;
 }
@@ -92,6 +96,25 @@ export async function setDefaultCanvasVisibility(
     headers: { "Content-Type": "application/json" },
     credentials: "same-origin",
     body: JSON.stringify({ defaultCanvasVisibility: visibility }),
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(detail || "Failed to update setting");
+  }
+  const user = (await res.json()) as User;
+  cacheUser(user);
+  return user;
+}
+
+// setDefaultPublicRole PATCHes the signed-in user's default public-role preference
+// and returns the server-confirmed user (refreshing the identity cache). Throws
+// on failure so callers can revert an optimistic UI.
+export async function setDefaultPublicRole(role: "read" | "write"): Promise<User> {
+  const res = await fetch("/api/auth/me", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    body: JSON.stringify({ defaultPublicRole: role }),
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => "");

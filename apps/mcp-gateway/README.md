@@ -47,9 +47,24 @@ pnpm --filter @jaximus/tandem-mcp build
 
 ## Configuration
 
-| Env var   | Default                    | Purpose                                                          |
-| --------- | -------------------------- | ---------------------------------------------------------------- |
-| `API_URL` | `https://tandemcanvas.com` | Tandem HTTP API base URL. Only set this to override the default. |
+| Env var        | Default                    | Purpose                                                                                                                                             |
+| -------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `API_URL`      | `https://tandemcanvas.com` | Tandem HTTP API base URL. Only set this to override the default.                                                                                    |
+| `TANDEM_TOKEN` | _(unset)_                  | Personal access token — lets the agent act as **you** on your private and shared canvases. Mint one at `/me`. Without it, only public canvases work. |
+
+To connect as yourself, mint a token under **Access tokens** at [tandemcanvas.com/me](https://tandemcanvas.com/me) and add it to your MCP client config:
+
+```json
+{
+  "mcpServers": {
+    "tandem": {
+      "command": "npx",
+      "args": ["-y", "@jaximus/tandem-mcp"],
+      "env": { "TANDEM_TOKEN": "tdm_pat_…" }
+    }
+  }
+}
+```
 
 ## Tools
 

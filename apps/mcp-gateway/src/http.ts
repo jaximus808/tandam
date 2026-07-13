@@ -33,7 +33,41 @@ const MCP_PATH = process.env.MCP_PATH ?? "/api/mcp";
 
 interface Session {
   transport: StreamableHTTPServerTransport;
+  // The session's Gateway, kept so we can push the per-request user token (the
+  // OAuth bearer) onto it before each dispatch — this is how the multi-tenant
+  // sidecar acts as whichever user made the call.
+  gateway: Gateway;
   createdAt: number;
+}
+
+// When true, the sidecar challenges unauthenticated connections with a 401 +
+// WWW-Authenticate so claude.ai runs the OAuth flow up front (connector-level
+// auth). Default OFF: anonymous access to public canvases stays seamless, and
+// OAuth is entered only when the user chooses to (step-up). Kept as a switch so
+// the full OAuth handshake can be exercised end-to-end while we confirm how the
+// hosted connector triggers auth. See the MCP-OAuth design note.
+const REQUIRE_AUTH = process.env.MCP_REQUIRE_AUTH === "1";
+
+/** The bearer token on an incoming request, if any. */
+function bearerFrom(req: IncomingMessage): string | undefined {
+  const header = req.headers["authorization"];
+  const value = Array.isArray(header) ? header[0] : header;
+  if (!value || !value.startsWith("Bearer ")) return undefined;
+  const token = value.slice("Bearer ".length).trim();
+  return token || undefined;
+}
+
+/**
+ * Emit the RFC 9728 challenge that points a client at our protected-resource
+ * metadata, kicking off OAuth discovery. resource_metadata lives on the Go API
+ * at <PUBLIC_URL>/.well-known/oauth-protected-resource.
+ */
+function respondUnauthorized(res: ServerResponse): void {
+  res.setHeader(
+    "WWW-Authenticate",
+    `Bearer resource_metadata="${WEB_URL}/.well-known/oauth-protected-resource"`
+  );
+  rpcError(res, 401, "Authorization required");
 }
 
 // sessionId -> live session. In-memory: a restart drops bindings and clients
@@ -120,7 +154,8 @@ async function handleMcp(req: IncomingMessage, res: ServerResponse): Promise<voi
   const body = await readJsonBody(req);
   const rpc = describeRpc(body);
 
-  // Existing session: route to its transport.
+  // Existing session: route to its transport, carrying the caller's user token
+  // (OAuth bearer) so tool calls resolve as that user.
   if (sid) {
     const existing = sessions.get(sid);
     trace("POST", sid, rpc, existing ? "hit" : "MISS→404");
@@ -128,6 +163,7 @@ async function handleMcp(req: IncomingMessage, res: ServerResponse): Promise<voi
       rpcError(res, 404, "Session not found — re-initialize");
       return;
     }
+    existing.gateway.setUserToken(bearerFrom(req));
     await existing.transport.handleRequest(req, res, body);
     return;
   }
@@ -139,14 +175,23 @@ async function handleMcp(req: IncomingMessage, res: ServerResponse): Promise<voi
     return;
   }
 
+  // Optional connector-level auth: challenge an unauthenticated new connection so
+  // the client runs OAuth. Off by default — anonymous public access stays seamless.
+  if (REQUIRE_AUTH && !bearerFrom(req)) {
+    trace("POST", sid, rpc, "initialize, no-auth→401-challenge");
+    respondUnauthorized(res);
+    return;
+  }
+
   trace("POST", sid, rpc, "new-session");
 
   // Fresh session: its own Gateway (canvas binding lives here) + Server.
   const gateway = new Gateway({ apiUrl: API_URL, webUrl: WEB_URL });
+  gateway.setUserToken(bearerFrom(req));
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: (newId) => {
-      sessions.set(newId, { transport, createdAt: Date.now() });
+      sessions.set(newId, { transport, gateway, createdAt: Date.now() });
       trace("POST", newId, "initialize", "session-created");
     },
   });

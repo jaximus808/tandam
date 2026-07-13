@@ -56,17 +56,19 @@ func (h *Handler) CreateCanvas(w http.ResponseWriter, r *http.Request) {
 	// Owned only when a logged-in human creates it (OptionalUser middleware).
 	// MCP/gateway creates have no session cookie → anonymous, as intended.
 	var owner *uuid.UUID
-	var visibility string
+	var visibility, publicRole string
 	if uid, ok := UserIDFromCtx(r.Context()); ok {
 		owner = &uid
-		// Apply the owner's default-visibility preference to the new canvas. If the
-		// lookup fails we leave visibility "" and fall back to the column default
-		// ('public') rather than block the create. Anonymous creates skip this.
+		// Apply the owner's default posture (visibility + public role) to the new
+		// canvas. If the lookup fails we leave them "" and fall back to the column
+		// defaults ('public'/'write') rather than block the create. Anonymous
+		// creates skip this and keep the fully-open column defaults.
 		if u, err := h.store.GetUserByID(r.Context(), uid); err == nil {
 			visibility = u.DefaultCanvasVisibility
+			publicRole = u.DefaultPublicRole
 		}
 	}
-	canvas, err := h.store.CreateCanvas(r.Context(), body.Name, owner, visibility)
+	canvas, err := h.store.CreateCanvas(r.Context(), body.Name, owner, visibility, publicRole)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

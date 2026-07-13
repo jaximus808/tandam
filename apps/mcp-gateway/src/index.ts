@@ -37,6 +37,10 @@ function printHelp() {
       `Environment:\n` +
       `  API_URL                    Tandem API base URL.\n` +
       `                             Default: ${DEFAULT_API_URL}\n` +
+      `  TANDEM_TOKEN               Personal access token — lets Claude act as you\n` +
+      `                             on your private / shared canvases. Mint one at\n` +
+      `                             ${DEFAULT_API_URL}/me. Optional; without it the\n` +
+      `                             gateway can only reach public canvases.\n` +
       `\n` +
       `This binary is normally spawned by an MCP client (Claude Code, Cursor,\n` +
       `Codex, OpenAI Agents SDK, …) over stdio. See:\n` +
@@ -60,8 +64,12 @@ const API_URL = (apiUrlFromEnv ?? DEFAULT_API_URL).replace(/\/$/, "");
 // correct for the common stdio case (API_URL = public domain) and for local
 // dev (links point at the same local instance the canvas lives in).
 const WEB_URL = (process.env.PUBLIC_URL ?? API_URL).replace(/\/$/, "");
+// Optional personal access token. Set it to let Claude act as you on your
+// private / shared canvases — mint one at https://tandemcanvas.com/me. Without
+// it the gateway is anonymous and can only reach public canvases.
+const USER_TOKEN = process.env.TANDEM_TOKEN?.trim() || undefined;
 
-const gateway = new Gateway({ apiUrl: API_URL, webUrl: WEB_URL });
+const gateway = new Gateway({ apiUrl: API_URL, webUrl: WEB_URL, userToken: USER_TOKEN });
 
 async function main() {
   const server = createTandemServer(gateway, VERSION);

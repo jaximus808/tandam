@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -23,6 +24,12 @@ type Config struct {
 	// CookieSecure marks the session cookie Secure. Leave false in local dev
 	// (http); set COOKIE_SECURE=true in production (https behind Caddy).
 	CookieSecure bool
+
+	// PublicBaseURL is the externally-reachable origin (e.g.
+	// https://tandemcanvas.com), used as the OAuth issuer + to build the
+	// authorization-server metadata URLs. Empty → the OAuth handlers derive it
+	// per-request from the Host / X-Forwarded-Proto headers (fine for local dev).
+	PublicBaseURL string
 }
 
 func Load() (*Config, error) {
@@ -78,5 +85,6 @@ func Load() (*Config, error) {
 		ImageDir:       imageDir,
 		GoogleClientID: os.Getenv("GOOGLE_CLIENT_ID"),
 		CookieSecure:   os.Getenv("COOKIE_SECURE") == "true",
+		PublicBaseURL:  strings.TrimRight(os.Getenv("PUBLIC_BASE_URL"), "/"),
 	}, nil
 }

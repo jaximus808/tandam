@@ -17,6 +17,11 @@ var (
 	ErrAlreadyClaimed    = errors.New("canvas already claimed")
 	ErrInvalidClaimToken = errors.New("invalid claim token")
 	ErrUserNotFound      = errors.New("user not found")
+	// ErrInvalidToken is returned by UserIDByTokenHash when no live PAT matches.
+	ErrInvalidToken = errors.New("invalid personal access token")
+	// ErrInvalidGrant is returned by the OAuth code/refresh consumers when the
+	// grant is missing, expired, revoked, or already used.
+	ErrInvalidGrant = errors.New("invalid grant")
 )
 
 // ── Domain types ──────────────────────────────────────────────────────────────
@@ -331,9 +336,75 @@ type User struct {
 	AvatarURL   string    `json:"avatarUrl"`
 	// DefaultCanvasVisibility is the user's preference ('public'|'private') for
 	// how canvases they create start out — applied in CreateCanvas.
-	DefaultCanvasVisibility string    `json:"defaultCanvasVisibility"`
+	DefaultCanvasVisibility string `json:"defaultCanvasVisibility"`
+	// DefaultPublicRole is the user's preference ('read'|'write') for what a bare
+	// code-holder gets on a PUBLIC canvas they create — applied in CreateCanvas.
+	// Does not affect owner/shared-member access (see ResolveCanvasRole).
+	DefaultPublicRole string    `json:"defaultPublicRole"`
+	CreatedAt         time.Time `json:"createdAt"`
+	LastSeenAt        time.Time `json:"lastSeenAt"`
+}
+
+// PersonalAccessToken is one user-scoped MCP credential (migration 0027). The
+// secret itself is never held here — only its metadata. The plaintext is
+// returned exactly once, at mint time, via CreatePersonalAccessToken's separate
+// return value.
+type PersonalAccessToken struct {
+	ID         uuid.UUID  `json:"id"`
+	Name       string     `json:"name"`
+	LastFour   string     `json:"lastFour"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
+}
+
+// ── OAuth 2.1 authorization server (migration 0029) ─────────────────────────────
+
+// OAuthClient is a dynamically-registered MCP client (claude.ai self-registers).
+// Public client: PKCE, no secret.
+type OAuthClient struct {
+	ID                      string    `json:"id"`
+	ClientName              string    `json:"clientName"`
+	RedirectURIs            []string  `json:"redirectUris"`
+	GrantTypes              []string  `json:"grantTypes"`
+	TokenEndpointAuthMethod string    `json:"tokenEndpointAuthMethod"`
 	CreatedAt               time.Time `json:"createdAt"`
-	LastSeenAt              time.Time `json:"lastSeenAt"`
+}
+
+// AllowsRedirect reports whether uri exactly matches one of the client's
+// registered redirect URIs — the anti-open-redirect check in the authorize flow.
+func (c *OAuthClient) AllowsRedirect(uri string) bool {
+	for _, u := range c.RedirectURIs {
+		if u == uri {
+			return true
+		}
+	}
+	return false
+}
+
+// OAuthCode is the pending authorization-code grant bridging /authorize and
+// /token. Stored hashed and single-use; never returned to a client verbatim.
+type OAuthCode struct {
+	ClientID            string
+	UserID              uuid.UUID
+	RedirectURI         string
+	CodeChallenge       string
+	CodeChallengeMethod string
+	Scope               string
+	Resource            string
+	ExpiresAt           time.Time
+}
+
+// OAuthGrant is the persisted state behind an issued token pair (access +
+// refresh). The secrets live only as hashes; this carries the metadata the token
+// endpoint and resolver need.
+type OAuthGrant struct {
+	ID               uuid.UUID
+	ClientID         string
+	UserID           uuid.UUID
+	Scope            string
+	Resource         string
+	AccessExpiresAt  time.Time
+	RefreshExpiresAt *time.Time
 }
 
 type PendingEdit struct {
@@ -523,8 +594,9 @@ type ActionStatePatch struct {
 type Store interface {
 	// Canvas
 	// visibility ('public'|'private', or "" to accept the DB default of public)
-	// is the owner's chosen starting posture for the new canvas.
-	CreateCanvas(ctx context.Context, name string, ownerUserID *uuid.UUID, visibility string) (*Canvas, error)
+	// and publicRole ('read'|'write', or "" for the DB default) are the owner's
+	// chosen starting posture for the new canvas.
+	CreateCanvas(ctx context.Context, name string, ownerUserID *uuid.UUID, visibility, publicRole string) (*Canvas, error)
 	ListCanvasesByOwner(ctx context.Context, ownerUserID uuid.UUID) ([]*Canvas, error)
 	CopyCanvas(ctx context.Context, srcID, ownerUserID uuid.UUID, name string) (*Canvas, error)
 	// ClaimCanvas atomically transfers an unowned canvas to ownerUserID iff the
@@ -645,6 +717,40 @@ type Store interface {
 	// UpdateUserDefaultVisibility sets the user's default_canvas_visibility
 	// preference ('public'|'private') and returns the refreshed row.
 	UpdateUserDefaultVisibility(ctx context.Context, id uuid.UUID, visibility string) (*User, error)
+	// UpdateUserDefaultPublicRole sets the user's default_public_role preference
+	// ('read'|'write') and returns the refreshed row.
+	UpdateUserDefaultPublicRole(ctx context.Context, id uuid.UUID, role string) (*User, error)
+
+	// Personal access tokens (migration 0027) — user-scoped MCP credentials.
+	// CreatePersonalAccessToken stores the hash and returns the metadata row;
+	// the plaintext is generated + returned by the caller (never persisted).
+	CreatePersonalAccessToken(ctx context.Context, userID uuid.UUID, name, tokenHash, lastFour string) (*PersonalAccessToken, error)
+	ListPersonalAccessTokens(ctx context.Context, userID uuid.UUID) ([]*PersonalAccessToken, error)
+	// DeletePersonalAccessToken revokes a token; scoped to userID so a caller can
+	// only revoke their own. Returns ErrInvalidToken if no such row for the user.
+	DeletePersonalAccessToken(ctx context.Context, userID, id uuid.UUID) error
+	// UserIDByTokenHash resolves the owning user from a token hash and touches
+	// last_used_at. Returns ErrInvalidToken when no live token matches.
+	UserIDByTokenHash(ctx context.Context, tokenHash string) (uuid.UUID, error)
+
+	// OAuth 2.1 authorization server (migration 0029).
+	CreateOAuthClient(ctx context.Context, c *OAuthClient) error
+	GetOAuthClient(ctx context.Context, id string) (*OAuthClient, error)
+	// CreateAuthCode stores a pending authorization code (by its hash).
+	CreateAuthCode(ctx context.Context, codeHash string, c *OAuthCode) error
+	// ConsumeAuthCode atomically fetches and deletes a code (single use).
+	// Returns ErrInvalidGrant when missing/already used.
+	ConsumeAuthCode(ctx context.Context, codeHash string) (*OAuthCode, error)
+	// CreateOAuthGrant persists an issued token pair (hashes + metadata).
+	CreateOAuthGrant(ctx context.Context, accessHash, refreshHash string, g *OAuthGrant) error
+	// OAuthUserByAccessHash resolves the user from a live access-token hash
+	// (not expired, not revoked) and touches last_used_at. Returns ErrInvalidToken
+	// otherwise.
+	OAuthUserByAccessHash(ctx context.Context, accessHash string) (uuid.UUID, error)
+	// ConsumeRefreshGrant validates a refresh-token hash (live), revokes the old
+	// grant, and returns its metadata so the caller can mint a rotated pair.
+	// Returns ErrInvalidGrant when missing/expired/revoked.
+	ConsumeRefreshGrant(ctx context.Context, refreshHash string) (*OAuthGrant, error)
 
 	// Pending edits
 	CreatePendingEdit(ctx context.Context, canvasID uuid.UUID, entityID uuid.UUID, instruction string) (*PendingEdit, error)

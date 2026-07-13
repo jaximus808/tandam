@@ -67,7 +67,7 @@ func main() {
 	}
 	log.Printf("loaded %d map presets: %v", len(mapsReg.IDs()), mapsReg.IDs())
 
-	router := api.NewRouter(db, hub, authSvc, googleVerifier, cfg.CookieSecure, mapsReg, cfg.WebDistPath, cfg.ImageDir)
+	router := api.NewRouter(db, hub, authSvc, googleVerifier, cfg.CookieSecure, mapsReg, cfg.WebDistPath, cfg.ImageDir, cfg.PublicBaseURL)
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%s", cfg.Port),

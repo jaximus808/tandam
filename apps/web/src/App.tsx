@@ -22,6 +22,7 @@ import About from "./pages/About";
 import MyCanvases from "./pages/MyCanvases";
 import StatsPage from "./pages/StatsPage";
 import UserSettings from "./pages/UserSettings";
+import OAuthConsent from "./pages/OAuthConsent";
 import { fetchMe, getCachedUser, type User } from "./lib/auth";
 import { copyCanvas, claimCanvas, setCanvasName } from "./lib/api";
 import ConnectModal, { hasDismissedConnect } from "./components/ConnectModal";
@@ -123,7 +124,7 @@ function stripClaimFromURL() {
 // per-canvas position, stored via lib/sidebarState instead.
 const SIDEBAR_WIDTH_KEY = "tandem.sidebar.width";
 
-type Route = "home" | "mcp" | "dashboard" | "stats" | "settings" | "about";
+type Route = "home" | "mcp" | "dashboard" | "stats" | "settings" | "about" | "authorize";
 
 function routeFromPath(): Route {
   const p = window.location.pathname.replace(/\/$/, "");
@@ -132,6 +133,9 @@ function routeFromPath(): Route {
   if (p === "/stats") return "stats";
   if (p === "/me") return "settings";
   if (p === "/about") return "about";
+  // OAuth consent screen (hosted MCP connector). This is the authorization_endpoint
+  // advertised to clients; it renders a self-contained consent page.
+  if (p === "/oauth/authorize") return "authorize";
   return "home";
 }
 
@@ -701,6 +705,12 @@ export default function App() {
       window.removeEventListener("keydown", onKey);
     };
   }, [activeDocId]);
+
+  // OAuth consent — a self-contained page (its own sign-in + redirect flow), so
+  // it needs none of the canvas/nav wiring below.
+  if (route === "authorize") {
+    return <OAuthConsent />;
+  }
 
   if (route === "mcp") {
     return (

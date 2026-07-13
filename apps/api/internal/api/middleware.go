@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/agentcanvas/api/internal/auth"
+	"github.com/agentcanvas/api/internal/store"
 	"github.com/google/uuid"
 )
 
@@ -66,13 +67,58 @@ func sessionUserID(authSvc *auth.Service, r *http.Request) (uuid.UUID, bool) {
 	return claims.UserID, true
 }
 
+// patUserID resolves a personal access token presented as
+// `Authorization: Bearer tdm_pat_…` to its owning user. The prefix guard means a
+// non-PAT bearer (or none) never hits the DB. This is how an MCP/agent caller —
+// which carries no browser cookie — acts as the user: the gateway forwards the
+// user's PAT on the auth handshake. Returns false on any miss.
+func patUserID(s store.Store, r *http.Request) (uuid.UUID, bool) {
+	header := r.Header.Get("Authorization")
+	token := strings.TrimPrefix(header, "Bearer ")
+	if token == header || !strings.HasPrefix(token, store.PATPrefix) {
+		return uuid.Nil, false
+	}
+	uid, err := s.UserIDByTokenHash(r.Context(), store.HashToken(token))
+	if err != nil {
+		return uuid.Nil, false
+	}
+	return uid, true
+}
+
+// oauthUserID resolves an OAuth 2.1 access token (Authorization: Bearer
+// tdm_oat_…) to its user — the hosted claude.ai connector path. Prefix-gated like
+// patUserID so non-OAuth bearers skip the DB. Returns false on any miss (expired,
+// revoked, unknown) so the caller falls through to anonymous.
+func oauthUserID(s store.Store, r *http.Request) (uuid.UUID, bool) {
+	header := r.Header.Get("Authorization")
+	token := strings.TrimPrefix(header, "Bearer ")
+	if token == header || !strings.HasPrefix(token, store.OAuthAccessPrefix) {
+		return uuid.Nil, false
+	}
+	uid, err := s.OAuthUserByAccessHash(r.Context(), store.HashToken(token))
+	if err != nil {
+		return uuid.Nil, false
+	}
+	return uid, true
+}
+
 // OptionalUser attaches the logged-in user's id to the context when a valid
-// session cookie is present, otherwise lets the request through anonymously.
-// Used on create-canvas: logged-in creates get owned, anonymous ones don't.
-func OptionalUser(authSvc *auth.Service) func(http.Handler) http.Handler {
+// session cookie, personal access token, OR OAuth access token is present,
+// otherwise lets the request through anonymously. Cookie is the browser path;
+// the PAT is the stdio-agent path; the OAuth token is the hosted-connector path —
+// each lets a caller act as that user. Used on create-canvas (owned vs
+// anonymous) and /api/mcp/auth (real role vs public).
+func OptionalUser(authSvc *auth.Service, s store.Store) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if uid, ok := sessionUserID(authSvc, r); ok {
+			uid, ok := sessionUserID(authSvc, r)
+			if !ok {
+				uid, ok = patUserID(s, r)
+			}
+			if !ok {
+				uid, ok = oauthUserID(s, r)
+			}
+			if ok {
 				r = r.WithContext(context.WithValue(r.Context(), userIDKey, uid))
 			}
 			next.ServeHTTP(w, r)

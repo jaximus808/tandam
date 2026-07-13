@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -46,6 +47,37 @@ func generateClaimToken() string {
 		panic(fmt.Errorf("crypto/rand: %w", err))
 	}
 	return "clm_" + hex.EncodeToString(b)
+}
+
+// PATPrefix namespaces personal access tokens. Prefix-gating on this string lets
+// the auth middleware skip a DB lookup for any bearer that isn't a PAT, and keeps
+// PATs unmistakable for canvas codes ('clm_' claim tokens, 8-char codes).
+const PATPrefix = "tdm_pat_"
+
+// GeneratePAT mints a user's personal access token: PATPrefix + 32 random bytes
+// (hex) = 256 bits of entropy, appropriate for a long-lived bearer secret.
+// crypto/rand for the same reason as codes/claim tokens.
+func GeneratePAT() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Errorf("crypto/rand: %w", err))
+	}
+	return PATPrefix + hex.EncodeToString(b)
+}
+
+// HashToken returns the hex SHA-256 of a token. We store only this hash, so a DB
+// leak can't yield usable tokens; auth hashes the presented secret and matches.
+func HashToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
+// LastFour returns the trailing 4 chars of a token, kept for UI disambiguation.
+func LastFour(token string) string {
+	if len(token) <= 4 {
+		return token
+	}
+	return token[len(token)-4:]
 }
 
 // ── DB row types (snake_case = Supabase column names) ─────────────────────────
@@ -198,8 +230,18 @@ type dbUser struct {
 	DisplayName             string `json:"display_name"`
 	AvatarURL               string `json:"avatar_url"`
 	DefaultCanvasVisibility string `json:"default_canvas_visibility"`
+	DefaultPublicRole       string `json:"default_public_role"`
 	CreatedAt               string `json:"created_at"`
 	LastSeenAt              string `json:"last_seen_at"`
+}
+
+type dbToken struct {
+	ID         string  `json:"id"`
+	UserID     string  `json:"user_id"`
+	Name       string  `json:"name"`
+	LastFour   string  `json:"last_four"`
+	CreatedAt  string  `json:"created_at"`
+	LastUsedAt *string `json:"last_used_at"`
 }
 
 type dbPendingEdit struct {
@@ -493,6 +535,7 @@ func toUser(d dbUser) *User {
 		ID: id, GoogleSub: d.GoogleSub, Email: d.Email,
 		DisplayName: d.DisplayName, AvatarURL: d.AvatarURL,
 		DefaultCanvasVisibility: d.DefaultCanvasVisibility,
+		DefaultPublicRole:       d.DefaultPublicRole,
 		CreatedAt:               parseTime(d.CreatedAt), LastSeenAt: parseTime(d.LastSeenAt),
 	}
 }
@@ -553,7 +596,7 @@ func (s *supabaseStore) exec(b interface{ Execute() ([]byte, int64, error) }) er
 
 // ── Canvas ────────────────────────────────────────────────────────────────────
 
-func (s *supabaseStore) CreateCanvas(_ context.Context, name string, ownerUserID *uuid.UUID, visibility string) (*Canvas, error) {
+func (s *supabaseStore) CreateCanvas(_ context.Context, name string, ownerUserID *uuid.UUID, visibility, publicRole string) (*Canvas, error) {
 	// An anonymous create (no owner — the MCP/gateway path) gets a claim token so
 	// the human can later make it theirs. A logged-in create is already owned, so
 	// it needs none (NULL claim_token = "not claimable this way").
@@ -569,10 +612,13 @@ func (s *supabaseStore) CreateCanvas(_ context.Context, name string, ownerUserID
 		} else {
 			row["claim_token"] = claimToken
 		}
-		// Owner's default posture. Empty = accept the column default ('public'),
-		// which keeps anonymous/MCP creates fully open as before.
+		// Owner's default posture. Empty = accept the column defaults ('public' /
+		// 'write'), which keeps anonymous/MCP creates fully open as before.
 		if visibility != "" {
 			row["visibility"] = visibility
+		}
+		if publicRole != "" {
+			row["public_role"] = publicRole
 		}
 		var rows []dbCanvas
 		_, err := s.client.From("canvases").
@@ -2628,6 +2674,119 @@ func (s *supabaseStore) UpdateUserDefaultVisibility(_ context.Context, id uuid.U
 		return nil, ErrUserNotFound
 	}
 	return toUser(rows[0]), nil
+}
+
+// UpdateUserDefaultPublicRole sets the user's default_public_role and returns the
+// refreshed row (representation) so the caller can echo the fresh user back.
+func (s *supabaseStore) UpdateUserDefaultPublicRole(_ context.Context, id uuid.UUID, role string) (*User, error) {
+	var rows []dbUser
+	_, err := s.client.From("users").
+		Update(map[string]string{"default_public_role": role}, "representation", "").
+		Eq("id", id.String()).
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, ErrUserNotFound
+	}
+	return toUser(rows[0]), nil
+}
+
+// ── Personal access tokens (migration 0027) ────────────────────────────────────
+
+func toPersonalAccessToken(d dbToken) *PersonalAccessToken {
+	id, _ := uuid.Parse(d.ID)
+	t := &PersonalAccessToken{
+		ID: id, Name: d.Name, LastFour: d.LastFour,
+		CreatedAt: parseTime(d.CreatedAt),
+	}
+	if d.LastUsedAt != nil && *d.LastUsedAt != "" {
+		lu := parseTime(*d.LastUsedAt)
+		t.LastUsedAt = &lu
+	}
+	return t
+}
+
+func (s *supabaseStore) CreatePersonalAccessToken(_ context.Context, userID uuid.UUID, name, tokenHash, lastFour string) (*PersonalAccessToken, error) {
+	var rows []dbToken
+	_, err := s.client.From("personal_access_tokens").
+		Insert(map[string]any{
+			"user_id":    userID.String(),
+			"name":       name,
+			"token_hash": tokenHash,
+			"last_four":  lastFour,
+		}, false, "", "representation", "").
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("no row returned after token insert")
+	}
+	return toPersonalAccessToken(rows[0]), nil
+}
+
+func (s *supabaseStore) ListPersonalAccessTokens(_ context.Context, userID uuid.UUID) ([]*PersonalAccessToken, error) {
+	var rows []dbToken
+	_, err := s.client.From("personal_access_tokens").
+		Select("id,user_id,name,last_four,created_at,last_used_at", "", false).
+		Eq("user_id", userID.String()).
+		Order("created_at", nil).
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, err
+	}
+	// Newest-first for the UI (DB order is ascending, matching the file idiom).
+	out := make([]*PersonalAccessToken, 0, len(rows))
+	for i := len(rows) - 1; i >= 0; i-- {
+		out = append(out, toPersonalAccessToken(rows[i]))
+	}
+	return out, nil
+}
+
+func (s *supabaseStore) DeletePersonalAccessToken(_ context.Context, userID, id uuid.UUID) error {
+	var rows []dbToken
+	// Scope the delete to the owner (user_id) so a caller can only revoke their
+	// own tokens; use representation to detect a no-op (wrong owner / missing).
+	_, err := s.client.From("personal_access_tokens").
+		Delete("representation", "").
+		Eq("id", id.String()).
+		Eq("user_id", userID.String()).
+		ExecuteTo(&rows)
+	if err != nil {
+		return err
+	}
+	if len(rows) == 0 {
+		return ErrInvalidToken
+	}
+	return nil
+}
+
+// UserIDByTokenHash resolves the owning user from a token hash and touches
+// last_used_at. Returns ErrInvalidToken when no token matches. The hash column
+// is UNIQUE, so at most one row comes back.
+func (s *supabaseStore) UserIDByTokenHash(_ context.Context, tokenHash string) (uuid.UUID, error) {
+	var rows []dbToken
+	_, err := s.client.From("personal_access_tokens").
+		Select("id,user_id", "", false).
+		Eq("token_hash", tokenHash).
+		ExecuteTo(&rows)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if len(rows) == 0 {
+		return uuid.Nil, ErrInvalidToken
+	}
+	uid, err := uuid.Parse(rows[0].UserID)
+	if err != nil {
+		return uuid.Nil, ErrInvalidToken
+	}
+	// Best-effort last-used bump; never fail auth if it errors.
+	_ = s.exec(s.client.From("personal_access_tokens").
+		Update(map[string]string{"last_used_at": time.Now().UTC().Format(time.RFC3339)}, "minimal", "").
+		Eq("id", rows[0].ID))
+	return uid, nil
 }
 
 // ── Pending edits ─────────────────────────────────────────────────────────────

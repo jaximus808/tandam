@@ -15,7 +15,7 @@ import (
 	"github.com/go-chi/cors"
 )
 
-func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier *auth.GoogleVerifier, cookieSecure bool, mapsReg *maps.Registry, webDistPath string, imageDir string) http.Handler {
+func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier *auth.GoogleVerifier, cookieSecure bool, mapsReg *maps.Registry, webDistPath string, imageDir string, publicBaseURL string) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(middleware.Logger)
@@ -31,18 +31,34 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 	wsH := NewWSHandler(s, hub, authSvc, mapsReg)
 	mapsH := NewMapsHandler(mapsReg)
 	authH := NewAuthHandler(s, authSvc, googleVerifier, cookieSecure)
+	oauthH := NewOAuthHandler(s, publicBaseURL)
 
 	// ── Public ─────────────────────────────────────────────────────────────────
-	// OptionalUser: a logged-in create gets owned; anonymous/MCP creates don't.
-	r.With(OptionalUser(authSvc)).Post("/api/canvases", h.CreateCanvas)
+	// OptionalUser: a logged-in create (cookie) or PAT-bearing agent gets owned;
+	// a truly anonymous create doesn't.
+	r.With(OptionalUser(authSvc, s)).Post("/api/canvases", h.CreateCanvas)
 	r.Get("/api/canvases/{code}", h.GetCanvasByCode)
-	// OptionalUser so a logged-in browser's cookie lets the resolver grant the
-	// real role; an agent/MCP caller has no cookie → anonymous (public canvases).
-	r.With(OptionalUser(authSvc)).Post("/api/mcp/auth", mcpAuthHandlerFunc(h, authSvc))
+	// OptionalUser so a browser cookie OR an agent's personal access token lets the
+	// resolver grant the user's real role; a caller with neither is anonymous
+	// (public canvases only).
+	r.With(OptionalUser(authSvc, s)).Post("/api/mcp/auth", mcpAuthHandlerFunc(h, authSvc))
 	r.Get("/ws", wsH.ServeWS)
 	r.Get("/api/maps", mapsH.List)
 	r.Get("/api/maps/{id}", mapsH.Get)
 	r.Get("/api/stats", h.Stats)
+
+	// ── OAuth 2.1 authorization server (hosted MCP connector) ────────────────────
+	// Discovery metadata (RFC 8414 / 9728). Registered with a trailing wildcard
+	// too because some clients append the resource path to the well-known URL.
+	r.Get("/.well-known/oauth-protected-resource", oauthH.ProtectedResourceMetadata)
+	r.Get("/.well-known/oauth-protected-resource/*", oauthH.ProtectedResourceMetadata)
+	r.Get("/.well-known/oauth-authorization-server", oauthH.AuthorizationServerMetadata)
+	r.Get("/.well-known/oauth-authorization-server/*", oauthH.AuthorizationServerMetadata)
+	// Dynamic client registration + token exchange (public; PKCE). The consent
+	// PAGE at GET /oauth/authorize is intentionally NOT a route here — it falls
+	// through to the SPA, which drives the two /api/oauth/authorize calls below.
+	r.Post("/oauth/register", oauthH.Register)
+	r.Post("/oauth/token", oauthH.Token)
 
 	// ── Auth (human login; cookie-based session) ─────────────────────────────────
 	r.Post("/api/auth/google", authH.GoogleLogin)
@@ -61,6 +77,18 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 		r.Get("/api/me/shared", h.SharedWithMe)
 		r.Get("/api/me/notifications", h.ListNotifications)
 		r.Post("/api/me/notifications/read", h.MarkNotificationsRead)
+
+		// Personal access tokens — user-scoped MCP credentials (mint / list /
+		// revoke). The plaintext is returned only from POST, once.
+		r.Get("/api/me/tokens", h.ListTokens)
+		r.Post("/api/me/tokens", h.CreateToken)
+		r.Delete("/api/me/tokens/{id}", h.RevokeToken)
+
+		// OAuth consent backend — the SPA consent page (served at /oauth/authorize)
+		// validates the request via GET and mints the authorization code via POST,
+		// both as the signed-in user.
+		r.Get("/api/oauth/authorize", oauthH.GetAuthorizationInfo)
+		r.Post("/api/oauth/authorize", oauthH.Approve)
 		r.Post("/api/canvases/{code}/copy", h.CopyCanvas)
 		r.Post("/api/canvases/{code}/claim", h.ClaimCanvas)
 

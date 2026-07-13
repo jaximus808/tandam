@@ -113,8 +113,9 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 
 // PATCH /api/auth/me — update the signed-in user's account preferences. Sits
 // behind RequireUser, so the user id comes from the validated session context.
-// Today the only editable field is defaultCanvasVisibility. Returns the fresh
-// user so the client can reconcile its identity cache.
+// Fields are optional pointers so the client can PATCH one preference at a time;
+// at least one must be present. Returns the fresh user so the client can
+// reconcile its identity cache.
 func (h *AuthHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 	uid, ok := UserIDFromCtx(r.Context())
 	if !ok {
@@ -122,20 +123,41 @@ func (h *AuthHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		DefaultCanvasVisibility string `json:"defaultCanvasVisibility"`
+		DefaultCanvasVisibility *string `json:"defaultCanvasVisibility"`
+		DefaultPublicRole       *string `json:"defaultPublicRole"`
 	}
 	if err := decode(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	if body.DefaultCanvasVisibility != "public" && body.DefaultCanvasVisibility != "private" {
-		writeError(w, http.StatusBadRequest, "defaultCanvasVisibility must be 'public' or 'private'")
+	if body.DefaultCanvasVisibility == nil && body.DefaultPublicRole == nil {
+		writeError(w, http.StatusBadRequest, "no updatable fields provided")
 		return
 	}
-	user, err := h.store.UpdateUserDefaultVisibility(r.Context(), uid, body.DefaultCanvasVisibility)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+
+	var user *store.User
+	var err error
+	if v := body.DefaultCanvasVisibility; v != nil {
+		if *v != "public" && *v != "private" {
+			writeError(w, http.StatusBadRequest, "defaultCanvasVisibility must be 'public' or 'private'")
+			return
+		}
+		user, err = h.store.UpdateUserDefaultVisibility(r.Context(), uid, *v)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	if pr := body.DefaultPublicRole; pr != nil {
+		if *pr != "read" && *pr != "write" {
+			writeError(w, http.StatusBadRequest, "defaultPublicRole must be 'read' or 'write'")
+			return
+		}
+		user, err = h.store.UpdateUserDefaultPublicRole(r.Context(), uid, *pr)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, user)
 }
