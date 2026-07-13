@@ -64,6 +64,7 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 		// Sharing (owner-only; the handler enforces ownership). Visibility +
 		// per-account access for the Google-Docs model.
 		r.Patch("/api/canvases/{code}/visibility", h.SetCanvasVisibility)
+		r.Patch("/api/canvases/{code}/name", h.SetCanvasName)
 		r.Get("/api/canvases/{code}/access", h.ListCanvasAccess)
 		r.Post("/api/canvases/{code}/access", h.AddCanvasAccess)
 		r.Delete("/api/canvases/{code}/access/{userId}", h.RemoveCanvasAccess)

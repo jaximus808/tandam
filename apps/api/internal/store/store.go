@@ -538,6 +538,7 @@ type Store interface {
 	// remaining methods back the owner-only sharing UI.
 	ResolveCanvasRole(ctx context.Context, canvas *Canvas, userID *uuid.UUID) (string, error)
 	SetCanvasVisibility(ctx context.Context, canvasID uuid.UUID, visibility, publicRole string) (int, error)
+	SetCanvasName(ctx context.Context, canvasID uuid.UUID, name string) (int, error)
 	ListCanvasAccess(ctx context.Context, canvasID uuid.UUID) ([]*CanvasAccess, error)
 	UpsertCanvasAccess(ctx context.Context, canvasID, userID uuid.UUID, role string) error
 	DeleteCanvasAccess(ctx context.Context, canvasID, userID uuid.UUID) error
