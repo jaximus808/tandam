@@ -559,6 +559,27 @@ export default function MCPSupport({
               </li>
             </ol>
           </div>
+
+          {/* Auth explainer — the OAuth step-up model. Fixed-sky "tip" island,
+              same idiom as the multi-agent callout below. */}
+          <div className="rounded-xl border border-sky-100 bg-sky-50 p-4 text-sm leading-relaxed text-sky-900">
+            <span className="font-semibold">Signing in is only asked for when it's needed.</span>{" "}
+            Public canvases connect with no sign-in at all — leaving the OAuth
+            fields blank in step 2 is correct. The first time you point Claude at
+            a <span className="font-semibold">private or shared</span> canvas, it
+            opens a Tandem sign-in (Google) and asks you to authorize the
+            connector — from then on the agent acts as{" "}
+            <span className="font-semibold">you</span>, with your access to that
+            canvas. It's a one-time authorization; you can review or revoke it any
+            time under{" "}
+            <button
+              onClick={onShowSettings}
+              className="font-semibold underline underline-offset-2 hover:text-sky-700"
+            >
+              Settings → Connected apps
+            </button>
+            . Revoke it and the next connect will prompt you to sign in again.
+          </div>
           </div>
           )}
 
@@ -633,6 +654,22 @@ export default function MCPSupport({
             Client not listed, stdio-only (e.g. Codex), or pointing at a
             self-hosted backend? Use the local gateway below.
           </p>
+
+          {/* Auth note for the remote path — same OAuth step-up as the connector. */}
+          <div className="rounded-lg border border-ink/10 bg-ink/[0.03] p-3 text-xs leading-relaxed text-ink/60">
+            <span className="font-semibold text-ink/70">Auth:</span> same as the
+            Claude connector — public canvases connect anonymously, and the first
+            time you connect to a private or shared canvas the client runs the
+            OAuth flow (Claude Code opens your browser to sign in with Google).
+            The token is stored by your client; revoke access any time under{" "}
+            <button
+              onClick={onShowSettings}
+              className="font-semibold text-ink/70 underline underline-offset-2 hover:text-ink"
+            >
+              Settings → Connected apps
+            </button>
+            .
+          </div>
           </div>
 
           {/* ── B. Local stdio gateway (fallback) ───────────────────────────── */}
@@ -646,6 +683,26 @@ export default function MCPSupport({
                 stdio, or when you want to point at a self-hosted{" "}
                 <span className="font-medium text-ink/50">API_URL</span>.
               </p>
+            </div>
+
+            {/* Auth note for stdio — this path does NOT use OAuth. */}
+            <div className="rounded-lg border border-ink/10 bg-ink/[0.03] p-3 text-xs leading-relaxed text-ink/60">
+              <span className="font-semibold text-ink/70">Auth is different here:</span>{" "}
+              the local gateway doesn't do the OAuth browser flow. Without a
+              credential it can only reach public canvases. To let the agent act
+              as you on your private / shared canvases, mint a personal access
+              token at{" "}
+              <button
+                onClick={onShowSettings}
+                className="font-semibold text-ink/70 underline underline-offset-2 hover:text-ink"
+              >
+                Settings → Access tokens
+              </button>{" "}
+              and pass it as the <span className="font-code">TANDEM_TOKEN</span>{" "}
+              env var:
+              <pre className="mt-2 overflow-x-auto whitespace-pre rounded-md bg-ink px-3 py-2 text-paper">
+{`"env": { "TANDEM_TOKEN": "tdm_pat_…" }`}
+              </pre>
             </div>
 
           {/* Install */}

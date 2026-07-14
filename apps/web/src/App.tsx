@@ -3,9 +3,11 @@ import type { CanvasMeta, CanvasMode, CanvasState, Document, DocumentType } from
 import { connectToCanvas, disconnectFromCanvas, onStateUpdate, onAccessError, onRoleChange, sendOp, setCanvasReadOnly, type AccessStatus, type ChangeActor } from "./lib/ws";
 import { ModeNavContext } from "./lib/modeNav";
 import { type SidebarView } from "./lib/sidebar";
+import { Menu } from "lucide-react";
 import DocumentTabs from "./components/DocumentTabs";
 import ActivityBar from "./components/ActivityBar";
 import SidePanel, { SidePanelReopenHandle, SIDE_PANEL_MIN, SIDE_PANEL_MAX, SIDE_PANEL_DEFAULT } from "./components/SidePanel";
+import MobileNavDrawer from "./components/MobileNavDrawer";
 import DocumentExplorer from "./components/DocumentExplorer";
 import SettingsPanel from "./components/SettingsPanel";
 import { DOC_TYPE_TO_MODE } from "./lib/docTypes";
@@ -181,6 +183,13 @@ export default function App() {
     () => initialSidebar?.view ?? "documents",
   );
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(() => initialSidebar?.open ?? true);
+  // Mobile-only: the off-canvas nav drawer (the desktop left dock has no phone
+  // home — ActivityBar + SidePanel are `hidden sm:flex`). It reuses `sidebarView`
+  // for which panel shows, so the view choice is continuous across breakpoints.
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  // The drawer always shows a concrete view (the desktop panel can be collapsed
+  // to null; the drawer can't). Fall back to Documents.
+  const mobileNavView: SidebarView = sidebarView ?? "documents";
   // Rail click: same icon toggles the panel open/closed (selection stays lit);
   // a different icon selects that view and opens it.
   function selectSidebarView(view: SidebarView) {
@@ -953,6 +962,23 @@ export default function App() {
           style={{ backgroundColor: theme.solid }}
         />
 
+        {/* Mobile-only: open the nav drawer (explorer / tasks / settings). The
+            desktop left dock is `hidden sm:flex`, so this is the only way in on
+            a phone. Badges the proposed-task count like the desktop rail. */}
+        <button
+          onClick={() => setMobileNavOpen(true)}
+          className="relative -ml-1 flex h-9 w-9 items-center justify-center rounded-lg text-ink/60 transition-colors hover:bg-ink/5 hover:text-ink shrink-0 sm:hidden"
+          title="Menu"
+          aria-label="Open navigation"
+        >
+          <Menu size={20} strokeWidth={1.75} />
+          {proposedTaskCount > 0 && (
+            <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#C75B39] px-1 text-[9px] font-bold text-white">
+              {proposedTaskCount}
+            </span>
+          )}
+        </button>
+
         <button
           onClick={() => handleJoin("")}
           className="group flex items-center gap-1.5 text-sm shrink-0"
@@ -1236,6 +1262,46 @@ export default function App() {
         </div>
         </div>
       </div>
+
+      {/* Mobile nav drawer — the desktop left dock (explorer / tasks / settings)
+          as an off-canvas panel, reusing the exact same view components. Purely
+          additive (`sm:hidden`); opening a document closes the drawer. */}
+      <MobileNavDrawer
+        open={mobileNavOpen}
+        view={mobileNavView}
+        onSelectView={setSidebarView}
+        onClose={() => setMobileNavOpen(false)}
+        badges={{ tasks: proposedTaskCount }}
+      >
+        {mobileNavView === "documents" && (
+          <DocumentExplorer
+            documents={documents}
+            state={canvasState}
+            openIds={openSet}
+            activeDocId={effectiveDocId}
+            onOpen={(id) => {
+              openDoc(id);
+              setMobileNavOpen(false);
+            }}
+            onDelete={deleteDoc}
+            onCreateFolder={createFolder}
+            onMove={moveDoc}
+            readOnly={canvas.yourRole === "read"}
+            onClose={() => setMobileNavOpen(false)}
+          />
+        )}
+        {mobileNavView === "tasks" && (
+          <TasksPanel
+            code={canvas.code}
+            state={canvasState}
+            readOnly={canvas.yourRole === "read"}
+            onClose={() => setMobileNavOpen(false)}
+          />
+        )}
+        {mobileNavView === "settings" && (
+          <SettingsPanel onClose={() => setMobileNavOpen(false)} />
+        )}
+      </MobileNavDrawer>
 
       {connectOpen && (
         <ConnectModal

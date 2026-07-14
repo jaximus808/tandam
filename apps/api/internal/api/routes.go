@@ -133,6 +133,9 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 	// but not touch — the HTTP mirror of the WS write gate.
 	r.Group(func(r chi.Router) {
 		r.Use(RequireJWT(authSvc))
+		// Kill tokens whose OAuth connection was revoked mid-session (before the
+		// 24h JWT TTL). No-op for anonymous/PAT tokens, which carry no binding.
+		r.Use(RequireLiveGrant(s))
 
 		// Reads — any valid role.
 		r.Get("/api/canvas/state", h.GetState)

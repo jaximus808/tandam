@@ -752,10 +752,16 @@ type Store interface {
 	ConsumeAuthCode(ctx context.Context, codeHash string) (*OAuthCode, error)
 	// CreateOAuthGrant persists an issued token pair (hashes + metadata).
 	CreateOAuthGrant(ctx context.Context, accessHash, refreshHash string, g *OAuthGrant) error
-	// OAuthUserByAccessHash resolves the user from a live access-token hash
-	// (not expired, not revoked) and touches last_used_at. Returns ErrInvalidToken
-	// otherwise.
-	OAuthUserByAccessHash(ctx context.Context, accessHash string) (uuid.UUID, error)
+	// OAuthUserByAccessHash resolves the user + client_id from a live access-token
+	// hash (not expired, not revoked) and touches last_used_at. Returns
+	// ErrInvalidToken otherwise. The client_id lets callers stamp a grant binding
+	// onto issued canvas tokens (see HasLiveOAuthGrant).
+	OAuthUserByAccessHash(ctx context.Context, accessHash string) (uuid.UUID, string, error)
+	// HasLiveOAuthGrant reports whether the user still holds any non-revoked token
+	// for the client — i.e. the connection hasn't been disconnected from /me. Used
+	// to invalidate canvas tokens minted off a since-revoked OAuth session before
+	// their TTL elapses.
+	HasLiveOAuthGrant(ctx context.Context, userID uuid.UUID, clientID string) (bool, error)
 	// ConsumeRefreshGrant validates a refresh-token hash (live), revokes the old
 	// grant, and returns its metadata so the caller can mint a rotated pair.
 	// Returns ErrInvalidGrant when missing/expired/revoked.

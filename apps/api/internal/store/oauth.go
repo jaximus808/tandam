@@ -178,34 +178,55 @@ func (s *supabaseStore) CreateOAuthGrant(_ context.Context, accessHash, refreshH
 		Insert(row, false, "", "minimal", ""))
 }
 
-// OAuthUserByAccessHash resolves the user behind a live access token (not
-// expired, not revoked) and best-effort touches last_used_at. Returns
+// OAuthUserByAccessHash resolves the user + client_id behind a live access token
+// (not expired, not revoked) and best-effort touches last_used_at. Returns
 // ErrInvalidToken otherwise so the middleware can fall through to anonymous.
-func (s *supabaseStore) OAuthUserByAccessHash(_ context.Context, accessHash string) (uuid.UUID, error) {
+func (s *supabaseStore) OAuthUserByAccessHash(_ context.Context, accessHash string) (uuid.UUID, string, error) {
 	var rows []dbOAuthToken
 	_, err := s.client.From("oauth_tokens").
-		Select("id,user_id,access_expires_at", "", false).
+		Select("id,client_id,user_id,access_expires_at", "", false).
 		Eq("access_token_hash", accessHash).
 		Is("revoked_at", "null").
 		ExecuteTo(&rows)
 	if err != nil {
-		return uuid.Nil, err
+		return uuid.Nil, "", err
 	}
 	if len(rows) == 0 {
-		return uuid.Nil, ErrInvalidToken
+		return uuid.Nil, "", ErrInvalidToken
 	}
 	d := rows[0]
 	if time.Now().After(parseTime(d.AccessExpiresAt)) {
-		return uuid.Nil, ErrInvalidToken
+		return uuid.Nil, "", ErrInvalidToken
 	}
 	uid, err := uuid.Parse(d.UserID)
 	if err != nil {
-		return uuid.Nil, ErrInvalidToken
+		return uuid.Nil, "", ErrInvalidToken
 	}
 	_ = s.exec(s.client.From("oauth_tokens").
 		Update(map[string]string{"last_used_at": time.Now().UTC().Format(time.RFC3339)}, "minimal", "").
 		Eq("id", d.ID))
-	return uid, nil
+	return uid, d.ClientID, nil
+}
+
+// HasLiveOAuthGrant reports whether the user still holds any non-revoked token
+// for the client. A canvas token minted off the hosted OAuth connector carries
+// (user_id, client_id); RequireLiveGrant calls this per request so disconnecting
+// the app from /me (which sets revoked_at on every token for the pair) kills the
+// canvas token immediately instead of at its TTL. Refresh rotation keeps exactly
+// one live row while authorized, so "any live row" is the right liveness test.
+func (s *supabaseStore) HasLiveOAuthGrant(_ context.Context, userID uuid.UUID, clientID string) (bool, error) {
+	var rows []dbOAuthToken
+	_, err := s.client.From("oauth_tokens").
+		Select("id", "", false).
+		Eq("user_id", userID.String()).
+		Eq("client_id", clientID).
+		Is("revoked_at", "null").
+		Limit(1, "").
+		ExecuteTo(&rows)
+	if err != nil {
+		return false, err
+	}
+	return len(rows) > 0, nil
 }
 
 // ConsumeRefreshGrant atomically revokes the grant behind a refresh-token hash

@@ -28,6 +28,17 @@ func (h *Handler) MCPAuth(w http.ResponseWriter, r *http.Request, authSvc *auth.
 		uid = &id
 	}
 
+	// A hosted-connector OAuth caller also carries a client_id; bind the issued
+	// canvas token to that grant so revoking the connection from /me kills the
+	// token mid-session (RequireLiveGrant). Cookie/PAT callers have no client_id
+	// and get an unbound token.
+	var binding *auth.GrantBinding
+	if uid != nil {
+		if clientID, ok := OAuthClientIDFromCtx(r.Context()); ok {
+			binding = &auth.GrantBinding{UserID: *uid, ClientID: clientID}
+		}
+	}
+
 	// A caller who presented an OAuth access token that didn't resolve to a user
 	// (revoked / expired / unknown) reaches here as anonymous. For a private
 	// canvas that dead token must surface as 401 (invalid_token), not 403, so the
@@ -35,7 +46,7 @@ func (h *Handler) MCPAuth(w http.ResponseWriter, r *http.Request, authSvc *auth.
 	// otherwise the connector clings to the stale token and never re-authorizes.
 	staleOAuth := uid == nil && hasOAuthBearer(r)
 
-	canvas, token, role, ok := h.issueTokenForCode(w, r.Context(), body.Code, authSvc, uid, staleOAuth)
+	canvas, token, role, ok := h.issueTokenForCode(w, r.Context(), body.Code, authSvc, uid, staleOAuth, binding)
 	if !ok {
 		return
 	}
@@ -55,7 +66,7 @@ func (h *Handler) MCPAuth(w http.ResponseWriter, r *http.Request, authSvc *auth.
 // so RequireWrite can enforce it on mutating routes. Returns 403 when the caller
 // has no access (private canvas, not a member). On failure it writes the error
 // response and returns ok=false.
-func (h *Handler) issueTokenForCode(w http.ResponseWriter, ctx context.Context, code string, authSvc *auth.Service, userID *uuid.UUID, staleOAuth bool) (*store.Canvas, string, string, bool) {
+func (h *Handler) issueTokenForCode(w http.ResponseWriter, ctx context.Context, code string, authSvc *auth.Service, userID *uuid.UUID, staleOAuth bool, binding *auth.GrantBinding) (*store.Canvas, string, string, bool) {
 	canvas, err := h.store.GetCanvasByCode(ctx, code)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "canvas not found — check your canvas code")
@@ -77,7 +88,7 @@ func (h *Handler) issueTokenForCode(w http.ResponseWriter, ctx context.Context, 
 		writeError(w, http.StatusForbidden, "this canvas is private — sign in with an account it's shared with")
 		return nil, "", "", false
 	}
-	token, err := authSvc.Issue(canvas.ID, role)
+	token, err := authSvc.Issue(canvas.ID, role, binding)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to issue token")
 		return nil, "", "", false

@@ -14,6 +14,7 @@ type ctxKey string
 
 const claimsKey ctxKey = "claims"
 const userIDKey ctxKey = "userID"
+const oauthClientKey ctxKey = "oauthClient"
 
 func CanvasIDFromCtx(ctx context.Context) uuid.UUID {
 	c, _ := ctx.Value(claimsKey).(*auth.Claims)
@@ -28,6 +29,15 @@ func CanvasIDFromCtx(ctx context.Context) uuid.UUID {
 func UserIDFromCtx(ctx context.Context) (uuid.UUID, bool) {
 	id, ok := ctx.Value(userIDKey).(uuid.UUID)
 	return id, ok
+}
+
+// OAuthClientIDFromCtx returns the OAuth client_id when the caller authenticated
+// via a hosted-connector OAuth access token (set by OptionalUser). Empty for
+// cookie / PAT / anonymous callers — used to stamp a revocable grant binding
+// onto issued canvas tokens.
+func OAuthClientIDFromCtx(ctx context.Context) (string, bool) {
+	cid, ok := ctx.Value(oauthClientKey).(string)
+	return cid, ok && cid != ""
 }
 
 // RoleFromCtx returns the canvas role baked into the JWT ("write" | "read"),
@@ -51,6 +61,36 @@ func RequireWrite(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// RequireLiveGrant invalidates a canvas token whose issuing OAuth connection has
+// since been revoked. A canvas JWT is self-contained and lives for its full TTL
+// (24h), so disconnecting the app from /me otherwise wouldn't stop in-flight
+// sessions until the token expired. When the token carries an OAuth grant binding
+// (UID/CID — stamped only for hosted-connector callers), this re-checks per
+// request that the grant is still live and 401s with invalid_token when it isn't,
+// so the sidecar drops the dead token and re-runs OAuth. Layer AFTER RequireJWT.
+// Unbound tokens (anonymous / PAT / cookie) skip the check entirely.
+func RequireLiveGrant(s store.Store) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			c, _ := r.Context().Value(claimsKey).(*auth.Claims)
+			if c == nil || c.UID == nil {
+				next.ServeHTTP(w, r) // unbound token — nothing to re-check
+				return
+			}
+			live, err := s.HasLiveOAuthGrant(r.Context(), *c.UID, c.CID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "could not verify authorization")
+				return
+			}
+			if !live {
+				writeError(w, http.StatusUnauthorized, "invalid_token")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // sessionUserID validates the session cookie and returns the user id, if any.
@@ -86,20 +126,20 @@ func patUserID(s store.Store, r *http.Request) (uuid.UUID, bool) {
 }
 
 // oauthUserID resolves an OAuth 2.1 access token (Authorization: Bearer
-// tdm_oat_…) to its user — the hosted claude.ai connector path. Prefix-gated like
-// patUserID so non-OAuth bearers skip the DB. Returns false on any miss (expired,
-// revoked, unknown) so the caller falls through to anonymous.
-func oauthUserID(s store.Store, r *http.Request) (uuid.UUID, bool) {
+// tdm_oat_…) to its user + client_id — the hosted claude.ai connector path.
+// Prefix-gated like patUserID so non-OAuth bearers skip the DB. Returns false on
+// any miss (expired, revoked, unknown) so the caller falls through to anonymous.
+func oauthUserID(s store.Store, r *http.Request) (uuid.UUID, string, bool) {
 	header := r.Header.Get("Authorization")
 	token := strings.TrimPrefix(header, "Bearer ")
 	if token == header || !strings.HasPrefix(token, store.OAuthAccessPrefix) {
-		return uuid.Nil, false
+		return uuid.Nil, "", false
 	}
-	uid, err := s.OAuthUserByAccessHash(r.Context(), store.HashToken(token))
+	uid, clientID, err := s.OAuthUserByAccessHash(r.Context(), store.HashToken(token))
 	if err != nil {
-		return uuid.Nil, false
+		return uuid.Nil, "", false
 	}
-	return uid, true
+	return uid, clientID, true
 }
 
 // hasOAuthBearer reports whether the request carries an OAuth access token
@@ -127,11 +167,18 @@ func OptionalUser(authSvc *auth.Service, s store.Store) func(http.Handler) http.
 			if !ok {
 				uid, ok = patUserID(s, r)
 			}
+			var clientID string
 			if !ok {
-				uid, ok = oauthUserID(s, r)
+				uid, clientID, ok = oauthUserID(s, r)
 			}
 			if ok {
-				r = r.WithContext(context.WithValue(r.Context(), userIDKey, uid))
+				ctx := context.WithValue(r.Context(), userIDKey, uid)
+				// Only OAuth callers carry a client_id — it marks the credential as a
+				// revocable connection so issued canvas tokens get a grant binding.
+				if clientID != "" {
+					ctx = context.WithValue(ctx, oauthClientKey, clientID)
+				}
+				r = r.WithContext(ctx)
 			}
 			next.ServeHTTP(w, r)
 		})
