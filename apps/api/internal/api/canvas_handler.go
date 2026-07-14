@@ -215,24 +215,47 @@ func (h *Handler) GetState(w http.ResponseWriter, r *http.Request) {
 	full := r.URL.Query().Get("full") == "true"
 
 	canvasID := CanvasIDFromCtx(r.Context())
-	canvas, state, edits, err := h.store.GetCanvasState(r.Context(), canvasID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
+
 	// This endpoint is the agent/gateway read path (the web client never calls
 	// it — it lives off the WS state stream). So a hit here means an agent just
 	// read the canvas; pulse that to viewers as live "reading" presence.
 	broadcastActivity(h.hub, canvasID, "read")
 
-	// Default (no fields, not full) → cheap summary so the agent can navigate
-	// without pulling the whole board.
+	// Default (no fields, not full) → cheap summary. The store does the trimming
+	// (exact counts + a capped name-only sample per kind), so a summary read never
+	// loads the whole board.
 	if !full && len(fields) == 0 {
-		writeJSON(w, http.StatusOK, summarizeState(canvas, state, edits))
+		canvas, sum, edits, err := h.store.GetCanvasSummary(r.Context(), canvasID, maxSummaryNames)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, summarizeFromStore(canvas, sum, edits))
 		return
 	}
+
+	// Field-filtered read → fetch only the requested kinds via per-table SELECTs,
+	// again avoiding a full-canvas load. full=true keeps the whole-canvas escape
+	// hatch (GetCanvasState) for back-compat.
 	if len(fields) > 0 {
-		state = projectState(state, fields)
+		canvas, state, edits, err := h.store.GetCanvasKinds(r.Context(), canvasID, fields)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, stateMsg{
+			Type:         "state",
+			Canvas:       canvas,
+			State:        state,
+			PendingEdits: edits,
+		})
+		return
+	}
+
+	canvas, state, edits, err := h.store.GetCanvasState(r.Context(), canvasID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	writeJSON(w, http.StatusOK, stateMsg{
 		Type:         "state",

@@ -463,6 +463,25 @@ type CanvasState struct {
 	Agents       map[string]*Agent       `json:"agents"`
 }
 
+// CanvasSummary is the cheap, navigational shape behind canvas_state_read's
+// default read. Instead of loading the whole canvas and counting/clipping it in
+// Go, the store fills this with EXACT per-kind counts (count=exact HEAD/range
+// queries — no rows transferred) plus a capped Sample of each kind carrying just
+// enough columns to render a name. So a summary read on a 100k-item board stays
+// cheap end-to-end, not just on the wire.
+//
+// Sample reuses CanvasState so the API layer's name-formatting (clip, "(type)",
+// first-line, sort, "+N more") stays in one place; only the requested name
+// columns are populated, the rest are zero. Counts are authoritative — Sample is
+// capped, so never derive a count from len(Sample.X).
+type CanvasSummary struct {
+	Version      int
+	Mode         string
+	EnabledModes []string
+	Counts       map[string]int
+	Sample       *CanvasState
+}
+
 // ── Patch types (partial updates from JSON body) ──────────────────────────────
 
 type PinPatch struct {
@@ -640,6 +659,16 @@ type Store interface {
 	CountUnreadNotifications(ctx context.Context, userID uuid.UUID) (int, error)
 	MarkNotificationsRead(ctx context.Context, userID uuid.UUID) error
 	GetCanvasState(ctx context.Context, canvasID uuid.UUID) (*Canvas, *CanvasState, []*PendingEdit, error)
+	// GetCanvasKinds is the lightweight sibling of GetCanvasState: it loads only
+	// the requested kinds via per-table SELECTs (kinds not asked for stay nil, so
+	// they serialize to null), plus the canvas row and pending edits. Backs the
+	// fields-filtered canvas_state_read so a single-field read no longer triggers a
+	// full-canvas DB load. Same return shape as GetCanvasState.
+	GetCanvasKinds(ctx context.Context, canvasID uuid.UUID, kinds []string) (*Canvas, *CanvasState, []*PendingEdit, error)
+	// GetCanvasSummary backs the default (summary) canvas_state_read: exact per-kind
+	// counts plus a name-column-only Sample capped at sampleLimit rows per kind, so
+	// the DB does the trimming instead of loading the whole canvas to count and clip.
+	GetCanvasSummary(ctx context.Context, canvasID uuid.UUID, sampleLimit int) (*Canvas, *CanvasSummary, []*PendingEdit, error)
 	SetMode(ctx context.Context, canvasID uuid.UUID, mode string) (int, error)
 	EnableMode(ctx context.Context, canvasID uuid.UUID, mode string) (int, error)
 	SetMapID(ctx context.Context, canvasID uuid.UUID, mapID string) (int, error)

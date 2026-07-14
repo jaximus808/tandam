@@ -114,69 +114,92 @@ func projectState(state *store.CanvasState, fields []string) *store.CanvasState 
 	return out
 }
 
-// summarizeState builds the counts + per-kind name lists for the default read.
-func summarizeState(canvas *store.Canvas, state *store.CanvasState, edits []*store.PendingEdit) summaryMsg {
+// countsFromState derives the per-kind counts from a fully-loaded state. Used by
+// the in-memory summarize path (tests, and any caller that already holds the whole
+// canvas); the cheap DB path gets exact counts straight from the store instead.
+func countsFromState(state *store.CanvasState) map[string]int {
 	counts := map[string]int{}
-	names := map[string][]string{}
-	if state != nil {
-		counts["documents"] = len(state.Documents)
-		counts["pins"] = len(state.Pins)
-		counts["events"] = len(state.Events)
-		counts["notes"] = len(state.Notes)
-		counts["roadmapItems"] = len(state.RoadmapItems)
-		counts["sheets"] = len(state.Sheets)
-		counts["sheetRows"] = len(state.SheetRows)
-		counts["charts"] = len(state.Charts)
-		counts["forms"] = len(state.Forms)
-		counts["actions"] = len(state.Actions)
-		counts["agents"] = len(state.Agents)
-
-		for _, d := range state.Documents {
-			names["documents"] = append(names["documents"], clip(d.Name)+" ("+d.Type+")")
-		}
-		for _, p := range state.Pins {
-			names["pins"] = append(names["pins"], derefName(p.Label, "(pin)"))
-		}
-		for _, e := range state.Events {
-			names["events"] = append(names["events"], clip(e.Title))
-		}
-		for _, n := range state.Notes {
-			names["notes"] = append(names["notes"], clip(firstLine(n.Body)))
-		}
-		for _, r := range state.RoadmapItems {
-			names["roadmapItems"] = append(names["roadmapItems"], clip(r.Title))
-		}
-		for _, s := range state.Sheets {
-			names["sheets"] = append(names["sheets"], clip(s.Name))
-		}
-		for _, c := range state.Charts {
-			names["charts"] = append(names["charts"], clip(c.Name))
-		}
-		for _, f := range state.Forms {
-			names["forms"] = append(names["forms"], clip(f.Name))
-		}
-		// Actions are deliberately NOT listed by name. Their only cheap projection
-		// is "type:state" (e.g. "task:done"), which is non-identifying noise that
-		// scales linearly with the action count — on a busy board it's tens of
-		// duplicate "task:done" strings that cost tokens and tell the agent nothing.
-		// The count still appears above, and the dedicated canvas_task_list /
-		// canvas_action_list tools give the real, identifying view. See _hint.
-		for _, ag := range state.Agents {
-			names["agents"] = append(names["agents"], clip(ag.Name))
-		}
+	if state == nil {
+		return counts
 	}
-	// Map iteration is unordered; sort each list so repeated reads are stable and
-	// diffable, then cap the length so a huge kind can't re-barf the summary.
+	counts["documents"] = len(state.Documents)
+	counts["pins"] = len(state.Pins)
+	counts["events"] = len(state.Events)
+	counts["notes"] = len(state.Notes)
+	counts["roadmapItems"] = len(state.RoadmapItems)
+	counts["sheets"] = len(state.Sheets)
+	counts["sheetRows"] = len(state.SheetRows)
+	counts["charts"] = len(state.Charts)
+	counts["forms"] = len(state.Forms)
+	counts["actions"] = len(state.Actions)
+	counts["agents"] = len(state.Agents)
+	return counts
+}
+
+// namesFromState builds the raw (unsorted, uncapped) per-kind name lists from a
+// state. The state may be a full canvas OR a capped Sample from GetCanvasSummary —
+// the formatting is identical either way, so both read paths share it. Sorting,
+// capping, and the "+N more" note are applied later by assembleSummary.
+func namesFromState(state *store.CanvasState) map[string][]string {
+	names := map[string][]string{}
+	if state == nil {
+		return names
+	}
+	for _, d := range state.Documents {
+		names["documents"] = append(names["documents"], clip(d.Name)+" ("+d.Type+")")
+	}
+	for _, p := range state.Pins {
+		names["pins"] = append(names["pins"], derefName(p.Label, "(pin)"))
+	}
+	for _, e := range state.Events {
+		names["events"] = append(names["events"], clip(e.Title))
+	}
+	for _, n := range state.Notes {
+		names["notes"] = append(names["notes"], clip(firstLine(n.Body)))
+	}
+	for _, r := range state.RoadmapItems {
+		names["roadmapItems"] = append(names["roadmapItems"], clip(r.Title))
+	}
+	for _, s := range state.Sheets {
+		names["sheets"] = append(names["sheets"], clip(s.Name))
+	}
+	for _, c := range state.Charts {
+		names["charts"] = append(names["charts"], clip(c.Name))
+	}
+	for _, f := range state.Forms {
+		names["forms"] = append(names["forms"], clip(f.Name))
+	}
+	// Actions are deliberately NOT listed by name. Their only cheap projection
+	// is "type:state" (e.g. "task:done"), which is non-identifying noise that
+	// scales linearly with the action count — on a busy board it's tens of
+	// duplicate "task:done" strings that cost tokens and tell the agent nothing.
+	// The count still appears, and the dedicated canvas_task_list /
+	// canvas_action_list tools give the real, identifying view. See _hint.
+	for _, ag := range state.Agents {
+		names["agents"] = append(names["agents"], clip(ag.Name))
+	}
+	return names
+}
+
+// assembleSummary is the shared tail of both summary read paths: given exact
+// counts and raw per-kind names, it sorts each list for stable/diffable output,
+// caps it (the "+N more" note is computed against the EXACT count so it's correct
+// even when names came from a capped DB sample), and packs the summaryMsg.
+func assembleSummary(canvas *store.Canvas, mode string, version int, enabledModes []string,
+	counts map[string]int, names map[string][]string, edits []*store.PendingEdit) summaryMsg {
+	capped := make(map[string][]string, len(names))
 	for k, list := range names {
 		sort.Strings(list)
-		names[k] = capNames(list)
+		capped[k] = capNamesToCount(list, counts[k])
 	}
-
-	msg := summaryMsg{
+	return summaryMsg{
 		Type:         "state.summary",
 		Canvas:       canvas,
+		Mode:         mode,
+		Version:      version,
+		EnabledModes: enabledModes,
 		Counts:       counts,
-		Names:        names,
+		Names:        capped,
 		PendingEdits: edits,
 		Hint: "Summary only (counts + names). Re-read canvas_state_read with " +
 			`fields=["roadmapItems"] (any of: ` + strings.Join(stateKinds, ", ") +
@@ -185,21 +208,55 @@ func summarizeState(canvas *store.Canvas, state *store.CanvasState, edits []*sto
 			"Actions aren't listed by name — use canvas_task_list for the task queue " +
 			"or canvas_action_list for other actions.",
 	}
-	if state != nil {
-		msg.Mode = state.Mode
-		msg.Version = state.Version
-		msg.EnabledModes = state.EnabledModes
-	}
-	return msg
 }
 
-func capNames(list []string) []string {
-	if len(list) <= maxSummaryNames {
-		return list
+// summarizeState builds the summary from a fully-loaded state (in-memory counts +
+// names). The cheap DB path builds the same message from store data via
+// summarizeFromStore; both funnel through assembleSummary.
+func summarizeState(canvas *store.Canvas, state *store.CanvasState, edits []*store.PendingEdit) summaryMsg {
+	mode, version := "", 0
+	var enabledModes []string
+	if state != nil {
+		mode, version, enabledModes = state.Mode, state.Version, state.EnabledModes
 	}
-	out := make([]string, 0, maxSummaryNames+1)
-	out = append(out, list[:maxSummaryNames]...)
-	out = append(out, fmt.Sprintf("…(+%d more)", len(list)-maxSummaryNames))
+	return assembleSummary(canvas, mode, version, enabledModes,
+		countsFromState(state), namesFromState(state), edits)
+}
+
+// summarizeFromStore builds the summary from GetCanvasSummary's exact counts + a
+// capped, name-column Sample — no full-canvas load. Names are derived from the
+// Sample; counts are authoritative from the store.
+func summarizeFromStore(canvas *store.Canvas, sum *store.CanvasSummary, edits []*store.PendingEdit) summaryMsg {
+	if sum == nil {
+		return assembleSummary(canvas, "", 0, nil, map[string]int{}, map[string][]string{}, edits)
+	}
+	return assembleSummary(canvas, sum.Mode, sum.Version, sum.EnabledModes,
+		sum.Counts, namesFromState(sum.Sample), edits)
+}
+
+// capNames caps a fully-materialized name list (len == total), keeping the
+// classic "first maxSummaryNames + (+N more)" shape. Thin wrapper over
+// capNamesToCount for callers that hold every name.
+func capNames(list []string) []string {
+	return capNamesToCount(list, len(list))
+}
+
+// capNamesToCount caps a name list to maxSummaryNames and appends a "…(+N more)"
+// marker for the rows not shown, where N is measured against the EXACT total —
+// so truncation is reported correctly even when `list` is a capped DB sample
+// (len(list) < total) rather than the full set (len(list) == total).
+func capNamesToCount(list []string, total int) []string {
+	shown := list
+	if len(shown) > maxSummaryNames {
+		shown = shown[:maxSummaryNames]
+	}
+	hidden := total - len(shown)
+	if hidden <= 0 {
+		return shown
+	}
+	out := make([]string, 0, len(shown)+1)
+	out = append(out, shown...)
+	out = append(out, fmt.Sprintf("…(+%d more)", hidden))
 	return out
 }
 
