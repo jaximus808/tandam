@@ -106,6 +106,89 @@ func TestSummarizeState(t *testing.T) {
 	}
 }
 
+// When the name list is a CAPPED DB sample (fewer names than the true total),
+// the "+N more" note must be computed against the exact total, not len(list).
+func TestCapNamesToCountSampledTotal(t *testing.T) {
+	sample := make([]string, maxSummaryNames) // a full sample page
+	for i := range sample {
+		sample[i] = "n"
+	}
+	// True total is far larger than what we sampled.
+	capped := capNamesToCount(sample, maxSummaryNames+5000)
+	if len(capped) != maxSummaryNames+1 {
+		t.Fatalf("capped len = %d, want %d", len(capped), maxSummaryNames+1)
+	}
+	if got := capped[len(capped)-1]; !strings.Contains(got, "5000 more") {
+		t.Fatalf("truncation note must reflect the exact total, got %q", got)
+	}
+
+	// total == len(list): fully materialized, no truncation note.
+	if got := capNamesToCount([]string{"a", "b"}, 2); len(got) != 2 {
+		t.Fatalf("no truncation expected, got %v", got)
+	}
+}
+
+// summarizeFromStore must take counts verbatim from the store (authoritative)
+// and derive names from the capped Sample — mirroring the wire shape of the
+// in-memory summarizeState so the gateway/web need no change.
+func TestSummarizeFromStore(t *testing.T) {
+	rid := uuid.New()
+	sample := &store.CanvasState{
+		Version:      9,
+		Mode:         "roadmap",
+		EnabledModes: []string{"roadmap"},
+		RoadmapItems: map[string]*store.RoadmapItem{rid.String(): {ID: rid, Title: "Sampled item"}},
+	}
+	sum := &store.CanvasSummary{
+		Version:      9,
+		Mode:         "roadmap",
+		EnabledModes: []string{"roadmap"},
+		// Exact count exceeds the single sampled name → summary must say "+more".
+		Counts: map[string]int{"roadmapItems": 4321, "actions": 7},
+		Sample: sample,
+	}
+	msg := summarizeFromStore(nil, sum, nil)
+	if msg.Type != "state.summary" || msg.Version != 9 || msg.Mode != "roadmap" {
+		t.Fatalf("bearings wrong: %+v", msg)
+	}
+	if msg.Counts["roadmapItems"] != 4321 || msg.Counts["actions"] != 7 {
+		t.Fatalf("counts must come straight from the store: %+v", msg.Counts)
+	}
+	got := msg.Names["roadmapItems"]
+	if len(got) != 2 || got[0] != "Sampled item" || !strings.Contains(got[1], "4320 more") {
+		t.Fatalf("names should be sample + exact-total truncation note, got %v", got)
+	}
+	// actions counted but never name-listed, even via the store path.
+	if _, ok := msg.Names["actions"]; ok {
+		t.Fatalf("actions must not be name-listed, got %v", msg.Names["actions"])
+	}
+}
+
+// Items whose display field is blank must summarize to a self-describing
+// placeholder, not an unexplained "" — so the agent knows what the blank means.
+func TestBlankNamesGetFallbackLabels(t *testing.T) {
+	nid, pid, eid, did := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	st := &store.CanvasState{
+		Documents: map[string]*store.Document{did.String(): {ID: did, Type: "map", Name: ""}},
+		Pins:      map[string]*store.Pin{pid.String(): {ID: pid, Label: nil}},
+		Events:    map[string]*store.Event{eid.String(): {ID: eid, Title: "   "}},
+		Notes:     map[string]*store.Note{nid.String(): {ID: nid, Body: ""}},
+	}
+	names := namesFromState(st)
+	cases := map[string]string{
+		"documents": "(untitled) (map)",
+		"pins":      "(unlabeled pin)",
+		"events":    "(untitled event)",
+		"notes":     "(empty note)",
+	}
+	for kind, want := range cases {
+		got := names[kind]
+		if len(got) != 1 || got[0] != want {
+			t.Fatalf("%s blank fallback = %v, want [%q]", kind, got, want)
+		}
+	}
+}
+
 func TestClipAndCapNames(t *testing.T) {
 	long := strings.Repeat("x", 200)
 	if got := clip(long); len([]rune(got)) > 81 { // 80 + ellipsis

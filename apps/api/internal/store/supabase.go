@@ -1146,6 +1146,390 @@ func (s *supabaseStore) GetCanvasState(_ context.Context, canvasID uuid.UUID) (*
 	return canvas, state, edits, nil
 }
 
+// getCanvasRowState fetches just the canvas row, returning the Canvas plus its
+// parsed enabled_modes. Shared by the per-kind read paths, which need the canvas
+// bearings (version/mode/enabledModes) without the embedded child tables.
+func (s *supabaseStore) getCanvasRowState(canvasID uuid.UUID) (*Canvas, []string, error) {
+	var rows []dbCanvas
+	_, err := s.client.From("canvases").
+		Select("*", "", false).
+		Eq("id", canvasID.String()).
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(rows) == 0 {
+		return nil, nil, fmt.Errorf("canvas not found: %s", canvasID)
+	}
+	enabledModes := []string{}
+	if len(rows[0].EnabledModes) > 0 {
+		_ = json.Unmarshal(rows[0].EnabledModes, &enabledModes)
+	}
+	return toCanvas(rows[0]), enabledModes, nil
+}
+
+// emptyCanvasState builds a CanvasState carrying only the bearings, with every
+// kind map allocated empty. Used by the per-kind read paths so a requested kind
+// with zero rows is an empty (not nil) map, and an unrequested kind can be
+// nil'd out by the caller's projection.
+func emptyCanvasState(version int, mode string, enabledModes []string) *CanvasState {
+	return &CanvasState{
+		Version:      version,
+		Mode:         mode,
+		EnabledModes: enabledModes,
+		Documents:    map[string]*Document{},
+		Pins:         map[string]*Pin{},
+		Events:       map[string]*Event{},
+		Notes:        map[string]*Note{},
+		RoadmapItems: map[string]*RoadmapItem{},
+		Sheets:       map[string]*Sheet{},
+		SheetRows:    map[string]*SheetRow{},
+		Charts:       map[string]*Chart{},
+		Forms:        map[string]*Form{},
+		Actions:      map[string]*Action{},
+		Agents:       map[string]*Agent{},
+	}
+}
+
+// GetCanvasKinds loads only the requested kinds via per-table SELECTs instead of
+// the single big embedded GetCanvasState. Kinds not in `kinds` are left as their
+// zero (nil) map so projectState/serialization treat them as absent, matching
+// the in-memory field projection's wire shape. See the interface doc.
+func (s *supabaseStore) GetCanvasKinds(_ context.Context, canvasID uuid.UUID, kinds []string) (*Canvas, *CanvasState, []*PendingEdit, error) {
+	canvas, enabledModes, err := s.getCanvasRowState(canvasID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	state := emptyCanvasState(canvas.Version, canvas.Mode, enabledModes)
+
+	want := make(map[string]bool, len(kinds))
+	for _, k := range kinds {
+		want[k] = true
+	}
+	// Null out kinds we won't fetch so absent kinds serialize to null (same as
+	// the in-memory projection), keeping the wire contract identical.
+	if !want["documents"] {
+		state.Documents = nil
+	}
+	if !want["pins"] {
+		state.Pins = nil
+	}
+	if !want["events"] {
+		state.Events = nil
+	}
+	if !want["notes"] {
+		state.Notes = nil
+	}
+	if !want["roadmapItems"] {
+		state.RoadmapItems = nil
+	}
+	if !want["sheets"] {
+		state.Sheets = nil
+	}
+	if !want["sheetRows"] {
+		state.SheetRows = nil
+	}
+	if !want["charts"] {
+		state.Charts = nil
+	}
+	if !want["forms"] {
+		state.Forms = nil
+	}
+	if !want["actions"] {
+		state.Actions = nil
+	}
+	if !want["agents"] {
+		state.Agents = nil
+	}
+
+	for _, k := range kinds {
+		if err := s.loadKind(canvasID, k, state); err != nil {
+			return nil, nil, nil, fmt.Errorf("GetCanvasKinds(%s): %w", k, err)
+		}
+	}
+
+	edits, err := s.ListPendingEdits(context.Background(), canvasID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return canvas, state, edits, nil
+}
+
+// loadKind fetches one kind's full rows for a canvas and populates the matching
+// map on state. Kept as a switch (not a table registry) because each kind has
+// its own db-row type and converter.
+func (s *supabaseStore) loadKind(canvasID uuid.UUID, kind string, state *CanvasState) error {
+	id := canvasID.String()
+	switch kind {
+	case "documents":
+		var rows []dbDocument
+		if _, err := s.client.From("documents").Select("*", "", false).Eq("canvas_id", id).ExecuteTo(&rows); err != nil {
+			return err
+		}
+		for _, d := range rows {
+			doc := toDocument(d)
+			state.Documents[doc.ID.String()] = doc
+		}
+	case "pins":
+		var rows []dbPin
+		if _, err := s.client.From("pins").Select("*", "", false).Eq("canvas_id", id).ExecuteTo(&rows); err != nil {
+			return err
+		}
+		for _, d := range rows {
+			p := toPin(d)
+			state.Pins[p.ID.String()] = p
+		}
+	case "events":
+		var rows []dbEvent
+		if _, err := s.client.From("events").Select("*", "", false).Eq("canvas_id", id).ExecuteTo(&rows); err != nil {
+			return err
+		}
+		for _, d := range rows {
+			e := toEvent(d)
+			state.Events[e.ID.String()] = e
+		}
+	case "notes":
+		var rows []dbNote
+		if _, err := s.client.From("notes").Select("*", "", false).Eq("canvas_id", id).ExecuteTo(&rows); err != nil {
+			return err
+		}
+		for _, d := range rows {
+			n := toNote(d)
+			state.Notes[n.ID.String()] = n
+		}
+	case "roadmapItems":
+		var rows []dbRoadmapItem
+		if _, err := s.client.From("roadmap_items").Select("*", "", false).Eq("canvas_id", id).ExecuteTo(&rows); err != nil {
+			return err
+		}
+		for _, d := range rows {
+			r := toRoadmapItem(d)
+			state.RoadmapItems[r.ID.String()] = r
+		}
+	case "sheets":
+		var rows []dbSheet
+		if _, err := s.client.From("sheets").Select("*", "", false).Eq("canvas_id", id).ExecuteTo(&rows); err != nil {
+			return err
+		}
+		for _, d := range rows {
+			sh := toSheet(d)
+			state.Sheets[sh.ID.String()] = sh
+		}
+	case "sheetRows":
+		// sheet_rows has no canvas_id (it's FK'd to sheets), so pull the rows nested
+		// under this canvas's sheets and flatten them into the canvas-level map —
+		// same shape GetCanvasState produces.
+		var rows []dbSheet
+		if _, err := s.client.From("sheets").Select("id,sheet_rows(*)", "", false).Eq("canvas_id", id).ExecuteTo(&rows); err != nil {
+			return err
+		}
+		for _, sh := range rows {
+			for _, rd := range sh.SheetRows {
+				sr := toSheetRow(rd)
+				state.SheetRows[sr.ID.String()] = sr
+			}
+		}
+	case "charts":
+		var rows []dbChart
+		if _, err := s.client.From("charts").Select("*", "", false).Eq("canvas_id", id).ExecuteTo(&rows); err != nil {
+			return err
+		}
+		for _, d := range rows {
+			ch := toChart(d)
+			state.Charts[ch.ID.String()] = ch
+		}
+	case "forms":
+		var rows []dbForm
+		if _, err := s.client.From("forms").Select("*", "", false).Eq("canvas_id", id).ExecuteTo(&rows); err != nil {
+			return err
+		}
+		for _, d := range rows {
+			f := toForm(d)
+			state.Forms[f.ID.String()] = f
+		}
+	case "actions":
+		var rows []dbAction
+		if _, err := s.client.From("actions").Select("*", "", false).Eq("canvas_id", id).ExecuteTo(&rows); err != nil {
+			return err
+		}
+		for _, d := range rows {
+			a := toAction(d)
+			state.Actions[a.ID.String()] = a
+		}
+	case "agents":
+		var rows []dbAgent
+		if _, err := s.client.From("agents").Select("*", "", false).Eq("canvas_id", id).ExecuteTo(&rows); err != nil {
+			return err
+		}
+		for _, d := range rows {
+			ag := toAgent(d)
+			state.Agents[ag.ID.String()] = ag
+		}
+	}
+	return nil
+}
+
+// GetCanvasSummary loads the exact per-kind counts plus a capped, name-column
+// Sample for the default canvas_state_read. Each name-listed kind is one query
+// that both counts (count=exact → total in Content-Range) and returns up to
+// sampleLimit rows carrying only the name column(s); the count-only kinds
+// (actions, sheetRows) issue a HEAD count with no rows. Nothing loads the full
+// canvas. See the interface doc + CanvasSummary.
+func (s *supabaseStore) GetCanvasSummary(_ context.Context, canvasID uuid.UUID, sampleLimit int) (*Canvas, *CanvasSummary, []*PendingEdit, error) {
+	canvas, enabledModes, err := s.getCanvasRowState(canvasID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	sum := &CanvasSummary{
+		Version:      canvas.Version,
+		Mode:         canvas.Mode,
+		EnabledModes: enabledModes,
+		Counts:       map[string]int{},
+		Sample:       emptyCanvasState(canvas.Version, canvas.Mode, enabledModes),
+	}
+	id := canvasID.String()
+
+	// Name-listed kinds: one query each returns the exact count (Content-Range)
+	// AND the capped name-column sample. Only the columns the summary renders a
+	// name from are selected, so heavy JSON columns (config/columns/data/…) never
+	// leave Postgres. Order by id so the sampled page is stable across reads (the
+	// API layer alpha-sorts the names for display on top of that).
+	{
+		var rows []dbDocument
+		n, err := s.client.From("documents").Select("id,name,type", "exact", false).Eq("canvas_id", id).Order("id", nil).Limit(sampleLimit, "").ExecuteTo(&rows)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		sum.Counts["documents"] = int(n)
+		for _, d := range rows {
+			doc := toDocument(d)
+			sum.Sample.Documents[doc.ID.String()] = doc
+		}
+	}
+	{
+		var rows []dbPin
+		n, err := s.client.From("pins").Select("id,label", "exact", false).Eq("canvas_id", id).Order("id", nil).Limit(sampleLimit, "").ExecuteTo(&rows)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		sum.Counts["pins"] = int(n)
+		for _, d := range rows {
+			p := toPin(d)
+			sum.Sample.Pins[p.ID.String()] = p
+		}
+	}
+	{
+		var rows []dbEvent
+		n, err := s.client.From("events").Select("id,title", "exact", false).Eq("canvas_id", id).Order("id", nil).Limit(sampleLimit, "").ExecuteTo(&rows)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		sum.Counts["events"] = int(n)
+		for _, d := range rows {
+			e := toEvent(d)
+			sum.Sample.Events[e.ID.String()] = e
+		}
+	}
+	{
+		var rows []dbNote
+		n, err := s.client.From("notes").Select("id,body", "exact", false).Eq("canvas_id", id).Order("id", nil).Limit(sampleLimit, "").ExecuteTo(&rows)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		sum.Counts["notes"] = int(n)
+		for _, d := range rows {
+			nt := toNote(d)
+			sum.Sample.Notes[nt.ID.String()] = nt
+		}
+	}
+	{
+		var rows []dbRoadmapItem
+		n, err := s.client.From("roadmap_items").Select("id,title", "exact", false).Eq("canvas_id", id).Order("id", nil).Limit(sampleLimit, "").ExecuteTo(&rows)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		sum.Counts["roadmapItems"] = int(n)
+		for _, d := range rows {
+			r := toRoadmapItem(d)
+			sum.Sample.RoadmapItems[r.ID.String()] = r
+		}
+	}
+	{
+		var rows []dbSheet
+		n, err := s.client.From("sheets").Select("id,name", "exact", false).Eq("canvas_id", id).Order("id", nil).Limit(sampleLimit, "").ExecuteTo(&rows)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		sum.Counts["sheets"] = int(n)
+		for _, d := range rows {
+			sh := toSheet(d)
+			sum.Sample.Sheets[sh.ID.String()] = sh
+		}
+	}
+	{
+		var rows []dbChart
+		n, err := s.client.From("charts").Select("id,name", "exact", false).Eq("canvas_id", id).Order("id", nil).Limit(sampleLimit, "").ExecuteTo(&rows)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		sum.Counts["charts"] = int(n)
+		for _, d := range rows {
+			ch := toChart(d)
+			sum.Sample.Charts[ch.ID.String()] = ch
+		}
+	}
+	{
+		var rows []dbForm
+		n, err := s.client.From("forms").Select("id,name", "exact", false).Eq("canvas_id", id).Order("id", nil).Limit(sampleLimit, "").ExecuteTo(&rows)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		sum.Counts["forms"] = int(n)
+		for _, d := range rows {
+			f := toForm(d)
+			sum.Sample.Forms[f.ID.String()] = f
+		}
+	}
+	{
+		var rows []dbAgent
+		n, err := s.client.From("agents").Select("id,name", "exact", false).Eq("canvas_id", id).Order("id", nil).Limit(sampleLimit, "").ExecuteTo(&rows)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		sum.Counts["agents"] = int(n)
+		for _, d := range rows {
+			ag := toAgent(d)
+			sum.Sample.Agents[ag.ID.String()] = ag
+		}
+	}
+
+	// Count-only kinds: actions are deliberately never name-listed, and sheet_rows
+	// has no name to list — a HEAD count (head=true → no rows transferred) is all
+	// the summary needs.
+	{
+		_, n, err := s.client.From("actions").Select("id", "exact", true).Eq("canvas_id", id).Execute()
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		sum.Counts["actions"] = int(n)
+	}
+	{
+		// sheet_rows is FK'd to sheets (no canvas_id), so scope the count through an
+		// inner join on the parent sheet's canvas_id.
+		_, n, err := s.client.From("sheet_rows").Select("id,sheets!inner(canvas_id)", "exact", true).Eq("sheets.canvas_id", id).Execute()
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		sum.Counts["sheetRows"] = int(n)
+	}
+
+	edits, err := s.ListPendingEdits(context.Background(), canvasID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return canvas, sum, edits, nil
+}
+
 func (s *supabaseStore) SetMode(ctx context.Context, canvasID uuid.UUID, mode string) (int, error) {
 	err := s.exec(s.client.From("canvases").
 		Update(map[string]string{"mode": mode}, "minimal", "").
