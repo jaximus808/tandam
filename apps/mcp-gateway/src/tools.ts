@@ -380,9 +380,10 @@ export async function handleTool(
 
     // ── Pending edits ──────────────────────────────────────────────────────────
     case "canvas_pending_edits_read":
-      return gateway.get("/api/canvas/state").then((s: any) => ({
-        pendingEdits: s.pendingEdits,
-      }));
+      // Dedicated endpoint — queries just the pending_edits table. Previously this
+      // hit /api/canvas/state, forcing the server to build the whole summary
+      // (counts + per-kind names for the entire board) just to return this slice.
+      return gateway.get("/api/canvas/pending-edits");
 
     case "canvas_pending_edits_complete":
       return gateway.del(`/api/canvas/pending-edits/${args.editId}`);

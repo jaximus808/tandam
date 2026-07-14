@@ -139,6 +139,7 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 
 		// Reads — any valid role.
 		r.Get("/api/canvas/state", h.GetState)
+		r.Get("/api/canvas/pending-edits", h.ListPendingEdits)
 		r.Post("/api/canvas/forms/scaffold", h.ScaffoldForm) // computes a spec; no mutation
 		r.Get("/api/canvas/actions", h.ListActions)
 		r.Get("/api/canvas/actions/{id}", h.ReadAction)

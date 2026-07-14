@@ -155,9 +155,12 @@ func summarizeState(canvas *store.Canvas, state *store.CanvasState, edits []*sto
 		for _, f := range state.Forms {
 			names["forms"] = append(names["forms"], clip(f.Name))
 		}
-		for _, a := range state.Actions {
-			names["actions"] = append(names["actions"], a.Type+":"+a.State)
-		}
+		// Actions are deliberately NOT listed by name. Their only cheap projection
+		// is "type:state" (e.g. "task:done"), which is non-identifying noise that
+		// scales linearly with the action count — on a busy board it's tens of
+		// duplicate "task:done" strings that cost tokens and tell the agent nothing.
+		// The count still appears above, and the dedicated canvas_task_list /
+		// canvas_action_list tools give the real, identifying view. See _hint.
 		for _, ag := range state.Agents {
 			names["agents"] = append(names["agents"], clip(ag.Name))
 		}
@@ -178,7 +181,9 @@ func summarizeState(canvas *store.Canvas, state *store.CanvasState, edits []*sto
 		Hint: "Summary only (counts + names). Re-read canvas_state_read with " +
 			`fields=["roadmapItems"] (any of: ` + strings.Join(stateKinds, ", ") +
 			") for the full objects of a kind, or full=true for the entire canvas. " +
-			"Reading a sheet? request both \"sheets\" and \"sheetRows\".",
+			"Reading a sheet? request both \"sheets\" and \"sheetRows\". " +
+			"Actions aren't listed by name — use canvas_task_list for the task queue " +
+			"or canvas_action_list for other actions.",
 	}
 	if state != nil {
 		msg.Mode = state.Mode

@@ -1031,6 +1031,23 @@ func (h *Handler) CreatePendingEdit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, edit)
 }
 
+// GET /api/canvas/pending-edits  (JWT required)
+//
+// Cheap, targeted read of just the pending edit queue. canvas_pending_edits_read
+// used to hit GET /api/canvas/state, which now builds the whole summary (counts +
+// per-kind names for the entire board) only to throw all of it away except
+// pendingEdits — wasteful server work on every poll. This queries the one table
+// and returns nothing else.
+func (h *Handler) ListPendingEdits(w http.ResponseWriter, r *http.Request) {
+	canvasID := CanvasIDFromCtx(r.Context())
+	edits, err := h.store.ListPendingEdits(r.Context(), canvasID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"pendingEdits": edits})
+}
+
 // DELETE /api/canvas/pending-edits/{id}
 func (h *Handler) DeletePendingEdit(w http.ResponseWriter, r *http.Request) {
 	canvasID := CanvasIDFromCtx(r.Context())
