@@ -102,6 +102,18 @@ func oauthUserID(s store.Store, r *http.Request) (uuid.UUID, bool) {
 	return uid, true
 }
 
+// hasOAuthBearer reports whether the request carries an OAuth access token
+// (Authorization: Bearer tdm_oat_…), regardless of whether it's still valid.
+// Paired with UserIDFromCtx after OptionalUser has run, it distinguishes a
+// caller who presented a *revoked/expired* OAuth token (bearer present, no user
+// resolved) from a genuinely anonymous caller (no bearer) — the former must be
+// re-challenged so the hosted connector drops the dead token and re-runs OAuth.
+func hasOAuthBearer(r *http.Request) bool {
+	header := r.Header.Get("Authorization")
+	token := strings.TrimPrefix(header, "Bearer ")
+	return token != header && strings.HasPrefix(token, store.OAuthAccessPrefix)
+}
+
 // OptionalUser attaches the logged-in user's id to the context when a valid
 // session cookie, personal access token, OR OAuth access token is present,
 // otherwise lets the request through anonymously. Cookie is the browser path;

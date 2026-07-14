@@ -28,7 +28,14 @@ func (h *Handler) MCPAuth(w http.ResponseWriter, r *http.Request, authSvc *auth.
 		uid = &id
 	}
 
-	canvas, token, role, ok := h.issueTokenForCode(w, r.Context(), body.Code, authSvc, uid)
+	// A caller who presented an OAuth access token that didn't resolve to a user
+	// (revoked / expired / unknown) reaches here as anonymous. For a private
+	// canvas that dead token must surface as 401 (invalid_token), not 403, so the
+	// hosted MCP sidecar re-challenges and claude.ai drops it and re-runs OAuth —
+	// otherwise the connector clings to the stale token and never re-authorizes.
+	staleOAuth := uid == nil && hasOAuthBearer(r)
+
+	canvas, token, role, ok := h.issueTokenForCode(w, r.Context(), body.Code, authSvc, uid, staleOAuth)
 	if !ok {
 		return
 	}
@@ -48,7 +55,7 @@ func (h *Handler) MCPAuth(w http.ResponseWriter, r *http.Request, authSvc *auth.
 // so RequireWrite can enforce it on mutating routes. Returns 403 when the caller
 // has no access (private canvas, not a member). On failure it writes the error
 // response and returns ok=false.
-func (h *Handler) issueTokenForCode(w http.ResponseWriter, ctx context.Context, code string, authSvc *auth.Service, userID *uuid.UUID) (*store.Canvas, string, string, bool) {
+func (h *Handler) issueTokenForCode(w http.ResponseWriter, ctx context.Context, code string, authSvc *auth.Service, userID *uuid.UUID, staleOAuth bool) (*store.Canvas, string, string, bool) {
 	canvas, err := h.store.GetCanvasByCode(ctx, code)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "canvas not found — check your canvas code")
@@ -60,6 +67,13 @@ func (h *Handler) issueTokenForCode(w http.ResponseWriter, ctx context.Context, 
 		return nil, "", "", false
 	}
 	if role == "none" {
+		// Stale OAuth token on a private canvas → 401 so the connector re-auths
+		// (see MCPAuth). A genuinely anonymous or validly-authenticated-but-
+		// unauthorized caller gets the plain 403 dead-end.
+		if staleOAuth {
+			writeError(w, http.StatusUnauthorized, "invalid_token")
+			return nil, "", "", false
+		}
 		writeError(w, http.StatusForbidden, "this canvas is private — sign in with an account it's shared with")
 		return nil, "", "", false
 	}

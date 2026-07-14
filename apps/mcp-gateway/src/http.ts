@@ -91,21 +91,35 @@ function toolCall(
 }
 
 /**
- * Lazy step-up probe: does connecting to `code` require the user's account?
- * Posts to the API's canvas-code exchange WITHOUT any credential — a 403 means
- * the canvas is private/shared and resolved as anonymous, i.e. OAuth is needed.
- * A public canvas returns 200 (the throwaway JWT is discarded; the real
- * canvas_connect call re-mints one). Any error/other status → treat as "no
- * challenge" so the actual tool call runs and surfaces the true error.
+ * Lazy step-up probe: should connecting to `code` trigger an OAuth challenge?
+ * Posts to the API's canvas-code exchange, forwarding the caller's bearer if it
+ * has one, and reads the status:
+ *   - 401 → the caller presented an OAuth token that's revoked/expired
+ *     (invalid_token) → challenge so the connector drops the dead token and
+ *     re-authorizes. This was previously a dead end: claude.ai clung to a token
+ *     revoked from the /me connected-apps page and never re-ran OAuth, because a
+ *     stale bearer skipped the no-bearer-only challenge below.
+ *   - 403 → private/shared canvas resolved as anonymous. Challenge ONLY when the
+ *     caller had no bearer (first-time / logged-out). A caller WITH a valid token
+ *     who simply lacks access to this canvas also gets 403 — challenging them
+ *     would re-auth as the same user and 403 again (a loop), so let that real
+ *     "this canvas is private" error surface instead.
+ *   - 200 (public / accessible canvas) or any other/error status → no challenge;
+ *     the real canvas_connect call runs and surfaces the true result.
+ * The throwaway JWT from a 200 is discarded; the real canvas_connect re-mints one.
  */
-async function canvasRequiresAuth(code: string): Promise<boolean> {
+async function canvasRequiresAuth(code: string, bearer?: string): Promise<boolean> {
   try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (bearer) headers["Authorization"] = `Bearer ${bearer}`;
     const res = await fetch(`${API_URL}/api/mcp/auth`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({ code }),
     });
-    return res.status === 403;
+    if (res.status === 401) return true; // stale/revoked token → re-auth
+    if (res.status === 403) return !bearer; // anonymous private → auth; valid-but-forbidden → no
+    return false;
   } catch {
     return false;
   }
@@ -205,16 +219,19 @@ async function handleMcp(req: IncomingMessage, res: ServerResponse): Promise<voi
       return;
     }
     const bearer = bearerFrom(req);
-    // Lazy step-up: an unauthenticated `canvas_connect` to a private/shared
-    // canvas returns a 401 + WWW-Authenticate challenge so the hosted connector
-    // runs OAuth, instead of surfacing an in-band "this canvas is private" error
-    // the client can't act on. Public canvases (and already-authenticated calls)
-    // fall straight through — anonymous public access stays seamless.
-    if (!bearer) {
+    // Lazy step-up: a `canvas_connect` to a private/shared canvas that can't be
+    // authorized returns a 401 + WWW-Authenticate challenge so the hosted
+    // connector runs OAuth, instead of surfacing an in-band "this canvas is
+    // private" error the client can't act on. We probe with the caller's bearer
+    // (if any): no bearer OR a revoked/expired one both challenge; a valid token
+    // that merely lacks access does not (see canvasRequiresAuth). Public canvases
+    // and already-authorized calls fall straight through — public access stays
+    // seamless.
+    {
       const call = toolCall(body);
       const code = typeof call?.args.code === "string" ? call.args.code.trim() : "";
-      if (call?.name === "canvas_connect" && code && (await canvasRequiresAuth(code))) {
-        trace("POST", sid, rpc, "private-canvas, no-auth→401-challenge");
+      if (call?.name === "canvas_connect" && code && (await canvasRequiresAuth(code, bearer))) {
+        trace("POST", sid, rpc, "canvas needs auth→401-challenge");
         const id = (body as { id?: unknown })?.id ?? null;
         respondUnauthorized(res, id);
         return;

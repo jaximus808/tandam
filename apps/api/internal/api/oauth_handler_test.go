@@ -3,7 +3,10 @@ package api
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"net/http"
 	"testing"
+
+	"github.com/agentcanvas/api/internal/store"
 )
 
 // verifyPKCE must accept exactly the challenge the client derives from its
@@ -38,5 +41,34 @@ func TestScopeOrDefault(t *testing.T) {
 	}
 	if got := scopeOrDefault("custom"); got != "custom" {
 		t.Fatalf("scopeOrDefault(custom) = %q, want custom", got)
+	}
+}
+
+// hasOAuthBearer gates the stale-token → 401 re-challenge in MCPAuth: it must
+// fire only for an OAuth access token (tdm_oat_…), not for a PAT, a canvas JWT,
+// or a missing header — otherwise a genuinely anonymous caller would be told to
+// re-auth on a private canvas instead of getting the plain "private" dead-end.
+func TestHasOAuthBearer(t *testing.T) {
+	cases := []struct {
+		name string
+		auth string
+		want bool
+	}{
+		{"oauth token", "Bearer " + store.OAuthAccessPrefix + "abc123", true},
+		{"pat", "Bearer " + store.PATPrefix + "abc123", false},
+		{"raw jwt", "Bearer eyJhbGciOi.foo.bar", false},
+		{"no prefix", store.OAuthAccessPrefix + "abc123", false},
+		{"empty", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r, _ := http.NewRequest("POST", "/api/mcp/auth", nil)
+			if c.auth != "" {
+				r.Header.Set("Authorization", c.auth)
+			}
+			if got := hasOAuthBearer(r); got != c.want {
+				t.Fatalf("hasOAuthBearer(%q) = %v, want %v", c.auth, got, c.want)
+			}
+		})
 	}
 }
