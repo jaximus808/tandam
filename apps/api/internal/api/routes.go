@@ -89,6 +89,10 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 		// both as the signed-in user.
 		r.Get("/api/oauth/authorize", oauthH.GetAuthorizationInfo)
 		r.Post("/api/oauth/authorize", oauthH.Approve)
+
+		// Connected apps — list + revoke the user's OAuth authorizations.
+		r.Get("/api/me/connections", oauthH.ListConnections)
+		r.Delete("/api/me/connections/{clientId}", oauthH.RevokeConnection)
 		r.Post("/api/canvases/{code}/copy", h.CopyCanvas)
 		r.Post("/api/canvases/{code}/claim", h.ClaimCanvas)
 

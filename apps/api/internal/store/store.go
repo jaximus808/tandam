@@ -407,6 +407,15 @@ type OAuthGrant struct {
 	RefreshExpiresAt *time.Time
 }
 
+// OAuthConnection is a user-facing "connected app" — one client the user has an
+// active authorization with, shown on /me so they can revoke it.
+type OAuthConnection struct {
+	ClientID   string     `json:"clientId"`
+	ClientName string     `json:"clientName"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
+}
+
 type PendingEdit struct {
 	ID          uuid.UUID `json:"id"`
 	EntityID    uuid.UUID `json:"entityId"`
@@ -751,6 +760,12 @@ type Store interface {
 	// grant, and returns its metadata so the caller can mint a rotated pair.
 	// Returns ErrInvalidGrant when missing/expired/revoked.
 	ConsumeRefreshGrant(ctx context.Context, refreshHash string) (*OAuthGrant, error)
+	// ListOAuthConnections lists the user's active authorizations (one per client)
+	// for the "connected apps" UI.
+	ListOAuthConnections(ctx context.Context, userID uuid.UUID) ([]*OAuthConnection, error)
+	// RevokeOAuthConnection revokes every live token the user holds for a client
+	// (disconnect). Returns ErrInvalidGrant if there was nothing to revoke.
+	RevokeOAuthConnection(ctx context.Context, userID uuid.UUID, clientID string) error
 
 	// Pending edits
 	CreatePendingEdit(ctx context.Context, canvasID uuid.UUID, entityID uuid.UUID, instruction string) (*PendingEdit, error)

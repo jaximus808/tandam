@@ -11,6 +11,7 @@ import {
 import TandemLogo from "../components/TandemLogo";
 import AccountMenu from "../components/AccountMenu";
 import AccessTokensSection from "../components/AccessTokensSection";
+import ConnectedAppsSection from "../components/ConnectedAppsSection";
 import ThemeToggle from "../components/ThemeToggle";
 import posthog from "../lib/posthog";
 
@@ -256,6 +257,10 @@ export default function UserSettings({ onHome, onShowCanvases, onShowAbout, onOp
             {/* Access tokens — user-scoped MCP credentials so an agent can act
                 as this user on their private / shared canvases. */}
             <AccessTokensSection />
+
+            {/* Connected apps — OAuth authorizations (hosted MCP connector).
+                Self-hides when the user hasn't authorized anything. */}
+            <ConnectedAppsSection />
 
             {/* Placeholder home for the remaining account setting — a follow-up
                 task. Kept visible (disabled) so the shell reads as intentional. */}

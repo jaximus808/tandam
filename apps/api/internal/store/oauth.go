@@ -240,3 +240,75 @@ func (s *supabaseStore) ConsumeRefreshGrant(_ context.Context, refreshHash strin
 	}
 	return g, nil
 }
+
+// ── Connections (user-facing) ───────────────────────────────────────────────
+
+type dbOAuthConnRow struct {
+	ClientID   string  `json:"client_id"`
+	CreatedAt  string  `json:"created_at"`
+	LastUsedAt *string `json:"last_used_at"`
+	Client     *struct {
+		ClientName string `json:"client_name"`
+	} `json:"oauth_clients"`
+}
+
+// ListOAuthConnections returns one entry per client the user has a live token
+// for (deduped, newest activity first) — the "connected apps" list.
+func (s *supabaseStore) ListOAuthConnections(_ context.Context, userID uuid.UUID) ([]*OAuthConnection, error) {
+	var rows []dbOAuthConnRow
+	_, err := s.client.From("oauth_tokens").
+		Select("client_id,created_at,last_used_at,oauth_clients(client_name)", "", false).
+		Eq("user_id", userID.String()).
+		Is("revoked_at", "null").
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, err
+	}
+	// Dedupe by client: keep the earliest created_at and latest last_used_at.
+	byClient := map[string]*OAuthConnection{}
+	order := []string{}
+	for _, d := range rows {
+		conn, ok := byClient[d.ClientID]
+		if !ok {
+			conn = &OAuthConnection{ClientID: d.ClientID}
+			if d.Client != nil {
+				conn.ClientName = d.Client.ClientName
+			}
+			byClient[d.ClientID] = conn
+			order = append(order, d.ClientID)
+		}
+		created := parseTime(d.CreatedAt)
+		if conn.CreatedAt.IsZero() || created.Before(conn.CreatedAt) {
+			conn.CreatedAt = created
+		}
+		if d.LastUsedAt != nil && *d.LastUsedAt != "" {
+			lu := parseTime(*d.LastUsedAt)
+			if conn.LastUsedAt == nil || lu.After(*conn.LastUsedAt) {
+				conn.LastUsedAt = &lu
+			}
+		}
+	}
+	out := make([]*OAuthConnection, 0, len(order))
+	for _, id := range order {
+		out = append(out, byClient[id])
+	}
+	return out, nil
+}
+
+// RevokeOAuthConnection revokes all of the user's live tokens for a client.
+func (s *supabaseStore) RevokeOAuthConnection(_ context.Context, userID uuid.UUID, clientID string) error {
+	var rows []dbOAuthToken
+	_, err := s.client.From("oauth_tokens").
+		Update(map[string]any{"revoked_at": time.Now().UTC().Format(time.RFC3339)}, "representation", "").
+		Eq("user_id", userID.String()).
+		Eq("client_id", clientID).
+		Is("revoked_at", "null").
+		ExecuteTo(&rows)
+	if err != nil {
+		return err
+	}
+	if len(rows) == 0 {
+		return ErrInvalidGrant
+	}
+	return nil
+}

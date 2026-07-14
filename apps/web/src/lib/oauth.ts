@@ -95,3 +95,34 @@ export function denyRedirectUrl(redirectUri: string, state: string): string {
   if (state) url += `&state=${encodeURIComponent(state)}`;
   return url;
 }
+
+// ── Connected apps (revocation) ──────────────────────────────────────────────
+
+// An active OAuth authorization the user granted — shown on /me so they can
+// disconnect it.
+export interface Connection {
+  clientId: string;
+  clientName: string;
+  createdAt: string;
+  lastUsedAt?: string;
+}
+
+export async function listConnections(): Promise<Connection[]> {
+  const res = await fetch("/api/me/connections", { credentials: "same-origin" });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(detail || "Failed to load connections");
+  }
+  return (await res.json()) as Connection[];
+}
+
+export async function revokeConnection(clientId: string): Promise<void> {
+  const res = await fetch(`/api/me/connections/${encodeURIComponent(clientId)}`, {
+    method: "DELETE",
+    credentials: "same-origin",
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(detail || "Failed to disconnect");
+  }
+}

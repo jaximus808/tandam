@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/agentcanvas/api/internal/store"
+	"github.com/go-chi/chi/v5"
 )
 
 // OAuth 2.1 authorization server for the hosted MCP connector (migration 0029).
@@ -320,6 +321,43 @@ func (h *OAuthHandler) issueTokens(w http.ResponseWriter, r *http.Request, g *st
 		"refresh_token": refresh,
 		"scope":         scopeOrDefault(g.Scope),
 	})
+}
+
+// ── Connected apps (user-facing revocation) ─────────────────────────────────
+
+// GET /api/me/connections (RequireUser). The user's active OAuth authorizations.
+func (h *OAuthHandler) ListConnections(w http.ResponseWriter, r *http.Request) {
+	uid, ok := UserIDFromCtx(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "not signed in")
+		return
+	}
+	conns, err := h.store.ListOAuthConnections(r.Context(), uid)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, conns)
+}
+
+// DELETE /api/me/connections/{clientId} (RequireUser). Disconnect a client —
+// revokes every live token the user holds for it.
+func (h *OAuthHandler) RevokeConnection(w http.ResponseWriter, r *http.Request) {
+	uid, ok := UserIDFromCtx(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "not signed in")
+		return
+	}
+	clientID := chi.URLParam(r, "clientId")
+	if err := h.store.RevokeOAuthConnection(r.Context(), uid, clientID); err != nil {
+		if errors.Is(err, store.ErrInvalidGrant) {
+			writeError(w, http.StatusNotFound, "no active connection for that app")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
