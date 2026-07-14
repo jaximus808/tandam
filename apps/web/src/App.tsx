@@ -42,6 +42,7 @@ import TasksPanel from "./components/TasksPanel";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { useAgentActivity } from "./lib/useAgentActivity";
 import { useAgentNotifications } from "./lib/useAgentNotifications";
+import { useNotifyPrefs } from "./lib/useNotifyPrefs";
 import { recordRecent } from "./lib/recentCanvases";
 import { loadTabState, saveTabState } from "./lib/tabState";
 import { loadSidebarState, saveSidebarState } from "./lib/sidebarState";
@@ -649,8 +650,13 @@ export default function App() {
     lastAction: agentAction,
   } = useAgentActivity(canvas?.id, canvasState, lastChangeByRef);
 
-  // Notification center: turns agent actions into transient toasts + a bell log.
-  const notify = useAgentNotifications(agentAction);
+  // Per-canvas notification preferences (which agent events reach this user).
+  // `allow` gates delivery below; the bell exposes the toggles.
+  const notifyPrefs = useNotifyPrefs(canvasCode ?? undefined, !!me);
+
+  // Notification center: turns agent actions into transient toasts + a bell log,
+  // filtered by the user's per-category preferences.
+  const notify = useAgentNotifications(agentAction, notifyPrefs.allow);
 
   // Auto-follow: while following, an agent edit pulls the follower to the
   // document that edit lives in (so you watch the agent move between tabs).
@@ -1031,6 +1037,9 @@ export default function App() {
           toggleMute={notify.toggleMute}
           markRead={notify.markRead}
           clearLog={notify.clearLog}
+          prefs={notifyPrefs.prefs}
+          toggleCategory={notifyPrefs.toggleCategory}
+          toggleMinorEdits={notifyPrefs.toggleMinorEdits}
         />
 
         <div className="ml-auto flex items-center gap-2 shrink-0">

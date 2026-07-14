@@ -29,8 +29,15 @@ function readMuted(): boolean {
  *
  * Muting (the bell toggle) silences popups but never the log/badge — the bell
  * still tells you something happened; it just doesn't shout.
+ *
+ * `allow` is the per-category delivery gate from the user's notification prefs:
+ * an action it rejects is dropped whole (no toast, no log, no badge), which is
+ * stronger than muting. Defaults to letting everything through.
  */
-export function useAgentNotifications(lastAction: AgentAction | null) {
+export function useAgentNotifications(
+  lastAction: AgentAction | null,
+  allow: (a: AgentAction) => boolean = () => true,
+) {
   const [muted, setMuted] = useState(readMuted);
   const [toasts, setToasts] = useState<Notification[]>([]);
   const [log, setLog] = useState<Notification[]>([]);
@@ -47,10 +54,13 @@ export function useAgentNotifications(lastAction: AgentAction | null) {
     }
   }, []);
 
-  // New action → log it, badge it, and (unless muted) pop a toast.
+  // New action → (if the user's prefs allow it) log it, badge it, and unless
+  // muted pop a toast. A disallowed category is dropped whole — we still advance
+  // the nonce cursor so it isn't reconsidered.
   useEffect(() => {
     if (!lastAction || lastAction.nonce === lastNonce.current) return;
     lastNonce.current = lastAction.nonce;
+    if (!allow(lastAction)) return;
     const item: Notification = { ...lastAction, id: lastAction.nonce, at: Date.now() };
 
     setLog((cur) => [item, ...cur].slice(0, LOG_CAP));
@@ -61,7 +71,7 @@ export function useAgentNotifications(lastAction: AgentAction | null) {
       const tm = setTimeout(() => dismissToast(item.id), TOAST_MS);
       expiryTimers.current.set(item.id, tm);
     }
-  }, [lastAction, muted, dismissToast]);
+  }, [lastAction, muted, dismissToast, allow]);
 
   useEffect(() => {
     const timers = expiryTimers.current;

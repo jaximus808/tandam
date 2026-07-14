@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { Bell, BellOff, Check } from "lucide-react";
+import { Bell, BellOff, Check, SlidersHorizontal } from "lucide-react";
 import { modeTheme } from "../lib/modeTheme";
 import { actionPhrase, shortAgo } from "../lib/agentPhrase";
+import { NOTIFY_CATEGORIES, type NotificationPrefs } from "../lib/api";
 import type { Notification } from "../lib/useAgentNotifications";
+import type { CanvasMode } from "../types";
 
 interface Props {
   log: Notification[];
@@ -11,6 +13,9 @@ interface Props {
   toggleMute: () => void;
   markRead: () => void;
   clearLog: () => void;
+  prefs: NotificationPrefs;
+  toggleCategory: (mode: CanvasMode) => void;
+  toggleMinorEdits: () => void;
 }
 
 /**
@@ -19,8 +24,19 @@ interface Props {
  * with the recent-activity log and the popup mute toggle. Lives in the top-left
  * chrome, next to the tabs.
  */
-export default function NotificationBell({ log, unread, muted, toggleMute, markRead, clearLog }: Props) {
+export default function NotificationBell({
+  log,
+  unread,
+  muted,
+  toggleMute,
+  markRead,
+  clearLog,
+  prefs,
+  toggleCategory,
+  toggleMinorEdits,
+}: Props) {
   const [open, setOpen] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [ringing, setRinging] = useState(false);
   const lastSeen = useRef<number | undefined>(log[0]?.id);
   const now = Date.now();
@@ -74,28 +90,46 @@ export default function NotificationBell({ log, unread, muted, toggleMute, markR
             role="menu"
             className="tandem-fade-in absolute left-0 z-40 mt-1.5 w-[18rem] max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-xl border border-ink/10 bg-surface shadow-[4px_4px_0_rgba(28,25,23,0.06)]"
           >
-            {/* Header — title + the popup mute toggle the bell controls. */}
+            {/* Header — title + the popup mute toggle + the settings gear. */}
             <div className="flex items-center justify-between gap-2 border-b border-ink/[0.07] px-3 py-2">
               <span className="font-code text-[10.5px] uppercase tracking-[0.16em] text-ink/45">
-                Agent activity
+                {showSettings ? "Notify me about" : "Agent activity"}
               </span>
-              <button
-                onClick={toggleMute}
-                className={[
-                  "inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-code text-[10px] font-medium transition-colors",
-                  muted
-                    ? "bg-ink/[0.05] text-ink/45 hover:text-ink/70"
-                    : "bg-agent/10 text-agent hover:bg-agent/15",
-                ].join(" ")}
-                title={muted ? "Turn agent popups on" : "Mute agent popups"}
-              >
-                {muted ? <BellOff className="h-3 w-3" /> : <Bell className="h-3 w-3" />}
-                {muted ? "Popups off" : "Popups on"}
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={toggleMute}
+                  className={[
+                    "inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-code text-[10px] font-medium transition-colors",
+                    muted
+                      ? "bg-ink/[0.05] text-ink/45 hover:text-ink/70"
+                      : "bg-agent/10 text-agent hover:bg-agent/15",
+                  ].join(" ")}
+                  title={muted ? "Turn agent popups on" : "Mute agent popups"}
+                >
+                  {muted ? <BellOff className="h-3 w-3" /> : <Bell className="h-3 w-3" />}
+                  {muted ? "Popups off" : "Popups on"}
+                </button>
+                <button
+                  onClick={() => setShowSettings((s) => !s)}
+                  className={[
+                    "grid h-6 w-6 place-items-center rounded-full transition-colors",
+                    showSettings ? "bg-ink/[0.08] text-ink/70" : "text-ink/40 hover:bg-ink/5 hover:text-ink/70",
+                  ].join(" ")}
+                  title="Notification settings"
+                  aria-label="Notification settings"
+                  aria-pressed={showSettings}
+                >
+                  <SlidersHorizontal className="h-3.5 w-3.5" />
+                </button>
+              </div>
             </div>
 
-            {/* The tailing log. */}
-            {log.length === 0 ? (
+            {showSettings ? (
+              <NotifySettings prefs={prefs} toggleCategory={toggleCategory} toggleMinorEdits={toggleMinorEdits} />
+            ) : (
+              <>
+                {/* The tailing log. */}
+                {log.length === 0 ? (
               <div className="px-3 py-6 text-center">
                 <p className="text-[13px] text-ink/45">No agent activity yet.</p>
                 <p className="mt-1 font-code text-[10px] uppercase tracking-[0.13em] text-ink/30">
@@ -128,19 +162,110 @@ export default function NotificationBell({ log, unread, muted, toggleMute, markR
               </ul>
             )}
 
-            {log.length > 0 && (
-              <button
-                onClick={clearLog}
-                className="flex w-full items-center justify-center gap-1.5 border-t border-ink/[0.07] py-2 font-code text-[10.5px] uppercase tracking-[0.13em] text-ink/40 transition-colors hover:bg-ink/[0.03] hover:text-ink/70"
-              >
-                <Check className="h-3 w-3" />
-                Clear
-              </button>
+                {log.length > 0 && (
+                  <button
+                    onClick={clearLog}
+                    className="flex w-full items-center justify-center gap-1.5 border-t border-ink/[0.07] py-2 font-code text-[10.5px] uppercase tracking-[0.13em] text-ink/40 transition-colors hover:bg-ink/[0.03] hover:text-ink/70"
+                  >
+                    <Check className="h-3 w-3" />
+                    Clear
+                  </button>
+                )}
+              </>
             )}
           </div>
         </>
       )}
     </div>
+  );
+}
+
+// The settings pane: one toggle row per canvas tab (mute that tab's agent
+// activity) plus a "minor edits" switch that hushes chatty updates/removals.
+// Preferences persist per user per canvas via the parent's handlers.
+function NotifySettings({
+  prefs,
+  toggleCategory,
+  toggleMinorEdits,
+}: {
+  prefs: NotificationPrefs;
+  toggleCategory: (mode: CanvasMode) => void;
+  toggleMinorEdits: () => void;
+}) {
+  return (
+    <div className="max-h-[20rem] overflow-y-auto py-1.5">
+      {NOTIFY_CATEGORIES.map(({ mode, label }) => {
+        const on = prefs.categories[mode] !== false; // absent = on
+        const accent = modeTheme(mode).solid;
+        return (
+          <ToggleRow
+            key={mode}
+            label={label}
+            dot={accent}
+            on={on}
+            onToggle={() => toggleCategory(mode)}
+          />
+        );
+      })}
+
+      {/* Minor-edits gate lives below a divider — it cross-cuts the tabs above. */}
+      <div className="mt-1 border-t border-ink/[0.07] pt-1">
+        <ToggleRow
+          label="Minor edits"
+          hint="edits & deletions, not just new items"
+          on={prefs.minorEdits}
+          onToggle={toggleMinorEdits}
+        />
+      </div>
+    </div>
+  );
+}
+
+function ToggleRow({
+  label,
+  hint,
+  dot,
+  on,
+  onToggle,
+}: {
+  label: string;
+  hint?: string;
+  dot?: string;
+  on: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      onClick={onToggle}
+      role="switch"
+      aria-checked={on}
+      className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left transition-colors hover:bg-ink/[0.03]"
+    >
+      {dot && <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: on ? dot : "#D6D3D1" }} />}
+      <span className="min-w-0 flex-1">
+        <span className={["block truncate text-[13px] leading-tight", on ? "text-ink" : "text-ink/45"].join(" ")}>
+          {label}
+        </span>
+        {hint && (
+          <span className="block truncate font-code text-[9.5px] uppercase tracking-[0.1em] text-ink/30">{hint}</span>
+        )}
+      </span>
+      {/* A compact pill switch. */}
+      <span
+        className={[
+          "relative h-[18px] w-[30px] shrink-0 rounded-full transition-colors",
+          on ? "bg-agent" : "bg-ink/15",
+        ].join(" ")}
+        aria-hidden="true"
+      >
+        <span
+          className={[
+            "absolute top-[2px] h-[14px] w-[14px] rounded-full bg-white shadow-sm transition-all",
+            on ? "left-[14px]" : "left-[2px]",
+          ].join(" ")}
+        />
+      </span>
+    </button>
   );
 }
 

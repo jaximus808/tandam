@@ -95,6 +95,65 @@ func NewNotification(recipientID uuid.UUID, kind string, canvasID *uuid.UUID, ac
 	}
 }
 
+// NotifiableModes are the canvas tabs whose agent activity can be toggled in
+// notification preferences — the content modes, minus "welcome" (which has no
+// edits to narrate). Mirrored on the web client; the two must stay in sync.
+var NotifiableModes = []string{"map", "itinerary", "docs", "roadmap", "sheets", "charts"}
+
+// NotificationPrefs is a user's per-canvas control over which agent-activity
+// events reach them and where (migration 0023). Persisted as one JSONB blob so
+// new categories or delivery channels slot in without a schema change. v1 honours
+// only the in-app channel — email/push are stored-but-dormant scaffolding.
+type NotificationPrefs struct {
+	// Categories gates per-tab agent edits. A mode present + false is muted; a
+	// mode absent defaults to on (so a newly added tab notifies until turned off).
+	Categories map[string]bool `json:"categories"`
+	// MinorEdits gates chatty "updated"/"removed" events; creations always pass a
+	// live category. Off by default — structural changes only, per the sane default.
+	MinorEdits bool `json:"minorEdits"`
+	// Channels routes delivery. Only InApp is wired in v1; Email/Push are reserved
+	// for a later delivery worker that reads this same blob.
+	Channels NotificationChannels `json:"channels"`
+}
+
+// NotificationChannels is where a notification is delivered. In-app is the live
+// toast/bell; email + push are v1 scaffolding (persisted, not yet delivered).
+type NotificationChannels struct {
+	InApp bool `json:"inApp"`
+	Email bool `json:"email"`
+	Push  bool `json:"push"`
+}
+
+// DefaultNotificationPrefs is what a user with no stored row gets: every content
+// category on, chatty minor edits off, in-app delivery on (email/push off). Also
+// the base that a stored blob is merged over, so partial rows stay well-formed.
+func DefaultNotificationPrefs() *NotificationPrefs {
+	cats := make(map[string]bool, len(NotifiableModes))
+	for _, m := range NotifiableModes {
+		cats[m] = true
+	}
+	return &NotificationPrefs{
+		Categories: cats,
+		MinorEdits: false,
+		Channels:   NotificationChannels{InApp: true, Email: false, Push: false},
+	}
+}
+
+// Normalize clamps a prefs blob to the known shape before it's stored: unknown
+// category keys are dropped and any missing known mode is filled from the default
+// (on). Keeps junk out of the JSONB and guarantees Get always returns every mode.
+func (p *NotificationPrefs) Normalize() {
+	clean := make(map[string]bool, len(NotifiableModes))
+	for _, m := range NotifiableModes {
+		if v, ok := p.Categories[m]; ok {
+			clean[m] = v
+		} else {
+			clean[m] = true
+		}
+	}
+	p.Categories = clean
+}
+
 type Pin struct {
 	ID         uuid.UUID  `json:"id"`
 	Kind       string     `json:"kind"` // always "pin"
@@ -658,6 +717,13 @@ type Store interface {
 	ListNotifications(ctx context.Context, userID uuid.UUID, limit int) ([]*Notification, error)
 	CountUnreadNotifications(ctx context.Context, userID uuid.UUID) (int, error)
 	MarkNotificationsRead(ctx context.Context, userID uuid.UUID) error
+
+	// Notification preferences (migration 0023) — per-user, per-canvas control
+	// over which agent-activity events notify, and through which channel. Get
+	// returns the stored blob merged over defaults (so a never-set user gets the
+	// sane defaults, not an empty object); Upsert writes one row per (user, canvas).
+	GetNotificationPrefs(ctx context.Context, userID, canvasID uuid.UUID) (*NotificationPrefs, error)
+	UpsertNotificationPrefs(ctx context.Context, userID, canvasID uuid.UUID, prefs *NotificationPrefs) error
 	GetCanvasState(ctx context.Context, canvasID uuid.UUID) (*Canvas, *CanvasState, []*PendingEdit, error)
 	// GetCanvasKinds is the lightweight sibling of GetCanvasState: it loads only
 	// the requested kinds via per-table SELECTs (kinds not asked for stay nil, so

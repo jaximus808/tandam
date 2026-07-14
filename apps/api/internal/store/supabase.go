@@ -1053,6 +1053,48 @@ func (s *supabaseStore) MarkNotificationsRead(_ context.Context, userID uuid.UUI
 		Is("read_at", "null"))
 }
 
+// GetNotificationPrefs returns the user's stored blob for this canvas merged over
+// the defaults, so callers always get every known category. No row → defaults.
+func (s *supabaseStore) GetNotificationPrefs(_ context.Context, userID, canvasID uuid.UUID) (*NotificationPrefs, error) {
+	var rows []struct {
+		Prefs json.RawMessage `json:"prefs"`
+	}
+	_, err := s.client.From("notification_prefs").
+		Select("prefs", "", false).
+		Eq("user_id", userID.String()).
+		Eq("canvas_id", canvasID.String()).
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, err
+	}
+	prefs := DefaultNotificationPrefs()
+	if len(rows) > 0 && len(rows[0].Prefs) > 0 {
+		// Unmarshal onto the default so a partial blob keeps default fields.
+		if err := json.Unmarshal(rows[0].Prefs, prefs); err != nil {
+			return nil, err
+		}
+	}
+	prefs.Normalize()
+	return prefs, nil
+}
+
+// UpsertNotificationPrefs writes the one (user, canvas) row, replacing any prior
+// blob. The caller is expected to Normalize() first.
+func (s *supabaseStore) UpsertNotificationPrefs(_ context.Context, userID, canvasID uuid.UUID, prefs *NotificationPrefs) error {
+	blob, err := json.Marshal(prefs)
+	if err != nil {
+		return err
+	}
+	row := map[string]any{
+		"user_id":    userID.String(),
+		"canvas_id":  canvasID.String(),
+		"prefs":      json.RawMessage(blob),
+		"updated_at": time.Now().UTC().Format(time.RFC3339),
+	}
+	return s.exec(s.client.From("notification_prefs").
+		Insert(row, true, "user_id,canvas_id", "minimal", ""))
+}
+
 // GetCanvasState uses PostgREST embedded selects — one HTTP request for everything.
 func (s *supabaseStore) GetCanvasState(_ context.Context, canvasID uuid.UUID) (*Canvas, *CanvasState, []*PendingEdit, error) {
 	var rows []dbCanvasWithChildren

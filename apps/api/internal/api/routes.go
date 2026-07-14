@@ -78,6 +78,12 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 		r.Get("/api/me/notifications", h.ListNotifications)
 		r.Post("/api/me/notifications/read", h.MarkNotificationsRead)
 
+		// Per-canvas notification preferences (which agent-activity events notify
+		// this user, and through which channel). Personal, not owner-gated — the
+		// handler checks the caller has *some* access to the canvas.
+		r.Get("/api/canvases/{code}/notification-prefs", h.GetNotificationPrefs)
+		r.Patch("/api/canvases/{code}/notification-prefs", h.SetNotificationPrefs)
+
 		// Personal access tokens — user-scoped MCP credentials (mint / list /
 		// revoke). The plaintext is returned only from POST, once.
 		r.Get("/api/me/tokens", h.ListTokens)

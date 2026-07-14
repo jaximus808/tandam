@@ -1,4 +1,4 @@
-import type { CanvasMeta } from "../types";
+import type { CanvasMeta, CanvasMode } from "../types";
 
 // Image upload is disabled for v1 (no durable-storage story yet). Reading
 // stays available so any imageRefs left from dev still render via the
@@ -297,4 +297,57 @@ export async function removeCanvasAccess(code: string, userId: string): Promise<
     credentials: "same-origin",
   });
   if (!res.ok) throw await apiError(res, "Could not remove access");
+}
+
+// ── Notification preferences (migration 0023) ────────────────────────────────
+// Per-user, per-canvas control over which agent-activity events notify, and
+// where. v1 honours only the in-app channel client-side; email/push ride along
+// for a future delivery worker. Keep NOTIFY_CATEGORIES in sync with the backend's
+// store.NotifiableModes.
+
+// The content tabs whose agent activity can be toggled, with the label shown in
+// the settings panel. Mirrors store.NotifiableModes (Go) — same order.
+export const NOTIFY_CATEGORIES: { mode: CanvasMode; label: string }[] = [
+  { mode: "map", label: "Map" },
+  { mode: "itinerary", label: "Itinerary" },
+  { mode: "docs", label: "Docs" },
+  { mode: "roadmap", label: "Roadmap" },
+  { mode: "sheets", label: "Sheets" },
+  { mode: "charts", label: "Charts" },
+];
+
+export interface NotificationChannels {
+  inApp: boolean;
+  email: boolean;
+  push: boolean;
+}
+
+export interface NotificationPrefs {
+  // Per-tab: a mode present + false is muted; missing modes are treated as on.
+  categories: Partial<Record<CanvasMode, boolean>>;
+  // Gate chatty "updated"/"removed" events; creations always pass a live category.
+  minorEdits: boolean;
+  channels: NotificationChannels;
+}
+
+export async function getNotificationPrefs(code: string): Promise<NotificationPrefs> {
+  const res = await fetch(`/api/canvases/${code}/notification-prefs`, {
+    credentials: "same-origin",
+  });
+  if (!res.ok) throw await apiError(res, "Could not load notification settings");
+  return (await res.json()) as NotificationPrefs;
+}
+
+export async function setNotificationPrefs(
+  code: string,
+  prefs: NotificationPrefs,
+): Promise<NotificationPrefs> {
+  const res = await fetch(`/api/canvases/${code}/notification-prefs`, {
+    method: "PATCH",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(prefs),
+  });
+  if (!res.ok) throw await apiError(res, "Could not save notification settings");
+  return (await res.json()) as NotificationPrefs;
 }
