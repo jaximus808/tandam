@@ -15,6 +15,7 @@ func sampleState() *store.CanvasState {
 	nid := uuid.New()
 	pid := uuid.New()
 	did := uuid.New()
+	aid := uuid.New()
 	return &store.CanvasState{
 		Version:      7,
 		Mode:         "roadmap",
@@ -23,6 +24,7 @@ func sampleState() *store.CanvasState {
 		Pins:         map[string]*store.Pin{pid.String(): {ID: pid, DocumentID: &did, Label: strptr("Tokyo Tower")}},
 		RoadmapItems: map[string]*store.RoadmapItem{rid.String(): {ID: rid, Title: "Fix the state barf"}},
 		Notes:        map[string]*store.Note{nid.String(): {ID: nid, Body: "line one\nline two"}},
+		Actions:      map[string]*store.Action{aid.String(): {ID: aid, Type: "task", State: "done"}},
 	}
 }
 
@@ -92,6 +94,15 @@ func TestSummarizeState(t *testing.T) {
 	// a kind with zero items has no names entry.
 	if _, ok := msg.Names["events"]; ok {
 		t.Fatalf("empty kind should not appear in names")
+	}
+	// Actions are counted but deliberately NOT name-listed — "type:state" is
+	// non-identifying noise that scales with the action count. canvas_task_list /
+	// canvas_action_list are the real views.
+	if msg.Counts["actions"] != 1 {
+		t.Fatalf("actions must still be counted: %+v", msg.Counts)
+	}
+	if _, ok := msg.Names["actions"]; ok {
+		t.Fatalf("actions must not appear in names, got %v", msg.Names["actions"])
 	}
 }
 
