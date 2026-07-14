@@ -62,12 +62,53 @@ function bearerFrom(req: IncomingMessage): string | undefined {
  * metadata, kicking off OAuth discovery. resource_metadata lives on the Go API
  * at <PUBLIC_URL>/.well-known/oauth-protected-resource.
  */
-function respondUnauthorized(res: ServerResponse): void {
+function respondUnauthorized(res: ServerResponse, id: unknown = null): void {
   res.setHeader(
     "WWW-Authenticate",
     `Bearer resource_metadata="${WEB_URL}/.well-known/oauth-protected-resource"`
   );
-  rpcError(res, 401, "Authorization required");
+  rpcError(res, 401, "Authorization required", id);
+}
+
+/**
+ * Pull a `tools/call` out of a request body: the tool name and its arguments.
+ * Returns undefined for anything that isn't a tool call. Used for lazy step-up,
+ * where we peek at `canvas_connect` before dispatching it to the transport.
+ */
+function toolCall(
+  body: unknown
+): { name: string; args: Record<string, unknown> } | undefined {
+  if (!body || typeof body !== "object") return undefined;
+  const b = body as { method?: unknown; params?: { name?: unknown; arguments?: unknown } };
+  if (b.method !== "tools/call") return undefined;
+  const name = typeof b.params?.name === "string" ? b.params.name : undefined;
+  if (!name) return undefined;
+  const args =
+    b.params?.arguments && typeof b.params.arguments === "object"
+      ? (b.params.arguments as Record<string, unknown>)
+      : {};
+  return { name, args };
+}
+
+/**
+ * Lazy step-up probe: does connecting to `code` require the user's account?
+ * Posts to the API's canvas-code exchange WITHOUT any credential — a 403 means
+ * the canvas is private/shared and resolved as anonymous, i.e. OAuth is needed.
+ * A public canvas returns 200 (the throwaway JWT is discarded; the real
+ * canvas_connect call re-mints one). Any error/other status → treat as "no
+ * challenge" so the actual tool call runs and surfaces the true error.
+ */
+async function canvasRequiresAuth(code: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_URL}/api/mcp/auth`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    return res.status === 403;
+  } catch {
+    return false;
+  }
 }
 
 // sessionId -> live session. In-memory: a restart drops bindings and clients
@@ -121,11 +162,11 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
 }
 
 /** JSON-RPC error envelope for the cases we reject before reaching a transport. */
-function rpcError(res: ServerResponse, status: number, message: string): void {
+function rpcError(res: ServerResponse, status: number, message: string, id: unknown = null): void {
   sendJson(res, status, {
     jsonrpc: "2.0",
     error: { code: -32000, message },
-    id: null,
+    id: id ?? null,
   });
 }
 
@@ -163,7 +204,23 @@ async function handleMcp(req: IncomingMessage, res: ServerResponse): Promise<voi
       rpcError(res, 404, "Session not found — re-initialize");
       return;
     }
-    existing.gateway.setUserToken(bearerFrom(req));
+    const bearer = bearerFrom(req);
+    // Lazy step-up: an unauthenticated `canvas_connect` to a private/shared
+    // canvas returns a 401 + WWW-Authenticate challenge so the hosted connector
+    // runs OAuth, instead of surfacing an in-band "this canvas is private" error
+    // the client can't act on. Public canvases (and already-authenticated calls)
+    // fall straight through — anonymous public access stays seamless.
+    if (!bearer) {
+      const call = toolCall(body);
+      const code = typeof call?.args.code === "string" ? call.args.code.trim() : "";
+      if (call?.name === "canvas_connect" && code && (await canvasRequiresAuth(code))) {
+        trace("POST", sid, rpc, "private-canvas, no-auth→401-challenge");
+        const id = (body as { id?: unknown })?.id ?? null;
+        respondUnauthorized(res, id);
+        return;
+      }
+    }
+    existing.gateway.setUserToken(bearer);
     await existing.transport.handleRequest(req, res, body);
     return;
   }
