@@ -4,6 +4,9 @@ canvas-data/
 docs/
 .env
 *.local
+
+# Supabase CLI local scratch (project ref cache, temp files)
+supabase/.temp/
 .gstack/
 
 # design-sync (claude.ai/design) — staged scripts, build output, machine state

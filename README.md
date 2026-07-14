@@ -12,7 +12,7 @@ Live at **[tandemcanvas.com](https://tandemcanvas.com)**.
 | `apps/web` | React + Vite + Tailwind frontend |
 | `apps/mcp-gateway` | Node stdio MCP server (`@jaximus/tandem-mcp`) that proxies tool calls to the API |
 | `internal/shared` | TypeScript types shared by web + gateway |
-| `migrations/` | Hand-written, numbered SQL applied manually to Supabase |
+| `migrations/` | Hand-written, numbered SQL. Applied to Supabase on push to `main` via the Supabase CLI (`.github/workflows/deploy-migrations.yml`); `supabase/migrations` symlinks here |
 
 ## Develop
 
