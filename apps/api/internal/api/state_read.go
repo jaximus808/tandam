@@ -146,28 +146,28 @@ func namesFromState(state *store.CanvasState) map[string][]string {
 		return names
 	}
 	for _, d := range state.Documents {
-		names["documents"] = append(names["documents"], clip(d.Name)+" ("+d.Type+")")
+		names["documents"] = append(names["documents"], orFallback(clip(d.Name), "(untitled)")+" ("+d.Type+")")
 	}
 	for _, p := range state.Pins {
-		names["pins"] = append(names["pins"], derefName(p.Label, "(pin)"))
+		names["pins"] = append(names["pins"], derefName(p.Label, "(unlabeled pin)"))
 	}
 	for _, e := range state.Events {
-		names["events"] = append(names["events"], clip(e.Title))
+		names["events"] = append(names["events"], orFallback(clip(e.Title), "(untitled event)"))
 	}
 	for _, n := range state.Notes {
-		names["notes"] = append(names["notes"], clip(firstLine(n.Body)))
+		names["notes"] = append(names["notes"], orFallback(clip(firstLine(n.Body)), "(empty note)"))
 	}
 	for _, r := range state.RoadmapItems {
-		names["roadmapItems"] = append(names["roadmapItems"], clip(r.Title))
+		names["roadmapItems"] = append(names["roadmapItems"], orFallback(clip(r.Title), "(untitled roadmap item)"))
 	}
 	for _, s := range state.Sheets {
-		names["sheets"] = append(names["sheets"], clip(s.Name))
+		names["sheets"] = append(names["sheets"], orFallback(clip(s.Name), "(untitled sheet)"))
 	}
 	for _, c := range state.Charts {
-		names["charts"] = append(names["charts"], clip(c.Name))
+		names["charts"] = append(names["charts"], orFallback(clip(c.Name), "(untitled chart)"))
 	}
 	for _, f := range state.Forms {
-		names["forms"] = append(names["forms"], clip(f.Name))
+		names["forms"] = append(names["forms"], orFallback(clip(f.Name), "(untitled form)"))
 	}
 	// Actions are deliberately NOT listed by name. Their only cheap projection
 	// is "type:state" (e.g. "task:done"), which is non-identifying noise that
@@ -176,9 +176,20 @@ func namesFromState(state *store.CanvasState) map[string][]string {
 	// The count still appears, and the dedicated canvas_task_list /
 	// canvas_action_list tools give the real, identifying view. See _hint.
 	for _, ag := range state.Agents {
-		names["agents"] = append(names["agents"], clip(ag.Name))
+		names["agents"] = append(names["agents"], orFallback(clip(ag.Name), "(unnamed agent)"))
 	}
 	return names
+}
+
+// orFallback returns s, or a self-describing placeholder when s is blank — so an
+// item whose display field is empty reads as "(empty note)" rather than an
+// unexplained "" in the summary, telling the agent what the blank means (and
+// that the real object is a fields:[...] read away).
+func orFallback(s, fallback string) string {
+	if strings.TrimSpace(s) == "" {
+		return fallback
+	}
+	return s
 }
 
 // assembleSummary is the shared tail of both summary read paths: given exact

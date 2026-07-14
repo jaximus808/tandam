@@ -164,6 +164,31 @@ func TestSummarizeFromStore(t *testing.T) {
 	}
 }
 
+// Items whose display field is blank must summarize to a self-describing
+// placeholder, not an unexplained "" — so the agent knows what the blank means.
+func TestBlankNamesGetFallbackLabels(t *testing.T) {
+	nid, pid, eid, did := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	st := &store.CanvasState{
+		Documents: map[string]*store.Document{did.String(): {ID: did, Type: "map", Name: ""}},
+		Pins:      map[string]*store.Pin{pid.String(): {ID: pid, Label: nil}},
+		Events:    map[string]*store.Event{eid.String(): {ID: eid, Title: "   "}},
+		Notes:     map[string]*store.Note{nid.String(): {ID: nid, Body: ""}},
+	}
+	names := namesFromState(st)
+	cases := map[string]string{
+		"documents": "(untitled) (map)",
+		"pins":      "(unlabeled pin)",
+		"events":    "(untitled event)",
+		"notes":     "(empty note)",
+	}
+	for kind, want := range cases {
+		got := names[kind]
+		if len(got) != 1 || got[0] != want {
+			t.Fatalf("%s blank fallback = %v, want [%q]", kind, got, want)
+		}
+	}
+}
+
 func TestClipAndCapNames(t *testing.T) {
 	long := strings.Repeat("x", 200)
 	if got := clip(long); len([]rune(got)) > 81 { // 80 + ellipsis
