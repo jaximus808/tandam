@@ -9,9 +9,12 @@ import {
   Globe,
   X,
   ArrowRight,
+  MoreVertical,
+  Trash2,
+  AlertTriangle,
 } from "lucide-react";
 import type { CanvasMeta, CanvasMode } from "../types";
-import { listMyCanvases, listSharedWithMe } from "../lib/api";
+import { listMyCanvases, listSharedWithMe, deleteCanvas } from "../lib/api";
 import { fetchMe, getCachedUser, type User } from "../lib/auth";
 import { modeTheme } from "../lib/modeTheme";
 import TandemLogo from "../components/TandemLogo";
@@ -99,10 +102,38 @@ export default function MyCanvases({ onOpenCanvas, onHome, onOpenMCP, onShowSett
     () => (localStorage.getItem(VIEW_KEY) as View) || "grid",
   );
   const [launcherOpen, setLauncherOpen] = useState(false);
+  // The canvas queued for deletion (drives the confirm modal), plus in-flight +
+  // error state for the destructive call.
+  const [pendingDelete, setPendingDelete] = useState<CanvasMeta | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   useEffect(() => {
     localStorage.setItem(VIEW_KEY, view);
   }, [view]);
+
+  // Permanently delete the queued canvas, then drop it from the list. Only
+  // reachable for owned canvases (the menu is rendered on owned cards/rows only,
+  // and the API is owner-only), so this never touches shared canvases.
+  async function confirmDelete() {
+    if (!pendingDelete) return;
+    const target = pendingDelete;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteCanvas(target.code);
+      setLoad((prev) =>
+        prev.status === "ready"
+          ? { ...prev, canvases: prev.canvases.filter((c) => c.id !== target.id) }
+          : prev,
+      );
+      setPendingDelete(null);
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -257,11 +288,11 @@ export default function MyCanvases({ onOpenCanvas, onHome, onOpenMCP, onShowSett
                 ) : view === "grid" ? (
                   <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                     {visible.map((c) => (
-                      <CanvasCard key={c.id} c={c} onOpen={onOpenCanvas} />
+                      <CanvasCard key={c.id} c={c} onOpen={onOpenCanvas} onDelete={setPendingDelete} />
                     ))}
                   </ul>
                 ) : (
-                  <CanvasTable canvases={visible} onOpen={onOpenCanvas} />
+                  <CanvasTable canvases={visible} onOpen={onOpenCanvas} onDelete={setPendingDelete} />
                 )}
               </>
             )}
@@ -292,6 +323,154 @@ export default function MyCanvases({ onOpenCanvas, onHome, onOpenMCP, onShowSett
           onClose={() => setLauncherOpen(false)}
           onOpenMCP={onOpenMCP}
         />
+      )}
+
+      {pendingDelete && (
+        <DeleteCanvasModal
+          canvas={pendingDelete}
+          deleting={deleting}
+          error={deleteError}
+          onCancel={() => {
+            if (deleting) return;
+            setPendingDelete(null);
+            setDeleteError(null);
+          }}
+          onConfirm={confirmDelete}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ── delete confirmation modal ──────────────────────────────────────────────── */
+
+// A destructive-action confirm for permanently deleting an owned canvas. Plain
+// confirm (not type-to-confirm) — the dashboard already scopes this to canvases
+// the user owns, and the copy spells out that it's irreversible.
+function DeleteCanvasModal({
+  canvas,
+  deleting,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  canvas: CanvasMeta;
+  deleting: boolean;
+  error: string | null;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <button
+        aria-label="Cancel"
+        onClick={onCancel}
+        className="absolute inset-0 bg-ink/40 backdrop-blur-sm"
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="delete-canvas-title"
+        className="relative w-full max-w-md rounded-2xl border border-ink/10 bg-surface p-6 shadow-xl"
+      >
+        <div className="flex items-start gap-3.5">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-red-50 text-red-500">
+            <AlertTriangle className="h-5 w-5" />
+          </div>
+          <div className="min-w-0">
+            <h2 id="delete-canvas-title" className="font-display text-lg font-medium tracking-tight">
+              Delete this canvas?
+            </h2>
+            <p className="mt-1.5 text-sm text-ink/60">
+              <span className="font-medium text-ink">{canvas.name || "Untitled canvas"}</span>{" "}
+              <span className="font-code text-xs tracking-[0.14em] text-ink/40">{canvas.code}</span>{" "}
+              and everything in it will be permanently deleted. This can’t be undone, and anyone
+              you’ve shared it with will lose access.
+            </p>
+          </div>
+        </div>
+
+        {error && (
+          <p className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600">
+            {error}
+          </p>
+        )}
+
+        <div className="mt-6 flex justify-end gap-2">
+          <button
+            onClick={onCancel}
+            disabled={deleting}
+            className="rounded-lg border border-ink/15 px-4 py-2 text-sm font-medium text-ink/70 transition-colors hover:bg-paper disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={deleting}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <Trash2 className="h-4 w-4" />
+            {deleting ? "Deleting…" : "Delete canvas"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── per-canvas options menu (owned canvases only) ──────────────────────────── */
+
+// A small kebab menu rendered on owned canvas cards/rows. Sits above the card's
+// stretched open-button (z-10) so its clicks don't fall through to "open"; a
+// full-screen backdrop closes it on an outside click. Delete is the only action
+// today, but the menu leaves room for more (rename, share…).
+function CanvasMenu({ onDelete, label }: { onDelete: () => void; label: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="pointer-events-auto relative z-10">
+      <button
+        aria-label={`Options for ${label}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
+        className={`flex h-7 w-7 items-center justify-center rounded-md text-ink/40 transition-colors hover:bg-ink/10 hover:text-ink focus:opacity-100 focus:outline-none focus:ring-1 focus:ring-ink/20 ${
+          open ? "bg-ink/10 opacity-100" : "opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
+        }`}
+      >
+        <MoreVertical className="h-4 w-4" />
+      </button>
+      {open && (
+        <>
+          <button
+            aria-hidden
+            tabIndex={-1}
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpen(false);
+            }}
+            className="fixed inset-0 z-10 cursor-default"
+          />
+          <div
+            role="menu"
+            className="absolute right-0 top-full z-20 mt-1 w-40 overflow-hidden rounded-lg border border-ink/10 bg-surface py-1 shadow-lg"
+          >
+            <button
+              role="menuitem"
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpen(false);
+                onDelete();
+              }}
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-medium text-red-600 transition-colors hover:bg-red-50"
+            >
+              <Trash2 className="h-4 w-4" />
+              Delete
+            </button>
+          </div>
+        </>
       )}
     </div>
   );
@@ -453,40 +632,53 @@ function VisibilityBadge({ c }: { c: CanvasMeta }) {
 /* ── grid card ──────────────────────────────────────────────────────────────── */
 
 // CanvasCard renders one canvas tile. For a shared canvas, pass `role` to badge
-// the access level (View/Edit) instead of the mode.
+// the access level (View/Edit) instead of the mode. Pass `onDelete` (owned
+// canvases only) to surface the options menu with a destructive delete.
+//
+// The whole tile opens the canvas via a stretched overlay button (absolute
+// inset-0) so the options menu can be a real sibling — no nested <button> — that
+// sits above it (z-10) and catches its own clicks.
 function CanvasCard({
   c,
   onOpen,
   role,
+  onDelete,
 }: {
   c: CanvasMeta;
   onOpen: (code: string) => void;
   role?: "read" | "write" | "none";
+  onDelete?: (c: CanvasMeta) => void;
 }) {
   const t = modeTheme((c.mode as never) ?? "welcome");
   return (
-    <li>
+    <li className="group relative overflow-hidden rounded-2xl border border-ink/10 bg-surface transition-all hover:-translate-y-0.5 hover:border-ink/20 hover:shadow-md">
+      <span aria-hidden className="absolute inset-x-0 top-0 z-0 h-0.5" style={{ backgroundColor: t.solid }} />
+      {/* Stretched click target — transparent, covers the whole tile. */}
       <button
         onClick={() => onOpen(c.code)}
-        className="group relative block w-full overflow-hidden rounded-2xl border border-ink/10 bg-surface p-4 text-left transition-all hover:-translate-y-0.5 hover:border-ink/20 hover:shadow-md"
-      >
-        <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: t.solid }} />
+        aria-label={`Open ${c.name || "canvas"}`}
+        className="absolute inset-0"
+      />
+      <div className="relative p-4">
         <div className="flex items-start justify-between gap-3">
           <span className="font-display text-base font-medium leading-snug text-ink">
             {c.name || "Untitled canvas"}
           </span>
-          {role ? (
-            <span className="shrink-0 rounded-full border border-ink/15 bg-ink/[0.03] px-2 py-0.5 text-[11px] font-medium text-ink/50">
-              {role === "write" ? "Edit" : "View"}
-            </span>
-          ) : (
-            <span
-              className="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium capitalize"
-              style={{ backgroundColor: t.soft, color: t.solid }}
-            >
-              {c.mode}
-            </span>
-          )}
+          <div className="flex shrink-0 items-center gap-1">
+            {role ? (
+              <span className="rounded-full border border-ink/15 bg-ink/[0.03] px-2 py-0.5 text-[11px] font-medium text-ink/50">
+                {role === "write" ? "Edit" : "View"}
+              </span>
+            ) : (
+              <span
+                className="rounded-full px-2 py-0.5 text-[11px] font-medium capitalize"
+                style={{ backgroundColor: t.soft, color: t.solid }}
+              >
+                {c.mode}
+              </span>
+            )}
+            {onDelete && <CanvasMenu label={c.name || "canvas"} onDelete={() => onDelete(c)} />}
+          </div>
         </div>
         <div className="mt-3 flex items-center justify-between gap-2 text-xs text-ink/40">
           <span className="font-code tracking-[0.15em]">{c.code}</span>
@@ -495,7 +687,7 @@ function CanvasCard({
             <span>{timeAgo(c.updatedAt)}</span>
           </div>
         </div>
-      </button>
+      </div>
     </li>
   );
 }
@@ -505,30 +697,44 @@ function CanvasCard({
 function CanvasTable({
   canvases,
   onOpen,
+  onDelete,
 }: {
   canvases: CanvasMeta[];
   onOpen: (code: string) => void;
+  onDelete?: (c: CanvasMeta) => void;
 }) {
+  const cols = "sm:grid-cols-[1fr_7rem_6rem_8rem_6rem_2.5rem]";
   return (
     <div className="overflow-hidden rounded-2xl border border-ink/10 bg-surface">
       {/* header row (desktop only) */}
-      <div className="hidden grid-cols-[1fr_7rem_6rem_8rem_6rem] gap-3 border-b border-ink/10 bg-paper px-4 py-2.5 font-code text-[10px] font-medium uppercase tracking-[0.14em] text-ink/40 sm:grid">
+      <div
+        className={`hidden gap-3 border-b border-ink/10 bg-paper px-4 py-2.5 font-code text-[10px] font-medium uppercase tracking-[0.14em] text-ink/40 sm:grid ${cols}`}
+      >
         <span>Name</span>
         <span>Mode</span>
         <span>Access</span>
         <span>Created</span>
         <span className="text-right">Updated</span>
+        <span aria-hidden />
       </div>
       <ul>
         {canvases.map((c, i) => {
           const t = modeTheme((c.mode as never) ?? "welcome");
           return (
-            <li key={c.id}>
+            <li
+              key={c.id}
+              className={`group relative transition-colors hover:bg-paper ${
+                i > 0 ? "border-t border-ink/[0.07]" : ""
+              }`}
+            >
+              {/* Stretched click target so the options menu can sit above it. */}
               <button
                 onClick={() => onOpen(c.code)}
-                className={`grid w-full grid-cols-1 gap-1 px-4 py-3 text-left transition-colors hover:bg-paper sm:grid-cols-[1fr_7rem_6rem_8rem_6rem] sm:items-center sm:gap-3 ${
-                  i > 0 ? "border-t border-ink/[0.07]" : ""
-                }`}
+                aria-label={`Open ${c.name || "canvas"}`}
+                className="absolute inset-0"
+              />
+              <div
+                className={`relative grid grid-cols-1 gap-1 px-4 py-3 sm:items-center sm:gap-3 ${cols}`}
               >
                 <div className="flex min-w-0 items-center gap-2.5">
                   <span
@@ -556,6 +762,10 @@ function CanvasTable({
                 <span className="hidden text-right text-xs text-ink/45 sm:block">
                   {timeAgo(c.updatedAt)}
                 </span>
+                {/* options menu (owned canvases) — trailing column on desktop */}
+                <div className="hidden justify-end sm:flex">
+                  {onDelete && <CanvasMenu label={c.name || "canvas"} onDelete={() => onDelete(c)} />}
+                </div>
                 {/* mobile meta line */}
                 <div className="flex items-center gap-2 text-xs text-ink/40 sm:hidden">
                   <span className="capitalize" style={{ color: t.solid }}>
@@ -563,9 +773,15 @@ function CanvasTable({
                   </span>
                   <span>·</span>
                   <span>{timeAgo(c.updatedAt)}</span>
-                  <ArrowRight className="ml-auto h-3.5 w-3.5 text-ink/25" />
+                  {onDelete ? (
+                    <div className="ml-auto">
+                      <CanvasMenu label={c.name || "canvas"} onDelete={() => onDelete(c)} />
+                    </div>
+                  ) : (
+                    <ArrowRight className="ml-auto h-3.5 w-3.5 text-ink/25" />
+                  )}
                 </div>
-              </button>
+              </div>
             </li>
           );
         })}

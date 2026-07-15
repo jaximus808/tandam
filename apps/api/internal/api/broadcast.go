@@ -72,6 +72,18 @@ type accessMsg struct {
 	Role string `json:"role"` // "write" | "read" | "none"
 }
 
+// disconnectAll boots every client connected to a canvas that no longer exists
+// (deleted). It reuses the access:none revoke path — send the notice, then close
+// the socket — so an open board shows the same "no access" handling instead of
+// erroring on the next broadcast against a now-missing canvas.
+func disconnectAll(hub *ws.Hub, canvasID uuid.UUID) {
+	data, _ := json.Marshal(accessMsg{Type: "access", Role: "none"})
+	for _, c := range hub.ClientsFor(canvasID) {
+		c.Send(data) // delivered by WritePump's done-drain before the close frame
+		c.Close()
+	}
+}
+
 // reevaluateAccess re-resolves every connected client's role for a canvas after
 // its sharing posture changed, applying the result live:
 //   - none       → send a revoke notice then close the socket. Broadcasts skip a

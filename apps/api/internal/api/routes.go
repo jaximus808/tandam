@@ -100,6 +100,8 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 		// per-account access for the Google-Docs model.
 		r.Patch("/api/canvases/{code}/visibility", h.SetCanvasVisibility)
 		r.Patch("/api/canvases/{code}/name", h.SetCanvasName)
+		// Owner-only permanent delete (requireCanvasOwner gates it).
+		r.Delete("/api/canvases/{code}", h.DeleteCanvas)
 		r.Get("/api/canvases/{code}/access", h.ListCanvasAccess)
 		r.Post("/api/canvases/{code}/access", h.AddCanvasAccess)
 		r.Delete("/api/canvases/{code}/access/{userId}", h.RemoveCanvasAccess)
