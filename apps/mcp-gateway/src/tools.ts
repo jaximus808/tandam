@@ -703,8 +703,9 @@ const RAW_TOOLS = [
         document: {
           type: "string",
           description:
-            "Which map document (tab) to add this pin to — a document id or name (e.g. \"Japan\"). " +
-            "Omit to use the canvas's default map document (created if none exists).",
+            "Which map document (tab) to add this pin to — an existing document id or name (e.g. \"Japan\"); " +
+            "the named document must already exist (create it first with canvas_document_add). " +
+            "Omit to use the canvas's default map document, which IS created on demand if none exists.",
         },
       },
       required: ["pinType", "lat", "lng"],
@@ -805,8 +806,9 @@ const RAW_TOOLS = [
         document: {
           type: "string",
           description:
-            "Which itinerary document (tab) to add this entry to — a document id or name. " +
-            "Omit to use the canvas's default itinerary (created if none exists).",
+            "Which itinerary document (tab) to add this entry to — an existing document id or name; " +
+            "the named document must already exist (create it first with canvas_document_add). " +
+            "Omit to use the canvas's default itinerary, which IS created on demand if none exists.",
         },
       },
       required: ["title", "start"],
@@ -877,8 +879,9 @@ const RAW_TOOLS = [
         document: {
           type: "string",
           description:
-            "Which notes document (tab) to add this note to — a document id or name. " +
-            "Omit to use the canvas's default notes doc (created if none exists).",
+            "Which notes document (tab) to add this note to — an existing document id or name; " +
+            "the named document must already exist (create it first with canvas_document_add). " +
+            "Omit to use the canvas's default notes doc, which IS created on demand if none exists.",
         },
       },
       required: ["body"],
@@ -938,8 +941,9 @@ const RAW_TOOLS = [
         document: {
           type: "string",
           description:
-            "Which roadmap document (tab) to add this item to — a document id or name. " +
-            "Omit to use the canvas's default roadmap (created if none exists).",
+            "Which roadmap document (tab) to add this item to — an existing document id or name; " +
+            "the named document must already exist (create it first with canvas_document_add). " +
+            "Omit to use the canvas's default roadmap, which IS created on demand if none exists.",
         },
       },
       required: ["title"],
