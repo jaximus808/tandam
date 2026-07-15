@@ -136,6 +136,7 @@ type dbNote struct {
 	ImageRefs  []string `json:"image_refs"`
 	ParentID   *string  `json:"parent_id"`
 	ParentKind *string  `json:"parent_kind"`
+	SortOrder  int      `json:"sort_order"`
 	CreatedBy  string   `json:"created_by"`
 	UpdatedAt  string   `json:"updated_at"`
 }
@@ -405,6 +406,7 @@ func toNote(d dbNote) *Note {
 	n := &Note{ID: id, Kind: "note", DocumentID: parseUUIDPtr(d.DocumentID),
 		Body:      d.Body,
 		ImageRefs: d.ImageRefs, ParentKind: d.ParentKind,
+		SortOrder: d.SortOrder,
 		CreatedBy: d.CreatedBy, UpdatedAt: parseTime(d.UpdatedAt)}
 	if n.ImageRefs == nil {
 		n.ImageRefs = []string{}
@@ -1929,6 +1931,32 @@ func (s *supabaseStore) DeleteEvent(ctx context.Context, canvasID uuid.UUID, id 
 
 // ── Notes ─────────────────────────────────────────────────────────────────────
 
+// nextNoteSortOrder appends a new note after the last one in its document, so
+// creating a note never displaces the notes already on the page. Scoped by
+// canvas_id too because document_id is nullable (pre-0024 rows): those orphans
+// order among themselves per canvas rather than sharing one global NULL bucket.
+func (s *supabaseStore) nextNoteSortOrder(canvasID uuid.UUID, documentID *uuid.UUID) (int, error) {
+	q := s.client.From("notes").Select("sort_order", "", false).Eq("canvas_id", canvasID.String())
+	if documentID != nil {
+		q = q.Eq("document_id", documentID.String())
+	} else {
+		q = q.Is("document_id", "null")
+	}
+	var rows []struct {
+		SortOrder int `json:"sort_order"`
+	}
+	if _, err := q.ExecuteTo(&rows); err != nil {
+		return 0, err
+	}
+	max := -1
+	for _, r := range rows {
+		if r.SortOrder > max {
+			max = r.SortOrder
+		}
+	}
+	return max + 1, nil
+}
+
 func (s *supabaseStore) CreateNote(ctx context.Context, canvasID uuid.UUID, n *Note) (int, error) {
 	now := time.Now().UTC()
 	n.UpdatedAt = now
@@ -1936,18 +1964,24 @@ func (s *supabaseStore) CreateNote(ctx context.Context, canvasID uuid.UUID, n *N
 	if refs == nil {
 		refs = []string{}
 	}
+	// Callers don't pick a position: every creation path (web, REST, MCP) appends.
+	sortOrder, err := s.nextNoteSortOrder(canvasID, n.DocumentID)
+	if err != nil {
+		return 0, err
+	}
+	n.SortOrder = sortOrder
 	row := map[string]any{
 		"id": n.ID.String(), "canvas_id": canvasID.String(),
 		"document_id": uuidPtrStr(n.DocumentID),
 		"body":        n.Body, "image_refs": refs,
 		"parent_kind": n.ParentKind, "created_by": n.CreatedBy,
-		"updated_at": now.Format(time.RFC3339),
+		"sort_order":  n.SortOrder,
+		"updated_at":  now.Format(time.RFC3339),
 	}
 	if n.ParentID != nil {
 		row["parent_id"] = n.ParentID.String()
 	}
-	err := s.exec(s.client.From("notes").Insert(row, false, "", "minimal", ""))
-	if err != nil {
+	if err := s.exec(s.client.From("notes").Insert(row, false, "", "minimal", "")); err != nil {
 		return 0, err
 	}
 	_ = s.LeaveWelcomeIfNeeded(ctx, canvasID, "docs")
@@ -1967,6 +2001,9 @@ func (s *supabaseStore) UpdateNote(ctx context.Context, canvasID uuid.UUID, id u
 	}
 	if patch.ParentID != nil {
 		m["parent_id"] = patch.ParentID.String()
+	}
+	if patch.SortOrder != nil {
+		m["sort_order"] = *patch.SortOrder
 	}
 	if len(m) == 0 {
 		return 0, nil

@@ -1241,7 +1241,13 @@ export default function App() {
                   onSelectEvent={setSelectedEventId}
                 />
               )}
-              {m === "docs" && <DocsMode canvasId={canvas.id} state={scopedState} />}
+              {m === "docs" && (
+                <DocsMode
+                  canvasId={canvas.id}
+                  state={scopedState}
+                  readOnly={canvas.yourRole === "read"}
+                />
+              )}
               {m === "roadmap" && (
                 <RoadmapMode
                   state={scopedState}

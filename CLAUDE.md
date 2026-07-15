@@ -9,7 +9,7 @@ Monorepo:
 - `apps/mcp-gateway` — Node stdio MCP server (`@jaximus/tandem-mcp`) that proxies tool
   calls to the API.
 - `internal/shared` — TypeScript types shared by web + gateway.
-- `migrations/` — hand-written, numbered SQL. Applied manually to Supabase.
+- `supabase/migrations/` — hand-written, numbered SQL. Applied manually to Supabase.
 
 Live at https://tandemcanvas.com. Deploy = push to `main` (GitHub Actions → GCP).
 
@@ -62,5 +62,5 @@ browser.
 So: **do not** spend effort (or tokens) working out how to run the server,
 rebuild the `tandem-local` docker image, point the MCP at localhost, or drive a
 browser to verify UI. When a change needs a migration, write the numbered SQL in
-`migrations/` and just tell him to apply it — don't try to run it yourself.
+`supabase/migrations/` and just tell him to apply it — don't try to run it yourself.
 Report what you changed and what's left for him to do, and stop there.

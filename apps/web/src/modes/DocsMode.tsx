@@ -1,4 +1,23 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DraggableAttributes,
+} from "@dnd-kit/core";
+import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import ReactMarkdown from "react-markdown";
 import { renderToStaticMarkup } from "react-dom/server";
 import remarkGfm from "remark-gfm";
@@ -8,11 +27,21 @@ import { sendOp } from "../lib/ws";
 import { htmlToMarkdown } from "../lib/paste";
 import EmptyState from "../components/EmptyState";
 import { modeTheme } from "../lib/modeTheme";
+import { noteTitle, sortNotes } from "../lib/docOutline";
 
 interface Props {
   canvasId: string;
   state: CanvasState;
+  readOnly: boolean;
 }
+
+// Below this the outline is noise — a rail listing one or two notes tells you
+// nothing you can't see by looking at the page.
+const MIN_NOTES_FOR_OUTLINE = 2;
+
+// How long a jumped-to note stays ringed. Long enough to catch the eye after the
+// smooth scroll settles, short enough not to linger as decoration.
+const HIGHLIGHT_MS = 1400;
 
 const ACCENT = modeTheme("docs");
 
@@ -38,8 +67,49 @@ function markdownToHtml(md: string): string {
   );
 }
 
-export default function DocsMode({ canvasId, state }: Props) {
-  const notes = Object.values(state.notes).sort((a, b) => a.updatedAt - b.updatedAt);
+export default function DocsMode({ canvasId, state, readOnly }: Props) {
+  const notes = useMemo(() => sortNotes(Object.values(state.notes)), [state.notes]);
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // Live map of note id → card element, populated by each card's ref callback.
+  // Drives both the jump-to scroll and the IntersectionObserver.
+  const cardsRef = useRef(new Map<string, HTMLElement>());
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [highlightId, setHighlightId] = useState<string | null>(null);
+
+  const showOutline = notes.length >= MIN_NOTES_FOR_OUTLINE;
+
+  // Track which note is currently in view so the outline row for it lights up as
+  // you scroll. The observer reports enter/exit per card, so we keep the visible
+  // set and pick whichever comes first in document order — that's the one the
+  // reader is at, and it stays stable when two cards are on screen at once.
+  const visibleRef = useRef(new Set<string>());
+  useEffect(() => {
+    if (!showOutline) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          const id = e.target.getAttribute("data-agent-target");
+          if (!id) continue;
+          if (e.isIntersecting) visibleRef.current.add(id);
+          else visibleRef.current.delete(id);
+        }
+        const first = notes.find((n) => visibleRef.current.has(n.id));
+        if (first) setActiveId(first.id);
+      },
+      // Ignore the bottom 55%: without it the last cards on a short page all
+      // count as "in view" and the active row sticks to the wrong note.
+      { root: scrollRef.current, rootMargin: "0px 0px -55% 0px", threshold: 0 },
+    );
+    for (const el of cardsRef.current.values()) io.observe(el);
+    return () => io.disconnect();
+  }, [showOutline, notes]);
+
+  useEffect(() => {
+    if (!highlightId) return;
+    const t = setTimeout(() => setHighlightId(null), HIGHLIGHT_MS);
+    return () => clearTimeout(t);
+  }, [highlightId]);
 
   function handleAddNote() {
     sendOp({
@@ -48,39 +118,266 @@ export default function DocsMode({ canvasId, state }: Props) {
     });
   }
 
-  return (
-    <div className="tandem-scroll flex-1 overflow-y-auto bg-paper">
-      <div className="max-w-3xl mx-auto w-full px-6 py-6">
-        <div className="flex items-center justify-between mb-4">
-          <h1 className="font-display text-xl font-medium tracking-tight text-ink">Docs</h1>
-          <button
-            onClick={handleAddNote}
-            className="text-sm px-3.5 py-1.5 rounded-lg text-white font-medium shadow-sm transition-opacity hover:opacity-90"
-            style={{ backgroundColor: ACCENT.solid }}
-          >
-            + New note
-          </button>
-        </div>
+  function handleJump(id: string) {
+    cardsRef.current.get(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setActiveId(id);
+    setHighlightId(id);
+  }
 
-        {notes.length === 0 ? (
-          <EmptyState
-            title="No notes yet"
-            hint="Click + New note to start writing, or ask Claude to draft something."
+  // Write a whole new order out as note.update ops — the same op any other edit
+  // uses, so a reorder broadcasts over WS to other clients and to agents for
+  // free. Renumber densely (0..n-1) and only send the rows that actually moved.
+  function applyOrder(ordered: Note[]) {
+    ordered.forEach((note, i) => {
+      if (note.sortOrder !== i) {
+        sendOp({ op: "note.update", id: note.id, partial: { sortOrder: i } });
+      }
+    });
+  }
+
+  function handleMove(from: number, to: number) {
+    if (to < 0 || to >= notes.length || from === to) return;
+    applyOrder(arrayMove(notes, from, to));
+  }
+
+  return (
+    <div ref={scrollRef} className="tandem-scroll flex-1 overflow-y-auto bg-paper">
+      {/* Wide enough to seat the rail beside a full-width prose column rather
+          than stealing from it; the rail itself is lg-only (see Outline). */}
+      <div className="mx-auto flex w-full max-w-[64rem] gap-6 px-6 py-6">
+        {showOutline && (
+          <Outline
+            notes={notes}
+            activeId={activeId}
+            readOnly={readOnly}
+            onJump={handleJump}
+            onMove={handleMove}
           />
-        ) : (
-          <div className="space-y-4">
-            {notes.map((note) => (
-              <NoteCard
-                key={note.id}
-                note={note}
-                canvasId={canvasId}
-                state={state}
-              />
-            ))}
-          </div>
         )}
+
+        <div className="mx-auto w-full min-w-0 max-w-3xl">
+          <div className="flex items-center justify-between mb-4">
+            <h1 className="font-display text-xl font-medium tracking-tight text-ink">Docs</h1>
+            <button
+              onClick={handleAddNote}
+              className="text-sm px-3.5 py-1.5 rounded-lg text-white font-medium shadow-sm transition-opacity hover:opacity-90"
+              style={{ backgroundColor: ACCENT.solid }}
+            >
+              + New note
+            </button>
+          </div>
+
+          {notes.length === 0 ? (
+            <EmptyState
+              title="No notes yet"
+              hint="Click + New note to start writing, or ask Claude to draft something."
+            />
+          ) : (
+            <div className="space-y-4">
+              {notes.map((note) => (
+                <NoteCard
+                  key={note.id}
+                  note={note}
+                  canvasId={canvasId}
+                  state={state}
+                  highlighted={highlightId === note.id}
+                  cardRef={(el) => {
+                    if (el) cardsRef.current.set(note.id, el);
+                    else cardsRef.current.delete(note.id);
+                  }}
+                />
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
+  );
+}
+
+// The jump-to rail: every note in the doc by derived title, in document order.
+// This is navigation, not a viewer — the notes stay one continuous scroll and
+// clicking a row just takes you there. Doubles as the reorder surface: drag a
+// row by its handle, or nudge it with the arrows (dragging is fiddly when all
+// you want is to swap two neighbours).
+//
+// Same dnd-kit sortable-list idiom as Sheets rows and the Roadmap board, so the
+// three reorderable lists in the app behave identically (including keyboard
+// reordering). Dragging lives on a handle rather than the row because the row
+// itself is a click target — jumping and dragging can't share one gesture.
+function Outline({
+  notes,
+  activeId,
+  readOnly,
+  onJump,
+  onMove,
+}: {
+  notes: Note[];
+  activeId: string | null;
+  readOnly: boolean;
+  onJump: (id: string) => void;
+  onMove: (from: number, to: number) => void;
+}) {
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+  const ids = useMemo(() => notes.map((n) => n.id), [notes]);
+
+  function handleDragEnd(e: DragEndEvent) {
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    const from = notes.findIndex((n) => n.id === active.id);
+    const to = notes.findIndex((n) => n.id === over.id);
+    if (from < 0 || to < 0) return;
+    onMove(from, to);
+  }
+
+  return (
+    <aside className="hidden w-52 shrink-0 lg:block">
+      <div className="sticky top-6">
+        <div className="mb-2 px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink/40">
+          Outline · {notes.length}
+        </div>
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <SortableContext items={ids} strategy={verticalListSortingStrategy}>
+            <div className="flex flex-col gap-0.5">
+              {notes.map((note, i) => (
+                <OutlineRow
+                  key={note.id}
+                  note={note}
+                  index={i}
+                  total={notes.length}
+                  isActive={note.id === activeId}
+                  readOnly={readOnly}
+                  onJump={onJump}
+                  onMove={onMove}
+                />
+              ))}
+            </div>
+          </SortableContext>
+        </DndContext>
+      </div>
+    </aside>
+  );
+}
+
+function OutlineRow({
+  note,
+  index,
+  total,
+  isActive,
+  readOnly,
+  onJump,
+  onMove,
+}: {
+  note: Note;
+  index: number;
+  total: number;
+  isActive: boolean;
+  readOnly: boolean;
+  onJump: (id: string) => void;
+  onMove: (from: number, to: number) => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: note.id,
+  });
+  const title = noteTitle(note.body);
+
+  return (
+    <div
+      ref={setNodeRef}
+      onClick={() => onJump(note.id)}
+      title={title}
+      className={[
+        "group/row flex cursor-pointer items-center gap-1 rounded-lg py-1.5 pl-1 pr-1 text-[13px] transition-colors",
+        isActive ? "font-medium text-ink" : "text-ink/60 hover:bg-ink/[0.04]",
+      ].join(" ")}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+        opacity: isDragging ? 0.4 : 1,
+        backgroundColor: isActive ? ACCENT.soft : undefined,
+      }}
+    >
+      {!readOnly && <OutlineDragHandle attributes={attributes} listeners={listeners} />}
+      <span
+        className="h-1.5 w-1.5 shrink-0 rounded-full transition-colors"
+        style={{ backgroundColor: isActive ? ACCENT.solid : "transparent" }}
+      />
+      <span className="min-w-0 flex-1 truncate">{title}</span>
+
+      {!readOnly && (
+        <span
+          className="flex shrink-0 items-center opacity-0 transition-opacity group-hover/row:opacity-100"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <MoveButton label="Move up" disabled={index === 0} onClick={() => onMove(index, index - 1)}>
+            ↑
+          </MoveButton>
+          <MoveButton
+            label="Move down"
+            disabled={index === total - 1}
+            onClick={() => onMove(index, index + 1)}
+          >
+            ↓
+          </MoveButton>
+        </span>
+      )}
+    </div>
+  );
+}
+
+function OutlineDragHandle({
+  attributes,
+  listeners,
+}: {
+  attributes: DraggableAttributes;
+  listeners: SyntheticListenerMap | undefined;
+}) {
+  return (
+    <button
+      {...attributes}
+      {...listeners}
+      onClick={(e) => e.stopPropagation()}
+      className="shrink-0 cursor-grab touch-none px-0.5 text-ink/20 hover:text-ink/55 active:cursor-grabbing"
+      aria-label="Drag to reorder note"
+      title="Drag to reorder"
+    >
+      <svg width="10" height="14" viewBox="0 0 10 14">
+        <circle cx="3" cy="3" r="1" fill="currentColor" />
+        <circle cx="7" cy="3" r="1" fill="currentColor" />
+        <circle cx="3" cy="7" r="1" fill="currentColor" />
+        <circle cx="7" cy="7" r="1" fill="currentColor" />
+        <circle cx="3" cy="11" r="1" fill="currentColor" />
+        <circle cx="7" cy="11" r="1" fill="currentColor" />
+      </svg>
+    </button>
+  );
+}
+
+function MoveButton({
+  label,
+  disabled,
+  onClick,
+  children,
+}: {
+  label: string;
+  disabled: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      disabled={disabled}
+      onClick={onClick}
+      className="rounded px-1 text-[11px] leading-4 text-ink/40 hover:bg-ink/10 hover:text-ink/70 disabled:pointer-events-none disabled:opacity-20"
+    >
+      {children}
+    </button>
   );
 }
 
@@ -88,10 +385,14 @@ function NoteCard({
   note,
   canvasId,
   state,
+  highlighted,
+  cardRef,
 }: {
   note: Note;
   canvasId: string;
   state: CanvasState;
+  highlighted: boolean;
+  cardRef: (el: HTMLElement | null) => void;
 }) {
   // No edit/read mode gate: the note is a live surface. When it isn't focused we
   // render the Markdown; the moment you click in, the same box becomes the
@@ -179,8 +480,13 @@ function NoteCard({
 
   return (
     <div
+      ref={cardRef}
       data-agent-target={note.id}
-      className="group bg-surface rounded-lg border border-ink/15 hover:border-ink/20 transition-colors"
+      className={[
+        "group bg-surface rounded-lg border transition-all",
+        highlighted ? "border-transparent" : "border-ink/15 hover:border-ink/20",
+      ].join(" ")}
+      style={highlighted ? { boxShadow: `0 0 0 2px ${ACCENT.solid}` } : undefined}
     >
       <div className="flex items-center justify-between px-4 pt-3">
         {parent ? (

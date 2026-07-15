@@ -898,6 +898,13 @@ const RAW_TOOLS = [
         parentId: { type: "string" },
         parentKind: { type: "string", enum: ["pin", "event"] },
         imageRefs: { type: "array", items: { type: "string" } },
+        sortOrder: {
+          type: "number",
+          description:
+            "Position within the notes document (0 = first). Notes are appended on create; " +
+            "set this to reorder. Renumber the whole document densely (0..n-1) rather than " +
+            "leaving gaps.",
+        },
       },
       required: ["id"],
     },

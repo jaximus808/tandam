@@ -136,6 +136,7 @@ type Note struct {
 	ImageRefs  []string   `json:"imageRefs"`
 	ParentID   *uuid.UUID `json:"parentId,omitempty"`
 	ParentKind *string    `json:"parentKind,omitempty"`
+	SortOrder  int        `json:"sortOrder"`
 	CreatedBy  string     `json:"createdBy"`
 	UpdatedAt  time.Time  `json:"updatedAt"`
 }
@@ -516,6 +517,7 @@ type NotePatch struct {
 	ImageRefs  []string   `json:"imageRefs"`
 	ParentID   *uuid.UUID `json:"parentId"`
 	ParentKind *string    `json:"parentKind"`
+	SortOrder  *int       `json:"sortOrder"`
 }
 
 type RoadmapItemPatch struct {

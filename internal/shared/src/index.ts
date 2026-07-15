@@ -89,6 +89,9 @@ export interface Note {
   body: string;
   imageRefs: string[];
   parentId?: EntityId;
+  // Position within the notes document. Authored via the Docs outline sidebar;
+  // the server appends new notes at max+1 so writing never reorders the page.
+  sortOrder: number;
   createdBy: "agent" | "user";
   updatedAt: number;
 }
@@ -314,7 +317,7 @@ export type WSClientMessage =
       };
     }
   | { op: "event.delete"; id: EntityId }
-  | { op: "note.add"; data: Omit<Note, "id" | "kind" | "createdBy" | "updatedAt"> }
+  | { op: "note.add"; data: Omit<Note, "id" | "kind" | "createdBy" | "updatedAt" | "sortOrder"> }
   | { op: "note.update"; id: EntityId; partial: Partial<Omit<Note, "id" | "kind">> }
   | { op: "note.delete"; id: EntityId }
   | { op: "roadmap.add"; data: Omit<RoadmapItem, "id" | "kind" | "createdBy" | "updatedAt"> }
