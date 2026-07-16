@@ -106,6 +106,24 @@ func (h *Handler) SetCanvasName(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"name": name})
 }
 
+// DELETE /api/canvases/{code} — owner-only permanent delete. requireCanvasOwner
+// rejects an unowned (anonymous) canvas or a non-owner, so this is only ever
+// reachable for a canvas the signed-in account owns. DB cascades drop all content,
+// shares, and notifications; we boot any live viewers so open boards don't error
+// on a now-missing canvas.
+func (h *Handler) DeleteCanvas(w http.ResponseWriter, r *http.Request) {
+	canvas, ok := h.requireCanvasOwner(w, r)
+	if !ok {
+		return
+	}
+	if err := h.store.DeleteCanvas(r.Context(), canvas.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	disconnectAll(h.hub, canvas.ID)
+	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
+}
+
 // GET /api/canvases/{code}/access — owner-only member list.
 func (h *Handler) ListCanvasAccess(w http.ResponseWriter, r *http.Request) {
 	canvas, ok := h.requireCanvasOwner(w, r)

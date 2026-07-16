@@ -270,6 +270,16 @@ export async function setCanvasName(code: string, name: string): Promise<void> {
   if (!res.ok) throw await apiError(res, "Could not rename canvas");
 }
 
+// Permanently delete a canvas (owner-only). The backend cascades all content and
+// boots any live viewers; the caller drops it from the list optimistically.
+export async function deleteCanvas(code: string): Promise<void> {
+  const res = await fetch(`/api/canvases/${code}`, {
+    method: "DELETE",
+    credentials: "same-origin",
+  });
+  if (!res.ok) throw await apiError(res, "Could not delete canvas");
+}
+
 export async function listCanvasAccess(code: string): Promise<CanvasAccessEntry[]> {
   const res = await fetch(`/api/canvases/${code}/access`, { credentials: "same-origin" });
   if (!res.ok) throw await apiError(res, "Could not load who this is shared with");

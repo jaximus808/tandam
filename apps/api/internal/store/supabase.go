@@ -725,6 +725,17 @@ func (s *supabaseStore) ClaimCanvas(ctx context.Context, code, claimToken string
 	return nil, ErrInvalidClaimToken
 }
 
+// DeleteCanvas removes the canvas row; every table that FKs canvases does so with
+// ON DELETE CASCADE, so all content (pins/events/notes/sheets/rows/charts/roadmap/
+// forms/actions/agents/documents/pending_edits), canvas_access rows, and
+// notifications are cleaned up by the DB in the same statement. Owner-only checks
+// live in the handler.
+func (s *supabaseStore) DeleteCanvas(_ context.Context, canvasID uuid.UUID) error {
+	return s.exec(s.client.From("canvases").
+		Delete("minimal", "").
+		Eq("id", canvasID.String()))
+}
+
 // CanvasCount returns the total number of canvases. Uses a count=exact HEAD
 // request (Select count="exact", head=true) so no rows are transferred — the
 // total comes back in the Content-Range header, surfaced as Execute's int64.

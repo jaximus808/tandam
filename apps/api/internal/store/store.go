@@ -633,6 +633,10 @@ type Store interface {
 	// claimToken matches and the canvas is still unowned, voiding the token on
 	// success. Returns ErrCanvasNotFound / ErrAlreadyClaimed / ErrInvalidClaimToken.
 	ClaimCanvas(ctx context.Context, code, claimToken string, ownerUserID uuid.UUID) (*Canvas, error)
+	// DeleteCanvas permanently removes a canvas by id. All content, access rows,
+	// and notifications FK canvases with ON DELETE CASCADE, so they go with it.
+	// Ownership is enforced by the caller (owner-only).
+	DeleteCanvas(ctx context.Context, canvasID uuid.UUID) error
 	CanvasCount(ctx context.Context) (int, error)
 	UserCount(ctx context.Context) (int, error)
 	CanvasRecurrence(ctx context.Context) (revisited int, total int, err error)
