@@ -1152,7 +1152,14 @@ export default function App() {
                 onClose={closeSidebar}
               />
             )}
-            {sidebarView === "settings" && <SettingsPanel onClose={closeSidebar} />}
+            {sidebarView === "settings" && (
+              <SettingsPanel
+                canvas={canvas}
+                isOwner={!!me && canvas.ownerUserId === me.id}
+                onDeleted={showMyCanvases}
+                onClose={closeSidebar}
+              />
+            )}
           </SidePanel>
         )}
         {/* Collapsed but a view is still selected → a grab strip at the dock edge
@@ -1305,7 +1312,15 @@ export default function App() {
           />
         )}
         {mobileNavView === "settings" && (
-          <SettingsPanel onClose={() => setMobileNavOpen(false)} />
+          <SettingsPanel
+            canvas={canvas}
+            isOwner={!!me && canvas.ownerUserId === me.id}
+            onDeleted={() => {
+              setMobileNavOpen(false);
+              showMyCanvases();
+            }}
+            onClose={() => setMobileNavOpen(false)}
+          />
         )}
       </MobileNavDrawer>
 
