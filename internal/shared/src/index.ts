@@ -23,7 +23,8 @@ export interface CanvasMeta {
   id: string;
   code: string;      // 8-char shareable code, e.g. "TOKYO7X3K"
   name: string;
-  mode: string;
+  mode: string;      // the ACTIVE mode — what's on screen now, not what the canvas is
+  enabledModes?: CanvasMode[]; // every mode turned on for this canvas; what it actually contains
   mapId?: string;    // Phase 3: active map preset (only meaningful in map mode)
   ownerUserId?: string; // set when a logged-in user owns the canvas; absent = anonymous
   visibility?: "public" | "private"; // access posture (migration 0021); absent treated as public

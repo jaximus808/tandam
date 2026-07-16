@@ -35,17 +35,26 @@ type Load =
   | { status: "error"; message: string }
   | { status: "ready"; canvases: CanvasMeta[]; shared: CanvasMeta[] };
 
-type SortKey = "updated" | "created" | "name" | "mode";
+type SortKey = "updated" | "created" | "name";
 type View = "grid" | "list";
 
 const SORTS: { key: SortKey; label: string }[] = [
   { key: "updated", label: "Last updated" },
   { key: "created", label: "Recently created" },
   { key: "name", label: "Name (A–Z)" },
-  { key: "mode", label: "Mode" },
 ];
 
 const ALL_MODES: CanvasMode[] = ["map", "itinerary", "docs", "roadmap", "sheets", "charts", "welcome"];
+
+// What a canvas actually *contains*, in canonical order — not `c.mode`, which is
+// only whichever view was open last and changes as you click around. A canvas
+// with nothing enabled yet has no content to describe, so it falls back to its
+// active mode (i.e. "welcome" for a fresh one).
+function modesOf(c: CanvasMeta): CanvasMode[] {
+  const enabled = c.enabledModes ?? [];
+  if (enabled.length === 0) return [(c.mode as CanvasMode) ?? "welcome"];
+  return ALL_MODES.filter((m) => enabled.includes(m));
+}
 
 const VIEW_KEY = "tandem.dashboard.view";
 
@@ -76,13 +85,6 @@ function sortCanvases(list: CanvasMeta[], key: SortKey): CanvasMeta[] {
       break;
     case "created":
       out.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
-      break;
-    case "mode":
-      out.sort(
-        (a, b) =>
-          (a.mode || "").localeCompare(b.mode || "") ||
-          Date.parse(b.updatedAt) - Date.parse(a.updatedAt),
-      );
       break;
     case "updated":
     default:
@@ -168,14 +170,16 @@ export default function MyCanvases({ onOpenCanvas, onHome, onOpenMCP, onShowSett
   // canvases, so the filter never lists empty buckets.
   const presentModes = useMemo(() => {
     const set = new Set<CanvasMode>();
-    for (const c of owned) set.add((c.mode as CanvasMode) ?? "welcome");
+    for (const c of owned) for (const m of modesOf(c)) set.add(m);
     return ALL_MODES.filter((m) => set.has(m));
   }, [owned]);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     let list = owned;
-    if (modeFilter !== "all") list = list.filter((c) => (c.mode ?? "welcome") === modeFilter);
+    // Membership, not equality: a canvas with sheets matches "Sheets" even if it
+    // was last left on the docs tab.
+    if (modeFilter !== "all") list = list.filter((c) => modesOf(c).includes(modeFilter));
     if (q) {
       list = list.filter(
         (c) =>
@@ -553,6 +557,40 @@ function VisibilityBadge({ c }: { c: CanvasMeta }) {
   );
 }
 
+/* ── mode chips ─────────────────────────────────────────────────────────────── */
+
+// The modes a canvas has enabled, each in its own accent. Caps at `max` chips and
+// rolls the rest into a "+N" so a canvas using every mode can't blow out the card;
+// the full list stays available on hover.
+function ModeBadges({ modes, max = 2 }: { modes: CanvasMode[]; max?: number }) {
+  const shown = modes.slice(0, max);
+  const rest = modes.length - shown.length;
+  return (
+    <span className="flex items-center gap-1">
+      {shown.map((m) => {
+        const t = modeTheme(m);
+        return (
+          <span
+            key={m}
+            className="rounded-full px-2 py-0.5 text-[11px] font-medium capitalize"
+            style={{ backgroundColor: t.soft, color: t.solid }}
+          >
+            {m}
+          </span>
+        );
+      })}
+      {rest > 0 && (
+        <span
+          className="rounded-full border border-ink/15 bg-ink/10 px-1.5 py-0.5 text-[10px] font-medium text-ink/70"
+          title={modes.join(", ")}
+        >
+          +{rest}
+        </span>
+      )}
+    </span>
+  );
+}
+
 /* ── grid card ──────────────────────────────────────────────────────────────── */
 
 // CanvasCard renders one canvas tile. For a shared canvas, pass `role` to badge
@@ -573,7 +611,10 @@ function CanvasCard({
   role?: "read" | "write" | "none";
   onDelete?: (c: CanvasMeta) => void;
 }) {
-  const t = modeTheme((c.mode as never) ?? "welcome");
+  const modes = modesOf(c);
+  // The top rule takes the primary (first) enabled mode's accent — stable, unlike
+  // the active mode, which shifts as you switch tabs inside the canvas.
+  const t = modeTheme(modes[0]);
   return (
     <li className="group relative overflow-hidden rounded-2xl border border-ink/10 bg-surface transition-all hover:-translate-y-0.5 hover:border-ink/20 hover:shadow-md">
       <span aria-hidden className="absolute inset-x-0 top-0 z-0 h-0.5" style={{ backgroundColor: t.solid }} />
@@ -596,12 +637,7 @@ function CanvasCard({
                 {role === "write" ? "Edit" : "View"}
               </span>
             ) : (
-              <span
-                className="rounded-full px-2 py-0.5 text-[11px] font-medium capitalize"
-                style={{ backgroundColor: t.soft, color: t.solid }}
-              >
-                {c.mode}
-              </span>
+              <ModeBadges modes={modes} />
             )}
             {onDelete && <CanvasMenu label={c.name || "canvas"} onDelete={() => onDelete(c)} />}
           </div>
@@ -629,7 +665,8 @@ function CanvasTable({
   onOpen: (code: string) => void;
   onDelete?: (c: CanvasMeta) => void;
 }) {
-  const cols = "sm:grid-cols-[1fr_7rem_6rem_8rem_6rem_2.5rem]";
+  // The modes column is wide enough for two chips + a "+N" overflow.
+  const cols = "sm:grid-cols-[1fr_10rem_6rem_8rem_6rem_2.5rem]";
   return (
     <div className="overflow-hidden rounded-2xl border border-ink/10 bg-surface">
       {/* header row (desktop only) */}
@@ -637,7 +674,7 @@ function CanvasTable({
         className={`hidden gap-3 border-b border-ink/10 bg-paper px-4 py-2.5 font-code text-[10px] font-medium uppercase tracking-[0.14em] text-ink/40 sm:grid ${cols}`}
       >
         <span>Name</span>
-        <span>Mode</span>
+        <span>Modes</span>
         <span>Access</span>
         <span>Created</span>
         <span className="text-right">Updated</span>
@@ -645,7 +682,8 @@ function CanvasTable({
       </div>
       <ul>
         {canvases.map((c, i) => {
-          const t = modeTheme((c.mode as never) ?? "welcome");
+          const modes = modesOf(c);
+          const t = modeTheme(modes[0]);
           return (
             <li
               key={c.id}
@@ -674,12 +712,7 @@ function CanvasTable({
                   </div>
                 </div>
                 <span className="hidden sm:block">
-                  <span
-                    className="rounded-full px-2 py-0.5 text-[11px] font-medium capitalize"
-                    style={{ backgroundColor: t.soft, color: t.solid }}
-                  >
-                    {c.mode}
-                  </span>
+                  <ModeBadges modes={modes} />
                 </span>
                 <span className="hidden sm:block">
                   <VisibilityBadge c={c} />
@@ -694,9 +727,7 @@ function CanvasTable({
                 </div>
                 {/* mobile meta line */}
                 <div className="flex items-center gap-2 text-xs text-ink/40 sm:hidden">
-                  <span className="capitalize" style={{ color: t.solid }}>
-                    {c.mode}
-                  </span>
+                  <ModeBadges modes={modes} />
                   <span>·</span>
                   <span>{timeAgo(c.updatedAt)}</span>
                   {onDelete ? (

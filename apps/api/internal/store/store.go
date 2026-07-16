@@ -30,9 +30,13 @@ type Canvas struct {
 	ID          uuid.UUID  `json:"id"`
 	Code        string     `json:"code"`
 	Name        string     `json:"name"`
-	Mode        string     `json:"mode"`
-	MapID       *string    `json:"mapId,omitempty"`
-	OwnerUserID *uuid.UUID `json:"ownerUserId,omitempty"`
+	// Mode is the ACTIVE mode — whichever view was last opened. It says nothing
+	// about what the canvas contains; EnabledModes does. Anything describing a
+	// canvas to a human (the dashboard cards, its filter) wants EnabledModes.
+	Mode         string     `json:"mode"`
+	EnabledModes []string   `json:"enabledModes"`
+	MapID        *string    `json:"mapId,omitempty"`
+	OwnerUserID  *uuid.UUID `json:"ownerUserId,omitempty"`
 	// ClaimToken is the private "own this canvas" capability for an anonymous
 	// canvas. It is deliberately surfaced ONLY on the create response (so the
 	// creator can hand it to the intended human) and never on any read path —

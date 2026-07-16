@@ -962,23 +962,9 @@ export default function App() {
           style={{ backgroundColor: theme.solid }}
         />
 
-        {/* Mobile-only: open the nav drawer (explorer / tasks / settings). The
-            desktop left dock is `hidden sm:flex`, so this is the only way in on
-            a phone. Badges the proposed-task count like the desktop rail. */}
-        <button
-          onClick={() => setMobileNavOpen(true)}
-          className="relative -ml-1 flex h-9 w-9 items-center justify-center rounded-lg text-ink/60 transition-colors hover:bg-ink/5 hover:text-ink shrink-0 sm:hidden"
-          title="Menu"
-          aria-label="Open navigation"
-        >
-          <Menu size={20} strokeWidth={1.75} />
-          {proposedTaskCount > 0 && (
-            <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#C75B39] px-1 text-[9px] font-bold text-white">
-              {proposedTaskCount}
-            </span>
-          )}
-        </button>
-
+        {/* On mobile the nav-drawer trigger lives as a FAB stacked under the
+            QuickLog button (see below) — off the header so the canvas title has
+            room. The desktop left dock is `hidden sm:flex`. */}
         <button
           onClick={() => handleJoin("")}
           className="group flex items-center gap-1.5 text-sm shrink-0"
@@ -1272,6 +1258,24 @@ export default function App() {
         {/* Direct-input layer: quick-log rail + mobile FAB, overlaid on whatever
             mode is showing. Renders the canvas's agent-defined forms. */}
         <QuickLog code={canvas.code} forms={canvasState.forms} />
+
+        {/* Mobile nav-drawer trigger — a secondary FAB tucked just under the
+            QuickLog button (which sits at bottom-5). Moved off the header so the
+            canvas title gets the space, and a bottom-corner tap is an easier
+            thumb reach than the top-left. Badges proposed tasks like the rail. */}
+        <button
+          onClick={() => setMobileNavOpen(true)}
+          className="fixed bottom-5 right-5 z-30 flex h-12 w-12 items-center justify-center rounded-full border border-black/10 bg-white text-[#2A2620] shadow-[2px_2px_0_#0D6E66] active:translate-y-px sm:hidden"
+          title="Menu"
+          aria-label="Open navigation"
+        >
+          <Menu size={20} strokeWidth={1.75} />
+          {proposedTaskCount > 0 && (
+            <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#C75B39] px-1 text-[9px] font-bold text-white">
+              {proposedTaskCount}
+            </span>
+          )}
+        </button>
         </div>
         </div>
       </div>

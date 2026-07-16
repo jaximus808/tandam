@@ -325,10 +325,10 @@ export default function QuickLog({ code, forms }: { code: string; forms?: Record
       {/* ── Mobile: FAB → bottom sheet (collapse/expand is desktop-only) ────── */}
       <button
         onClick={() => setSheetOpen(true)}
-        className="fixed bottom-5 right-5 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-ink text-paper shadow-[3px_3px_0_#0D6E66] active:translate-y-px sm:hidden"
+        className="fixed bottom-[4.75rem] right-5 z-30 flex h-12 w-12 items-center justify-center rounded-full border border-black/10 bg-[#F5EFE0] text-[#2A2620] shadow-[2px_2px_0_#0D6E66] active:translate-y-px sm:hidden"
         aria-label="Quick log"
       >
-        <Plus size={26} />
+        <ClipboardList size={20} strokeWidth={1.75} />
       </button>
 
       {sheetOpen && (

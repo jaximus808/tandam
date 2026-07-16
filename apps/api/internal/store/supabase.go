@@ -344,9 +344,21 @@ func toCanvas(d dbCanvas) *Canvas {
 			owner = &oid
 		}
 	}
-	return &Canvas{ID: id, Code: d.Code, Name: d.Name, Mode: d.Mode, MapID: d.MapID, OwnerUserID: owner,
+	return &Canvas{ID: id, Code: d.Code, Name: d.Name, Mode: d.Mode,
+		EnabledModes: parseEnabledModes(d.EnabledModes), MapID: d.MapID, OwnerUserID: owner,
 		Visibility: d.Visibility, PublicRole: d.PublicRole, Version: d.Version,
 		CreatedAt: parseTime(d.CreatedAt), UpdatedAt: parseTime(d.UpdatedAt)}
+}
+
+// parseEnabledModes decodes the enabled_modes jsonb column, which is null on
+// rows written before the column existed. Always returns non-nil so the field
+// marshals as [] rather than null.
+func parseEnabledModes(raw json.RawMessage) []string {
+	modes := []string{}
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &modes)
+	}
+	return modes
 }
 
 func toPin(d dbPin) *Pin {
@@ -1084,15 +1096,10 @@ func (s *supabaseStore) GetCanvasState(_ context.Context, canvasID uuid.UUID) (*
 	row := rows[0]
 	canvas := toCanvas(row.dbCanvas)
 
-	enabledModes := []string{}
-	if len(row.EnabledModes) > 0 {
-		_ = json.Unmarshal(row.EnabledModes, &enabledModes)
-	}
-
 	state := &CanvasState{
 		Version:      canvas.Version,
 		Mode:         canvas.Mode,
-		EnabledModes: enabledModes,
+		EnabledModes: canvas.EnabledModes,
 		Documents:    make(map[string]*Document, len(row.Documents)),
 		Pins:         make(map[string]*Pin, len(row.Pins)),
 		Events:       make(map[string]*Event, len(row.Events)),
@@ -1174,11 +1181,8 @@ func (s *supabaseStore) getCanvasRowState(canvasID uuid.UUID) (*Canvas, []string
 	if len(rows) == 0 {
 		return nil, nil, fmt.Errorf("canvas not found: %s", canvasID)
 	}
-	enabledModes := []string{}
-	if len(rows[0].EnabledModes) > 0 {
-		_ = json.Unmarshal(rows[0].EnabledModes, &enabledModes)
-	}
-	return toCanvas(rows[0]), enabledModes, nil
+	canvas := toCanvas(rows[0])
+	return canvas, canvas.EnabledModes, nil
 }
 
 // emptyCanvasState builds a CanvasState carrying only the bearings, with every
@@ -1572,10 +1576,7 @@ func (s *supabaseStore) EnableMode(ctx context.Context, canvasID uuid.UUID, mode
 		return 0, fmt.Errorf("canvas not found: %s", canvasID)
 	}
 
-	modes := []string{}
-	if len(rows[0].EnabledModes) > 0 {
-		_ = json.Unmarshal(rows[0].EnabledModes, &modes)
-	}
+	modes := parseEnabledModes(rows[0].EnabledModes)
 	for _, m := range modes {
 		if m == mode {
 			return rows[0].Version, nil // already enabled — no write, no bump
