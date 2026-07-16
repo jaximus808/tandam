@@ -60,8 +60,8 @@ export default function About({ onBack, onOpenMCP, onShowCanvases, onShowSetting
         <div className="mt-6 space-y-4 text-[15px] leading-relaxed text-ink/70 sm:text-base">
           <p>
             I’m a solo builder who makes tools I actually want to use. Tandem is one of
-            them — a shared canvas where you and your AI agents plan together in real time,
-            each editing the same live worksurface instead of trading walls of text.
+            them — a place where the work your agent does in a chat actually stays. A real
+            artifact you can open and edit, instead of walls of text you scroll past and lose.
           </p>
           <p>
             I built it because planning with an agent should feel like sitting at the same

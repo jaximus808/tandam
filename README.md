@@ -1,6 +1,6 @@
 # Tandem
 
-A shared planning canvas that humans and AI agents co-edit in real time.
+Where the work your AI agent does in a chat becomes a real artifact you can open, edit, and keep. A doc has no agent; an MCP server has no human — Tandem is the one thing that's both.
 
 Live at **[tandemcanvas.com](https://tandemcanvas.com)**.
 

@@ -40,12 +40,10 @@ interface Editor {
   drift: "a" | "b";
 }
 
-interface OpLine {
-  t: string; // wall-clock-ish timestamp
-  actor: string;
-  kind: "human" | "agent";
-  op: string; // the MCP-ish operation name
-  arg: string; // human-readable payload
+interface Chat {
+  user: string; // the human's prompt, in the chat they already live in
+  building: string; // what the agent is doing, e.g. "building the roadmap"
+  reply: string; // the agent's natural-language confirmation (no op names)
 }
 
 interface Scene {
@@ -58,7 +56,7 @@ interface Scene {
   heroAgent: string; // the cursor by the headline — distinct from the canvas editors
   accent: Accent;
   editors: [Editor, Editor]; // the two drifting cursors
-  ops: OpLine[]; // the live feed under the canvas
+  chat: Chat; // the prescripted "you ask → agent builds it" exchange below the canvas
 }
 
 const SCENES: Scene[] = [
@@ -70,17 +68,19 @@ const SCENES: Scene[] = [
     mode: "Sheets",
     phrase: "run operations",
     heroAgent: "Claude",
+    // heroAgent is the morphing headline word: "{agent} made this." Cycling it
+    // Claude → ChatGPT → Cursor → Codex SHOWS agent-agnosticism instead of
+    // telling it. Any one entry is a single-line edit if a client stops working.
     accent: { solid: "#F43F5E", soft: "rgba(244,63,94,0.10)", line: "rgba(244,63,94,0.24)" },
     editors: [
       { name: "ops-agent", kind: "agent", at: { top: "30%", left: "53%" }, drift: "a" },
       { name: "Priya", kind: "human", at: { bottom: "10%", left: "20%" }, drift: "b" },
     ],
-    ops: [
-      { t: "14:02:31", actor: "ops-agent", kind: "agent", op: "sheet.row.add", arg: '"API 5xx spike"' },
-      { t: "14:02:34", actor: "ops-agent", kind: "agent", op: "row.update", arg: "status → mitigating" },
-      { t: "14:02:41", actor: "priya", kind: "human", op: "note.add", arg: '"rollback v2.3.1 first"' },
-      { t: "14:02:45", actor: "ops-agent", kind: "agent", op: "chart.update", arg: "error-rate / 5m" },
-    ],
+    chat: {
+      user: "API 5xx just spiked on edge-eu — spin up an incident board.",
+      building: "triaging the incident",
+      reply: "Done — board's up, alerts triaged, and I kicked off the v2.3.1 rollback.",
+    },
   },
   {
     key: "build",
@@ -89,18 +89,17 @@ const SCENES: Scene[] = [
     code: "BUILD8QX",
     mode: "Roadmap",
     phrase: "ship the build",
-    heroAgent: "Cursor",
+    heroAgent: "ChatGPT",
     accent: { solid: "#0EA5E9", soft: "rgba(14,165,233,0.10)", line: "rgba(14,165,233,0.24)" },
     editors: [
       { name: "Codex", kind: "agent", at: { top: "34%", right: "10%" }, drift: "a" },
       { name: "Devin", kind: "human", at: { top: "55%", right: "22%" }, drift: "b" },
     ],
-    ops: [
-      { t: "09:41:02", actor: "codex", kind: "agent", op: "item.update", arg: '"Realtime cursors" → in_progress' },
-      { t: "09:41:18", actor: "devin", kind: "human", op: "item.add", arg: '"Billing webhooks"' },
-      { t: "09:41:26", actor: "codex", kind: "agent", op: "sheet.row.add", arg: "perf budget · p95 400ms" },
-      { t: "09:41:53", actor: "codex", kind: "agent", op: "item.update", arg: '"Charts mode" → done' },
-    ],
+    chat: {
+      user: "Turn our Q3 notes into a roadmap I can actually track.",
+      building: "building the roadmap",
+      reply: "Up now — items scoped with status. Realtime cursors is in progress, Charts mode shipped.",
+    },
   },
   {
     key: "life",
@@ -109,18 +108,17 @@ const SCENES: Scene[] = [
     code: "YEAR42KP",
     mode: "Itinerary",
     phrase: "plan the year",
-    heroAgent: "Codex",
+    heroAgent: "Cursor",
     accent: { solid: "#F59E0B", soft: "rgba(245,158,11,0.12)", line: "rgba(245,158,11,0.26)" },
     editors: [
       { name: "Claude", kind: "agent", at: { top: "26%", right: "12%" }, drift: "a" },
       { name: "Sam", kind: "human", at: { bottom: "14%", right: "16%" }, drift: "b" },
     ],
-    ops: [
-      { t: "19:12:08", actor: "claude", kind: "agent", op: "event.add", arg: '"Apartment tours" · Mar' },
-      { t: "19:12:15", actor: "sam", kind: "human", op: "pin.add", arg: '"Shinjuku hotel"' },
-      { t: "19:12:19", actor: "claude", kind: "agent", op: "event.update", arg: "Japan → flights held" },
-      { t: "19:12:31", actor: "claude", kind: "agent", op: "note.add", arg: '"no visa needed < 90 days"' },
-    ],
+    chat: {
+      user: "Plan our Japan trip for March.",
+      building: "filling the itinerary",
+      reply: "Laid out the days, held your flights, and dropped hotel options on the map.",
+    },
   },
   {
     key: "research",
@@ -129,18 +127,17 @@ const SCENES: Scene[] = [
     code: "SCOUT9WZ",
     mode: "Map",
     phrase: "map the unknown",
-    heroAgent: "Claude Code",
+    heroAgent: "Codex",
     accent: { solid: "#10B981", soft: "rgba(16,185,129,0.10)", line: "rgba(16,185,129,0.24)" },
     editors: [
       { name: "scout-agent", kind: "agent", at: { top: "30%", left: "30%" }, drift: "a" },
       { name: "Lee", kind: "human", at: { bottom: "12%", left: "12%" }, drift: "b" },
     ],
-    ops: [
-      { t: "11:23:44", actor: "scout-agent", kind: "agent", op: "pin.add", arg: '"Acme HQ" · 37.78,-122.41' },
-      { t: "11:23:52", actor: "scout-agent", kind: "agent", op: "note.update", arg: "Findings.md › pricing" },
-      { t: "11:24:07", actor: "lee", kind: "human", op: "row.update", arg: "Northwind → shortlist" },
-      { t: "11:24:19", actor: "scout-agent", kind: "agent", op: "pin.add", arg: '"Globex labs"' },
-    ],
+    chat: {
+      user: "Scan these three vendors and map them for me.",
+      building: "mapping the vendors",
+      reply: "Mapped all three with pricing notes — Northwind's on the shortlist.",
+    },
   },
 ];
 
@@ -488,6 +485,7 @@ function OpsBody() {
       ],
     },
   ];
+  let order = 0; // flat add-order across all columns, so cards glow in one by one
   return (
     <div className="grid h-full grid-cols-3 gap-2.5 p-4">
       {cols.map((col) => (
@@ -498,7 +496,13 @@ function OpsBody() {
           {col.cards.map((card) => (
             <div
               key={card.name}
-              className="rounded-md border border-ink/10 bg-surface px-2.5 py-2"
+              className="tandem-item-in rounded-md border border-ink/10 bg-surface px-2.5 py-2"
+              style={
+                {
+                  animationDelay: `${460 + order++ * 120}ms`,
+                  "--item-accent": card.sev,
+                } as React.CSSProperties
+              }
             >
               <div className="flex items-center gap-1.5">
                 <span
@@ -528,17 +532,18 @@ function BuildBody({ accent }: { accent: Accent }) {
   ];
   return (
     <div className="flex h-full flex-col gap-2 p-4">
-      {rows.map((row) => (
+      {rows.map((row, i) => {
+        const rowColor =
+          row.tone === "done" ? "#10B981" : row.tone === "accent" ? accent.solid : "rgb(var(--color-ink) / 0.25)";
+        return (
         <div
           key={row.name}
-          className="flex items-center gap-2 rounded-md border border-ink/10 bg-surface px-3 py-2"
+          className="tandem-item-in flex items-center gap-2 rounded-md border border-ink/10 bg-surface px-3 py-2"
+          style={{ animationDelay: `${460 + i * 130}ms`, "--item-accent": rowColor } as React.CSSProperties}
         >
           <span
             className="h-2.5 w-2.5 shrink-0 rounded-[3px]"
-            style={{
-              backgroundColor:
-                row.tone === "done" ? "#10B981" : row.tone === "accent" ? accent.solid : "rgb(var(--color-ink) / 0.25)",
-            }}
+            style={{ backgroundColor: rowColor }}
           />
           <span className="flex-1 truncate text-[12px] font-medium text-ink/85">{row.name}</span>
           {row.who && (
@@ -548,13 +553,13 @@ function BuildBody({ accent }: { accent: Accent }) {
           )}
           <Pill label={row.label} accent={accent} tone={row.tone} />
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
 
-function LifeBody({ accent }: { accent: Accent }) {
-  void accent;
+function LifeBody() {
   const items = [
     { when: "Mar", what: "Apartment tours", note: "3 saved", color: "#0EA5E9" },
     { when: "Jun", what: "Japan — 2 weeks", note: "flights held", color: "#F59E0B" },
@@ -565,8 +570,12 @@ function LifeBody({ accent }: { accent: Accent }) {
     <div className="relative h-full p-4">
       <div className="absolute bottom-5 left-[34px] top-5 w-px bg-ink/10" />
       <div className="flex h-full flex-col justify-between">
-        {items.map((it) => (
-          <div key={it.what} className="relative flex items-center gap-3">
+        {items.map((it, i) => (
+          <div
+            key={it.what}
+            className="tandem-item-in relative flex items-center gap-3"
+            style={{ animationDelay: `${460 + i * 150}ms`, "--item-accent": it.color } as React.CSSProperties}
+          >
             <span className="w-6 shrink-0 text-right font-code text-[9px] font-medium text-ink/35">
               {it.when}
             </span>
@@ -603,13 +612,18 @@ function ResearchBody({ accent }: { accent: Accent }) {
             backgroundSize: "34px 34px",
           }}
         />
-        {pins.map((p) => (
+        {pins.map((p, i) => (
           <div
             key={p.label}
             className="absolute -translate-x-1/2 -translate-y-full"
             style={{ top: p.top, left: p.left }}
           >
-            <div className="flex flex-col items-center">
+            {/* glow on the inner group, not the positioned wrapper, so the pin's
+                translate isn't clobbered by the animation's transform */}
+            <div
+              className="tandem-item-in flex flex-col items-center"
+              style={{ animationDelay: `${460 + i * 150}ms`, "--item-accent": p.color } as React.CSSProperties}
+            >
               <svg width="18" height="23" viewBox="0 0 18 23" aria-hidden="true">
                 <path
                   d="M9 0C4 0 0 4 0 9c0 6.2 9 14 9 14s9-7.8 9-14c0-5-4-9-9-9z"
@@ -626,10 +640,11 @@ function ResearchBody({ accent }: { accent: Accent }) {
       </div>
       <div className="flex w-28 shrink-0 flex-col gap-1.5">
         <div className="font-code text-[9px] font-medium uppercase tracking-[0.14em] text-ink/35">Docs</div>
-        {["Findings.md", "Shortlist", "Pricing grid"].map((d) => (
+        {["Findings.md", "Shortlist", "Pricing grid"].map((d, j) => (
           <div
             key={d}
-            className="flex items-center gap-1.5 rounded-md border border-ink/10 bg-surface px-2 py-1.5"
+            className="tandem-item-in flex items-center gap-1.5 rounded-md border border-ink/10 bg-surface px-2 py-1.5"
+            style={{ animationDelay: `${460 + (pins.length + j) * 150}ms`, "--item-accent": accent.solid } as React.CSSProperties}
           >
             <span style={{ color: accent.solid }}>
               <Icon name="docs" className="h-3 w-3" />
@@ -649,53 +664,70 @@ function SceneBody({ scene }: { scene: Scene }) {
     case "build":
       return <BuildBody accent={scene.accent} />;
     case "life":
-      return <LifeBody accent={scene.accent} />;
+      return <LifeBody />;
     case "research":
       return <ResearchBody accent={scene.accent} />;
   }
 }
 
-/* ── the live op feed: agents speak in operations, humans in names ───────────── */
+/* ── the hero chat: you ask in the chat you already live in, the agent builds
+   the canvas above. Reversed causality, coded — no video, no jank, always on.
+   Replaces the old canvas.ops feed, which showed raw MCP op names and so read as
+   "just an MCP server." Re-keyed on scene.key so it replays on every morph. ──── */
 
-function OpFeed({ scene }: { scene: Scene }) {
+function HeroChat({ scene }: { scene: Scene }) {
+  const { chat, accent } = scene;
   return (
     <div
       key={scene.key}
       className="mt-3 overflow-hidden rounded-md border border-ink/15 bg-surface"
     >
       <div className="flex items-center gap-2 border-b border-ink/10 bg-paper px-3 py-1.5">
-        <span className="relative flex h-1.5 w-1.5">
-          <span className="tandem-ping absolute inline-flex h-full w-full rounded-full bg-agent opacity-70" />
-          <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-agent" />
+        <span
+          className="grid h-3.5 w-3.5 place-items-center rounded-[3px] text-white"
+          style={{ backgroundColor: AGENT }}
+        >
+          <Icon name="spark" className="h-2 w-2" />
         </span>
-        <span className="font-code text-[10px] font-medium text-ink/50">canvas.ops — live</span>
+        <span className="font-code text-[10px] font-medium text-ink/50">
+          {scene.heroAgent.toLowerCase()} · chat
+        </span>
         <span className="ml-auto font-code text-[10px] tracking-[0.14em] text-ink/30">
           {scene.code}
         </span>
       </div>
-      <div className="px-3 py-2 font-code text-[10.5px] leading-[1.9]">
-        {scene.ops.map((line, i) => (
-          <div
-            key={`${scene.key}-${i}`}
-            className="tandem-op-in flex items-baseline gap-2 whitespace-nowrap"
-            style={{ animationDelay: `${180 + i * 340}ms` }}
-          >
-            <span className="text-ink/30">{line.t}</span>
+      <div className="space-y-2 px-3 py-2.5">
+        {/* you → (lands first — the prompt that causes everything above) */}
+        <div className="tandem-op-in flex justify-end" style={{ animationDelay: "100ms" }}>
+          <span className="max-w-[80%] rounded-[9px] rounded-br-[3px] bg-ink px-2.5 py-1.5 text-[11.5px] leading-snug text-paper">
+            {chat.user}
+          </span>
+        </div>
+        {/* the agent, working — the cause of the canvas above filling in */}
+        <div
+          className="tandem-op-in flex items-center gap-1.5 pl-0.5 font-code text-[10px] text-ink/45"
+          style={{ animationDelay: "520ms" }}
+        >
+          <span className="relative flex h-1.5 w-1.5">
             <span
-              className="font-medium"
-              style={{ color: line.kind === "agent" ? AGENT : "rgb(var(--color-ink))" }}
-            >
-              {line.actor}
-            </span>
-            <span className="text-ink/45">{line.op}</span>
-            <span className="truncate text-ink/70">{line.arg}</span>
-          </div>
-        ))}
-        <div className="flex items-center gap-2 text-ink/30">
+              className="tandem-ping absolute inline-flex h-full w-full rounded-full opacity-70"
+              style={{ backgroundColor: accent.solid }}
+            />
+            <span
+              className="relative inline-flex h-1.5 w-1.5 rounded-full"
+              style={{ backgroundColor: accent.solid }}
+            />
+          </span>
+          {scene.heroAgent} is {chat.building}…
+        </div>
+        {/* ← the agent's reply, after the items finish building (natural language, never an op name) */}
+        <div className="tandem-op-in flex justify-start" style={{ animationDelay: "2000ms" }}>
           <span
-            className="tandem-caret inline-block h-3 w-[7px] translate-y-[1px] bg-agent/80"
-            style={{ animationDelay: "1.6s" }}
-          />
+            className="max-w-[85%] rounded-[9px] rounded-bl-[3px] px-2.5 py-1.5 text-[11.5px] leading-snug text-ink"
+            style={{ backgroundColor: accent.soft, boxShadow: `inset 0 0 0 1px ${accent.line}` }}
+          >
+            {chat.reply}
+          </span>
         </div>
       </div>
     </div>
@@ -748,6 +780,9 @@ function MorphCanvas({
         })}
       </div>
 
+      {/* The canvas frame stays put; its CONTENTS rebuild per scene — each item
+          inside builds in one at a time with the agent-edit glow (see SceneBody
+          + tandem-item-in). */}
       <div className="relative overflow-hidden rounded-lg border-[1.5px] border-ink bg-surface shadow-[8px_8px_0_rgba(28,25,23,0.10)]">
         {/* title bar */}
         <div className="flex items-center gap-2.5 border-b border-ink/10 bg-paper px-3.5 py-2">
@@ -810,14 +845,15 @@ function MorphCanvas({
             <Cursor key={ed.name} editor={ed} accent={accent} />
           ))}
 
-          <div key={scene.key} className="tandem-scene-in h-full">
+          {/* re-keyed so SceneBody remounts and its items rebuild each morph */}
+          <div key={scene.key} className="h-full">
             <SceneBody scene={scene} />
           </div>
         </div>
       </div>
 
-      {/* the op feed: same edits, as the agents see them */}
-      <OpFeed scene={scene} />
+      {/* the chat that made it: you ask, the agent builds the canvas above */}
+      <HeroChat scene={scene} />
     </div>
   );
 }
@@ -859,7 +895,7 @@ const MODE_DOCS: { kind: string; name: string; color: string; desc: string }[] =
     kind: "charts",
     name: "Charts",
     color: "#6366F1",
-    desc: "Turn the numbers on your canvas into live charts the whole team — and every agent — can read.",
+    desc: "Turn the numbers on your canvas into live charts you and your agent can both read.",
   },
 ];
 
@@ -870,8 +906,8 @@ const STEPS: { title: string; body: string }[] = [
     body: "Point any MCP-aware agent at the code — Claude, Codex, Cursor, or your own.",
   },
   {
-    title: "Work in tandem",
-    body: "You, your team, and your agents all edit the same canvas — and its shared memory — live.",
+    title: "Let it build",
+    body: "Your agent works in the chat you're already in — and the result lands here, yours to open and edit.",
   },
 ];
 
@@ -879,7 +915,7 @@ const AUDIENCES: { title: string; blurb: string; tags: string[]; accent: string;
   {
     title: "Operations",
     blurb:
-      "Stand up an incident bridge, a launch checklist, or a daily ops board. Agents triage and update while the room watches.",
+      "Stand up an incident bridge, a launch checklist, or a daily ops board. Your agent triages and updates it while you watch.",
     tags: ["Incidents", "Launches", "Logistics"],
     accent: "#F43F5E",
     tilt: "lg:-rotate-1",
@@ -887,13 +923,13 @@ const AUDIENCES: { title: string; blurb: string; tags: string[]; accent: string;
   {
     title: "Builders",
     blurb:
-      "Plan the quarter, split work across coding agents, and watch the roadmap move from todo to done in real time.",
+      "Plan the quarter, split work across coding agents, and watch the roadmap move from todo to done as the work gets done.",
     tags: ["Roadmaps", "Sprints", "Research"],
     accent: "#0EA5E9",
     tilt: "lg:rotate-[0.5deg] lg:translate-y-3",
   },
   {
-    title: "Teams & life",
+    title: "Life & plans",
     blurb:
       "A trip, a move, a wedding, a whole year. Bring the people who matter and an agent to do the legwork.",
     tags: ["Trips", "Plans", "Budgets"],
@@ -1016,7 +1052,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
           {/* Left: copy + actions */}
           <div className="min-w-0 max-w-xl lg:pt-4">
             <div className="tandem-rise">
-              <SysLabel>One surface · humans + agents · live</SysLabel>
+              <SysLabel>One prompt in · a real artifact out</SysLabel>
             </div>
 
             {/* mt-12 leaves headroom for the frame's "you" tag above the h1.
@@ -1038,37 +1074,18 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
                         aria-hidden={!active}
                         className={`col-start-1 row-start-1 block ${active ? "" : "invisible"}`}
                       >
-                        Where teams and agents{" "}
-                        <span className="relative inline-block">
-                          <span
-                            key={active ? `${s.key}-on` : s.key}
-                            className={`inline-block px-1 italic ${active ? "tandem-word-in" : ""}`}
-                            style={{
-                              color: s.accent.solid,
-                              backgroundColor: s.accent.soft,
-                              boxShadow: `inset 0 0 0 1.5px ${s.accent.line}`,
-                            }}
-                          >
-                            {s.phrase}
-                          </span>
-                          {/* the agent's cursor hovers in the free space right
-                              of the phrase, arrow tip aimed back at the word */}
-                          {active && (
-                            <span className="pointer-events-none absolute left-full top-1/2 ml-1.5 hidden -translate-y-1/2 sm:block">
-                              <span key={s.key} className="tandem-fade-in block">
-                                <span className="tandem-hover block leading-none">
-                                  <PointerGlyph color={AGENT} />
-                                  {/* flex: keeps the tiny tag out of the h1's
-                                      ~56px inline line box, snug under the arrow */}
-                                  <span className="ml-2.5 mt-px flex w-max">
-                                    <NameTag name={s.heroAgent} kind="agent" />
-                                  </span>
-                                </span>
-                              </span>
-                            </span>
-                          )}
+                        <span
+                          key={active ? `${s.key}-on` : s.key}
+                          className={`inline-block px-1 italic ${active ? "tandem-word-in" : ""}`}
+                          style={{
+                            color: s.accent.solid,
+                            backgroundColor: s.accent.soft,
+                            boxShadow: `inset 0 0 0 1.5px ${s.accent.line}`,
+                          }}
+                        >
+                          {s.heroAgent}
                         </span>{" "}
-                        together.
+                        made this. You keep it.
                       </span>
                     );
                   })}
@@ -1080,10 +1097,9 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
               className="tandem-rise mt-7 text-[1.05rem] leading-relaxed text-ink/65"
               style={{ animationDelay: "120ms" }}
             >
-              Tandem is a shared agent artifact — one live canvas, with shared memory, that any
-              number of people and agents edit at once. Operations, builders, or a family planning
-              their future: bring everyone you work with, human and AI, to create what's already in
-              everyone's mind.
+              You ask in the chat you're already in. Your agent does the work and leaves it here —
+              a real artifact you can open, edit, and keep, not a chat log you'll never find again.
+              A doc has no agent. An MCP server has no human. Tandem is the one thing that's both.
             </p>
 
             {/* Primary actions — the create / join forms live in the launcher modal.
@@ -1161,7 +1177,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
             </div>
           </div>
 
-          {/* Right: the morphing canvas + its op feed */}
+          {/* Right: the morphing canvas illustration + its prescripted chat */}
           <div className="tandem-rise min-w-0" style={{ animationDelay: "140ms" }}>
             <MorphCanvas sceneIdx={sceneIdx} setSceneIdx={setSceneIdx} />
           </div>
@@ -1171,7 +1187,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
       {/* "Becomes anything" marquee */}
       <section className="border-y border-ink/10 bg-surface py-5">
         <div className="mx-auto mb-3 max-w-6xl px-6">
-          <SysLabel>One canvas → anything your team and agents do</SysLabel>
+          <SysLabel>One canvas → anything your agent can build</SysLabel>
         </div>
         <div className="relative flex overflow-hidden [mask-image:linear-gradient(to_right,transparent,black_8%,black_92%,transparent)]">
           <div className="tandem-marquee flex shrink-0 items-center gap-3 pr-3">
@@ -1234,13 +1250,13 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
         <div aria-hidden="true" className="surface-grid-faint absolute inset-0" />
         <div className="relative mx-auto max-w-6xl px-6 py-24">
           <div className="max-w-2xl">
-            <SysLabel>Who shows up</SysLabel>
+            <SysLabel>What it becomes</SysLabel>
             <h2 className="mt-3 font-display text-3xl font-medium tracking-tight text-ink sm:text-4xl">
-              Bring your team. Bring your agents.
+              Ask for anything. It shows up here.
             </h2>
             <p className="mt-3 leading-relaxed text-ink/65">
-              The same canvas reshapes itself for whoever shows up and whatever they're trying to
-              create. A few of the rooms people open every day:
+              The same canvas reshapes itself around whatever you ask your agent for. A few of the
+              things people build every day:
             </p>
           </div>
 
@@ -1453,8 +1469,8 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
               </div>
               <div className="px-4 pb-4">
                 <p className="text-xs leading-relaxed text-paper/60">
-                  Tandem speaks MCP — not locked to any one assistant. Claude, Codex, Cursor, or an
-                  orchestrator you wrote yourself.
+                  Speaks MCP — Claude, ChatGPT, Cursor, Codex, or an orchestrator you wrote
+                  yourself. However you already work, the artifact lands here.
                 </p>
                 <button
                   onClick={onOpenMCP}
@@ -1547,14 +1563,14 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
           <div className="mt-10 inline-block">
             <SelectionFrame tag="everyone" tagKind="human" className="inline-block">
               <h2 className="font-display text-3xl font-medium leading-tight tracking-tight text-ink sm:text-[2.5rem]">
-                The place to bring your team and your agents, to create what's{" "}
-                <em className="text-agent">truly envisioned</em> in everyone's mind.
+                Everything your agent makes, in one place that's{" "}
+                <em className="text-agent">actually yours.</em>
               </h2>
             </SelectionFrame>
           </div>
           <p className="mx-auto mt-8 max-w-xl leading-relaxed text-ink/65">
-            Stop copy-pasting plans out of a chat window. Open one canvas, share one link, and let
-            everyone — human and AI — build the thing together.
+            Stop copy-pasting plans out of a chat window. Ask in the chat you're already in, and the
+            artifact your agent builds shows up here — open it, edit it, keep it.
           </p>
           <div className="mt-10 flex flex-wrap items-center justify-center gap-4">
             <button

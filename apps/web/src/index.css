@@ -332,6 +332,27 @@ body {
 }
 .tandem-scene-in { animation: tandem-scene-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
 
+/* Each item inside the demo canvas is "added" by the agent one at a time: it
+   rises in and briefly wears the agent-edit halo (a ring in the item's own
+   accent), then settles — the same per-element glow the live canvas shows on an
+   edit (see AgentCursor). Items stagger via inline animation-delay; the ring
+   colour comes from --item-accent set on each element. */
+@keyframes tandem-item-in {
+  0%   { opacity: 0; transform: translateY(7px) scale(0.965); box-shadow: 0 0 0 0 rgba(0, 0, 0, 0); }
+  45%  {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--item-accent, var(--agent-accent, #c75b39)) 26%, transparent),
+      0 6px 18px -6px var(--item-accent, var(--agent-accent, #c75b39));
+  }
+  100% { opacity: 1; transform: translateY(0) scale(1); box-shadow: 0 0 0 0 rgba(0, 0, 0, 0); }
+}
+.tandem-item-in { animation: tandem-item-in 0.85s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .tandem-item-in { animation: none; }
+}
+
 /* The cycling headline word: blurs up into place each time the scene changes. */
 @keyframes tandem-word-in {
   from { opacity: 0; transform: translateY(0.42em); filter: blur(5px); }
