@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { listRecent, removeRecent } from "../lib/recentCanvases";
 import { fetchMe, getCachedUser, GOOGLE_CLIENT_ID, type User } from "../lib/auth";
 import TandemLogo from "../components/TandemLogo";
@@ -493,16 +493,13 @@ function OpsBody() {
           <div className="font-code text-[9px] font-medium uppercase tracking-[0.14em] text-ink/35">
             {col.title}
           </div>
-          {col.cards.map((card) => (
+          {col.cards.map((card) => {
+            const delay = 460 + order++ * 150;
+            return (
             <div
               key={card.name}
-              className="tandem-item-in rounded-md border border-ink/10 bg-surface px-2.5 py-2"
-              style={
-                {
-                  animationDelay: `${460 + order++ * 120}ms`,
-                  "--item-accent": card.sev,
-                } as React.CSSProperties
-              }
+              className="tandem-item-in relative rounded-md border border-ink/10 bg-surface px-2.5 py-2"
+              style={{ animationDelay: `${delay}ms`, "--item-accent": card.sev } as React.CSSProperties}
             >
               <div className="flex items-center gap-1.5">
                 <span
@@ -515,7 +512,8 @@ function OpsBody() {
               </div>
               <div className="mt-0.5 font-code text-[8.5px] text-ink/35">{card.meta}</div>
             </div>
-          ))}
+            );
+          })}
         </div>
       ))}
     </div>
@@ -535,11 +533,12 @@ function BuildBody({ accent }: { accent: Accent }) {
       {rows.map((row, i) => {
         const rowColor =
           row.tone === "done" ? "#10B981" : row.tone === "accent" ? accent.solid : "rgb(var(--color-ink) / 0.25)";
+        const delay = 460 + i * 150;
         return (
         <div
           key={row.name}
-          className="tandem-item-in flex items-center gap-2 rounded-md border border-ink/10 bg-surface px-3 py-2"
-          style={{ animationDelay: `${460 + i * 130}ms`, "--item-accent": rowColor } as React.CSSProperties}
+          className="tandem-item-in relative flex items-center gap-2 rounded-md border border-ink/10 bg-surface px-3 py-2"
+          style={{ animationDelay: `${delay}ms`, "--item-accent": rowColor } as React.CSSProperties}
         >
           <span
             className="h-2.5 w-2.5 shrink-0 rounded-[3px]"
@@ -570,11 +569,13 @@ function LifeBody() {
     <div className="relative h-full p-4">
       <div className="absolute bottom-5 left-[34px] top-5 w-px bg-ink/10" />
       <div className="flex h-full flex-col justify-between">
-        {items.map((it, i) => (
+        {items.map((it, i) => {
+          const delay = 460 + i * 150;
+          return (
           <div
             key={it.what}
             className="tandem-item-in relative flex items-center gap-3"
-            style={{ animationDelay: `${460 + i * 150}ms`, "--item-accent": it.color } as React.CSSProperties}
+            style={{ animationDelay: `${delay}ms`, "--item-accent": it.color } as React.CSSProperties}
           >
             <span className="w-6 shrink-0 text-right font-code text-[9px] font-medium text-ink/35">
               {it.when}
@@ -588,7 +589,8 @@ function LifeBody() {
               <div className="font-code text-[8.5px] text-ink/35">{it.note}</div>
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -612,7 +614,9 @@ function ResearchBody({ accent }: { accent: Accent }) {
             backgroundSize: "34px 34px",
           }}
         />
-        {pins.map((p, i) => (
+        {pins.map((p, i) => {
+          const delay = 460 + i * 150;
+          return (
           <div
             key={p.label}
             className="absolute -translate-x-1/2 -translate-y-full"
@@ -621,8 +625,8 @@ function ResearchBody({ accent }: { accent: Accent }) {
             {/* glow on the inner group, not the positioned wrapper, so the pin's
                 translate isn't clobbered by the animation's transform */}
             <div
-              className="tandem-item-in flex flex-col items-center"
-              style={{ animationDelay: `${460 + i * 150}ms`, "--item-accent": p.color } as React.CSSProperties}
+              className="tandem-item-in relative flex flex-col items-center"
+              style={{ animationDelay: `${delay}ms`, "--item-accent": p.color } as React.CSSProperties}
             >
               <svg width="18" height="23" viewBox="0 0 18 23" aria-hidden="true">
                 <path
@@ -636,7 +640,8 @@ function ResearchBody({ accent }: { accent: Accent }) {
               </span>
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
       <div className="flex w-28 shrink-0 flex-col gap-1.5">
         <div className="font-code text-[9px] font-medium uppercase tracking-[0.14em] text-ink/35">Docs</div>
@@ -745,6 +750,59 @@ function MorphCanvas({
 }) {
   const scene = SCENES[sceneIdx];
   const { accent } = scene;
+  const reduced = usePrefersReducedMotion();
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const cursorRef = useRef<HTMLDivElement>(null);
+
+  // One persistent agent cursor: hidden until the first item lands, then it jumps
+  // to each item as it spawns (the same 460 + i*150ms cadence SceneBody staggers
+  // them at) — so the build reads as a single agent hopping around placing things.
+  // Positions are measured live; styling is imperative to dodge re-render churn.
+  useEffect(() => {
+    const body = bodyRef.current;
+    const cur = cursorRef.current;
+    if (!body || !cur) return;
+    cur.style.opacity = "0"; // empty at the start of every scene
+    if (reduced) return;
+    const glide = "transform .34s cubic-bezier(.22,1,.36,1), opacity .22s ease";
+    const items = Array.from(body.querySelectorAll<HTMLElement>(".tandem-item-in"));
+    const timers = items.map((item, k) =>
+      window.setTimeout(
+        () => {
+          const cr = body.getBoundingClientRect();
+          const ir = item.getBoundingClientRect();
+          const x = ir.left - cr.left + 2;
+          const y = ir.top - cr.top + 2;
+          if (cur.style.opacity !== "1") {
+            // first appearance: teleport to the item, then fade in (no glide from 0,0)
+            cur.style.transition = "none";
+            cur.style.transform = `translate(${x}px, ${y}px)`;
+            void cur.offsetWidth;
+            cur.style.transition = glide;
+            cur.style.opacity = "1";
+          } else {
+            cur.style.transition = glide;
+            cur.style.transform = `translate(${x}px, ${y}px)`;
+          }
+        },
+        460 + k * 150,
+      ),
+    );
+    // once the big changes are done, the agent's work is finished — fade the
+    // cursor away ~1s after the last item lands so it gets out of the way.
+    if (items.length) {
+      timers.push(
+        window.setTimeout(
+          () => {
+            cur.style.transition = glide;
+            cur.style.opacity = "0";
+          },
+          460 + (items.length - 1) * 150 + 1000,
+        ),
+      );
+    }
+    return () => timers.forEach((t) => clearTimeout(t));
+  }, [sceneIdx, reduced]);
 
   return (
     // The demo canvas follows the page theme so it previews the real dark
@@ -829,25 +887,33 @@ function MorphCanvas({
         </div>
 
         {/* body — re-keyed on scene so it replays the entrance animation */}
-        <div className="surface-grid-faint relative h-[300px]">
-          {/* "editing" pill — bottom corner so it never covers the first row */}
-          <div className="absolute bottom-3 left-3 z-30 flex items-center gap-2 rounded-[4px] border border-ink/10 bg-surface/95 px-2 py-1 backdrop-blur">
-            <span className="relative flex h-1.5 w-1.5">
-              <span className="tandem-ping absolute inline-flex h-full w-full rounded-full bg-agent opacity-70" />
-              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-agent" />
-            </span>
-            <span key={scene.key} className="tandem-fade-in font-code text-[10px] text-ink/55">
-              {scene.editors[0].name} is editing…
-            </span>
-          </div>
-
-          {scene.editors.map((ed) => (
-            <Cursor key={ed.name} editor={ed} accent={accent} />
-          ))}
+        <div ref={bodyRef} className="surface-grid-faint relative h-[300px]">
+          {/* Only the human collaborator roams now — the agent's presence is the
+              single build cursor below. The roaming agent cursors + "editing" pill
+              were removed as messy. */}
+          {scene.editors
+            .filter((ed) => ed.kind === "human")
+            .map((ed) => (
+              <Cursor key={ed.name} editor={ed} accent={accent} />
+            ))}
 
           {/* re-keyed so SceneBody remounts and its items rebuild each morph */}
           <div key={scene.key} className="h-full">
             <SceneBody scene={scene} />
+          </div>
+
+          {/* the single persistent build cursor — position driven imperatively by
+              the effect above; it hops to each item as it lands */}
+          <div
+            ref={cursorRef}
+            aria-hidden="true"
+            className="pointer-events-none absolute left-0 top-0 z-40 flex items-start"
+            style={{ opacity: 0 }}
+          >
+            <PointerGlyph color={AGENT} />
+            <span className="ml-1 mt-0.5 flex w-max">
+              <NameTag name={scene.heroAgent} kind="agent" />
+            </span>
           </div>
         </div>
       </div>
