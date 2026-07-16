@@ -1355,100 +1355,6 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
         </div>
       </section>
 
-      {/* Shared memory / multi-agent — the wire. Dark room. theme-light pins the
-          light palette so `bg-ink text-paper` stays a dark band in both themes
-          (without it, the tokens flip and the room inverts to light). */}
-      <section className="theme-light bg-ink text-paper">
-        <div className="mx-auto grid max-w-6xl items-center gap-14 px-6 py-24 lg:grid-cols-2">
-          <div>
-            <span className="font-code text-[11px] uppercase tracking-[0.22em] text-agent">
-              Shared memory
-            </span>
-            <h2 className="mt-4 font-display text-3xl font-medium tracking-tight sm:text-4xl">
-              The canvas is the blackboard.
-            </h2>
-            <p className="mt-5 leading-relaxed text-paper/65">
-              Every pin, row, note, and roadmap item is shared state — broadcast over the wire to
-              every browser and every agent on the code. Hand-offs happen through the canvas, not
-              through a copied prompt, so you can split work across specialised agents and mix
-              vendors without rewriting the orchestration.
-            </p>
-            <p className="mt-4 leading-relaxed text-paper/65">
-              Reopen it next week and the whole plan is still there, with everything the team and the
-              agents have added since. The work and the deliverable are the same thing.
-            </p>
-            <button
-              onClick={onOpenMCP}
-              className="btn-press mt-8 inline-flex items-center gap-2 rounded-md border-[1.5px] border-paper/30 bg-transparent px-4 py-2.5 text-sm font-medium text-paper shadow-[4px_4px_0_rgba(199,91,57,0.55)] transition-colors hover:border-paper/60"
-            >
-              See how multi-agent flows work
-              <Icon name="arrow" className="h-4 w-4" />
-            </button>
-          </div>
-
-          {/* agents ⇄ canvas ⇄ people, with live wires. Row on sm+; stacked
-              vertically on phones so it can never force horizontal scroll. */}
-          <div className="relative rounded-md border border-paper/15 bg-white/[0.03] p-5 sm:p-7">
-            <div className="flex flex-col items-stretch gap-4 sm:flex-row sm:items-center sm:justify-between sm:gap-2">
-              <div className="flex flex-row flex-wrap justify-center gap-2 sm:flex-col sm:gap-2.5">
-                {["scout-agent", "planner", "reporter"].map((n) => (
-                  <span
-                    key={n}
-                    className="inline-flex items-center gap-1.5 rounded-[4px] border border-agent/50 bg-agent/15 px-2.5 py-1 font-code text-[10.5px] font-medium text-[#E89277]"
-                  >
-                    <Icon name="spark" className="h-3 w-3" />
-                    {n}
-                  </span>
-                ))}
-              </div>
-
-              <div className="flex min-w-0 flex-col gap-1 px-2 sm:flex-1">
-                <span className="text-center font-code text-[9px] uppercase tracking-[0.18em] text-agent/80">
-                  ops →
-                </span>
-                <div className="tandem-wire text-agent/60" />
-                <span className="text-center font-code text-[9px] uppercase tracking-[0.18em] text-paper/40">
-                  ← state
-                </span>
-              </div>
-
-              <div className="flex flex-col items-center gap-1.5">
-                <div className="grid h-20 w-20 place-items-center rounded-md border-[1.5px] border-paper/25 bg-paper shadow-[5px_5px_0_rgba(199,91,57,0.4)]">
-                  <TandemLogo size={40} animate={false} />
-                </div>
-                <span className="font-code text-[9px] uppercase tracking-[0.18em] text-paper/40">
-                  canvas
-                </span>
-              </div>
-
-              <div className="flex min-w-0 flex-col gap-1 px-2 sm:flex-1">
-                <span className="text-center font-code text-[9px] uppercase tracking-[0.18em] text-paper/60">
-                  edits →
-                </span>
-                <div className="tandem-wire text-paper/40" style={{ animationDirection: "reverse" }} />
-                <span className="text-center font-code text-[9px] uppercase tracking-[0.18em] text-paper/40">
-                  ← live
-                </span>
-              </div>
-
-              <div className="flex flex-row flex-wrap justify-center gap-2 sm:flex-col sm:gap-2.5">
-                {["Priya", "Devin", "Sam"].map((n) => (
-                  <span
-                    key={n}
-                    className="inline-flex items-center justify-end gap-1.5 rounded-[4px] border border-paper/25 bg-paper/10 px-2.5 py-1 font-code text-[10.5px] font-medium text-paper/85"
-                  >
-                    {n}
-                  </span>
-                ))}
-              </div>
-            </div>
-            <p className="mt-6 text-center font-code text-[10px] text-paper/40 sm:mt-7">
-              many agents · many people · one shared, persistent state
-            </p>
-          </div>
-        </div>
-      </section>
-
       {/* How it works */}
       <section className="mx-auto max-w-6xl px-6 py-24">
         <div className="grid gap-10 sm:grid-cols-3">
@@ -1483,13 +1389,14 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
         <div aria-hidden="true" className="surface-grid-faint absolute inset-0 opacity-60" />
         <div className="relative mx-auto max-w-6xl px-6 py-24">
           <div className="max-w-2xl">
-            <SysLabel>The surface, six ways</SysLabel>
+            <SysLabel>Whatever the answer needs to be</SysLabel>
             <h2 className="mt-3 font-display text-3xl font-medium tracking-tight text-ink sm:text-4xl">
-              One canvas, six ways to see it.
+              You don't pick a tool. Your agent picks the shape.
             </h2>
             <p className="mt-3 leading-relaxed text-ink/65">
-              Switch views from the top of any canvas. Every mode is fully editable by you and your
-              agents alike — they read and write the same entities you do.
+              You ask for the thing — a trip, an incident board, a launch plan — and your agent
+              builds it in whatever form fits: a map, a schedule, a roadmap, a sheet. Then it's
+              yours to open and edit.
             </p>
           </div>
 
