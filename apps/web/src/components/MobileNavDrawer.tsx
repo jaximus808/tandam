@@ -60,7 +60,7 @@ export default function MobileNavDrawer({
         aria-hidden="true"
       />
       <aside
-        className="absolute inset-y-0 left-0 flex w-[86vw] max-w-[340px] flex-col border-r border-ink/10 bg-surface shadow-xl animate-[drawer-in_180ms_ease-out]"
+        className="absolute inset-x-0 bottom-0 flex max-h-[80vh] flex-col rounded-t-2xl border-t border-ink/10 bg-surface shadow-xl animate-[drawer-in_180ms_ease-out]"
         role="dialog"
         aria-modal="true"
         aria-label="Canvas navigation"
@@ -112,7 +112,7 @@ export default function MobileNavDrawer({
 
       {/* Local keyframes so the drawer is self-contained (mirrors QuickLog). */}
       <style>{`
-        @keyframes drawer-in { from { opacity: 0; transform: translateX(-16px) } to { opacity: 1; transform: translateX(0) } }
+        @keyframes drawer-in { from { opacity: 0; transform: translateY(24px) } to { opacity: 1; transform: translateY(0) } }
       `}</style>
     </div>
   );
