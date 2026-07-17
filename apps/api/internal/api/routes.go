@@ -162,10 +162,12 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 			r.Post("/api/canvas/template", h.ApplyTemplate)
 
 			r.Post("/api/canvas/pins", h.CreatePin)
+			r.Post("/api/canvas/pins/batch", h.CreatePinsBatch)
 			r.Patch("/api/canvas/pins/{id}", h.UpdatePin)
 			r.Delete("/api/canvas/pins/{id}", h.DeletePin)
 
 			r.Post("/api/canvas/events", h.CreateEvent)
+			r.Post("/api/canvas/events/batch", h.CreateEventsBatch)
 			r.Patch("/api/canvas/events/{id}", h.UpdateEvent)
 			r.Delete("/api/canvas/events/{id}", h.DeleteEvent)
 

@@ -430,6 +430,77 @@ func (h *Handler) CreatePin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, pin)
 }
 
+// POST /api/canvas/pins/batch — add many pins in one shot. The whole array
+// persists via a single bulk INSERT and fires ONE state broadcast, so an N-pin
+// itinerary costs one full-canvas reload instead of N. `document` sets a shared
+// target map doc for the batch; each pin may still override it with its own
+// `document`/`documentId`.
+func (h *Handler) CreatePinsBatch(w http.ResponseWriter, r *http.Request) {
+	canvasID := CanvasIDFromCtx(r.Context())
+	var body struct {
+		Document string `json:"document"` // shared target for the batch
+		Pins     []struct {
+			store.Pin
+			Document string `json:"document"`
+		} `json:"pins"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(body.Pins) == 0 {
+		writeError(w, http.StatusBadRequest, "pins: at least one pin is required")
+		return
+	}
+	// Resolve each pin's target doc through a cache so a shared/default doc is
+	// resolved (and created on demand) exactly once for the whole batch.
+	docCache := map[string]*uuid.UUID{}
+	resolveDoc := func(ref string) (*uuid.UUID, error) {
+		if cached, ok := docCache[ref]; ok {
+			return cached, nil
+		}
+		id, err := h.documentForContent(r.Context(), canvasID, "map", ref)
+		if err != nil {
+			return nil, err
+		}
+		docCache[ref] = &id
+		return &id, nil
+	}
+	pins := make([]*store.Pin, 0, len(body.Pins))
+	for i := range body.Pins {
+		pin := body.Pins[i].Pin
+		if msg := validateLatLng(pin.Lat, pin.Lng); msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
+			return
+		}
+		pin.ID = uuid.New()
+		pin.Kind = "pin"
+		if pin.CreatedBy == "" {
+			pin.CreatedBy = "agent"
+		}
+		ref := body.Pins[i].Document
+		if ref == "" && pin.DocumentID != nil {
+			ref = pin.DocumentID.String()
+		}
+		if ref == "" {
+			ref = body.Document
+		}
+		docID, err := resolveDoc(ref)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		pin.DocumentID = docID
+		pins = append(pins, &pin)
+	}
+	if _, err := h.store.CreatePins(r.Context(), canvasID, pins); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	broadcastState(r.Context(), h.store, h.hub, canvasID)
+	writeJSON(w, http.StatusCreated, map[string]any{"pins": pins})
+}
+
 // PATCH /api/canvas/pins/{id}
 func (h *Handler) UpdatePin(w http.ResponseWriter, r *http.Request) {
 	canvasID := CanvasIDFromCtx(r.Context())
@@ -528,6 +599,90 @@ func (h *Handler) CreateEvent(w http.ResponseWriter, r *http.Request) {
 	}
 	broadcastState(r.Context(), h.store, h.hub, canvasID)
 	writeJSON(w, http.StatusCreated, ev)
+}
+
+// POST /api/canvas/events/batch — add many itinerary entries in one shot via a
+// single bulk INSERT + ONE state broadcast. `document` sets a shared target
+// itinerary doc for the batch; each entry may override with its own `document`.
+// NOTE: entries reference pins by real pin UUIDs (pinIds/fromPinId/toPinId), so
+// those pins must already exist — this endpoint does not resolve client-side pin
+// refs (that's the separate clientId-batching task).
+func (h *Handler) CreateEventsBatch(w http.ResponseWriter, r *http.Request) {
+	canvasID := CanvasIDFromCtx(r.Context())
+	type eventItem struct {
+		Title      string      `json:"title"`
+		Start      time.Time   `json:"start"`
+		End        *time.Time  `json:"end"`
+		Timezone   *string     `json:"timezone"`
+		PinIDs     []uuid.UUID `json:"pinIds"`
+		PinID      *uuid.UUID  `json:"pinId"`
+		FromPinID  *uuid.UUID  `json:"fromPinId"`
+		ToPinID    *uuid.UUID  `json:"toPinId"`
+		TravelMode *string     `json:"travelMode"`
+		DayTag     *string     `json:"dayTag"`
+		Cost       *float64    `json:"cost"`
+		CreatedBy  string      `json:"createdBy"`
+		Document   string      `json:"document"` // per-entry override
+	}
+	var body struct {
+		Document string      `json:"document"` // shared target for the batch
+		Events   []eventItem `json:"events"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(body.Events) == 0 {
+		writeError(w, http.StatusBadRequest, "events: at least one entry is required")
+		return
+	}
+	// Resolve target docs through a cache so the shared/default itinerary is
+	// resolved (and created on demand) once for the whole batch.
+	docCache := map[string]*uuid.UUID{}
+	resolveDoc := func(ref string) (*uuid.UUID, error) {
+		if cached, ok := docCache[ref]; ok {
+			return cached, nil
+		}
+		id, err := h.documentForContent(r.Context(), canvasID, "itinerary", ref)
+		if err != nil {
+			return nil, err
+		}
+		docCache[ref] = &id
+		return &id, nil
+	}
+	events := make([]*store.Event, 0, len(body.Events))
+	for i := range body.Events {
+		item := body.Events[i]
+		createdBy := item.CreatedBy
+		if createdBy == "" {
+			createdBy = "agent"
+		}
+		ref := item.Document
+		if ref == "" {
+			ref = body.Document
+		}
+		docID, err := resolveDoc(ref)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		events = append(events, &store.Event{
+			ID: uuid.New(), Kind: "event", DocumentID: docID,
+			Title: item.Title, Start: item.Start, End: item.End,
+			Timezone: item.Timezone,
+			PinIDs:   item.PinIDs, PinID: item.PinID,
+			FromPinID: item.FromPinID, ToPinID: item.ToPinID,
+			TravelMode: item.TravelMode, DayTag: item.DayTag,
+			Cost:      item.Cost,
+			CreatedBy: createdBy,
+		})
+	}
+	if _, err := h.store.CreateEvents(r.Context(), canvasID, events); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	broadcastState(r.Context(), h.store, h.hub, canvasID)
+	writeJSON(w, http.StatusCreated, map[string]any{"events": events})
 }
 
 // PATCH /api/canvas/events/{id}

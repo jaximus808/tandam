@@ -1763,10 +1763,10 @@ func (s *supabaseStore) GetDocument(_ context.Context, canvasID, id uuid.UUID) (
 	return toDocument(rows[0]), nil
 }
 
-func (s *supabaseStore) CreatePin(ctx context.Context, canvasID uuid.UUID, pin *Pin) (int, error) {
-	now := time.Now().UTC()
-	pin.UpdatedAt = now
-	row := map[string]any{
+// pinRow shapes a Pin into its DB row. Shared by the single- and bulk-insert
+// paths so both stay in lockstep on column mapping.
+func pinRow(canvasID uuid.UUID, pin *Pin, now time.Time) map[string]any {
+	return map[string]any{
 		"id": pin.ID.String(), "canvas_id": canvasID.String(),
 		"document_id": uuidPtrStr(pin.DocumentID),
 		"pin_type":    pin.PinType, "lat": pin.Lat, "lng": pin.Lng,
@@ -1774,8 +1774,34 @@ func (s *supabaseStore) CreatePin(ctx context.Context, canvasID uuid.UUID, pin *
 		"created_by": pin.CreatedBy,
 		"updated_at": now.Format(time.RFC3339),
 	}
-	err := s.exec(s.client.From("pins").Insert(row, false, "", "minimal", ""))
+}
+
+func (s *supabaseStore) CreatePin(ctx context.Context, canvasID uuid.UUID, pin *Pin) (int, error) {
+	now := time.Now().UTC()
+	pin.UpdatedAt = now
+	err := s.exec(s.client.From("pins").Insert(pinRow(canvasID, pin, now), false, "", "minimal", ""))
 	if err != nil {
+		return 0, err
+	}
+	_ = s.LeaveWelcomeIfNeeded(ctx, canvasID, "map")
+	return s.bumpVersion(ctx, canvasID)
+}
+
+// CreatePins inserts many pins in a SINGLE round trip — one bulk INSERT, one
+// welcome-transition check, one version bump — instead of N of each. The caller
+// (the batch handler) broadcasts once after this returns, so an N-pin itinerary
+// costs one full-canvas reload instead of N. Returns the new canvas version.
+func (s *supabaseStore) CreatePins(ctx context.Context, canvasID uuid.UUID, pins []*Pin) (int, error) {
+	if len(pins) == 0 {
+		return 0, nil
+	}
+	now := time.Now().UTC()
+	rows := make([]map[string]any, 0, len(pins))
+	for _, pin := range pins {
+		pin.UpdatedAt = now
+		rows = append(rows, pinRow(canvasID, pin, now))
+	}
+	if err := s.exec(s.client.From("pins").Insert(rows, false, "", "minimal", "")); err != nil {
 		return 0, err
 	}
 	_ = s.LeaveWelcomeIfNeeded(ctx, canvasID, "map")
@@ -1828,47 +1854,91 @@ func (s *supabaseStore) DeletePin(ctx context.Context, canvasID uuid.UUID, id uu
 
 // ── Events ────────────────────────────────────────────────────────────────────
 
-func (s *supabaseStore) CreateEvent(ctx context.Context, canvasID uuid.UUID, ev *Event) (int, error) {
-	now := time.Now().UTC()
-	ev.UpdatedAt = now
+// eventRow shapes an Event into its DB row, canonicalizing the pin list.
+// Shared by the single- and bulk-insert paths. Every key is always present
+// (nil when unset) so that a batch INSERT's rows all share identical key
+// sets — PostgREST's bulk insert (PGRST102) rejects a JSON array whose
+// objects don't all have matching keys.
+func eventRow(canvasID uuid.UUID, ev *Event, now time.Time) map[string]any {
 	// Canonicalize the pin list: prefer PinIDs, fall back to a single PinID.
 	if len(ev.PinIDs) == 0 && ev.PinID != nil {
 		ev.PinIDs = []uuid.UUID{*ev.PinID}
 	}
-	row := map[string]any{
+	var endTime any
+	if ev.End != nil {
+		endTime = ev.End.Format(time.RFC3339)
+	}
+	var timezone any
+	if ev.Timezone != nil {
+		timezone = *ev.Timezone
+	}
+	var pinID any
+	if ev.PinID != nil {
+		pinID = ev.PinID.String()
+	}
+	var fromPinID any
+	if ev.FromPinID != nil {
+		fromPinID = ev.FromPinID.String()
+	}
+	var toPinID any
+	if ev.ToPinID != nil {
+		toPinID = ev.ToPinID.String()
+	}
+	var travelMode any
+	if ev.TravelMode != nil {
+		travelMode = *ev.TravelMode
+	}
+	var dayTag any
+	if ev.DayTag != nil {
+		dayTag = *ev.DayTag
+	}
+	var cost any
+	if ev.Cost != nil {
+		cost = *ev.Cost
+	}
+	return map[string]any{
 		"id": ev.ID.String(), "canvas_id": canvasID.String(),
 		"document_id": uuidPtrStr(ev.DocumentID),
 		"title":       ev.Title, "start_time": ev.Start.Format(time.RFC3339),
-		"pin_ids":    uuidStrings(ev.PinIDs),
-		"created_by": ev.CreatedBy,
-		"updated_at": now.Format(time.RFC3339),
+		"end_time":    endTime,
+		"timezone":    timezone,
+		"pin_ids":     uuidStrings(ev.PinIDs),
+		"pin_id":      pinID,
+		"from_pin_id": fromPinID,
+		"to_pin_id":   toPinID,
+		"travel_mode": travelMode,
+		"day_tag":     dayTag,
+		"cost":        cost,
+		"created_by":  ev.CreatedBy,
+		"updated_at":  now.Format(time.RFC3339),
 	}
-	if ev.End != nil {
-		row["end_time"] = ev.End.Format(time.RFC3339)
-	}
-	if ev.Timezone != nil {
-		row["timezone"] = *ev.Timezone
-	}
-	if ev.PinID != nil {
-		row["pin_id"] = ev.PinID.String()
-	}
-	if ev.FromPinID != nil {
-		row["from_pin_id"] = ev.FromPinID.String()
-	}
-	if ev.ToPinID != nil {
-		row["to_pin_id"] = ev.ToPinID.String()
-	}
-	if ev.TravelMode != nil {
-		row["travel_mode"] = *ev.TravelMode
-	}
-	if ev.DayTag != nil {
-		row["day_tag"] = *ev.DayTag
-	}
-	if ev.Cost != nil {
-		row["cost"] = *ev.Cost
-	}
-	err := s.exec(s.client.From("events").Insert(row, false, "", "minimal", ""))
+}
+
+func (s *supabaseStore) CreateEvent(ctx context.Context, canvasID uuid.UUID, ev *Event) (int, error) {
+	now := time.Now().UTC()
+	ev.UpdatedAt = now
+	err := s.exec(s.client.From("events").Insert(eventRow(canvasID, ev, now), false, "", "minimal", ""))
 	if err != nil {
+		return 0, err
+	}
+	_ = s.LeaveWelcomeIfNeeded(ctx, canvasID, "itinerary")
+	return s.bumpVersion(ctx, canvasID)
+}
+
+// CreateEvents inserts many itinerary entries in a SINGLE round trip — one bulk
+// INSERT, one welcome-transition check, one version bump. The batch handler
+// broadcasts once after this returns. Returns the new canvas version.
+func (s *supabaseStore) CreateEvents(ctx context.Context, canvasID uuid.UUID, events []*Event) (int, error) {
+	if len(events) == 0 {
+		return 0, nil
+	}
+	now := time.Now().UTC()
+	rows := make([]map[string]any, 0, len(events))
+	for _, ev := range events {
+		ev.UpdatedAt = now
+		rows = append(rows, eventRow(canvasID, ev, now))
+	}
+	if err := s.exec(s.client.From("events").Insert(rows, false, "", "minimal", "")); err != nil {
 		return 0, err
 	}
 	_ = s.LeaveWelcomeIfNeeded(ctx, canvasID, "itinerary")

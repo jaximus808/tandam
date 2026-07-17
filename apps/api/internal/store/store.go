@@ -696,11 +696,13 @@ type Store interface {
 
 	// Pins
 	CreatePin(ctx context.Context, canvasID uuid.UUID, p *Pin) (int, error)
+	CreatePins(ctx context.Context, canvasID uuid.UUID, pins []*Pin) (int, error)
 	UpdatePin(ctx context.Context, canvasID uuid.UUID, id uuid.UUID, patch PinPatch) (int, error)
 	DeletePin(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error)
 
 	// Events
 	CreateEvent(ctx context.Context, canvasID uuid.UUID, e *Event) (int, error)
+	CreateEvents(ctx context.Context, canvasID uuid.UUID, events []*Event) (int, error)
 	UpdateEvent(ctx context.Context, canvasID uuid.UUID, id uuid.UUID, patch EventPatch) (int, error)
 	DeleteEvent(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error)
 

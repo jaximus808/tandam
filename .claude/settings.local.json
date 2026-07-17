@@ -117,7 +117,9 @@
       "Bash(curl -s -m 4 http://127.0.0.1:8971/healthz)",
       "Bash(echo \"EXIT=$?\")",
       "Bash(echo \"TSC_EXIT=$?\")",
-      "Bash(echo \"GO_EXIT=$?\")"
+      "Bash(echo \"GO_EXIT=$?\")",
+      "mcp__agentcanvas__canvas_pin_add_batch",
+      "mcp__agentcanvas__canvas_event_add_batch"
     ]
   }
 }

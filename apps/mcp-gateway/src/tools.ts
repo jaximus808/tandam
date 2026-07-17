@@ -151,6 +151,21 @@ export async function handleTool(
         createdBy: "agent",
       });
 
+    case "canvas_pin_add_batch":
+      return gateway.post("/api/canvas/pins/batch", {
+        document: args.document,
+        pins: ((args.pins as Record<string, unknown>[]) ?? []).map((p) => ({
+          pinType: p.pinType ?? "marker",
+          lat: p.lat,
+          lng: p.lng,
+          label: p.label,
+          body: p.body,
+          color: p.color,
+          document: p.document,
+          createdBy: "agent",
+        })),
+      });
+
     case "canvas_pin_update": {
       const { id, ...partial } = args;
       return gateway.patch(`/api/canvas/pins/${id}`, partial);
@@ -175,6 +190,26 @@ export async function handleTool(
         cost: args.cost,
         document: args.document,
         createdBy: "agent",
+      });
+
+    case "canvas_event_add_batch":
+      return gateway.post("/api/canvas/events/batch", {
+        document: args.document,
+        events: ((args.events as Record<string, unknown>[]) ?? []).map((e) => ({
+          title: e.title,
+          start: e.start,
+          end: e.end,
+          timezone: e.timezone,
+          pinIds: e.pinIds,
+          pinId: e.pinId,
+          fromPinId: e.fromPinId,
+          toPinId: e.toPinId,
+          travelMode: e.travelMode,
+          dayTag: e.dayTag,
+          cost: e.cost,
+          document: e.document,
+          createdBy: "agent",
+        })),
       });
 
     case "canvas_event_update": {
@@ -712,6 +747,51 @@ const RAW_TOOLS = [
     },
   },
   {
+    name: "canvas_pin_add_batch",
+    description:
+      "Add MANY location pins in ONE call. Strongly preferred over calling " +
+      "canvas_pin_add repeatedly when placing several pins (e.g. a full trip's " +
+      "stops): the whole array persists in a single write and fires one live " +
+      "update, instead of one round trip per pin. Returns the created pins (with " +
+      "their generated ids), in input order — use those ids when you then add " +
+      "itinerary entries that reference the pins.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        pins: {
+          type: "array",
+          description: "The pins to add. At least one.",
+          items: {
+            type: "object" as const,
+            properties: {
+              pinType: { type: "string", enum: ["marker", "annotation"] },
+              lat: { type: "number" },
+              lng: { type: "number" },
+              label: { type: "string" },
+              body: { type: "string" },
+              color: { type: "string" },
+              document: {
+                type: "string",
+                description:
+                  "Per-pin override of the target map document. Usually omit and set `document` " +
+                  "once at the top level for the whole batch.",
+              },
+            },
+            required: ["pinType", "lat", "lng"],
+          },
+        },
+        document: {
+          type: "string",
+          description:
+            "Shared target map document (tab) for every pin in this batch — an existing document " +
+            "id or name (e.g. \"Japan\"); the named document must already exist. Omit to use the " +
+            "canvas's default map document, which IS created on demand if none exists.",
+        },
+      },
+      required: ["pins"],
+    },
+  },
+  {
     name: "canvas_pin_update",
     description: "Update an existing pin by its ID.",
     inputSchema: {
@@ -812,6 +892,73 @@ const RAW_TOOLS = [
         },
       },
       required: ["title", "start"],
+    },
+  },
+  {
+    name: "canvas_event_add_batch",
+    description:
+      "Add MANY itinerary entries in ONE call — the batch counterpart of " +
+      "canvas_event_add. Strongly preferred when adding several entries at once " +
+      "(a whole day, or a whole trip): the array persists in a single write and " +
+      "fires one live update instead of one round trip per entry. Each entry " +
+      "takes the SAME fields as canvas_event_add (title, start, end, timezone, " +
+      "pinIds/pinId, fromPinId+toPinId+travelMode, dayTag, cost). Entries " +
+      "reference pins by their real ids, so create the pins first " +
+      "(canvas_pin_add_batch) and use the ids it returns.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        events: {
+          type: "array",
+          description: "The itinerary entries to add. At least one.",
+          items: {
+            type: "object" as const,
+            properties: {
+              title: { type: "string" },
+              start: {
+                type: "string",
+                description:
+                  "Timezone-aware ISO-8601 instant (include offset or Z), e.g. 2024-06-01T18:00:00-05:00.",
+              },
+              end: { type: "string", description: "End / arrival instant, timezone-aware ISO-8601." },
+              timezone: {
+                type: "string",
+                description: "IANA timezone of THIS entry's location, e.g. 'Asia/Tokyo'.",
+              },
+              pinIds: {
+                type: "array",
+                items: { type: "string" },
+                description: "Pin ids this entry covers (multi-stop). Prefer over pinId.",
+              },
+              pinId: { type: "string", description: "Single pin this entry takes place at. Legacy." },
+              fromPinId: { type: "string", description: "Origin pin for a travel segment." },
+              toPinId: { type: "string", description: "Destination pin for a travel segment." },
+              travelMode: {
+                type: "string",
+                enum: ["flight", "train", "drive"],
+                description: "Travel mode. Required when fromPinId/toPinId are set.",
+              },
+              dayTag: { type: "string", description: "Optional short day-cluster prefix, e.g. 'DAY 1'." },
+              cost: { type: "number", description: "Optional cost; summed into per-day and grand totals." },
+              document: {
+                type: "string",
+                description:
+                  "Per-entry override of the target itinerary document. Usually omit and set " +
+                  "`document` once at the top level for the whole batch.",
+              },
+            },
+            required: ["title", "start"],
+          },
+        },
+        document: {
+          type: "string",
+          description:
+            "Shared target itinerary document (tab) for every entry in this batch — an existing " +
+            "document id or name; must already exist. Omit to use the canvas's default itinerary, " +
+            "which IS created on demand if none exists.",
+        },
+      },
+      required: ["events"],
     },
   },
   {
