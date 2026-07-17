@@ -297,6 +297,104 @@ func (h *Handler) CreateDocument(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"document": doc})
 }
 
+// POST /api/canvas/documents/batch — create many documents (new tabs) in one
+// shot. The whole array persists via a single bulk INSERT and fires ONE state
+// broadcast, so an N-document batch costs one full-canvas reload instead of N.
+// Documents ARE the doc — there's no target-doc resolution the way pins/events
+// need. Unlike CreateDocument, this does not special-case type "sheet" (which
+// mints a paired sheet + document via CreateSheet, not a plain document row) —
+// route sheet creation through the single canvas_document_add instead.
+func (h *Handler) CreateDocumentsBatch(w http.ResponseWriter, r *http.Request) {
+	canvasID := CanvasIDFromCtx(r.Context())
+	var body struct {
+		Documents []struct {
+			Type      string         `json:"type"`
+			Name      string         `json:"name"`
+			Config    map[string]any `json:"config"`
+			SortOrder *int           `json:"sortOrder"`
+			ParentID  *string        `json:"parentId"`
+			CreatedBy string         `json:"createdBy"`
+		} `json:"documents"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(body.Documents) == 0 {
+		writeError(w, http.StatusBadRequest, "documents: at least one document is required")
+		return
+	}
+
+	// Auto-assigned sortOrders (items that omit one) append after the existing
+	// tabs and increment locally so N new docs land in a stable, distinct order
+	// instead of all colliding at the same slot. Existing docs are fetched at
+	// most once for the whole batch.
+	autoSort := -1
+	nextAutoSort := func() int {
+		if autoSort < 0 {
+			if existing, err := h.store.ListDocuments(r.Context(), canvasID); err == nil {
+				autoSort = nextDocSortOrder(existing)
+			} else {
+				autoSort = 0
+			}
+		}
+		n := autoSort
+		autoSort++
+		return n
+	}
+
+	docs := make([]*store.Document, 0, len(body.Documents))
+	for i := range body.Documents {
+		item := body.Documents[i]
+		item.Type = strings.TrimSpace(item.Type)
+		if item.Type == "chart" {
+			writeError(w, http.StatusBadRequest, "create charts with canvas_chart_add_batch — a chart needs a source sheet")
+			return
+		}
+		if item.Type == "sheet" {
+			writeError(w, http.StatusBadRequest, "sheet documents can't be batched (each needs a paired sheet) — create them individually with canvas_document_add")
+			return
+		}
+		if !docTypesCreatable[item.Type] {
+			writeError(w, http.StatusBadRequest, "invalid document type: "+item.Type+" (map, notes, itinerary, roadmap, folder)")
+			return
+		}
+		var parentID *uuid.UUID
+		if item.ParentID != nil {
+			p, err := h.resolveParentFolder(r.Context(), canvasID, *item.ParentID)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			parentID = p
+		}
+		if item.CreatedBy == "" {
+			item.CreatedBy = "agent"
+		}
+		if strings.TrimSpace(item.Name) == "" {
+			if n := defaultDocNames[item.Type]; n != "" {
+				item.Name = n
+			} else {
+				item.Name = "Untitled " + item.Type
+			}
+		}
+		sortOrder := 0
+		if item.SortOrder != nil {
+			sortOrder = *item.SortOrder
+		} else {
+			sortOrder = nextAutoSort()
+		}
+		docs = append(docs, &store.Document{ID: uuid.New(), Kind: "document", Type: item.Type,
+			Name: item.Name, Config: item.Config, ParentID: parentID, SortOrder: sortOrder, CreatedBy: item.CreatedBy})
+	}
+	if _, err := h.store.CreateDocuments(r.Context(), canvasID, docs); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	broadcastState(r.Context(), h.store, h.hub, canvasID)
+	writeJSON(w, http.StatusCreated, map[string]any{"documents": docs})
+}
+
 // PATCH /api/canvas/documents/{ref} — rename / reorder / reconfigure. {ref} is a
 // document id or name (url-encoded); name is resolved across all types.
 func (h *Handler) UpdateDocument(w http.ResponseWriter, r *http.Request) {

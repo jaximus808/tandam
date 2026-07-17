@@ -1411,6 +1411,71 @@ func (h *Handler) CreateChart(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, ch)
 }
 
+// POST /api/canvas/charts/batch — add many charts in one shot. The whole array
+// persists via a single bulk INSERT (plus one bulk INSERT for any backing
+// 'chart' documents that need minting) and fires ONE state broadcast, so an
+// N-chart batch costs one full-canvas reload instead of N. Each chart is 1:1
+// with its own 'chart' document (mirroring canvas_chart_add) — there's no
+// shared/default target doc to resolve here, unlike pins or events.
+func (h *Handler) CreateChartsBatch(w http.ResponseWriter, r *http.Request) {
+	canvasID := CanvasIDFromCtx(r.Context())
+	var body struct {
+		Charts []struct {
+			Name      string    `json:"name"`
+			SheetID   uuid.UUID `json:"sheetId"`
+			ChartType string    `json:"chartType"`
+			XColumn   string    `json:"xColumn"`
+			YColumns  []string  `json:"yColumns"`
+			SortOrder int       `json:"sortOrder"`
+			CreatedBy string    `json:"createdBy"`
+		} `json:"charts"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(body.Charts) == 0 {
+		writeError(w, http.StatusBadRequest, "charts: at least one chart is required")
+		return
+	}
+	charts := make([]*store.Chart, 0, len(body.Charts))
+	for i := range body.Charts {
+		item := body.Charts[i]
+		if item.SheetID == uuid.Nil {
+			writeError(w, http.StatusBadRequest, "sheetId is required")
+			return
+		}
+		if item.CreatedBy == "" {
+			item.CreatedBy = "agent"
+		}
+		if item.ChartType == "" {
+			item.ChartType = "bar"
+		}
+		if !isValidChartType(item.ChartType) {
+			writeError(w, http.StatusBadRequest, "invalid chart type: "+item.ChartType)
+			return
+		}
+		if item.Name == "" {
+			item.Name = "Untitled chart"
+		}
+		if item.YColumns == nil {
+			item.YColumns = []string{}
+		}
+		charts = append(charts, &store.Chart{
+			ID: uuid.New(), Kind: "chart",
+			Name: item.Name, SheetID: item.SheetID, ChartType: item.ChartType,
+			XColumn: item.XColumn, YColumns: item.YColumns, SortOrder: item.SortOrder,
+			CreatedBy: item.CreatedBy,
+		})
+	}
+	if _, err := h.store.CreateCharts(r.Context(), canvasID, charts); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	broadcastState(r.Context(), h.store, h.hub, canvasID)
+	writeJSON(w, http.StatusCreated, map[string]any{"charts": charts})
+}
+
 // PATCH /api/canvas/charts/{id}
 func (h *Handler) UpdateChart(w http.ResponseWriter, r *http.Request) {
 	canvasID := CanvasIDFromCtx(r.Context())

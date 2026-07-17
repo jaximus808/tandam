@@ -136,6 +136,18 @@ export async function handleTool(
         createdBy: "agent",
       });
 
+    case "canvas_document_add_batch":
+      return gateway.post("/api/canvas/documents/batch", {
+        documents: ((args.documents as Record<string, unknown>[]) ?? []).map((d) => ({
+          type: d.type,
+          name: d.name,
+          config: d.config,
+          sortOrder: d.sortOrder,
+          parentId: d.parentId,
+          createdBy: "agent",
+        })),
+      });
+
     case "canvas_document_update":
       // {ref} is a document id OR name (url-encoded); server resolves it.
       return gateway.patch(`/api/canvas/documents/${encodeURIComponent(String(args.document))}`, {
@@ -440,6 +452,19 @@ export async function handleTool(
         yColumns: args.yColumns,
         sortOrder: args.sortOrder ?? 0,
         createdBy: "agent",
+      });
+
+    case "canvas_chart_add_batch":
+      return gateway.post("/api/canvas/charts/batch", {
+        charts: ((args.charts as Record<string, unknown>[]) ?? []).map((c) => ({
+          name: c.name,
+          sheetId: c.sheetId,
+          chartType: c.chartType,
+          xColumn: c.xColumn,
+          yColumns: c.yColumns,
+          sortOrder: c.sortOrder ?? 0,
+          createdBy: "agent",
+        })),
       });
 
     case "canvas_chart_update": {
@@ -761,6 +786,46 @@ const RAW_TOOLS = [
         },
       },
       required: ["type"],
+    },
+  },
+  {
+    name: "canvas_document_add_batch",
+    description:
+      "Create MANY documents (new tabs) in ONE call. Strongly preferred over calling " +
+      "canvas_document_add repeatedly when creating several documents at once (e.g. a set of " +
+      "notes tabs): the whole array persists in a single write and fires one live update, " +
+      "instead of one round trip per document. Each item takes the SAME fields as " +
+      "canvas_document_add EXCEPT type \"sheet\" isn't supported here (a sheet needs its paired " +
+      "backing sheet minted 1:1 — create it individually with canvas_document_add) and \"chart\" " +
+      "is never valid (use canvas_chart_add_batch — a chart needs a source sheet). Returns the " +
+      "created documents (with their generated ids), in input order.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        documents: {
+          type: "array",
+          description: "The documents to add. At least one.",
+          items: {
+            type: "object" as const,
+            properties: {
+              type: { type: "string", enum: ["map", "notes", "itinerary", "roadmap", "folder"] },
+              name: { type: "string", description: "Display name / tab title (e.g. \"Japan trip\")." },
+              config: {
+                type: "object",
+                description: "Type-specific settings — e.g. { \"mapId\": \"us\" } for a map document.",
+              },
+              sortOrder: { type: "number", description: "Tab position; omit to append at the end." },
+              parentId: {
+                type: "string",
+                description:
+                  "Folder to create this document inside — a folder document's id or name. Omit for the root level.",
+              },
+            },
+            required: ["type"],
+          },
+        },
+      },
+      required: ["documents"],
     },
   },
   {
@@ -1535,6 +1600,43 @@ const RAW_TOOLS = [
         sortOrder: { type: "number" },
       },
       required: ["sheetId"],
+    },
+  },
+  {
+    name: "canvas_chart_add_batch",
+    description:
+      "Add MANY charts in ONE call — the batch counterpart of canvas_chart_add. Strongly " +
+      "preferred over calling canvas_chart_add repeatedly when adding several charts at once " +
+      "(e.g. one chart per category from the same sheet): the whole array persists in a single " +
+      "write and fires one live update, instead of one round trip per chart. Each entry takes " +
+      "the SAME fields as canvas_chart_add (sheetId, chartType, xColumn, yColumns, sortOrder) " +
+      "and gets its own 1:1 backing chart document, same as the single-item tool. Returns the " +
+      "created charts (with their generated ids), in input order.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        charts: {
+          type: "array",
+          description: "The charts to add. At least one.",
+          items: {
+            type: "object" as const,
+            properties: {
+              name: { type: "string", description: "Chart title." },
+              sheetId: { type: "string", description: "Source sheet id." },
+              chartType: { type: "string", enum: ["bar", "line", "area", "pie"] },
+              xColumn: { type: "string", description: "Column name or id for x-axis / categories." },
+              yColumns: {
+                type: "array",
+                items: { type: "string" },
+                description: "Column names or ids to plot as series (numeric). Pie uses the first.",
+              },
+              sortOrder: { type: "number" },
+            },
+            required: ["sheetId"],
+          },
+        },
+      },
+      required: ["charts"],
     },
   },
   {

@@ -688,6 +688,9 @@ type Store interface {
 	// Documents (migration 0024) — named, multi-instance tabs. Child rows point
 	// back via document_id; ListDocuments powers name/id targeting.
 	CreateDocument(ctx context.Context, canvasID uuid.UUID, d *Document) (int, error)
+	// CreateDocuments bulk-inserts many documents in one round trip (one INSERT,
+	// one version bump) instead of N of each.
+	CreateDocuments(ctx context.Context, canvasID uuid.UUID, docs []*Document) (int, error)
 	UpdateDocument(ctx context.Context, canvasID uuid.UUID, id uuid.UUID, patch DocumentPatch) (int, error)
 	DeleteDocument(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error)
 	ReorderDocuments(ctx context.Context, canvasID uuid.UUID, updates []DocumentReorder) (int, error)
@@ -738,6 +741,10 @@ type Store interface {
 
 	// Charts
 	CreateChart(ctx context.Context, canvasID uuid.UUID, c *Chart) (int, error)
+	// CreateCharts bulk-inserts many charts in one round trip (one INSERT, one
+	// version bump), minting any needed backing 'chart' documents in a single
+	// bulk documents INSERT rather than N individual CreateDocument calls.
+	CreateCharts(ctx context.Context, canvasID uuid.UUID, charts []*Chart) (int, error)
 	UpdateChart(ctx context.Context, canvasID uuid.UUID, id uuid.UUID, patch ChartPatch) (int, error)
 	DeleteChart(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error)
 

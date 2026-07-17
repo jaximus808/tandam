@@ -155,6 +155,7 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 			r.Post("/api/canvas/mode", h.SetMode)
 
 			r.Post("/api/canvas/documents", h.CreateDocument)
+			r.Post("/api/canvas/documents/batch", h.CreateDocumentsBatch)
 			r.Patch("/api/canvas/documents/{ref}", h.UpdateDocument)
 			r.Delete("/api/canvas/documents/{ref}", h.DeleteDocument)
 			r.Post("/api/canvas/mode/enable", h.EnableMode)
@@ -194,6 +195,7 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 			r.Delete("/api/canvas/sheet-rows/{id}", h.DeleteSheetRow)
 
 			r.Post("/api/canvas/charts", h.CreateChart)
+			r.Post("/api/canvas/charts/batch", h.CreateChartsBatch)
 			r.Patch("/api/canvas/charts/{id}", h.UpdateChart)
 			r.Delete("/api/canvas/charts/{id}", h.DeleteChart)
 

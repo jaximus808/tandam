@@ -1645,18 +1645,20 @@ func (s *supabaseStore) LeaveWelcomeIfNeeded(ctx context.Context, canvasID uuid.
 
 // ── Documents (migration 0024) ────────────────────────────────────────────────
 
-func (s *supabaseStore) CreateDocument(ctx context.Context, canvasID uuid.UUID, d *Document) (int, error) {
+// documentRow shapes a Document into its DB row. Shared by the single- and
+// bulk-insert paths (and by CreateCharts, which mints each chart's backing
+// 'chart' document in one bulk documents INSERT rather than one CreateDocument
+// round trip per chart).
+func documentRow(canvasID uuid.UUID, d *Document, now time.Time) (map[string]any, error) {
 	cfg := d.Config
 	if cfg == nil {
 		cfg = map[string]any{}
 	}
 	cfgJSON, err := json.Marshal(cfg)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	now := time.Now().UTC()
-	d.UpdatedAt = now
-	row := map[string]any{
+	return map[string]any{
 		"id":         d.ID.String(),
 		"canvas_id":  canvasID.String(),
 		"type":       d.Type,
@@ -1666,8 +1668,40 @@ func (s *supabaseStore) CreateDocument(ctx context.Context, canvasID uuid.UUID, 
 		"config":     json.RawMessage(cfgJSON),
 		"created_by": d.CreatedBy,
 		"updated_at": now.Format(time.RFC3339),
+	}, nil
+}
+
+func (s *supabaseStore) CreateDocument(ctx context.Context, canvasID uuid.UUID, d *Document) (int, error) {
+	now := time.Now().UTC()
+	d.UpdatedAt = now
+	row, err := documentRow(canvasID, d, now)
+	if err != nil {
+		return 0, err
 	}
 	if err := s.exec(s.client.From("documents").Insert(row, false, "", "minimal", "")); err != nil {
+		return 0, err
+	}
+	return s.bumpVersion(ctx, canvasID)
+}
+
+// CreateDocuments inserts many documents in a SINGLE round trip — one bulk
+// INSERT, one version bump — instead of N of each. The caller (the batch
+// handler) broadcasts once after this returns. Returns the new canvas version.
+func (s *supabaseStore) CreateDocuments(ctx context.Context, canvasID uuid.UUID, docs []*Document) (int, error) {
+	if len(docs) == 0 {
+		return 0, nil
+	}
+	now := time.Now().UTC()
+	rows := make([]map[string]any, 0, len(docs))
+	for _, d := range docs {
+		d.UpdatedAt = now
+		row, err := documentRow(canvasID, d, now)
+		if err != nil {
+			return 0, err
+		}
+		rows = append(rows, row)
+	}
+	if err := s.exec(s.client.From("documents").Insert(rows, false, "", "minimal", "")); err != nil {
 		return 0, err
 	}
 	return s.bumpVersion(ctx, canvasID)
@@ -3047,6 +3081,25 @@ func (s *supabaseStore) resolveChartCols(canvasID, sheetID uuid.UUID, x string, 
 	return rx, rys
 }
 
+// chartRow shapes a Chart into its DB row. Shared by the single- and
+// bulk-insert paths. Caller must have already resolved ch.XColumn/YColumns
+// (via resolveChartCols) and ch.DocumentID.
+func chartRow(canvasID uuid.UUID, ch *Chart, ysJSON []byte, now time.Time) map[string]any {
+	return map[string]any{
+		"id":          ch.ID.String(),
+		"canvas_id":   canvasID.String(),
+		"document_id": uuidPtrStr(ch.DocumentID),
+		"sheet_id":    ch.SheetID.String(),
+		"name":        ch.Name,
+		"chart_type":  ch.ChartType,
+		"x_column":    ch.XColumn,
+		"y_columns":   json.RawMessage(ysJSON),
+		"sort_order":  ch.SortOrder,
+		"created_by":  ch.CreatedBy,
+		"updated_at":  now.Format(time.RFC3339),
+	}
+}
+
 func (s *supabaseStore) CreateChart(ctx context.Context, canvasID uuid.UUID, ch *Chart) (int, error) {
 	if err := s.sheetBelongsToCanvas(canvasID, ch.SheetID); err != nil {
 		return 0, err
@@ -3070,20 +3123,64 @@ func (s *supabaseStore) CreateChart(ctx context.Context, canvasID uuid.UUID, ch 
 		}
 		ch.DocumentID = &doc.ID
 	}
-	row := map[string]any{
-		"id":          ch.ID.String(),
-		"canvas_id":   canvasID.String(),
-		"document_id": uuidPtrStr(ch.DocumentID),
-		"sheet_id":    ch.SheetID.String(),
-		"name":        ch.Name,
-		"chart_type":  ch.ChartType,
-		"x_column":    ch.XColumn,
-		"y_columns":   json.RawMessage(ysJSON),
-		"sort_order":  ch.SortOrder,
-		"created_by":  ch.CreatedBy,
-		"updated_at":  now.Format(time.RFC3339),
+	if err := s.exec(s.client.From("charts").Insert(chartRow(canvasID, ch, ysJSON, now), false, "", "minimal", "")); err != nil {
+		return 0, err
 	}
-	if err := s.exec(s.client.From("charts").Insert(row, false, "", "minimal", "")); err != nil {
+	_ = s.LeaveWelcomeIfNeeded(ctx, canvasID, "charts")
+	return s.bumpVersion(ctx, canvasID)
+}
+
+// CreateCharts inserts many charts in a SINGLE round trip for the chart rows —
+// one bulk INSERT, one welcome-transition check, one version bump — instead of
+// N of each. Each chart still needs its own 1:1 backing 'chart' document
+// (mirrors how the single CreateChart mints one when absent), so any charts
+// without a DocumentID have their docs minted together in one bulk documents
+// INSERT first (reusing documentRow) rather than N individual CreateDocument
+// round trips. The caller (the batch handler) broadcasts once after this
+// returns. Returns the new canvas version.
+func (s *supabaseStore) CreateCharts(ctx context.Context, canvasID uuid.UUID, charts []*Chart) (int, error) {
+	if len(charts) == 0 {
+		return 0, nil
+	}
+	now := time.Now().UTC()
+
+	var docRows []map[string]any
+	for _, ch := range charts {
+		if ch.DocumentID != nil {
+			continue
+		}
+		doc := &Document{ID: uuid.New(), Kind: "document", Type: "chart",
+			Name: ch.Name, SortOrder: ch.SortOrder, CreatedBy: ch.CreatedBy, UpdatedAt: now}
+		row, err := documentRow(canvasID, doc, now)
+		if err != nil {
+			return 0, err
+		}
+		docRows = append(docRows, row)
+		ch.DocumentID = &doc.ID
+	}
+	if len(docRows) > 0 {
+		if err := s.exec(s.client.From("documents").Insert(docRows, false, "", "minimal", "")); err != nil {
+			return 0, err
+		}
+	}
+
+	rows := make([]map[string]any, 0, len(charts))
+	for _, ch := range charts {
+		if err := s.sheetBelongsToCanvas(canvasID, ch.SheetID); err != nil {
+			return 0, err
+		}
+		ch.XColumn, ch.YColumns = s.resolveChartCols(canvasID, ch.SheetID, ch.XColumn, ch.YColumns)
+		if ch.YColumns == nil {
+			ch.YColumns = []string{}
+		}
+		ysJSON, err := json.Marshal(ch.YColumns)
+		if err != nil {
+			return 0, err
+		}
+		ch.UpdatedAt = now
+		rows = append(rows, chartRow(canvasID, ch, ysJSON, now))
+	}
+	if err := s.exec(s.client.From("charts").Insert(rows, false, "", "minimal", "")); err != nil {
 		return 0, err
 	}
 	_ = s.LeaveWelcomeIfNeeded(ctx, canvasID, "charts")

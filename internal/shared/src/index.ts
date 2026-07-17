@@ -385,7 +385,13 @@ export type WSClientMessage =
   | { op: "mode.enable"; mode: CanvasMode }
   | { op: "map.set"; mapId: string }
   | { op: "template.apply"; templateId: string; mode: CanvasMode; mapId?: string }
-  | { op: "scoped_edit_request"; entityId: EntityId; instruction: string };
+  | { op: "scoped_edit_request"; entityId: EntityId; instruction: string }
+  // Generic batch envelope: apply several ops as one WS message with ONE state
+  // broadcast at the end, instead of one broadcast per op. Introduced for grid
+  // paste (item 13 — a 10x20 paste is ~30 column/row ops) but works for any mix
+  // of ops. Ops are applied in order; a sub-op that fails is logged and skipped,
+  // the rest still apply. Not nested — a "batch" op inside `ops` is ignored.
+  | { op: "batch"; ops: WSClientMessage[] };
 
 export type WSServerMessage =
   | { type: "state"; canvas: CanvasMeta; canvases: CanvasMeta[]; state: CanvasState; pendingEdits: PendingEdit[] }

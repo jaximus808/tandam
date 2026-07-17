@@ -25,6 +25,7 @@ import type {
   SheetColumn,
   SheetColumnType,
   SheetRow,
+  WSClientMessage,
 } from "../types";
 import { sendOp } from "../lib/ws";
 import { parseClipboardGrid } from "../lib/paste";
@@ -338,12 +339,15 @@ function SheetTable({ sheet, rows }: { sheet: Sheet; rows: SheetRow[] }) {
 
   // Paste a TSV/Excel block anchored at (startRow, startCol), auto-growing the
   // sheet: new text columns to the right and new rows below as the block needs
-  // (item 13). Client-side and non-atomic (one op per new column / row), which
-  // is fine for the small sheets this app deals in. New columns carry a
-  // client-minted id so the row ops below can key cells to them immediately —
-  // the server honours a supplied column id (see sheet.column.add).
+  // (item 13). Every column/row op is collected and sent as ONE "batch" WS
+  // message instead of one message per op — a 10x20 paste is ~30 ops, which
+  // used to mean ~30 full-canvas broadcasts (see ws_handler.go's applyBatch).
+  // New columns carry a client-minted id so the row ops in the same batch can
+  // key cells to them immediately — the server honours a supplied column id
+  // (see sheet.column.add) and applies columns before rows within a batch.
   function handlePasteGrid(startRow: number, startCol: number, grid: string[][]) {
     const width = Math.max(...grid.map((r) => r.length));
+    const ops: WSClientMessage[] = [];
 
     // Absolute column index → column id (+ type for parsing). Extend as needed.
     const colId: string[] = columns.map((c) => c.id);
@@ -356,7 +360,7 @@ function SheetTable({ sheet, rows }: { sheet: Sheet; rows: SheetRow[] }) {
       colSort += 1;
       colId[ci] = id;
       colType[ci] = "text";
-      sendOp({
+      ops.push({
         op: "sheet.column.add",
         sheetId: sheet.id,
         column: { id, name: `Column ${ci + 1}`, type: "text", sortOrder: colSort },
@@ -376,12 +380,15 @@ function SheetTable({ sheet, rows }: { sheet: Sheet; rows: SheetRow[] }) {
       });
       const absRow = startRow + ri;
       if (absRow < orderedRows.length) {
-        sendOp({ op: "sheet.row.update", id: orderedRows[absRow].id, partial: { data } });
+        ops.push({ op: "sheet.row.update", id: orderedRows[absRow].id, partial: { data } });
       } else {
         rowSort += 1;
-        sendOp({ op: "sheet.row.add", sheetId: sheet.id, data, sortOrder: rowSort });
+        ops.push({ op: "sheet.row.add", sheetId: sheet.id, data, sortOrder: rowSort });
       }
     });
+
+    if (ops.length === 0) return;
+    sendOp({ op: "batch", ops });
   }
 
   const rowIds = useMemo(() => orderedRows.map((r) => r.id), [orderedRows]);
