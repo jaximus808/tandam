@@ -708,11 +708,13 @@ type Store interface {
 
 	// Notes
 	CreateNote(ctx context.Context, canvasID uuid.UUID, n *Note) (int, error)
+	CreateNotes(ctx context.Context, canvasID uuid.UUID, notes []*Note) (int, error)
 	UpdateNote(ctx context.Context, canvasID uuid.UUID, id uuid.UUID, patch NotePatch) (int, error)
 	DeleteNote(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error)
 
 	// Roadmap items
 	CreateRoadmapItem(ctx context.Context, canvasID uuid.UUID, r *RoadmapItem) (int, error)
+	CreateRoadmapItems(ctx context.Context, canvasID uuid.UUID, items []*RoadmapItem) (int, error)
 	UpdateRoadmapItem(ctx context.Context, canvasID uuid.UUID, id uuid.UUID, patch RoadmapItemPatch) (int, error)
 	DeleteRoadmapItem(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error)
 	ReorderRoadmapItems(ctx context.Context, canvasID uuid.UUID, updates []RoadmapReorder) (int, error)
@@ -725,9 +727,11 @@ type Store interface {
 	UpdateSheet(ctx context.Context, canvasID uuid.UUID, id uuid.UUID, patch SheetPatch) (int, error)
 	DeleteSheet(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error)
 	AddSheetColumn(ctx context.Context, canvasID, sheetID uuid.UUID, col SheetColumn) (int, error)
+	CreateSheetColumns(ctx context.Context, canvasID, sheetID uuid.UUID, cols []SheetColumn) (int, error)
 	UpdateSheetColumn(ctx context.Context, canvasID, sheetID uuid.UUID, columnID string, patch SheetColumnPatch) (int, error)
 	DeleteSheetColumn(ctx context.Context, canvasID, sheetID uuid.UUID, columnID string) (int, error)
 	CreateSheetRow(ctx context.Context, canvasID uuid.UUID, r *SheetRow) (int, error)
+	CreateSheetRows(ctx context.Context, canvasID uuid.UUID, rows []*SheetRow) (int, error)
 	UpdateSheetRow(ctx context.Context, canvasID uuid.UUID, id uuid.UUID, patch SheetRowPatch) (int, error)
 	DeleteSheetRow(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error)
 	ReorderSheetRows(ctx context.Context, canvasID, sheetID uuid.UUID, updates []SheetRowReorder) (int, error)
@@ -751,6 +755,7 @@ type Store interface {
 
 	// Actions (v1 execution primitive)
 	CreateAction(ctx context.Context, canvasID uuid.UUID, a *Action) (int, error)
+	CreateActions(ctx context.Context, canvasID uuid.UUID, actions []*Action) (int, error)
 	GetAction(ctx context.Context, canvasID, id uuid.UUID) (*Action, error)
 	ListActions(ctx context.Context, canvasID uuid.UUID, stateFilter, typeFilter, assigneeFilter string) ([]*Action, error)
 	UpdateActionState(ctx context.Context, canvasID, id uuid.UUID, patch ActionStatePatch) (int, error)

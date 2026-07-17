@@ -172,10 +172,12 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 			r.Delete("/api/canvas/events/{id}", h.DeleteEvent)
 
 			r.Post("/api/canvas/notes", h.CreateNote)
+			r.Post("/api/canvas/notes/batch", h.CreateNotesBatch)
 			r.Patch("/api/canvas/notes/{id}", h.UpdateNote)
 			r.Delete("/api/canvas/notes/{id}", h.DeleteNote)
 
 			r.Post("/api/canvas/roadmap-items", h.CreateRoadmapItem)
+			r.Post("/api/canvas/roadmap-items/batch", h.CreateRoadmapItemsBatch)
 			r.Patch("/api/canvas/roadmap-items/{id}", h.UpdateRoadmapItem)
 			r.Delete("/api/canvas/roadmap-items/{id}", h.DeleteRoadmapItem)
 
@@ -183,8 +185,10 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 			r.Patch("/api/canvas/sheets/{id}", h.UpdateSheet)
 			r.Delete("/api/canvas/sheets/{id}", h.DeleteSheet)
 			r.Post("/api/canvas/sheets/{id}/columns", h.AddSheetColumn)
+			r.Post("/api/canvas/sheets/{id}/columns/batch", h.CreateSheetColumnsBatch)
 			r.Patch("/api/canvas/sheets/{id}/columns/{columnId}", h.UpdateSheetColumn)
 			r.Delete("/api/canvas/sheets/{id}/columns/{columnId}", h.DeleteSheetColumn)
+			r.Post("/api/canvas/sheets/{id}/rows/batch", h.CreateSheetRowsBatch)
 			r.Post("/api/canvas/sheet-rows", h.CreateSheetRow)
 			r.Patch("/api/canvas/sheet-rows/{id}", h.UpdateSheetRow)
 			r.Delete("/api/canvas/sheet-rows/{id}", h.DeleteSheetRow)
@@ -202,6 +206,7 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 			// Agents + actions (v1 execution primitive) — proposing mutates.
 			r.Post("/api/canvas/agents", h.RegisterAgent)
 			r.Post("/api/canvas/actions", h.ProposeAction)
+			r.Post("/api/canvas/actions/batch", h.ProposeActionsBatch)
 			r.Post("/api/canvas/actions/{id}/approve", h.ApproveAction)
 			r.Post("/api/canvas/actions/{id}/reject", h.RejectAction)
 			r.Patch("/api/canvas/actions/{id}", h.UpdateActionState)

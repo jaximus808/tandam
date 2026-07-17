@@ -754,6 +754,80 @@ func (h *Handler) CreateNote(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, n)
 }
 
+// POST /api/canvas/notes/batch — add many notes in one shot. The whole array
+// persists via a single bulk INSERT and fires ONE state broadcast, so an
+// N-note batch costs one full-canvas reload instead of N. `document` sets a
+// shared target notes doc for the batch; each note may still override it with
+// its own `document`. sortOrder is assigned the same way as the single path
+// (appended after the last note in its target document) — see
+// store.CreateNotes.
+func (h *Handler) CreateNotesBatch(w http.ResponseWriter, r *http.Request) {
+	canvasID := CanvasIDFromCtx(r.Context())
+	type noteItem struct {
+		Body       string     `json:"body"`
+		ImageRefs  []string   `json:"imageRefs"`
+		ParentID   *uuid.UUID `json:"parentId"`
+		ParentKind *string    `json:"parentKind"`
+		CreatedBy  string     `json:"createdBy"`
+		Document   string     `json:"document"` // per-note override
+	}
+	var body struct {
+		Document string     `json:"document"` // shared target for the batch
+		Notes    []noteItem `json:"notes"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(body.Notes) == 0 {
+		writeError(w, http.StatusBadRequest, "notes: at least one note is required")
+		return
+	}
+	// Resolve each note's target doc through a cache so a shared/default doc is
+	// resolved (and created on demand) exactly once for the whole batch.
+	docCache := map[string]*uuid.UUID{}
+	resolveDoc := func(ref string) (*uuid.UUID, error) {
+		if cached, ok := docCache[ref]; ok {
+			return cached, nil
+		}
+		id, err := h.documentForContent(r.Context(), canvasID, "notes", ref)
+		if err != nil {
+			return nil, err
+		}
+		docCache[ref] = &id
+		return &id, nil
+	}
+	notes := make([]*store.Note, 0, len(body.Notes))
+	for i := range body.Notes {
+		item := body.Notes[i]
+		createdBy := item.CreatedBy
+		if createdBy == "" {
+			createdBy = "agent"
+		}
+		ref := item.Document
+		if ref == "" {
+			ref = body.Document
+		}
+		docID, err := resolveDoc(ref)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		notes = append(notes, &store.Note{
+			ID: uuid.New(), Kind: "note", DocumentID: docID,
+			Body: item.Body, ImageRefs: item.ImageRefs,
+			ParentID: item.ParentID, ParentKind: item.ParentKind,
+			CreatedBy: createdBy,
+		})
+	}
+	if _, err := h.store.CreateNotes(r.Context(), canvasID, notes); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	broadcastState(r.Context(), h.store, h.hub, canvasID)
+	writeJSON(w, http.StatusCreated, map[string]any{"notes": notes})
+}
+
 // PATCH /api/canvas/notes/{id}
 func (h *Handler) UpdateNote(w http.ResponseWriter, r *http.Request) {
 	canvasID := CanvasIDFromCtx(r.Context())
@@ -850,6 +924,93 @@ func (h *Handler) CreateRoadmapItem(w http.ResponseWriter, r *http.Request) {
 	}
 	broadcastState(r.Context(), h.store, h.hub, canvasID)
 	writeJSON(w, http.StatusCreated, item)
+}
+
+// POST /api/canvas/roadmap-items/batch — add many roadmap items in one shot.
+// The whole array persists via a single bulk INSERT and fires ONE state
+// broadcast, so an N-item batch costs one full-canvas reload instead of N.
+// `document` sets a shared target roadmap doc for the batch; each item may
+// still override it with its own `document`.
+func (h *Handler) CreateRoadmapItemsBatch(w http.ResponseWriter, r *http.Request) {
+	canvasID := CanvasIDFromCtx(r.Context())
+	type roadmapItem struct {
+		ParentID  *uuid.UUID `json:"parentId"`
+		Title     string     `json:"title"`
+		Body      string     `json:"body"`
+		Status    string     `json:"status"`
+		Stage     string     `json:"stage"`
+		Assignee  string     `json:"assignee"`
+		SortOrder int        `json:"sortOrder"`
+		CreatedBy string     `json:"createdBy"`
+		Document  string     `json:"document"` // per-item override
+	}
+	var body struct {
+		Document string        `json:"document"` // shared target for the batch
+		Items    []roadmapItem `json:"items"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(body.Items) == 0 {
+		writeError(w, http.StatusBadRequest, "items: at least one roadmap item is required")
+		return
+	}
+	// Resolve each item's target doc through a cache so a shared/default doc is
+	// resolved (and created on demand) exactly once for the whole batch.
+	docCache := map[string]*uuid.UUID{}
+	resolveDoc := func(ref string) (*uuid.UUID, error) {
+		if cached, ok := docCache[ref]; ok {
+			return cached, nil
+		}
+		id, err := h.documentForContent(r.Context(), canvasID, "roadmap", ref)
+		if err != nil {
+			return nil, err
+		}
+		docCache[ref] = &id
+		return &id, nil
+	}
+	items := make([]*store.RoadmapItem, 0, len(body.Items))
+	for i := range body.Items {
+		item := body.Items[i]
+		createdBy := item.CreatedBy
+		if createdBy == "" {
+			createdBy = "agent"
+		}
+		if item.Status == "" {
+			item.Status = "todo"
+		}
+		if item.Assignee != "" && item.Assignee != "agent" && item.Assignee != "human" {
+			writeError(w, http.StatusBadRequest, "assignee must be 'agent' or 'human'")
+			return
+		}
+		// "human" is the implicit default — store it as unmarked so the column
+		// stays NULL for goals and only agent tasks carry a value.
+		if item.Assignee == "human" {
+			item.Assignee = ""
+		}
+		ref := item.Document
+		if ref == "" {
+			ref = body.Document
+		}
+		docID, err := resolveDoc(ref)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		items = append(items, &store.RoadmapItem{
+			ID: uuid.New(), Kind: "roadmap", DocumentID: docID,
+			ParentID: item.ParentID, Title: item.Title, Body: item.Body,
+			Status: item.Status, Stage: item.Stage, Assignee: item.Assignee,
+			SortOrder: item.SortOrder, CreatedBy: createdBy,
+		})
+	}
+	if _, err := h.store.CreateRoadmapItems(r.Context(), canvasID, items); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	broadcastState(r.Context(), h.store, h.hub, canvasID)
+	writeJSON(w, http.StatusCreated, map[string]any{"items": items})
 }
 
 // PATCH /api/canvas/roadmap-items/{id}
@@ -997,6 +1158,50 @@ func (h *Handler) AddSheetColumn(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, body)
 }
 
+// POST /api/canvas/sheets/{id}/columns/batch — add many columns to one sheet
+// in one shot. Mirrors CreatePinsBatch/CreateEventsBatch: the sheet is
+// resolved once (from the URL) and every column is appended in a single
+// sheet write, firing ONE state broadcast instead of one per column.
+func (h *Handler) CreateSheetColumnsBatch(w http.ResponseWriter, r *http.Request) {
+	canvasID := CanvasIDFromCtx(r.Context())
+	sheetID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid sheet id")
+		return
+	}
+	var body struct {
+		Columns []store.SheetColumn `json:"columns"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(body.Columns) == 0 {
+		writeError(w, http.StatusBadRequest, "columns: at least one column is required")
+		return
+	}
+	cols := make([]store.SheetColumn, 0, len(body.Columns))
+	for _, c := range body.Columns {
+		if c.Type == "" {
+			c.Type = "text"
+		}
+		if !isValidSheetColumnType(c.Type) {
+			writeError(w, http.StatusBadRequest, "invalid column type: "+c.Type)
+			return
+		}
+		if c.ID == "" {
+			c.ID = uuid.New().String()
+		}
+		cols = append(cols, c)
+	}
+	if _, err := h.store.CreateSheetColumns(r.Context(), canvasID, sheetID, cols); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	broadcastState(r.Context(), h.store, h.hub, canvasID)
+	writeJSON(w, http.StatusCreated, map[string]any{"columns": cols})
+}
+
 // PATCH /api/canvas/sheets/{id}/columns/{columnId}
 func (h *Handler) UpdateSheetColumn(w http.ResponseWriter, r *http.Request) {
 	canvasID := CanvasIDFromCtx(r.Context())
@@ -1069,6 +1274,56 @@ func (h *Handler) CreateSheetRow(w http.ResponseWriter, r *http.Request) {
 	}
 	broadcastState(r.Context(), h.store, h.hub, canvasID)
 	writeJSON(w, http.StatusCreated, row)
+}
+
+// POST /api/canvas/sheets/{id}/rows/batch — add many rows to one sheet in one
+// shot via a single bulk INSERT + ONE state broadcast. Mirrors
+// CreatePinsBatch/CreateEventsBatch: the sheet is resolved once (from the
+// URL) and shared by every row in the batch — this is the highest-value
+// agent-add case, spreadsheets being inherently many-row.
+func (h *Handler) CreateSheetRowsBatch(w http.ResponseWriter, r *http.Request) {
+	canvasID := CanvasIDFromCtx(r.Context())
+	sheetID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid sheet id")
+		return
+	}
+	var body struct {
+		Rows []struct {
+			Data      map[string]any `json:"data"`
+			SortOrder int            `json:"sortOrder"`
+			CreatedBy string         `json:"createdBy"`
+		} `json:"rows"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(body.Rows) == 0 {
+		writeError(w, http.StatusBadRequest, "rows: at least one row is required")
+		return
+	}
+	rows := make([]*store.SheetRow, 0, len(body.Rows))
+	for _, item := range body.Rows {
+		createdBy := item.CreatedBy
+		if createdBy == "" {
+			createdBy = "agent"
+		}
+		data := item.Data
+		if data == nil {
+			data = map[string]any{}
+		}
+		rows = append(rows, &store.SheetRow{
+			ID: uuid.New(), Kind: "sheetRow", SheetID: sheetID,
+			Data: data, SortOrder: item.SortOrder, CreatedBy: createdBy,
+		})
+	}
+	if _, err := h.store.CreateSheetRows(r.Context(), canvasID, rows); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	broadcastState(r.Context(), h.store, h.hub, canvasID)
+	writeJSON(w, http.StatusCreated, map[string]any{"rows": rows})
 }
 
 // PATCH /api/canvas/sheet-rows/{id}

@@ -138,6 +138,77 @@ func (h *Handler) ProposeAction(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, action)
 }
 
+// POST /api/canvas/actions/batch  — propose many actions (e.g. a whole task
+// plan) in one shot via a single bulk INSERT + ONE state broadcast. Each
+// action gets the same defaulting/validation as ProposeAction (type defaults
+// to "navigate", proposedBy defaults to "agent", state defaults to
+// "proposed", task payloads are canonicalized). Actions have no `document`
+// target (unlike pins/events), so there's no doc-cache resolution here.
+func (h *Handler) ProposeActionsBatch(w http.ResponseWriter, r *http.Request) {
+	canvasID := CanvasIDFromCtx(r.Context())
+	type actionItem struct {
+		Type         string          `json:"type"`
+		State        string          `json:"state"`
+		Payload      json.RawMessage `json:"payload"`
+		ProposedBy   string          `json:"proposedBy"`
+		LinkedPinIDs []uuid.UUID     `json:"linkedPinIds"`
+	}
+	var body struct {
+		Actions []actionItem `json:"actions"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(body.Actions) == 0 {
+		writeError(w, http.StatusBadRequest, "actions: at least one action is required")
+		return
+	}
+	actions := make([]*store.Action, 0, len(body.Actions))
+	for i := range body.Actions {
+		item := body.Actions[i]
+		if item.Type == "" {
+			item.Type = "navigate"
+		}
+		if item.ProposedBy == "" {
+			item.ProposedBy = "agent"
+		}
+		switch item.State {
+		case "":
+			item.State = "proposed"
+		case "proposed", "approved":
+		default:
+			writeError(w, http.StatusBadRequest, "state must be 'proposed' or 'approved'")
+			return
+		}
+		if item.Type == "task" {
+			canonical, err := canonicalizeTaskPayload(item.Payload)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			item.Payload = canonical
+		}
+		action := &store.Action{
+			ID: uuid.New(), Kind: "action",
+			Type: item.Type, State: item.State,
+			Payload:      item.Payload,
+			ProposedBy:   item.ProposedBy,
+			LinkedPinIDs: item.LinkedPinIDs,
+		}
+		if item.State == "approved" {
+			action.ApprovedBy = &item.ProposedBy
+		}
+		actions = append(actions, action)
+	}
+	if _, err := h.store.CreateActions(r.Context(), canvasID, actions); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	broadcastState(r.Context(), h.store, h.hub, canvasID)
+	writeJSON(w, http.StatusCreated, map[string]any{"actions": actions})
+}
+
 // GET /api/canvas/actions?state=&type=&assignee=  — list actions, optionally
 // filtered. assignee filters on payload.assignee ("agent" matches tasks that
 // predate the field).

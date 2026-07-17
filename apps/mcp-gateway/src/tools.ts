@@ -241,6 +241,19 @@ export async function handleTool(
         createdBy: "agent",
       });
 
+    case "canvas_note_add_batch":
+      return gateway.post("/api/canvas/notes/batch", {
+        document: args.document,
+        notes: ((args.notes as Record<string, unknown>[]) ?? []).map((n) => ({
+          body: n.body,
+          imageRefs: n.imageRefs ?? [],
+          parentId: n.parentId,
+          parentKind: n.parentKind,
+          document: n.document,
+          createdBy: "agent",
+        })),
+      });
+
     case "canvas_note_update": {
       const { id, ...partial } = args;
       return gateway.patch(`/api/canvas/notes/${id}`, partial);
@@ -261,6 +274,22 @@ export async function handleTool(
         sortOrder: args.sortOrder ?? 0,
         document: args.document,
         createdBy: "agent",
+      });
+
+    case "canvas_roadmap_item_add_batch":
+      return gateway.post("/api/canvas/roadmap-items/batch", {
+        document: args.document,
+        items: ((args.items as Record<string, unknown>[]) ?? []).map((it) => ({
+          parentId: it.parentId,
+          title: it.title,
+          body: it.body ?? "",
+          status: it.status ?? "todo",
+          stage: it.stage,
+          assignee: it.assignee,
+          sortOrder: it.sortOrder ?? 0,
+          document: it.document,
+          createdBy: "agent",
+        })),
       });
 
     case "canvas_roadmap_item_update": {
@@ -359,6 +388,15 @@ export async function handleTool(
         sortOrder: args.sortOrder ?? 0,
       });
 
+    case "canvas_sheet_column_add_batch":
+      return gateway.post(`/api/canvas/sheets/${args.sheetId}/columns/batch`, {
+        columns: ((args.columns as Record<string, unknown>[]) ?? []).map((c) => ({
+          name: c.name,
+          type: c.type ?? "text",
+          sortOrder: c.sortOrder,
+        })),
+      });
+
     case "canvas_sheet_column_update": {
       const { sheetId, columnId, ...partial } = args;
       return gateway.patch(`/api/canvas/sheets/${sheetId}/columns/${columnId}`, partial);
@@ -373,6 +411,15 @@ export async function handleTool(
         data: args.data ?? {},
         sortOrder: args.sortOrder ?? 0,
         createdBy: "agent",
+      });
+
+    case "canvas_sheet_row_add_batch":
+      return gateway.post(`/api/canvas/sheets/${args.sheetId}/rows/batch`, {
+        rows: ((args.rows as Record<string, unknown>[]) ?? []).map((r) => ({
+          data: r.data ?? {},
+          sortOrder: r.sortOrder ?? 0,
+          createdBy: "agent",
+        })),
       });
 
     case "canvas_sheet_row_update": {
@@ -490,6 +537,20 @@ export async function handleTool(
           assignee: args.assignee ?? "agent",
         },
         proposedBy: gateway.getSession().agentId,
+      });
+
+    case "canvas_task_add_batch":
+      return gateway.post("/api/canvas/actions/batch", {
+        actions: ((args.tasks as Record<string, unknown>[]) ?? []).map((t) => ({
+          type: "task",
+          payload: {
+            title: t.title,
+            body: t.body,
+            linkedIds: t.linkedIds,
+            assignee: t.assignee ?? "agent",
+          },
+          proposedBy: gateway.getSession().agentId,
+        })),
       });
 
     case "canvas_task_list": {
@@ -1050,6 +1111,48 @@ const RAW_TOOLS = [
     },
   },
   {
+    name: "canvas_note_add_batch",
+    description:
+      "Add MANY notes in ONE call — the batch counterpart of canvas_note_add. " +
+      "Strongly preferred over calling canvas_note_add repeatedly when adding " +
+      "several notes at once: the whole array persists in a single write and " +
+      "fires one live update, instead of one round trip per note. Returns the " +
+      "created notes (with their generated ids), in input order.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        notes: {
+          type: "array",
+          description: "The notes to add. At least one.",
+          items: {
+            type: "object" as const,
+            properties: {
+              body: { type: "string" },
+              parentId: { type: "string" },
+              parentKind: { type: "string", enum: ["pin", "event"] },
+              imageRefs: { type: "array", items: { type: "string" } },
+              document: {
+                type: "string",
+                description:
+                  "Per-note override of the target notes document. Usually omit and set " +
+                  "`document` once at the top level for the whole batch.",
+              },
+            },
+            required: ["body"],
+          },
+        },
+        document: {
+          type: "string",
+          description:
+            "Shared target notes document (tab) for every note in this batch — an existing " +
+            "document id or name; the named document must already exist. Omit to use the " +
+            "canvas's default notes doc, which IS created on demand if none exists.",
+        },
+      },
+      required: ["notes"],
+    },
+  },
+  {
     name: "canvas_note_update",
     description: "Update an existing note by its ID.",
     inputSchema: {
@@ -1116,6 +1219,61 @@ const RAW_TOOLS = [
         },
       },
       required: ["title"],
+    },
+  },
+  {
+    name: "canvas_roadmap_item_add_batch",
+    description:
+      "Add MANY roadmap items in ONE call — the batch counterpart of " +
+      "canvas_roadmap_item_add. Strongly preferred over calling " +
+      "canvas_roadmap_item_add repeatedly when seeding several goals/tasks at " +
+      "once: the whole array persists in a single write and fires one live " +
+      "update, instead of one round trip per item. Returns the created items " +
+      "(with their generated ids), in input order.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        items: {
+          type: "array",
+          description: "The roadmap items to add. At least one.",
+          items: {
+            type: "object" as const,
+            properties: {
+              title: { type: "string" },
+              parentId: { type: "string", description: "Parent roadmap item ID for nesting." },
+              body: { type: "string", description: "Optional longer description." },
+              status: { type: "string", enum: ["todo", "in_progress", "done", "blocked"] },
+              stage: {
+                type: "string",
+                description:
+                  "Phase label for grouping top-level goals into bands, e.g. 'Now' / " +
+                  "'Next' / 'Later' or 'v1' / 'v2'. Only meaningful on top-level items.",
+              },
+              assignee: {
+                type: "string",
+                enum: ["agent", "human"],
+                description: "'agent' = an agent task; 'human' (default) = a human goal.",
+              },
+              sortOrder: { type: "number", description: "Position among siblings; higher = later." },
+              document: {
+                type: "string",
+                description:
+                  "Per-item override of the target roadmap document. Usually omit and set " +
+                  "`document` once at the top level for the whole batch.",
+              },
+            },
+            required: ["title"],
+          },
+        },
+        document: {
+          type: "string",
+          description:
+            "Shared target roadmap document (tab) for every item in this batch — an existing " +
+            "document id or name; the named document must already exist. Omit to use the " +
+            "canvas's default roadmap, which IS created on demand if none exists.",
+        },
+      },
+      required: ["items"],
     },
   },
   {
@@ -1230,6 +1388,35 @@ const RAW_TOOLS = [
     },
   },
   {
+    name: "canvas_sheet_column_add_batch",
+    description:
+      "Add MANY columns to a sheet in ONE call — the batch counterpart of " +
+      "canvas_sheet_column_add. Strongly preferred over calling the single-item tool " +
+      "repeatedly when defining a sheet's schema (several columns at once): the whole " +
+      "array persists in a single write and fires one live update, instead of one round " +
+      "trip per column. Column types: text | number | date | checkbox.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        sheetId: { type: "string" },
+        columns: {
+          type: "array",
+          description: "The columns to add. At least one.",
+          items: {
+            type: "object" as const,
+            properties: {
+              name: { type: "string" },
+              type: { type: "string", enum: ["text", "number", "date", "checkbox"] },
+              sortOrder: { type: "number" },
+            },
+            required: ["name", "type"],
+          },
+        },
+      },
+      required: ["sheetId", "columns"],
+    },
+  },
+  {
     name: "canvas_sheet_column_update",
     description: "Rename a column, change its type, or reorder it within the sheet.",
     inputSchema: {
@@ -1273,6 +1460,34 @@ const RAW_TOOLS = [
         sortOrder: { type: "number" },
       },
       required: ["sheetId"],
+    },
+  },
+  {
+    name: "canvas_sheet_row_add_batch",
+    description:
+      "Add MANY rows to a sheet in ONE call — the batch counterpart of canvas_sheet_row_add. " +
+      "Strongly preferred over calling the single-item tool repeatedly: spreadsheets are " +
+      "inherently many-row, so batching an N-row add turns N round trips (and N live " +
+      "updates) into one. Each row's `data` is an object of cell values keyed by either the " +
+      "column NAME (e.g. \"Task\", case-insensitive) or the column.id — names are resolved to " +
+      "ids server-side. Values: strings for text/date, numbers for number, booleans for checkbox.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        sheetId: { type: "string" },
+        rows: {
+          type: "array",
+          description: "The rows to add. At least one.",
+          items: {
+            type: "object" as const,
+            properties: {
+              data: { type: "object" },
+              sortOrder: { type: "number" },
+            },
+          },
+        },
+      },
+      required: ["sheetId", "rows"],
     },
   },
   {
@@ -1576,6 +1791,47 @@ const RAW_TOOLS = [
         },
       },
       required: ["title"],
+    },
+  },
+  {
+    name: "canvas_task_add_batch",
+    description:
+      "Add MANY tasks to the canvas work queue in ONE call — the batch counterpart of " +
+      "canvas_task_add. Strongly preferred over calling canvas_task_add repeatedly when " +
+      "proposing a whole plan (e.g. breaking a project into 8 tasks): the whole array " +
+      "persists via a single write and fires one live update, instead of one round trip " +
+      "per task. Each task takes the SAME fields as canvas_task_add (title, body, " +
+      "linkedIds, assignee) and enters state 'proposed' — a human approves each in the " +
+      "web UI before any session picks it up.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        tasks: {
+          type: "array",
+          description: "The tasks to add. At least one.",
+          items: {
+            type: "object" as const,
+            properties: {
+              title: { type: "string", description: "Short imperative title, e.g. 'Add CSV export to sheets'." },
+              body: { type: "string", description: "Concise brief: what to do, acceptance criteria." },
+              linkedIds: {
+                type: "array",
+                items: { type: "string" },
+                description: "Roadmap item / note ids carrying the detailed context.",
+              },
+              assignee: {
+                type: "string",
+                enum: ["agent", "human"],
+                description:
+                  "Who the task is FOR. 'agent' (default) = an agent session executes it; " +
+                  "'human' = the human's own todo, invisible to the agent queue.",
+              },
+            },
+            required: ["title"],
+          },
+        },
+      },
+      required: ["tasks"],
     },
   },
   {

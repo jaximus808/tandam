@@ -2039,31 +2039,80 @@ func (s *supabaseStore) nextNoteSortOrder(canvasID uuid.UUID, documentID *uuid.U
 	return max + 1, nil
 }
 
-func (s *supabaseStore) CreateNote(ctx context.Context, canvasID uuid.UUID, n *Note) (int, error) {
-	now := time.Now().UTC()
-	n.UpdatedAt = now
+// noteRow shapes a Note into its DB row. Shared by the single- and bulk-insert
+// paths so both stay in lockstep on column mapping. Every key is always
+// present (nil when unset) so a batch INSERT's rows all share identical key
+// sets — PostgREST's bulk insert (PGRST102) rejects a JSON array whose
+// objects don't all have matching keys.
+func noteRow(canvasID uuid.UUID, n *Note, now time.Time) map[string]any {
 	refs := n.ImageRefs
 	if refs == nil {
 		refs = []string{}
 	}
+	var parentID any
+	if n.ParentID != nil {
+		parentID = n.ParentID.String()
+	}
+	return map[string]any{
+		"id": n.ID.String(), "canvas_id": canvasID.String(),
+		"document_id": uuidPtrStr(n.DocumentID),
+		"body":        n.Body, "image_refs": refs,
+		"parent_kind": n.ParentKind, "created_by": n.CreatedBy,
+		"parent_id":   parentID,
+		"sort_order":  n.SortOrder,
+		"updated_at":  now.Format(time.RFC3339),
+	}
+}
+
+func (s *supabaseStore) CreateNote(ctx context.Context, canvasID uuid.UUID, n *Note) (int, error) {
+	now := time.Now().UTC()
+	n.UpdatedAt = now
 	// Callers don't pick a position: every creation path (web, REST, MCP) appends.
 	sortOrder, err := s.nextNoteSortOrder(canvasID, n.DocumentID)
 	if err != nil {
 		return 0, err
 	}
 	n.SortOrder = sortOrder
-	row := map[string]any{
-		"id": n.ID.String(), "canvas_id": canvasID.String(),
-		"document_id": uuidPtrStr(n.DocumentID),
-		"body":        n.Body, "image_refs": refs,
-		"parent_kind": n.ParentKind, "created_by": n.CreatedBy,
-		"sort_order":  n.SortOrder,
-		"updated_at":  now.Format(time.RFC3339),
+	if err := s.exec(s.client.From("notes").Insert(noteRow(canvasID, n, now), false, "", "minimal", "")); err != nil {
+		return 0, err
 	}
-	if n.ParentID != nil {
-		row["parent_id"] = n.ParentID.String()
+	_ = s.LeaveWelcomeIfNeeded(ctx, canvasID, "docs")
+	return s.bumpVersion(ctx, canvasID)
+}
+
+// CreateNotes inserts many notes in a SINGLE round trip — one bulk INSERT, one
+// welcome-transition check, one version bump — instead of N of each. Sort
+// orders are assigned by appending after the current max per target document,
+// querying that max once per distinct document in the batch (not once per
+// note) so a same-document batch costs one extra read, not N. The caller (the
+// batch handler) broadcasts once after this returns. Returns the new canvas
+// version.
+func (s *supabaseStore) CreateNotes(ctx context.Context, canvasID uuid.UUID, notes []*Note) (int, error) {
+	if len(notes) == 0 {
+		return 0, nil
 	}
-	if err := s.exec(s.client.From("notes").Insert(row, false, "", "minimal", "")); err != nil {
+	now := time.Now().UTC()
+	nextSort := map[string]int{}
+	rows := make([]map[string]any, 0, len(notes))
+	for _, n := range notes {
+		n.UpdatedAt = now
+		key := ""
+		if n.DocumentID != nil {
+			key = n.DocumentID.String()
+		}
+		start, ok := nextSort[key]
+		if !ok {
+			var err error
+			start, err = s.nextNoteSortOrder(canvasID, n.DocumentID)
+			if err != nil {
+				return 0, err
+			}
+		}
+		n.SortOrder = start
+		nextSort[key] = start + 1
+		rows = append(rows, noteRow(canvasID, n, now))
+	}
+	if err := s.exec(s.client.From("notes").Insert(rows, false, "", "minimal", "")); err != nil {
 		return 0, err
 	}
 	_ = s.LeaveWelcomeIfNeeded(ctx, canvasID, "docs")
@@ -2113,28 +2162,63 @@ func (s *supabaseStore) DeleteNote(ctx context.Context, canvasID uuid.UUID, id u
 
 // ── Roadmap items ─────────────────────────────────────────────────────────────
 
-func (s *supabaseStore) CreateRoadmapItem(ctx context.Context, canvasID uuid.UUID, r *RoadmapItem) (int, error) {
-	now := time.Now().UTC()
-	r.UpdatedAt = now
-	row := map[string]any{
+// roadmapItemRow shapes a RoadmapItem into its DB row. Shared by the single-
+// and bulk-insert paths so both stay in lockstep on column mapping. Every key
+// is always present (nil when unset) so a batch INSERT's rows all share
+// identical key sets — PostgREST's bulk insert (PGRST102) rejects a JSON
+// array whose objects don't all have matching keys.
+func roadmapItemRow(canvasID uuid.UUID, r *RoadmapItem, now time.Time) map[string]any {
+	var parentID any
+	if r.ParentID != nil {
+		parentID = r.ParentID.String()
+	}
+	var stage any
+	if r.Stage != "" {
+		stage = r.Stage
+	}
+	var assignee any
+	if r.Assignee != "" {
+		assignee = r.Assignee
+	}
+	return map[string]any{
 		"id": r.ID.String(), "canvas_id": canvasID.String(),
 		"document_id": uuidPtrStr(r.DocumentID),
 		"title":       r.Title, "body": r.Body,
 		"status": r.Status, "sort_order": r.SortOrder,
 		"created_by": r.CreatedBy,
+		"parent_id":  parentID,
+		"stage":      stage,
+		"assignee":   assignee,
 		"updated_at": now.Format(time.RFC3339),
 	}
-	if r.ParentID != nil {
-		row["parent_id"] = r.ParentID.String()
-	}
-	if r.Stage != "" {
-		row["stage"] = r.Stage
-	}
-	if r.Assignee != "" {
-		row["assignee"] = r.Assignee
-	}
-	err := s.exec(s.client.From("roadmap_items").Insert(row, false, "", "minimal", ""))
+}
+
+func (s *supabaseStore) CreateRoadmapItem(ctx context.Context, canvasID uuid.UUID, r *RoadmapItem) (int, error) {
+	now := time.Now().UTC()
+	r.UpdatedAt = now
+	err := s.exec(s.client.From("roadmap_items").Insert(roadmapItemRow(canvasID, r, now), false, "", "minimal", ""))
 	if err != nil {
+		return 0, err
+	}
+	_ = s.LeaveWelcomeIfNeeded(ctx, canvasID, "roadmap")
+	return s.bumpVersion(ctx, canvasID)
+}
+
+// CreateRoadmapItems inserts many roadmap items in a SINGLE round trip — one
+// bulk INSERT, one welcome-transition check, one version bump — instead of N
+// of each. The caller (the batch handler) broadcasts once after this returns.
+// Returns the new canvas version.
+func (s *supabaseStore) CreateRoadmapItems(ctx context.Context, canvasID uuid.UUID, items []*RoadmapItem) (int, error) {
+	if len(items) == 0 {
+		return 0, nil
+	}
+	now := time.Now().UTC()
+	rows := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		item.UpdatedAt = now
+		rows = append(rows, roadmapItemRow(canvasID, item, now))
+	}
+	if err := s.exec(s.client.From("roadmap_items").Insert(rows, false, "", "minimal", "")); err != nil {
 		return 0, err
 	}
 	_ = s.LeaveWelcomeIfNeeded(ctx, canvasID, "roadmap")
@@ -2265,28 +2349,67 @@ func (s *supabaseStore) RegisterAgent(ctx context.Context, canvasID uuid.UUID, a
 
 // ── Actions (v1 execution primitive) ──────────────────────────────────────────
 
-func (s *supabaseStore) CreateAction(ctx context.Context, canvasID uuid.UUID, a *Action) (int, error) {
-	now := time.Now().UTC()
-	a.CreatedAt, a.UpdatedAt = now, now
+// actionRow shapes an Action into its DB row. Shared by the single- and
+// bulk-insert paths so both stay in lockstep on column mapping. Every key is
+// always present (nil when unset) so that a batch INSERT's rows all share
+// identical key sets — PostgREST's bulk insert (PGRST102) rejects a JSON
+// array whose objects don't all have matching keys.
+func actionRow(canvasID uuid.UUID, a *Action, now time.Time) (map[string]any, error) {
 	if len(a.Payload) == 0 {
 		a.Payload = json.RawMessage("{}")
 	}
 	linkedJSON, err := json.Marshal(uuidStrings(a.LinkedPinIDs))
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	row := map[string]any{
+	var approvedBy any
+	if a.ApprovedBy != nil {
+		approvedBy = *a.ApprovedBy
+	}
+	return map[string]any{
 		"id": a.ID.String(), "canvas_id": canvasID.String(),
 		"type": a.Type, "state": a.State,
 		"payload":        json.RawMessage(a.Payload),
 		"proposed_by":    a.ProposedBy,
+		"approved_by":    approvedBy,
 		"linked_pin_ids": json.RawMessage(linkedJSON),
 		"updated_at":     now.Format(time.RFC3339),
-	}
-	if a.ApprovedBy != nil {
-		row["approved_by"] = *a.ApprovedBy
+	}, nil
+}
+
+func (s *supabaseStore) CreateAction(ctx context.Context, canvasID uuid.UUID, a *Action) (int, error) {
+	now := time.Now().UTC()
+	a.CreatedAt, a.UpdatedAt = now, now
+	row, err := actionRow(canvasID, a, now)
+	if err != nil {
+		return 0, err
 	}
 	if err := s.exec(s.client.From("actions").Insert(row, false, "", "minimal", "")); err != nil {
+		return 0, err
+	}
+	return s.bumpVersion(ctx, canvasID)
+}
+
+// CreateActions inserts many actions (e.g. a whole task plan) in a SINGLE
+// round trip — one bulk INSERT, one version bump — instead of N of each. The
+// caller (the batch handler) broadcasts once after this returns. Actions have
+// no `document` target (unlike pins/events), so there's no doc-cache
+// resolution here. Returns the new canvas version.
+func (s *supabaseStore) CreateActions(ctx context.Context, canvasID uuid.UUID, actions []*Action) (int, error) {
+	if len(actions) == 0 {
+		return 0, nil
+	}
+	now := time.Now().UTC()
+	rows := make([]map[string]any, 0, len(actions))
+	for _, a := range actions {
+		a.CreatedAt, a.UpdatedAt = now, now
+		row, err := actionRow(canvasID, a, now)
+		if err != nil {
+			return 0, err
+		}
+		rows = append(rows, row)
+	}
+	if err := s.exec(s.client.From("actions").Insert(rows, false, "", "minimal", "")); err != nil {
 		return 0, err
 	}
 	return s.bumpVersion(ctx, canvasID)
@@ -2560,6 +2683,30 @@ func (s *supabaseStore) AddSheetColumn(ctx context.Context, canvasID, sheetID uu
 	return s.writeSheetColumns(ctx, canvasID, sheetID, sh.Columns)
 }
 
+// CreateSheetColumns appends many columns to a sheet in a SINGLE round trip —
+// one sheet lookup, one columns write, one version bump — instead of N of
+// each. Columns are stored inline in the sheet's `columns` JSONB (there is no
+// separate table to bulk-INSERT into, unlike rows/pins/events), so the win
+// here is collapsing N getSheet+write round trips into one. The caller (the
+// batch handler) broadcasts once after this returns. Returns the new canvas
+// version.
+func (s *supabaseStore) CreateSheetColumns(ctx context.Context, canvasID, sheetID uuid.UUID, cols []SheetColumn) (int, error) {
+	if len(cols) == 0 {
+		return 0, nil
+	}
+	sh, err := s.getSheet(canvasID, sheetID)
+	if err != nil {
+		return 0, err
+	}
+	for i := range cols {
+		if cols[i].ID == "" {
+			cols[i].ID = uuid.New().String()
+		}
+	}
+	sh.Columns = append(sh.Columns, cols...)
+	return s.writeSheetColumns(ctx, canvasID, sheetID, sh.Columns)
+}
+
 func (s *supabaseStore) UpdateSheetColumn(ctx context.Context, canvasID, sheetID uuid.UUID, columnID string, patch SheetColumnPatch) (int, error) {
 	sh, err := s.getSheet(canvasID, sheetID)
 	if err != nil {
@@ -2676,6 +2823,24 @@ func resolveRowData(cols []SheetColumn, data map[string]any) map[string]any {
 	return out
 }
 
+// sheetRowRow shapes a SheetRow into its DB row. Shared by the single- and
+// bulk-insert paths so both stay in lockstep on column mapping. Caller must
+// have already resolved r.Data through resolveRowData.
+func sheetRowRow(r *SheetRow, now time.Time) (map[string]any, error) {
+	dataJSON, err := json.Marshal(r.Data)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"id":         r.ID.String(),
+		"sheet_id":   r.SheetID.String(),
+		"data":       json.RawMessage(dataJSON),
+		"sort_order": r.SortOrder,
+		"created_by": r.CreatedBy,
+		"updated_at": now.Format(time.RFC3339),
+	}, nil
+}
+
 func (s *supabaseStore) CreateSheetRow(ctx context.Context, canvasID uuid.UUID, r *SheetRow) (int, error) {
 	// getSheet both scope-checks the sheet against the canvas and gives us the
 	// column schema needed to resolve name-keyed cell data.
@@ -2690,19 +2855,45 @@ func (s *supabaseStore) CreateSheetRow(ctx context.Context, canvasID uuid.UUID, 
 		data = map[string]any{}
 	}
 	r.Data = data
-	dataJSON, err := json.Marshal(data)
+	row, err := sheetRowRow(r, now)
 	if err != nil {
 		return 0, err
 	}
-	row := map[string]any{
-		"id":         r.ID.String(),
-		"sheet_id":   r.SheetID.String(),
-		"data":       json.RawMessage(dataJSON),
-		"sort_order": r.SortOrder,
-		"created_by": r.CreatedBy,
-		"updated_at": now.Format(time.RFC3339),
-	}
 	if err := s.exec(s.client.From("sheet_rows").Insert(row, false, "", "minimal", "")); err != nil {
+		return 0, err
+	}
+	return s.bumpVersion(ctx, canvasID)
+}
+
+// CreateSheetRows inserts many rows into the SAME sheet in a SINGLE round trip
+// — one sheet lookup (for column-name resolution), one bulk INSERT, one
+// version bump — instead of N of each. The caller (the batch handler) sets
+// every row's SheetID to the one target sheet and broadcasts once after this
+// returns. Returns the new canvas version.
+func (s *supabaseStore) CreateSheetRows(ctx context.Context, canvasID uuid.UUID, rows []*SheetRow) (int, error) {
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	sh, err := s.getSheet(canvasID, rows[0].SheetID)
+	if err != nil {
+		return 0, err
+	}
+	now := time.Now().UTC()
+	dbRows := make([]map[string]any, 0, len(rows))
+	for _, r := range rows {
+		r.UpdatedAt = now
+		data := resolveRowData(sh.Columns, r.Data)
+		if data == nil {
+			data = map[string]any{}
+		}
+		r.Data = data
+		dbRow, err := sheetRowRow(r, now)
+		if err != nil {
+			return 0, err
+		}
+		dbRows = append(dbRows, dbRow)
+	}
+	if err := s.exec(s.client.From("sheet_rows").Insert(dbRows, false, "", "minimal", "")); err != nil {
 		return 0, err
 	}
 	return s.bumpVersion(ctx, canvasID)
