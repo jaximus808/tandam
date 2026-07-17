@@ -851,18 +851,14 @@ function MorphCanvas({
             {scene.code}
           </span>
           <div className="ml-auto flex items-center gap-1.5">
-            {/* who's on this surface, agent first */}
+            {/* byline: who built this canvas — reinforces "the agent made it" */}
             <span
-              className="grid h-5 w-5 place-items-center rounded-[4px] text-white"
+              className="grid h-4 w-4 place-items-center rounded-[3px] text-white"
               style={{ backgroundColor: AGENT }}
-              title={scene.editors[0].name}
             >
               <Icon name="spark" className="h-2.5 w-2.5" />
             </span>
-            <span className="grid h-5 w-5 place-items-center rounded-[4px] bg-ink font-code text-[9px] font-medium text-paper">
-              {scene.editors[1].name.slice(0, 1)}
-            </span>
-            <span className="ml-1 font-code text-[9.5px] text-ink/40">2 here</span>
+            <span className="font-code text-[9.5px] text-ink/45">built by {scene.heroAgent}</span>
           </div>
         </div>
 

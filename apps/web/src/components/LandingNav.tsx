@@ -86,7 +86,7 @@ export default function LandingNav({
               <span className="tandem-ping absolute inline-flex h-full w-full rounded-full bg-agent opacity-70" />
               <span className="relative inline-flex h-1 w-1 rounded-full bg-agent" />
             </span>
-            multiplayer
+            agent-native
           </span>
         </button>
         <nav className="ml-auto flex items-center gap-1 text-sm sm:gap-1.5">
