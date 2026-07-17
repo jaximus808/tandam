@@ -63,6 +63,66 @@ function hasValidCoords(p: { lat: number; lng: number }): boolean {
   );
 }
 
+// Batched writes (e.g. an agent laying down a whole itinerary in one
+// pin_add_batch call) land as a single state update, so without this every
+// new pin would pop onto the map in the same render — the "watching it get
+// built" feel that comes from pins streaming in one at a time disappears.
+// This reveals pins one-by-one on a short interval instead. Small arrivals
+// (1-2 pins, the normal single pin_add case) reveal immediately — only a
+// real batch gets staggered.
+function useSequentialReveal<T extends { id: string }>(
+  items: T[],
+  staggerMs = 140,
+  minBatchSize = 3
+): T[] {
+  const [revealedIds, setRevealedIds] = useState<Set<string>>(
+    () => new Set(items.map((i) => i.id))
+  );
+  const seenIdsRef = useRef<Set<string>>(new Set(items.map((i) => i.id)));
+  const queueRef = useRef<string[]>([]);
+  const timerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const currentIds = new Set(items.map((i) => i.id));
+    const newIds = items.filter((i) => !seenIdsRef.current.has(i.id)).map((i) => i.id);
+    for (const id of newIds) seenIdsRef.current.add(id);
+
+    setRevealedIds((prev) => {
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (currentIds.has(id)) next.add(id);
+        else changed = true;
+      }
+      if (newIds.length > 0 && newIds.length < minBatchSize) {
+        for (const id of newIds) next.add(id);
+        changed = true;
+      }
+      return changed ? next : prev;
+    });
+
+    if (newIds.length >= minBatchSize) {
+      queueRef.current.push(...newIds);
+      if (timerRef.current == null) {
+        const tick = () => {
+          const id = queueRef.current.shift();
+          if (id) setRevealedIds((prev) => new Set(prev).add(id));
+          timerRef.current = queueRef.current.length > 0 ? window.setTimeout(tick, staggerMs) : null;
+        };
+        tick();
+      }
+    }
+  }, [items, staggerMs, minBatchSize]);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current != null) window.clearTimeout(timerRef.current);
+    };
+  }, []);
+
+  return useMemo(() => items.filter((i) => revealedIds.has(i.id)), [items, revealedIds]);
+}
+
 interface ResolvedTravel {
   event: CanvasEvent;
   from: Pin;
@@ -427,6 +487,13 @@ export default function MapMode({
     () => Object.values(state.pins).filter(hasValidCoords),
     [state.pins]
   );
+  // Markers reveal one-by-one when a batch lands; everything else (camera,
+  // sidebar, day labels) reacts to the full `pins` list immediately.
+  const revealedPins = useSequentialReveal(pins);
+  const revealedPinIds = useMemo(
+    () => new Set(revealedPins.map((p) => p.id)),
+    [revealedPins]
+  );
   const travels = useMemo<ResolvedTravel[]>(() => {
     const out: ResolvedTravel[] = [];
     for (const ev of Object.values(state.events)) {
@@ -434,10 +501,12 @@ export default function MapMode({
       const from = state.pins[ev.fromPinId];
       const to = state.pins[ev.toPinId];
       if (!from || !to || !hasValidCoords(from) || !hasValidCoords(to)) continue;
+      // Don't draw a line to a pin that hasn't visually landed yet.
+      if (!revealedPinIds.has(from.id) || !revealedPinIds.has(to.id)) continue;
       out.push({ event: ev, from, to, mode: ev.travelMode });
     }
     return out;
-  }, [state.events, state.pins]);
+  }, [state.events, state.pins, revealedPinIds]);
 
   // Floating "DAY 1 · Friday, May 29" labels above each day's pin clusters.
   // Derived from events (no separate group entity) — a pin belongs to the
@@ -682,7 +751,7 @@ export default function MapMode({
               zIndexOffset={-500}
             />
           ))}
-          {pins.map((pin) => {
+          {revealedPins.map((pin) => {
             const eventCount = eventsByPin.get(pin.id)?.length ?? 0;
             const icon =
               pin.color || eventCount > 0

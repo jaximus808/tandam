@@ -4,5 +4,8 @@ packages:
   - 'apps/web'
   - 'internal/*'
 
+allowBuilds:
+  core-js: false
+
 onlyBuiltDependencies:
   - esbuild

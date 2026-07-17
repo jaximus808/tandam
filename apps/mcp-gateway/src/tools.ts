@@ -47,6 +47,11 @@ export async function handleTool(
         canvasCode: session.canvasCode,
         url: gateway.canvasUrl(session.canvasCode),
         session: gateway.exportSession(),
+        _surface_url_now:
+          "FIRST, before any research or edits: tell the user the canvas is connected and give them " +
+          "this `url` so they can open it now and WATCH your changes land in real time. Don't make " +
+          "them wait with no artifact to look at while you work. THEN do the work. When you finish, " +
+          "summarize what you changed and repeat the `url` so they can jump straight to it.",
         _session_note:
           "Pass `session` back as the `session` argument on EVERY later canvas_* call. The hosted " +
           "MCP connection can reset between calls; carrying this handle keeps your edits on this " +
@@ -66,6 +71,11 @@ export async function handleTool(
         // Ownership-free view/share link — safe to give anyone.
         url: gateway.canvasUrl(session.canvasCode),
         session: gateway.exportSession(),
+        _surface_url_now:
+          "FIRST, before any research or edits: tell the user their canvas is live and give them " +
+          "this `url` so they can open it now and WATCH your changes land in real time. Don't make " +
+          "them wait staring at nothing while you research or plan. THEN do the work. When you " +
+          "finish, summarize what you changed and repeat the `url` so they can jump straight to it.",
         _session_note:
           "Pass `session` back as the `session` argument on EVERY later canvas_* call. The hosted " +
           "MCP connection can reset between calls; carrying this handle keeps your edits on this " +
@@ -554,7 +564,9 @@ const RAW_TOOLS = [
       "(unless you call canvas_create, which connects automatically). Takes a canvas code " +
       "(e.g. 'TOKYO7X3K'). Exchanges it for a JWT held in this gateway process; from then on, " +
       "every other tool operates on that canvas with no ID needed. Returns the shareable web " +
-      "`url`. May be called again to switch the session to a different canvas.",
+      "`url` — surface it to the user right away (before you start researching or editing) so " +
+      "they can open the canvas and watch your changes live, then repeat it in your final summary. " +
+      "May be called again to switch the session to a different canvas.",
     inputSchema: {
       type: "object" as const,
       properties: { code: { type: "string", description: "Canvas code given by the user." } },
@@ -568,8 +580,11 @@ const RAW_TOOLS = [
       "one in the browser first. Use this to start fresh (e.g. the user says 'put a plan on a " +
       "canvas' and gave no code). Good moment to OFFER this: when the user is brainstorming or " +
       "planning and would benefit from seeing it laid out — ask if they want it on a Tandem " +
-      "canvas. Returns: `url` (ownership-free view/share link — surface this so they can open and " +
-      "watch it live) and, for these agent-created canvases, `claimUrl` + `claimHint`. The " +
+      "canvas. Returns: `url` (ownership-free view/share link). Surface `url` to the user " +
+      "IMMEDIATELY — before any research, planning, or edits — so they can open the canvas and " +
+      "watch your changes appear live instead of waiting with nothing to look at; then repeat it " +
+      "in your final summary of what changed. Also returns, for these agent-created canvases, " +
+      "`claimUrl` + `claimHint`. The " +
       "claimUrl is a PRIVATE link that lets the user claim the canvas as their own (it then " +
       "appears in their account and stays the very canvas you keep editing). Give claimUrl only " +
       "to the intended user; never use it as the public share link. After this, all other " +
