@@ -164,21 +164,25 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 
 			r.Post("/api/canvas/pins", h.CreatePin)
 			r.Post("/api/canvas/pins/batch", h.CreatePinsBatch)
+			r.Post("/api/canvas/pins/batch-update", h.UpdatePinsBatch)
 			r.Patch("/api/canvas/pins/{id}", h.UpdatePin)
 			r.Delete("/api/canvas/pins/{id}", h.DeletePin)
 
 			r.Post("/api/canvas/events", h.CreateEvent)
 			r.Post("/api/canvas/events/batch", h.CreateEventsBatch)
+			r.Post("/api/canvas/events/batch-update", h.UpdateEventsBatch)
 			r.Patch("/api/canvas/events/{id}", h.UpdateEvent)
 			r.Delete("/api/canvas/events/{id}", h.DeleteEvent)
 
 			r.Post("/api/canvas/notes", h.CreateNote)
 			r.Post("/api/canvas/notes/batch", h.CreateNotesBatch)
+			r.Post("/api/canvas/notes/batch-update", h.UpdateNotesBatch)
 			r.Patch("/api/canvas/notes/{id}", h.UpdateNote)
 			r.Delete("/api/canvas/notes/{id}", h.DeleteNote)
 
 			r.Post("/api/canvas/roadmap-items", h.CreateRoadmapItem)
 			r.Post("/api/canvas/roadmap-items/batch", h.CreateRoadmapItemsBatch)
+			r.Post("/api/canvas/roadmap-items/batch-update", h.UpdateRoadmapItemsBatch)
 			r.Patch("/api/canvas/roadmap-items/{id}", h.UpdateRoadmapItem)
 			r.Delete("/api/canvas/roadmap-items/{id}", h.DeleteRoadmapItem)
 
@@ -187,15 +191,18 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 			r.Delete("/api/canvas/sheets/{id}", h.DeleteSheet)
 			r.Post("/api/canvas/sheets/{id}/columns", h.AddSheetColumn)
 			r.Post("/api/canvas/sheets/{id}/columns/batch", h.CreateSheetColumnsBatch)
+			r.Post("/api/canvas/sheet-columns/batch-update", h.UpdateSheetColumnsBatch)
 			r.Patch("/api/canvas/sheets/{id}/columns/{columnId}", h.UpdateSheetColumn)
 			r.Delete("/api/canvas/sheets/{id}/columns/{columnId}", h.DeleteSheetColumn)
 			r.Post("/api/canvas/sheets/{id}/rows/batch", h.CreateSheetRowsBatch)
 			r.Post("/api/canvas/sheet-rows", h.CreateSheetRow)
+			r.Post("/api/canvas/sheet-rows/batch-update", h.UpdateSheetRowsBatch)
 			r.Patch("/api/canvas/sheet-rows/{id}", h.UpdateSheetRow)
 			r.Delete("/api/canvas/sheet-rows/{id}", h.DeleteSheetRow)
 
 			r.Post("/api/canvas/charts", h.CreateChart)
 			r.Post("/api/canvas/charts/batch", h.CreateChartsBatch)
+			r.Post("/api/canvas/charts/batch-update", h.UpdateChartsBatch)
 			r.Patch("/api/canvas/charts/{id}", h.UpdateChart)
 			r.Delete("/api/canvas/charts/{id}", h.DeleteChart)
 
