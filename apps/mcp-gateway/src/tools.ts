@@ -193,6 +193,19 @@ export async function handleTool(
       return gateway.patch(`/api/canvas/pins/${id}`, partial);
     }
 
+    case "canvas_pin_update_batch":
+      return gateway.post("/api/canvas/pins/batch-update", {
+        items: ((args.items as Record<string, unknown>[]) ?? []).map((it) => ({
+          id: it.id,
+          pinType: it.pinType,
+          lat: it.lat,
+          lng: it.lng,
+          label: it.label,
+          body: it.body,
+          color: it.color,
+        })),
+      });
+
     case "canvas_pin_delete":
       return gateway.del(`/api/canvas/pins/${args.id}`);
 
@@ -239,6 +252,24 @@ export async function handleTool(
       return gateway.patch(`/api/canvas/events/${id}`, partial);
     }
 
+    case "canvas_event_update_batch":
+      return gateway.post("/api/canvas/events/batch-update", {
+        items: ((args.items as Record<string, unknown>[]) ?? []).map((it) => ({
+          id: it.id,
+          title: it.title,
+          start: it.start,
+          end: it.end,
+          timezone: it.timezone,
+          pinIds: it.pinIds,
+          pinId: it.pinId,
+          fromPinId: it.fromPinId,
+          toPinId: it.toPinId,
+          travelMode: it.travelMode,
+          dayTag: it.dayTag,
+          cost: it.cost,
+        })),
+      });
+
     case "canvas_event_delete":
       return gateway.del(`/api/canvas/events/${args.id}`);
 
@@ -270,6 +301,18 @@ export async function handleTool(
       const { id, ...partial } = args;
       return gateway.patch(`/api/canvas/notes/${id}`, partial);
     }
+
+    case "canvas_note_update_batch":
+      return gateway.post("/api/canvas/notes/batch-update", {
+        items: ((args.items as Record<string, unknown>[]) ?? []).map((it) => ({
+          id: it.id,
+          body: it.body,
+          parentId: it.parentId,
+          parentKind: it.parentKind,
+          imageRefs: it.imageRefs,
+          sortOrder: it.sortOrder,
+        })),
+      });
 
     case "canvas_note_delete":
       return gateway.del(`/api/canvas/notes/${args.id}`);
@@ -308,6 +351,20 @@ export async function handleTool(
       const { id, ...partial } = args;
       return gateway.patch(`/api/canvas/roadmap-items/${id}`, partial);
     }
+
+    case "canvas_roadmap_item_update_batch":
+      return gateway.post("/api/canvas/roadmap-items/batch-update", {
+        items: ((args.items as Record<string, unknown>[]) ?? []).map((it) => ({
+          id: it.id,
+          parentId: it.parentId,
+          title: it.title,
+          body: it.body,
+          status: it.status,
+          stage: it.stage,
+          assignee: it.assignee,
+          sortOrder: it.sortOrder,
+        })),
+      });
 
     case "canvas_roadmap_item_delete":
       return gateway.del(`/api/canvas/roadmap-items/${args.id}`);
@@ -414,6 +471,17 @@ export async function handleTool(
       return gateway.patch(`/api/canvas/sheets/${sheetId}/columns/${columnId}`, partial);
     }
 
+    case "canvas_sheet_column_update_batch":
+      return gateway.post("/api/canvas/sheet-columns/batch-update", {
+        items: ((args.items as Record<string, unknown>[]) ?? []).map((it) => ({
+          sheetId: it.sheetId,
+          columnId: it.columnId,
+          name: it.name,
+          type: it.type,
+          sortOrder: it.sortOrder,
+        })),
+      });
+
     case "canvas_sheet_column_delete":
       return gateway.del(`/api/canvas/sheets/${args.sheetId}/columns/${args.columnId}`);
 
@@ -438,6 +506,15 @@ export async function handleTool(
       const { id, ...partial } = args;
       return gateway.patch(`/api/canvas/sheet-rows/${id}`, partial);
     }
+
+    case "canvas_sheet_row_update_batch":
+      return gateway.post("/api/canvas/sheet-rows/batch-update", {
+        items: ((args.items as Record<string, unknown>[]) ?? []).map((it) => ({
+          id: it.id,
+          data: it.data,
+          sortOrder: it.sortOrder,
+        })),
+      });
 
     case "canvas_sheet_row_delete":
       return gateway.del(`/api/canvas/sheet-rows/${args.id}`);
@@ -471,6 +548,19 @@ export async function handleTool(
       const { id, ...partial } = args;
       return gateway.patch(`/api/canvas/charts/${id}`, partial);
     }
+
+    case "canvas_chart_update_batch":
+      return gateway.post("/api/canvas/charts/batch-update", {
+        items: ((args.items as Record<string, unknown>[]) ?? []).map((it) => ({
+          id: it.id,
+          name: it.name,
+          sheetId: it.sheetId,
+          chartType: it.chartType,
+          xColumn: it.xColumn,
+          yColumns: it.yColumns,
+          sortOrder: it.sortOrder,
+        })),
+      });
 
     case "canvas_chart_delete":
       return gateway.del(`/api/canvas/charts/${args.id}`);
@@ -950,6 +1040,36 @@ const RAW_TOOLS = [
     },
   },
   {
+    name: "canvas_pin_update_batch",
+    description:
+      "Update MANY pins in ONE call - the batch counterpart of canvas_pin_update. Strongly " +
+      "preferred over calling canvas_pin_update repeatedly when editing several existing pins " +
+      "at once; N one-at-a-time updates become one round trip and one live update.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        items: {
+          type: "array",
+          description: "The pins to update. At least one.",
+          items: {
+            type: "object" as const,
+            properties: {
+              id: { type: "string" },
+              pinType: { type: "string", enum: ["marker", "annotation"] },
+              lat: { type: "number" },
+              lng: { type: "number" },
+              label: { type: "string" },
+              body: { type: "string" },
+              color: { type: "string" },
+            },
+            required: ["id"],
+          },
+        },
+      },
+      required: ["items"],
+    },
+  },
+  {
     name: "canvas_pin_delete",
     description: "Delete a pin by its ID.",
     inputSchema: { type: "object" as const, properties: { id: { type: "string" } }, required: ["id"] },
@@ -1150,6 +1270,58 @@ const RAW_TOOLS = [
     },
   },
   {
+    name: "canvas_event_update_batch",
+    description:
+      "Update MANY itinerary entries in ONE call - the batch counterpart of canvas_event_update. " +
+      "Strongly preferred over calling canvas_event_update repeatedly when editing several " +
+      "existing entries at once; N one-at-a-time updates become one round trip and one live update.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        items: {
+          type: "array",
+          description: "The entries to update. At least one.",
+          items: {
+            type: "object" as const,
+            properties: {
+              id: { type: "string" },
+              title: { type: "string" },
+              start: {
+                type: "string",
+                description:
+                  "Timezone-aware ISO-8601 instant (include offset or Z), e.g. 2024-06-01T18:00:00-05:00.",
+              },
+              end: { type: "string", description: "End / arrival instant, timezone-aware ISO-8601." },
+              timezone: {
+                type: "string",
+                description: "IANA timezone of the location, e.g. 'America/Chicago'.",
+              },
+              pinIds: {
+                type: "array",
+                items: { type: "string" },
+                description: "Replaces the entry's pin list. Pass [] to clear all pins.",
+              },
+              pinId: { type: "string" },
+              fromPinId: { type: "string" },
+              toPinId: { type: "string" },
+              travelMode: { type: "string", enum: ["flight", "train", "drive"] },
+              dayTag: {
+                type: "string",
+                description: "Short prefix for the map day label, e.g. 'DAY 1'.",
+              },
+              cost: {
+                type: "number",
+                description: "Cost of this entry; updating re-totals the itinerary live.",
+              },
+            },
+            required: ["id"],
+          },
+        },
+      },
+      required: ["items"],
+    },
+  },
+  {
     name: "canvas_event_delete",
     description: "Delete an event by its ID.",
     inputSchema: { type: "object" as const, properties: { id: { type: "string" } }, required: ["id"] },
@@ -1237,6 +1409,38 @@ const RAW_TOOLS = [
         },
       },
       required: ["id"],
+    },
+  },
+  {
+    name: "canvas_note_update_batch",
+    description:
+      "Update MANY notes in ONE call - the batch counterpart of canvas_note_update. Strongly " +
+      "preferred over calling canvas_note_update repeatedly when editing several existing notes " +
+      "at once; N one-at-a-time updates become one round trip and one live update.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        items: {
+          type: "array",
+          description: "The notes to update. At least one.",
+          items: {
+            type: "object" as const,
+            properties: {
+              id: { type: "string" },
+              body: { type: "string" },
+              parentId: { type: "string" },
+              parentKind: { type: "string", enum: ["pin", "event"] },
+              imageRefs: { type: "array", items: { type: "string" } },
+              sortOrder: {
+                type: "number",
+                description: "Position within the notes document (0 = first).",
+              },
+            },
+            required: ["id"],
+          },
+        },
+      },
+      required: ["items"],
     },
   },
   {
@@ -1371,6 +1575,44 @@ const RAW_TOOLS = [
     },
   },
   {
+    name: "canvas_roadmap_item_update_batch",
+    description:
+      "Update MANY roadmap items in ONE call - the batch counterpart of canvas_roadmap_item_update. " +
+      "Strongly preferred over calling canvas_roadmap_item_update repeatedly when editing several " +
+      "existing items at once; N one-at-a-time updates become one round trip and one live update.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        items: {
+          type: "array",
+          description: "The roadmap items to update. At least one.",
+          items: {
+            type: "object" as const,
+            properties: {
+              id: { type: "string" },
+              parentId: { type: "string" },
+              title: { type: "string" },
+              body: { type: "string" },
+              status: { type: "string", enum: ["todo", "in_progress", "done", "blocked"] },
+              stage: {
+                type: "string",
+                description: "Phase label (e.g. 'Now', 'v2'). Pass '' to clear the phase (unstage).",
+              },
+              assignee: {
+                type: "string",
+                enum: ["agent", "human"],
+                description: "'agent' marks it an agent task; 'human' clears the mark.",
+              },
+              sortOrder: { type: "number" },
+            },
+            required: ["id"],
+          },
+        },
+      },
+      required: ["items"],
+    },
+  },
+  {
     name: "canvas_roadmap_task_list",
     description:
       "List the roadmap's AGENT tasks: goals a human marked (assignee='agent') " +
@@ -1497,6 +1739,35 @@ const RAW_TOOLS = [
     },
   },
   {
+    name: "canvas_sheet_column_update_batch",
+    description:
+      "Update MANY columns in ONE call - the batch counterpart of canvas_sheet_column_update. " +
+      "Strongly preferred over calling canvas_sheet_column_update repeatedly when editing several " +
+      "existing columns at once; N one-at-a-time updates become one round trip and one live update. " +
+      "Each item carries its own sheetId + columnId, so a single call can span multiple sheets.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        items: {
+          type: "array",
+          description: "The columns to update. At least one.",
+          items: {
+            type: "object" as const,
+            properties: {
+              sheetId: { type: "string" },
+              columnId: { type: "string" },
+              name: { type: "string" },
+              type: { type: "string", enum: ["text", "number", "date", "checkbox"] },
+              sortOrder: { type: "number" },
+            },
+            required: ["sheetId", "columnId"],
+          },
+        },
+      },
+      required: ["items"],
+    },
+  },
+  {
     name: "canvas_sheet_column_delete",
     description:
       "Delete a column from a sheet. Also strips that column's data from every row " +
@@ -1569,6 +1840,35 @@ const RAW_TOOLS = [
         sortOrder: { type: "number" },
       },
       required: ["id"],
+    },
+  },
+  {
+    name: "canvas_sheet_row_update_batch",
+    description:
+      "Update MANY rows in ONE call - the batch counterpart of canvas_sheet_row_update. Strongly " +
+      "preferred over calling canvas_sheet_row_update repeatedly when editing several existing " +
+      "rows at once; N one-at-a-time updates become one round trip and one live update. Each row's " +
+      "`data` is merged into the existing row data — keys not present are left untouched, setting " +
+      "a key to null clears that cell. Cells may be keyed by column NAME (case-insensitive) or " +
+      "column.id.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        items: {
+          type: "array",
+          description: "The rows to update. At least one.",
+          items: {
+            type: "object" as const,
+            properties: {
+              id: { type: "string" },
+              data: { type: "object" },
+              sortOrder: { type: "number" },
+            },
+            required: ["id"],
+          },
+        },
+      },
+      required: ["items"],
     },
   },
   {
@@ -1656,6 +1956,36 @@ const RAW_TOOLS = [
         sortOrder: { type: "number" },
       },
       required: ["id"],
+    },
+  },
+  {
+    name: "canvas_chart_update_batch",
+    description:
+      "Update MANY charts in ONE call - the batch counterpart of canvas_chart_update. Strongly " +
+      "preferred over calling canvas_chart_update repeatedly when editing several existing charts " +
+      "at once; N one-at-a-time updates become one round trip and one live update.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        items: {
+          type: "array",
+          description: "The charts to update. At least one.",
+          items: {
+            type: "object" as const,
+            properties: {
+              id: { type: "string" },
+              name: { type: "string" },
+              sheetId: { type: "string" },
+              chartType: { type: "string", enum: ["bar", "line", "area", "pie"] },
+              xColumn: { type: "string" },
+              yColumns: { type: "array", items: { type: "string" } },
+              sortOrder: { type: "number" },
+            },
+            required: ["id"],
+          },
+        },
+      },
+      required: ["items"],
     },
   },
   {
