@@ -2,6 +2,37 @@ import type { Gateway } from "./gateway.js";
 
 type Args = Record<string, unknown>;
 
+// Contextual fan-out nudge for single-item updates (mirrors the task fan-out
+// nudge above). A model that's editing several elements of one type tends to
+// call canvas_X_update in a tight burst instead of reaching for
+// canvas_X_update_batch. Track recent single-update calls per element type in
+// this process, and once a burst is clearly underway, attach a one-time hint
+// to the tool result. Resets after firing so it doesn't nag on every call.
+const recentUpdateCalls = new Map<string, number[]>();
+const UPDATE_FANOUT_WINDOW_MS = 20_000;
+const UPDATE_FANOUT_THRESHOLD = 3;
+
+function updateFanOutHint(kind: string, plural: string, batchTool: string): string | undefined {
+  const now = Date.now();
+  const calls = (recentUpdateCalls.get(kind) ?? []).filter((t) => now - t < UPDATE_FANOUT_WINDOW_MS);
+  calls.push(now);
+  if (calls.length < UPDATE_FANOUT_THRESHOLD) {
+    recentUpdateCalls.set(kind, calls);
+    return undefined;
+  }
+  // Fired — reset so the next hint only shows up after another real burst.
+  recentUpdateCalls.set(kind, []);
+  return (
+    `That's ${calls.length} ${kind}_update calls in a row. If you're updating more ${plural}, ` +
+    `switch to ${batchTool} — it does them all in one call instead of one round trip each.`
+  );
+}
+
+function withUpdateFanOutHint<T>(result: T, hint: string | undefined): T | (T & { hint: string }) {
+  if (!hint || typeof result !== "object" || result === null) return result;
+  return { ...(result as object), hint } as T & { hint: string };
+}
+
 export async function handleTool(
   gateway: Gateway,
   toolName: string,
@@ -190,7 +221,8 @@ export async function handleTool(
 
     case "canvas_pin_update": {
       const { id, ...partial } = args;
-      return gateway.patch(`/api/canvas/pins/${id}`, partial);
+      const result = await gateway.patch(`/api/canvas/pins/${id}`, partial);
+      return withUpdateFanOutHint(result, updateFanOutHint("pin", "pins", "canvas_pin_update_batch"));
     }
 
     case "canvas_pin_update_batch":
@@ -249,7 +281,8 @@ export async function handleTool(
 
     case "canvas_event_update": {
       const { id, ...partial } = args;
-      return gateway.patch(`/api/canvas/events/${id}`, partial);
+      const result = await gateway.patch(`/api/canvas/events/${id}`, partial);
+      return withUpdateFanOutHint(result, updateFanOutHint("event", "events", "canvas_event_update_batch"));
     }
 
     case "canvas_event_update_batch":
@@ -299,7 +332,8 @@ export async function handleTool(
 
     case "canvas_note_update": {
       const { id, ...partial } = args;
-      return gateway.patch(`/api/canvas/notes/${id}`, partial);
+      const result = await gateway.patch(`/api/canvas/notes/${id}`, partial);
+      return withUpdateFanOutHint(result, updateFanOutHint("note", "notes", "canvas_note_update_batch"));
     }
 
     case "canvas_note_update_batch":
@@ -349,7 +383,11 @@ export async function handleTool(
 
     case "canvas_roadmap_item_update": {
       const { id, ...partial } = args;
-      return gateway.patch(`/api/canvas/roadmap-items/${id}`, partial);
+      const result = await gateway.patch(`/api/canvas/roadmap-items/${id}`, partial);
+      return withUpdateFanOutHint(
+        result,
+        updateFanOutHint("roadmap_item", "roadmap items", "canvas_roadmap_item_update_batch")
+      );
     }
 
     case "canvas_roadmap_item_update_batch":
@@ -468,7 +506,11 @@ export async function handleTool(
 
     case "canvas_sheet_column_update": {
       const { sheetId, columnId, ...partial } = args;
-      return gateway.patch(`/api/canvas/sheets/${sheetId}/columns/${columnId}`, partial);
+      const result = await gateway.patch(`/api/canvas/sheets/${sheetId}/columns/${columnId}`, partial);
+      return withUpdateFanOutHint(
+        result,
+        updateFanOutHint("sheet_column", "columns", "canvas_sheet_column_update_batch")
+      );
     }
 
     case "canvas_sheet_column_update_batch":
@@ -504,7 +546,8 @@ export async function handleTool(
 
     case "canvas_sheet_row_update": {
       const { id, ...partial } = args;
-      return gateway.patch(`/api/canvas/sheet-rows/${id}`, partial);
+      const result = await gateway.patch(`/api/canvas/sheet-rows/${id}`, partial);
+      return withUpdateFanOutHint(result, updateFanOutHint("sheet_row", "rows", "canvas_sheet_row_update_batch"));
     }
 
     case "canvas_sheet_row_update_batch":
@@ -546,7 +589,8 @@ export async function handleTool(
 
     case "canvas_chart_update": {
       const { id, ...partial } = args;
-      return gateway.patch(`/api/canvas/charts/${id}`, partial);
+      const result = await gateway.patch(`/api/canvas/charts/${id}`, partial);
+      return withUpdateFanOutHint(result, updateFanOutHint("chart", "charts", "canvas_chart_update_batch"));
     }
 
     case "canvas_chart_update_batch":
@@ -1024,7 +1068,9 @@ const RAW_TOOLS = [
   },
   {
     name: "canvas_pin_update",
-    description: "Update an existing pin by its ID.",
+    description:
+      "Update an existing pin by its ID. To edit several pins at once, use " +
+      "canvas_pin_update_batch instead of calling this repeatedly.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -1227,7 +1273,9 @@ const RAW_TOOLS = [
     description:
       "Update an existing entry by its ID. Set pinIds to change which pins it " +
       "covers (replaces the whole list; pass [] to clear). To convert an entry " +
-      "into a travel segment, set fromPinId + toPinId + travelMode.",
+      "into a travel segment, set fromPinId + toPinId + travelMode. To edit " +
+      "several entries at once, use canvas_event_update_batch instead of " +
+      "calling this repeatedly.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -1391,7 +1439,9 @@ const RAW_TOOLS = [
   },
   {
     name: "canvas_note_update",
-    description: "Update an existing note by its ID.",
+    description:
+      "Update an existing note by its ID. To edit several notes at once, use " +
+      "canvas_note_update_batch instead of calling this repeatedly.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -1550,7 +1600,9 @@ const RAW_TOOLS = [
     description:
       "Update a roadmap item by its ID. Set stage to move a top-level goal " +
       "between phase bands ('' clears the phase / unstages it). Set assignee to " +
-      "mark it as an agent task ('agent') or clear the mark ('human').",
+      "mark it as an agent task ('agent') or clear the mark ('human'). To edit " +
+      "several roadmap items at once, use canvas_roadmap_item_update_batch " +
+      "instead of calling this repeatedly.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -1725,7 +1777,10 @@ const RAW_TOOLS = [
   },
   {
     name: "canvas_sheet_column_update",
-    description: "Rename a column, change its type, or reorder it within the sheet.",
+    description:
+      "Rename a column, change its type, or reorder it within the sheet. To edit " +
+      "several columns at once, use canvas_sheet_column_update_batch instead of " +
+      "calling this repeatedly.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -1831,7 +1886,9 @@ const RAW_TOOLS = [
     description:
       "Update a row by ID. `data` is merged into the existing row data — keys not present " +
       "are left untouched; setting a key to null clears that cell. Cells may be keyed by " +
-      "column NAME (case-insensitive) or column.id; names are resolved to ids server-side.",
+      "column NAME (case-insensitive) or column.id; names are resolved to ids server-side. " +
+      "To edit several rows at once, use canvas_sheet_row_update_batch instead of calling " +
+      "this repeatedly.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -1943,7 +2000,9 @@ const RAW_TOOLS = [
     name: "canvas_chart_update",
     description:
       "Update a chart by ID. Any of name, sheetId, chartType, xColumn, yColumns, sortOrder " +
-      "may be set. Column refs (xColumn / yColumns) may be names or ids; resolved server-side.",
+      "may be set. Column refs (xColumn / yColumns) may be names or ids; resolved server-side. " +
+      "To edit several charts at once, use canvas_chart_update_batch instead of calling this " +
+      "repeatedly.",
     inputSchema: {
       type: "object" as const,
       properties: {
