@@ -28,6 +28,7 @@ import OAuthConsent from "./pages/OAuthConsent";
 import { fetchMe, getCachedUser, type User } from "./lib/auth";
 import { copyCanvas, claimCanvas, setCanvasName } from "./lib/api";
 import ConnectModal, { hasDismissedConnect } from "./components/ConnectModal";
+import SignInModal from "./components/SignInModal";
 import ShareDialog from "./components/ShareDialog";
 import CanvasNameEditor from "./components/CanvasNameEditor";
 import AccessDenied from "./components/AccessDenied";
@@ -125,6 +126,12 @@ function stripClaimFromURL() {
 // and not expiry-gated. Which view is selected and whether the panel is open are
 // per-canvas position, stored via lib/sidebarState instead.
 const SIDEBAR_WIDTH_KEY = "tandem.sidebar.width";
+
+// A signed-out visitor clicked "Open your own copy": remember which canvas they
+// wanted so the copy resumes after sign-in. sessionStorage (not state) so the
+// intent survives a page reload mid-auth; sessionStorage (not localStorage) so
+// it dies with the tab instead of ambushing a later, unrelated sign-in.
+const PENDING_COPY_KEY = "tandem.pendingCopy";
 
 type Route = "home" | "mcp" | "dashboard" | "stats" | "settings" | "about" | "authorize";
 
@@ -238,6 +245,13 @@ export default function App() {
   // shown when this canvas isn't already owned by me.
   const [me, setMe] = useState<User | null>(getCachedUser);
   const [copying, setCopying] = useState(false);
+  // Sign-in modal opened from the signed-out copy CTA (AccountMenu has its own
+  // for the plain "Sign in" path — this one exists so App can resume the copy).
+  const [signInForCopy, setSignInForCopy] = useState(false);
+  // In-memory copy of the pending-copy intent, so the in-page sign-in path
+  // resumes even when sessionStorage is unavailable (storage is the mirror
+  // that survives a reload; this covers the same-page case).
+  const pendingCopyRef = useRef<string | null>(null);
   // Pending claim token from a /c/CODE?claim=… link. Held in state (not just the
   // URL) so it survives the URL being stripped and a later sign-in.
   const [claimToken, setClaimToken] = useState<string | null>(getClaimTokenFromURL);
@@ -601,6 +615,46 @@ export default function App() {
       setCopying(false);
     }
   }
+
+  // A signed-out visitor clicked the copy CTA: stash the intent, then ask them
+  // to sign in. The copy itself runs from the resume effect below once `me`
+  // lands, so the same path covers both an in-page GIS sign-in and a full page
+  // reload mid-auth.
+  function handleSignedOutCopyClick() {
+    if (!canvas) return;
+    pendingCopyRef.current = canvas.code;
+    try {
+      sessionStorage.setItem(PENDING_COPY_KEY, canvas.code);
+    } catch {
+      /* storage disabled — the ref still resumes the in-page sign-in path */
+    }
+    posthog.capture("signed_out_copy_cta_clicked", { canvas_code: canvas.code });
+    setSignInForCopy(true);
+  }
+
+  // Resume a pending copy after sign-in. Consumes the intent BEFORE calling the
+  // API so a failure (e.g. the canvas flipped private since page load — the
+  // endpoint 403s and the catch in handleCopyToAccount surfaces it) can't loop.
+  // loginWithGoogle resolves only after the server sets the session cookie, so
+  // by the time `me` is set the copy request authenticates.
+  useEffect(() => {
+    if (!me || !canvas) return;
+    let pending = pendingCopyRef.current;
+    pendingCopyRef.current = null;
+    try {
+      const stored = sessionStorage.getItem(PENDING_COPY_KEY);
+      if (stored) {
+        sessionStorage.removeItem(PENDING_COPY_KEY);
+        pending = pending ?? stored;
+      }
+    } catch {
+      /* storage disabled — the ref alone decides */
+    }
+    // Stale intent from another canvas, or they turned out to own this one.
+    if (pending !== canvas.code || canvas.ownerUserId === me.id) return;
+    void handleCopyToAccount();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [me, canvas]);
 
   // Auto-claim: landing on /c/CODE?claim=TOKEN while signed in takes ownership
   // of THIS canvas in place (the agent keeps editing the very same canvas), and
@@ -1057,8 +1111,7 @@ export default function App() {
             <span className="hidden rounded-md border border-ink/20 px-3 py-1.5 text-sm font-medium text-ink/60 sm:inline-block">
               Saving to your account…
             </span>
-          ) : (
-            me &&
+          ) : me ? (
             canvas.ownerUserId !== me.id && (
               <button
                 onClick={handleCopyToAccount}
@@ -1067,6 +1120,28 @@ export default function App() {
                 title="Save a copy of this canvas to your account so it shows up in My canvases on every device"
               >
                 {copying ? "Copying…" : "Copy to my account"}
+              </button>
+            )
+          ) : (
+            // Signed-out visitor on a shared canvas: the one action we want them
+            // to take. Visible on ALL breakpoints (launch traffic is mostly
+            // mobile) — just a shorter label under sm. Suppressed while a claim
+            // token is pending so the copy CTA doesn't compete with the claim
+            // flow, which takes over after the same sign-in.
+            !claimToken && (
+              <button
+                onClick={handleSignedOutCopyClick}
+                disabled={copying}
+                className="btn-press rounded-md px-3 py-1.5 text-sm font-medium text-white shadow-sm transition-opacity disabled:opacity-60"
+                style={{ backgroundColor: theme.solid }}
+                title="Sign in and get your own editable copy of this canvas"
+              >
+                {copying ? "Copying…" : (
+                  <>
+                    <span className="sm:hidden">Copy canvas</span>
+                    <span className="hidden sm:inline">Open your own copy</span>
+                  </>
+                )}
               </button>
             )
           )}
@@ -1085,9 +1160,35 @@ export default function App() {
           >
             Connect
           </button>
-          <AccountMenu onShowCanvases={showMyCanvases} onShowSettings={showSettings} onShowAbout={showAbout} onUserChange={setMe} onOpenCanvas={handleJoin} />
+          {/* Keyed on the user so a sign-in completed OUTSIDE AccountMenu (the
+              copy-CTA modal below) remounts it out of its stale "Sign in"
+              state — it rehydrates from the identity cache loginWithGoogle
+              just wrote. */}
+          <AccountMenu key={me?.id ?? "anon"} onShowCanvases={showMyCanvases} onShowSettings={showSettings} onShowAbout={showAbout} onUserChange={setMe} onOpenCanvas={handleJoin} />
         </div>
       </header>
+
+      {/* Sign-in gate for the signed-out copy CTA. Closing without signing in
+          drops the pending intent so a later, unrelated sign-in doesn't
+          surprise-copy; onSignedIn sets `me`, and the resume effect does the
+          copy + navigation. */}
+      {signInForCopy && (
+        <SignInModal
+          onClose={() => {
+            setSignInForCopy(false);
+            pendingCopyRef.current = null;
+            try {
+              sessionStorage.removeItem(PENDING_COPY_KEY);
+            } catch {
+              /* best effort */
+            }
+          }}
+          onSignedIn={(u) => {
+            setSignInForCopy(false);
+            setMe(u);
+          }}
+        />
+      )}
 
       {claimNotice && (
         <div className="pointer-events-none fixed inset-x-0 top-16 z-50 flex justify-center">
