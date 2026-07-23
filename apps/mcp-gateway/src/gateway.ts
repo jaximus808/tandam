@@ -21,7 +21,12 @@ export interface GatewayConfig {
   // anonymous. Only used on the stdio path — the multi-tenant HTTP sidecar leaves
   // this unset (it can't hold one user's secret for every client).
   userToken?: string;
+  // Per-request timeout in ms for calls made through safeFetch, enforced via
+  // AbortController. Configurable via REQUEST_TIMEOUT_MS. Defaults to 15000.
+  requestTimeoutMs?: number;
 }
+
+const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
 
 export interface CanvasSession {
   token: string;
@@ -222,16 +227,39 @@ export class Gateway {
   /**
    * Wraps fetch so network-level failures (DNS, refused, timeout) surface a
    * clear "API_URL is wrong / unreachable" message instead of the default
-   * `TypeError: fetch failed` with no context.
+   * `TypeError: fetch failed` with no context. Also enforces a request
+   * timeout via AbortController and logs latency for every call — this is
+   * the single choke point every get/getPublic/post/patch/del goes through.
    */
   private async safeFetch(path: string, init?: RequestInit): Promise<Response> {
+    const method = init?.method ?? "GET";
+    const timeoutMs = this.config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const start = Date.now();
     try {
-      return await fetch(`${this.config.apiUrl}${path}`, init);
+      const res = await fetch(`${this.config.apiUrl}${path}`, {
+        ...init,
+        signal: controller.signal,
+      });
+      const ms = Date.now() - start;
+      process.stderr.write(`[tandem] ${method} ${path} -> ${res.status} (${ms}ms)\n`);
+      return res;
     } catch (err) {
+      const ms = Date.now() - start;
+      if (err instanceof Error && err.name === "AbortError") {
+        process.stderr.write(`[tandem] ${method} ${path} -> timeout (${ms}ms)\n`);
+        throw new Error(
+          `Request to ${path} timed out after ${timeoutMs}ms — the Tandem API did not respond.`
+        );
+      }
       const reason = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`[tandem] ${method} ${path} -> error (${ms}ms): ${reason}\n`);
       throw new Error(
         `Could not reach Tandem API at ${this.config.apiUrl} — check the API_URL env var. (${reason})`
       );
+    } finally {
+      clearTimeout(timer);
     }
   }
 

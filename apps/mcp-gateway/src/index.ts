@@ -68,8 +68,20 @@ const WEB_URL = (process.env.PUBLIC_URL ?? API_URL).replace(/\/$/, "");
 // private / shared canvases — mint one at https://tandemcanvas.com/me. Without
 // it the gateway is anonymous and can only reach public canvases.
 const USER_TOKEN = process.env.TANDEM_TOKEN?.trim() || undefined;
+// Optional per-request timeout override (ms) for calls to the Tandem API.
+// Defaults to 15000 in the Gateway when unset or unparsable.
+const requestTimeoutFromEnv = Number(process.env.REQUEST_TIMEOUT_MS);
+const REQUEST_TIMEOUT_MS =
+  Number.isFinite(requestTimeoutFromEnv) && requestTimeoutFromEnv > 0
+    ? requestTimeoutFromEnv
+    : undefined;
 
-const gateway = new Gateway({ apiUrl: API_URL, webUrl: WEB_URL, userToken: USER_TOKEN });
+const gateway = new Gateway({
+  apiUrl: API_URL,
+  webUrl: WEB_URL,
+  userToken: USER_TOKEN,
+  requestTimeoutMs: REQUEST_TIMEOUT_MS,
+});
 
 async function main() {
   const server = createTandemServer(gateway, VERSION);
