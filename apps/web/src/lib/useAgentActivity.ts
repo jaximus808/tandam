@@ -12,6 +12,16 @@ const CURSOR_MS = 2000;
 const PRESENCE_MS = 20_000;
 const READING_MS = 1800;
 
+// A batch push (canvas_*_add_batch etc.) touches many entities in one state
+// broadcast. Instead of jumping the cursor once to the "best" one, we replay
+// every created/updated entity in order, staggered by SEQUENCE_STEP_MS, so the
+// canvas visibly hops across each item like the agent placed them one by one.
+const SEQUENCE_STEP_MS = 320;
+// Cap how many stops a single batch replays — a 200-item batch shouldn't spawn
+// 200 timers or a minute-long light show. Large batches are down-sampled
+// (evenly spaced) but always end on the true last item.
+const MAX_SEQUENCE_STEPS = 20;
+
 export interface AgentEdit {
   entityId: string;
   mode: CanvasMode;
@@ -92,7 +102,15 @@ export function useAgentActivity(
   const cursorTimer = useRef<ReturnType<typeof setTimeout>>();
   const presenceTimer = useRef<ReturnType<typeof setTimeout>>();
   const readingTimer = useRef<ReturnType<typeof setTimeout>>();
+  // Pending "replay next item" timers for an in-flight batch sequence. A new
+  // state push cancels whatever's still queued here before starting its own.
+  const sequenceTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const nonce = useRef(0);
+
+  const clearSequence = () => {
+    for (const t of sequenceTimers.current) clearTimeout(t);
+    sequenceTimers.current = [];
+  };
 
   const [edit, setEdit] = useState<AgentEdit | null>(null);
   const [online, setOnline] = useState(false);
@@ -115,6 +133,10 @@ export function useAgentActivity(
 
   useEffect(() => {
     if (!state) return;
+
+    // A new push supersedes whatever replay sequence was still in flight —
+    // stale timers must not go on firing setEdit for a previous push's items.
+    clearSequence();
 
     // Snapshot every entity with its mode + last-touched time + noun.
     const cur = new Map<string, Snap>();
@@ -140,20 +162,24 @@ export function useAgentActivity(
       return;
     }
 
-    // The most-recently-changed entity since the last snapshot wins the cursor.
-    // Classify it as created (new id) vs updated (existing id, newer time).
-    let best: { id: string; snap: Snap; op: AgentOp } | null = null;
+    // Every entity created or updated since the last snapshot, oldest first —
+    // that's replay order, so a batch add plays back in the order the agent
+    // actually created the items. Classify created (new id) vs updated
+    // (existing id, newer time).
+    const changed: { id: string; snap: Snap; op: AgentOp }[] = [];
     for (const [id, v] of cur) {
       const before = prev.current.get(id);
       if (!before) {
-        if (!best || v.ms > best.snap.ms) best = { id, snap: v, op: "created" };
+        changed.push({ id, snap: v, op: "created" });
       } else if (v.ms > before.ms) {
-        if (!best || v.ms > best.snap.ms) best = { id, snap: v, op: "updated" };
+        changed.push({ id, snap: v, op: "updated" });
       }
     }
+    changed.sort((a, b) => a.snap.ms - b.snap.ms);
+
     // No add/update? Look for a removal (an id that vanished).
     let removed: Snap | null = null;
-    if (!best) {
+    if (changed.length === 0) {
       for (const [id, v] of prev.current) {
         if (!cur.has(id)) {
           removed = v;
@@ -183,11 +209,41 @@ export function useAgentActivity(
       presenceTimer.current = setTimeout(() => setOnline(false), PRESENCE_MS);
     };
 
-    if (best) {
-      setEdit({ entityId: best.id, mode: best.snap.mode });
+    if (changed.length > 0) {
+      // Down-sample pathologically large batches: keep it a lively few-second
+      // hop rather than a minute of timers, but always land on the real last
+      // item so the final cursor position matches what actually happened.
+      let steps = changed;
+      if (steps.length > MAX_SEQUENCE_STEPS) {
+        const stride = steps.length / MAX_SEQUENCE_STEPS;
+        const sampled: typeof steps = [];
+        for (let i = 0; i < MAX_SEQUENCE_STEPS - 1; i++) {
+          sampled.push(steps[Math.floor(i * stride)]);
+        }
+        sampled.push(steps[steps.length - 1]);
+        steps = sampled;
+      }
+
       clearTimeout(cursorTimer.current);
-      cursorTimer.current = setTimeout(() => setEdit(null), CURSOR_MS);
-      emit(best.op, best.snap);
+
+      const applyStep = (step: (typeof steps)[number], isLast: boolean) => {
+        setEdit({ entityId: step.id, mode: step.snap.mode });
+        emit(step.op, step.snap);
+        if (isLast) {
+          cursorTimer.current = setTimeout(() => setEdit(null), CURSOR_MS);
+        }
+      };
+
+      // First item jumps immediately — a single-change push (the common case)
+      // gets one instant jump with no artificial delay. Any further items
+      // trail behind on a stagger so the cursor visibly hops across each.
+      applyStep(steps[0], steps.length === 1);
+      for (let i = 1; i < steps.length; i++) {
+        const step = steps[i];
+        const isLast = i === steps.length - 1;
+        const timer = setTimeout(() => applyStep(step, isLast), i * SEQUENCE_STEP_MS);
+        sequenceTimers.current.push(timer);
+      }
     } else if (removed) {
       emit("removed", removed);
     }
@@ -198,6 +254,7 @@ export function useAgentActivity(
       clearTimeout(cursorTimer.current);
       clearTimeout(presenceTimer.current);
       clearTimeout(readingTimer.current);
+      clearSequence();
     },
     [],
   );
