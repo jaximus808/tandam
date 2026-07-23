@@ -191,6 +191,11 @@ export async function handleTool(
     case "canvas_document_delete":
       return gateway.del(`/api/canvas/documents/${encodeURIComponent(String(args.document))}`);
 
+    case "canvas_document_delete_batch":
+      return gateway.post("/api/canvas/documents/batch-delete", {
+        refs: (args.documents as unknown[]) ?? [],
+      });
+
     // ── Pins ───────────────────────────────────────────────────────────────────
     case "canvas_pin_add":
       return gateway.post("/api/canvas/pins", {
@@ -240,6 +245,9 @@ export async function handleTool(
 
     case "canvas_pin_delete":
       return gateway.del(`/api/canvas/pins/${args.id}`);
+
+    case "canvas_pin_delete_batch":
+      return gateway.post("/api/canvas/pins/batch-delete", { ids: (args.ids as unknown[]) ?? [] });
 
     // ── Events ─────────────────────────────────────────────────────────────────
     case "canvas_event_add":
@@ -306,6 +314,9 @@ export async function handleTool(
     case "canvas_event_delete":
       return gateway.del(`/api/canvas/events/${args.id}`);
 
+    case "canvas_event_delete_batch":
+      return gateway.post("/api/canvas/events/batch-delete", { ids: (args.ids as unknown[]) ?? [] });
+
     // ── Notes ──────────────────────────────────────────────────────────────────
     case "canvas_note_add":
       return gateway.post("/api/canvas/notes", {
@@ -350,6 +361,9 @@ export async function handleTool(
 
     case "canvas_note_delete":
       return gateway.del(`/api/canvas/notes/${args.id}`);
+
+    case "canvas_note_delete_batch":
+      return gateway.post("/api/canvas/notes/batch-delete", { ids: (args.ids as unknown[]) ?? [] });
 
     // ── Roadmap items ──────────────────────────────────────────────────────────
     case "canvas_roadmap_item_add":
@@ -406,6 +420,9 @@ export async function handleTool(
 
     case "canvas_roadmap_item_delete":
       return gateway.del(`/api/canvas/roadmap-items/${args.id}`);
+
+    case "canvas_roadmap_item_delete_batch":
+      return gateway.post("/api/canvas/roadmap-items/batch-delete", { ids: (args.ids as unknown[]) ?? [] });
 
     case "canvas_roadmap_task_list": {
       // The agent-task queue drawn from the roadmap: goals a human marked for an
@@ -488,6 +505,9 @@ export async function handleTool(
     case "canvas_sheet_delete":
       return gateway.del(`/api/canvas/sheets/${args.id}`);
 
+    case "canvas_sheet_delete_batch":
+      return gateway.post("/api/canvas/sheets/batch-delete", { ids: (args.ids as unknown[]) ?? [] });
+
     case "canvas_sheet_column_add":
       return gateway.post(`/api/canvas/sheets/${args.sheetId}/columns`, {
         name: args.name,
@@ -527,6 +547,14 @@ export async function handleTool(
     case "canvas_sheet_column_delete":
       return gateway.del(`/api/canvas/sheets/${args.sheetId}/columns/${args.columnId}`);
 
+    case "canvas_sheet_column_delete_batch":
+      return gateway.post("/api/canvas/sheet-columns/batch-delete", {
+        items: ((args.items as Record<string, unknown>[]) ?? []).map((it) => ({
+          sheetId: it.sheetId,
+          columnId: it.columnId,
+        })),
+      });
+
     case "canvas_sheet_row_add":
       return gateway.post("/api/canvas/sheet-rows", {
         sheetId: args.sheetId,
@@ -561,6 +589,9 @@ export async function handleTool(
 
     case "canvas_sheet_row_delete":
       return gateway.del(`/api/canvas/sheet-rows/${args.id}`);
+
+    case "canvas_sheet_row_delete_batch":
+      return gateway.post("/api/canvas/sheet-rows/batch-delete", { ids: (args.ids as unknown[]) ?? [] });
 
     // ── Charts ─────────────────────────────────────────────────────────────────
     case "canvas_chart_add":
@@ -609,6 +640,9 @@ export async function handleTool(
     case "canvas_chart_delete":
       return gateway.del(`/api/canvas/charts/${args.id}`);
 
+    case "canvas_chart_delete_batch":
+      return gateway.post("/api/canvas/charts/batch-delete", { ids: (args.ids as unknown[]) ?? [] });
+
     // ── Forms (direct-input layer) ───────────────────────────────────────────────
     case "canvas_form_scaffold":
       return gateway.post("/api/canvas/forms/scaffold", { sheet: args.sheet });
@@ -628,6 +662,9 @@ export async function handleTool(
 
     case "canvas_form_delete":
       return gateway.del(`/api/canvas/forms/${args.id}`);
+
+    case "canvas_form_delete_batch":
+      return gateway.post("/api/canvas/forms/batch-delete", { ids: (args.ids as unknown[]) ?? [] });
 
     // ── Pending edits ──────────────────────────────────────────────────────────
     case "canvas_pending_edits_read":
@@ -997,6 +1034,25 @@ const RAW_TOOLS = [
       required: ["document"],
     },
   },
+  {
+    name: "canvas_document_delete_batch",
+    description:
+      "Delete MANY documents in ONE call — the batch counterpart of canvas_document_delete. " +
+      "Strongly preferred over calling canvas_document_delete repeatedly when removing several " +
+      "documents at once; N one-at-a-time deletes become one round trip and one live update. " +
+      "Each cascades exactly like the single delete. Irreversible.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        documents: {
+          type: "array",
+          items: { type: "string" },
+          description: "The documents to delete — each an id or name. At least one.",
+        },
+      },
+      required: ["documents"],
+    },
+  },
 
   {
     name: "canvas_pin_add",
@@ -1119,6 +1175,20 @@ const RAW_TOOLS = [
     name: "canvas_pin_delete",
     description: "Delete a pin by its ID.",
     inputSchema: { type: "object" as const, properties: { id: { type: "string" } }, required: ["id"] },
+  },
+  {
+    name: "canvas_pin_delete_batch",
+    description:
+      "Delete MANY pins in ONE call — the batch counterpart of canvas_pin_delete. Strongly " +
+      "preferred over calling canvas_pin_delete repeatedly when removing several pins at once; " +
+      "N one-at-a-time deletes become one round trip and one live update.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        ids: { type: "array", items: { type: "string" }, description: "Pin ids to delete. At least one." },
+      },
+      required: ["ids"],
+    },
   },
   {
     name: "canvas_event_add",
@@ -1375,6 +1445,20 @@ const RAW_TOOLS = [
     inputSchema: { type: "object" as const, properties: { id: { type: "string" } }, required: ["id"] },
   },
   {
+    name: "canvas_event_delete_batch",
+    description:
+      "Delete MANY itinerary entries in ONE call — the batch counterpart of canvas_event_delete. " +
+      "Strongly preferred over calling canvas_event_delete repeatedly when removing several " +
+      "entries at once; N one-at-a-time deletes become one round trip and one live update.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        ids: { type: "array", items: { type: "string" }, description: "Event ids to delete. At least one." },
+      },
+      required: ["ids"],
+    },
+  },
+  {
     name: "canvas_note_add",
     description: "Add a markdown note. Attach to a Pin or Event via parentId + parentKind.",
     inputSchema: {
@@ -1497,6 +1581,20 @@ const RAW_TOOLS = [
     name: "canvas_note_delete",
     description: "Delete a note by its ID.",
     inputSchema: { type: "object" as const, properties: { id: { type: "string" } }, required: ["id"] },
+  },
+  {
+    name: "canvas_note_delete_batch",
+    description:
+      "Delete MANY notes in ONE call — the batch counterpart of canvas_note_delete. Strongly " +
+      "preferred over calling canvas_note_delete repeatedly when removing several notes at once; " +
+      "N one-at-a-time deletes become one round trip and one live update.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        ids: { type: "array", items: { type: "string" }, description: "Note ids to delete. At least one." },
+      },
+      required: ["ids"],
+    },
   },
   {
     name: "canvas_roadmap_item_add",
@@ -1685,6 +1783,25 @@ const RAW_TOOLS = [
     inputSchema: { type: "object" as const, properties: { id: { type: "string" } }, required: ["id"] },
   },
   {
+    name: "canvas_roadmap_item_delete_batch",
+    description:
+      "Delete MANY roadmap items in ONE call — the batch counterpart of canvas_roadmap_item_delete. " +
+      "Strongly preferred over calling canvas_roadmap_item_delete repeatedly when removing several " +
+      "items at once; N one-at-a-time deletes become one round trip and one live update. Each " +
+      "item's children are deleted via cascade, same as the single delete.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        ids: {
+          type: "array",
+          items: { type: "string" },
+          description: "Roadmap item ids to delete. At least one.",
+        },
+      },
+      required: ["ids"],
+    },
+  },
+  {
     name: "canvas_sheet_add",
     description:
       "Create a new sheet (spreadsheet) on the canvas. A canvas can have multiple sheets — " +
@@ -1729,6 +1846,21 @@ const RAW_TOOLS = [
     name: "canvas_sheet_delete",
     description: "Delete a sheet and all its rows.",
     inputSchema: { type: "object" as const, properties: { id: { type: "string" } }, required: ["id"] },
+  },
+  {
+    name: "canvas_sheet_delete_batch",
+    description:
+      "Delete MANY sheets in ONE call — the batch counterpart of canvas_sheet_delete. Strongly " +
+      "preferred over calling canvas_sheet_delete repeatedly when removing several sheets at once; " +
+      "N one-at-a-time deletes become one round trip and one live update. Each sheet's rows are " +
+      "deleted along with it, same as the single delete.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        ids: { type: "array", items: { type: "string" }, description: "Sheet ids to delete. At least one." },
+      },
+      required: ["ids"],
+    },
   },
   {
     name: "canvas_sheet_column_add",
@@ -1837,6 +1969,33 @@ const RAW_TOOLS = [
     },
   },
   {
+    name: "canvas_sheet_column_delete_batch",
+    description:
+      "Delete MANY columns in ONE call — the batch counterpart of canvas_sheet_column_delete. " +
+      "Strongly preferred over calling canvas_sheet_column_delete repeatedly when removing " +
+      "several columns at once; N one-at-a-time deletes become one round trip and one live " +
+      "update. Each item carries its own sheetId + columnId, so a single call can span multiple " +
+      "sheets. Also strips each column's data from every row (non-reversible).",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        items: {
+          type: "array",
+          description: "The columns to delete. At least one.",
+          items: {
+            type: "object" as const,
+            properties: {
+              sheetId: { type: "string" },
+              columnId: { type: "string" },
+            },
+            required: ["sheetId", "columnId"],
+          },
+        },
+      },
+      required: ["items"],
+    },
+  },
+  {
     name: "canvas_sheet_row_add",
     description:
       "Add a row to a sheet. `data` is an object of cell values keyed by either the " +
@@ -1932,6 +2091,25 @@ const RAW_TOOLS = [
     name: "canvas_sheet_row_delete",
     description: "Delete a sheet row by its ID.",
     inputSchema: { type: "object" as const, properties: { id: { type: "string" } }, required: ["id"] },
+  },
+  {
+    name: "canvas_sheet_row_delete_batch",
+    description:
+      "Delete MANY rows in ONE call — the batch counterpart of canvas_sheet_row_delete. Strongly " +
+      "preferred over calling canvas_sheet_row_delete repeatedly when removing several rows at " +
+      "once (spreadsheets are inherently many-row): N one-at-a-time deletes become one round trip " +
+      "and one live update.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        ids: {
+          type: "array",
+          items: { type: "string" },
+          description: "Sheet row ids to delete. At least one.",
+        },
+      },
+      required: ["ids"],
+    },
   },
   {
     name: "canvas_chart_add",
@@ -2053,6 +2231,20 @@ const RAW_TOOLS = [
     inputSchema: { type: "object" as const, properties: { id: { type: "string" } }, required: ["id"] },
   },
   {
+    name: "canvas_chart_delete_batch",
+    description:
+      "Delete MANY charts in ONE call — the batch counterpart of canvas_chart_delete. Strongly " +
+      "preferred over calling canvas_chart_delete repeatedly when removing several charts at " +
+      "once; N one-at-a-time deletes become one round trip and one live update.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        ids: { type: "array", items: { type: "string" }, description: "Chart ids to delete. At least one." },
+      },
+      required: ["ids"],
+    },
+  },
+  {
     name: "canvas_form_scaffold",
     description:
       "Draft a form from an existing sheet — the easy on-ramp to the direct-input layer. " +
@@ -2134,6 +2326,21 @@ const RAW_TOOLS = [
     name: "canvas_form_delete",
     description: "Delete a form by its ID. (Rows/pins it already produced are unaffected.)",
     inputSchema: { type: "object" as const, properties: { id: { type: "string" } }, required: ["id"] },
+  },
+  {
+    name: "canvas_form_delete_batch",
+    description:
+      "Delete MANY forms in ONE call — the batch counterpart of canvas_form_delete. Strongly " +
+      "preferred over calling canvas_form_delete repeatedly when removing several forms at once; " +
+      "N one-at-a-time deletes become one round trip and one live update. (Rows/pins they already " +
+      "produced are unaffected.)",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        ids: { type: "array", items: { type: "string" }, description: "Form ids to delete. At least one." },
+      },
+      required: ["ids"],
+    },
   },
   {
     name: "canvas_pending_edits_read",
@@ -2410,7 +2617,7 @@ const CONNECTORS = new Set(["canvas_connect", "canvas_create"]);
  * each one, which is what was stalling read-heavy sessions with the connector's
  * per-call "approve?" gate. Derived by name so we don't hand-annotate ~60 tools:
  *   - *_read / *_list / *_get           → read-only
- *   - *_delete                          → write + destructive
+ *   - *_delete / *_delete_batch         → write + destructive
  *   - everything else (add/update/set…) → write, non-destructive
  * `openWorldHint: false` on all of them — every tool acts on the bound canvas,
  * a closed system, not the open internet.
@@ -2421,7 +2628,7 @@ function annotationsFor(name: string): {
   openWorldHint: boolean;
 } {
   const readOnly = /_(read|list|get)$/.test(name);
-  const destructive = /_delete$/.test(name);
+  const destructive = /_delete(_batch)?$/.test(name);
   return {
     readOnlyHint: readOnly,
     // Only meaningful when not read-only; keep it false for plain writes so
