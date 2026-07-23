@@ -29,13 +29,21 @@ import (
 // The store DeleteX methods return (rows-affected int, error); like the single
 // handlers, the int is ignored — a well-formed but already-absent id is a
 // no-op, not an error, matching single-handler semantics.
+//
+// Execution: the id-keyed deletes run concurrently via runBatch (each row is
+// independent), with the trailing broadcast async (broadcastBatchDelete). Two
+// types stay serial: sheet columns (a read-modify-write of the sheet's JSON
+// array — concurrent removals would clobber) and documents (ref resolution needs
+// the request goroutine to surface a 404). See each handler's note.
 
 // broadcastBatchDelete fires the single trailing state broadcast and writes
 // the list of deleted ids. Callers do all the per-item work first, then hand
-// the deleted ids here.
+// the deleted ids here. Async for the same reason as broadcastBatchUpdate: the
+// deletes are durable, so the caller returns immediately and viewers converge a
+// moment later off the request goroutine.
 func (h *Handler) broadcastBatchDelete(w http.ResponseWriter, r *http.Request, deleted []string) {
 	canvasID := CanvasIDFromCtx(r.Context())
-	broadcastState(r.Context(), h.store, h.hub, canvasID)
+	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted})
 }
 
@@ -53,16 +61,21 @@ func (h *Handler) DeletePinsBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ids: at least one id is required")
 		return
 	}
+	ids := make([]uuid.UUID, 0, len(body.IDs))
 	deleted := make([]string, 0, len(body.IDs))
 	for _, id := range body.IDs {
 		if id == uuid.Nil {
 			continue
 		}
-		if _, err := h.store.DeletePin(r.Context(), canvasID, id); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
+		ids = append(ids, id)
 		deleted = append(deleted, id.String())
+	}
+	if err := runBatch(len(ids), func(i int) error {
+		_, err := h.store.DeletePin(r.Context(), canvasID, ids[i])
+		return err
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	h.broadcastBatchDelete(w, r, deleted)
 }
@@ -81,16 +94,21 @@ func (h *Handler) DeleteEventsBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ids: at least one id is required")
 		return
 	}
+	ids := make([]uuid.UUID, 0, len(body.IDs))
 	deleted := make([]string, 0, len(body.IDs))
 	for _, id := range body.IDs {
 		if id == uuid.Nil {
 			continue
 		}
-		if _, err := h.store.DeleteEvent(r.Context(), canvasID, id); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
+		ids = append(ids, id)
 		deleted = append(deleted, id.String())
+	}
+	if err := runBatch(len(ids), func(i int) error {
+		_, err := h.store.DeleteEvent(r.Context(), canvasID, ids[i])
+		return err
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	h.broadcastBatchDelete(w, r, deleted)
 }
@@ -109,16 +127,21 @@ func (h *Handler) DeleteNotesBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ids: at least one id is required")
 		return
 	}
+	ids := make([]uuid.UUID, 0, len(body.IDs))
 	deleted := make([]string, 0, len(body.IDs))
 	for _, id := range body.IDs {
 		if id == uuid.Nil {
 			continue
 		}
-		if _, err := h.store.DeleteNote(r.Context(), canvasID, id); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
+		ids = append(ids, id)
 		deleted = append(deleted, id.String())
+	}
+	if err := runBatch(len(ids), func(i int) error {
+		_, err := h.store.DeleteNote(r.Context(), canvasID, ids[i])
+		return err
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	h.broadcastBatchDelete(w, r, deleted)
 }
@@ -137,16 +160,21 @@ func (h *Handler) DeleteRoadmapItemsBatch(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "ids: at least one id is required")
 		return
 	}
+	ids := make([]uuid.UUID, 0, len(body.IDs))
 	deleted := make([]string, 0, len(body.IDs))
 	for _, id := range body.IDs {
 		if id == uuid.Nil {
 			continue
 		}
-		if _, err := h.store.DeleteRoadmapItem(r.Context(), canvasID, id); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
+		ids = append(ids, id)
 		deleted = append(deleted, id.String())
+	}
+	if err := runBatch(len(ids), func(i int) error {
+		_, err := h.store.DeleteRoadmapItem(r.Context(), canvasID, ids[i])
+		return err
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	h.broadcastBatchDelete(w, r, deleted)
 }
@@ -165,16 +193,21 @@ func (h *Handler) DeleteChartsBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ids: at least one id is required")
 		return
 	}
+	ids := make([]uuid.UUID, 0, len(body.IDs))
 	deleted := make([]string, 0, len(body.IDs))
 	for _, id := range body.IDs {
 		if id == uuid.Nil {
 			continue
 		}
-		if _, err := h.store.DeleteChart(r.Context(), canvasID, id); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
+		ids = append(ids, id)
 		deleted = append(deleted, id.String())
+	}
+	if err := runBatch(len(ids), func(i int) error {
+		_, err := h.store.DeleteChart(r.Context(), canvasID, ids[i])
+		return err
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	h.broadcastBatchDelete(w, r, deleted)
 }
@@ -193,16 +226,21 @@ func (h *Handler) DeleteSheetsBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ids: at least one id is required")
 		return
 	}
+	ids := make([]uuid.UUID, 0, len(body.IDs))
 	deleted := make([]string, 0, len(body.IDs))
 	for _, id := range body.IDs {
 		if id == uuid.Nil {
 			continue
 		}
-		if _, err := h.store.DeleteSheet(r.Context(), canvasID, id); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
+		ids = append(ids, id)
 		deleted = append(deleted, id.String())
+	}
+	if err := runBatch(len(ids), func(i int) error {
+		_, err := h.store.DeleteSheet(r.Context(), canvasID, ids[i])
+		return err
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	h.broadcastBatchDelete(w, r, deleted)
 }
@@ -221,16 +259,21 @@ func (h *Handler) DeleteSheetRowsBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ids: at least one id is required")
 		return
 	}
+	ids := make([]uuid.UUID, 0, len(body.IDs))
 	deleted := make([]string, 0, len(body.IDs))
 	for _, id := range body.IDs {
 		if id == uuid.Nil {
 			continue
 		}
-		if _, err := h.store.DeleteSheetRow(r.Context(), canvasID, id); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
+		ids = append(ids, id)
 		deleted = append(deleted, id.String())
+	}
+	if err := runBatch(len(ids), func(i int) error {
+		_, err := h.store.DeleteSheetRow(r.Context(), canvasID, ids[i])
+		return err
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	h.broadcastBatchDelete(w, r, deleted)
 }
@@ -241,6 +284,10 @@ func (h *Handler) DeleteSheetRowsBatch(w http.ResponseWriter, r *http.Request) {
 // local to its sheet, so unlike the other element types each item must carry
 // its owning sheetId (mirrors UpdateSheetColumnsBatch). Can span multiple
 // sheets in one call.
+//
+// Serial (not parallelized like the id-keyed deletes): a column lives inside its
+// sheet's JSON array, so DeleteSheetColumn is a read-modify-write of that array;
+// two columns of the same sheet removed concurrently would clobber each other.
 func (h *Handler) DeleteSheetColumnsBatch(w http.ResponseWriter, r *http.Request) {
 	canvasID := CanvasIDFromCtx(r.Context())
 	type columnItem struct {
@@ -280,6 +327,10 @@ func (h *Handler) DeleteSheetColumnsBatch(w http.ResponseWriter, r *http.Request
 // everywhere else. An unresolvable ref is a real error (404), not a skip: a
 // non-empty ref that fails to resolve is a mistake worth surfacing, unlike a
 // blank/zero id in the other batches.
+//
+// Serial (not parallelized): each ref is resolved on the request goroutine so an
+// unresolvable ref surfaces as 404 rather than a generic 500 from inside a
+// worker. Document deletes are also comparatively rare, so the serial cost is fine.
 func (h *Handler) DeleteDocumentsBatch(w http.ResponseWriter, r *http.Request) {
 	canvasID := CanvasIDFromCtx(r.Context())
 	var body struct {
@@ -326,16 +377,21 @@ func (h *Handler) DeleteFormsBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ids: at least one id is required")
 		return
 	}
+	ids := make([]uuid.UUID, 0, len(body.IDs))
 	deleted := make([]string, 0, len(body.IDs))
 	for _, id := range body.IDs {
 		if id == uuid.Nil {
 			continue
 		}
-		if _, err := h.store.DeleteForm(r.Context(), canvasID, id); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
+		ids = append(ids, id)
 		deleted = append(deleted, id.String())
+	}
+	if err := runBatch(len(ids), func(i int) error {
+		_, err := h.store.DeleteForm(r.Context(), canvasID, ids[i])
+		return err
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	h.broadcastBatchDelete(w, r, deleted)
 }
@@ -358,16 +414,21 @@ func (h *Handler) DeleteActionsBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ids: at least one id is required")
 		return
 	}
+	ids := make([]uuid.UUID, 0, len(body.IDs))
 	deleted := make([]string, 0, len(body.IDs))
 	for _, id := range body.IDs {
 		if id == uuid.Nil {
 			continue
 		}
-		if _, err := h.store.DeleteAction(r.Context(), canvasID, id); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
+		ids = append(ids, id)
 		deleted = append(deleted, id.String())
+	}
+	if err := runBatch(len(ids), func(i int) error {
+		_, err := h.store.DeleteAction(r.Context(), canvasID, ids[i])
+		return err
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	h.broadcastBatchDelete(w, r, deleted)
 }

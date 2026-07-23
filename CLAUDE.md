@@ -64,3 +64,7 @@ rebuild the `tandem-local` docker image, point the MCP at localhost, or drive a
 browser to verify UI. When a change needs a migration, write the numbered SQL in
 `supabase/migrations/` and just tell him to apply it — don't try to run it yourself.
 Report what you changed and what's left for him to do, and stop there.
+
+**Git is Jaxon's too. Do NOT make PRs, and don't commit, branch, or push unless
+he explicitly asks.** Leave the changes in the working tree, report what was
+changed, and he handles everything git-related from there.

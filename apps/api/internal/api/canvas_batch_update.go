@@ -26,13 +26,24 @@ import (
 // rows-affected count (same as the single handlers, which ignore it), so
 // "updated" here means "patched without error", matching single-handler
 // semantics where a well-formed but absent id is a no-op, not an error.
+//
+// Execution: each handler validates its items synchronously (400s stay on the
+// request goroutine), then runs the per-item store calls concurrently via
+// runBatch — every element is its own DB row keyed by id, so the writes are
+// independent. The one exception is sheet columns, which live inside their
+// sheet's JSON array and so stay serial (see UpdateSheetColumnsBatch). The
+// trailing broadcast is async (broadcastBatchUpdate), so the caller unblocks as
+// soon as the writes are durable.
 
 // broadcastBatchUpdate fires the single trailing state broadcast and writes the
 // list of applied ids. Callers do all the per-item work first, then hand the
-// applied ids here.
+// applied ids here. The broadcast is async: the writes are already durable, so
+// the caller (an agent over the MCP path) unblocks immediately instead of waiting
+// on a full-canvas read + marshal + WS fan-out that only exists to converge
+// viewers — the same reasoning as broadcastStateAsync elsewhere.
 func (h *Handler) broadcastBatchUpdate(w http.ResponseWriter, r *http.Request, updated []string) {
 	canvasID := CanvasIDFromCtx(r.Context())
-	broadcastState(r.Context(), h.store, h.hub, canvasID)
+	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
 	writeJSON(w, http.StatusOK, map[string]any{"updated": updated})
 }
 
@@ -54,6 +65,10 @@ func (h *Handler) UpdatePinsBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "items: at least one entry is required")
 		return
 	}
+	// Validate synchronously and collect the valid items; the store calls then run
+	// concurrently via runBatch. Validation stays on the request goroutine so a
+	// 400 is decided before any write, exactly as the old serial loop did.
+	items := make([]pinItem, 0, len(body.Items))
 	updated := make([]string, 0, len(body.Items))
 	for _, item := range body.Items {
 		if item.ID == uuid.Nil {
@@ -75,11 +90,15 @@ func (h *Handler) UpdatePinsBatch(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		if _, err := h.store.UpdatePin(r.Context(), canvasID, item.ID, item.PinPatch); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
+		items = append(items, item)
 		updated = append(updated, item.ID.String())
+	}
+	if err := runBatch(len(items), func(i int) error {
+		_, err := h.store.UpdatePin(r.Context(), canvasID, items[i].ID, items[i].PinPatch)
+		return err
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	h.broadcastBatchUpdate(w, r, updated)
 }
@@ -102,16 +121,21 @@ func (h *Handler) UpdateEventsBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "items: at least one entry is required")
 		return
 	}
+	items := make([]eventItem, 0, len(body.Items))
 	updated := make([]string, 0, len(body.Items))
 	for _, item := range body.Items {
 		if item.ID == uuid.Nil {
 			continue
 		}
-		if _, err := h.store.UpdateEvent(r.Context(), canvasID, item.ID, item.EventPatch); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
+		items = append(items, item)
 		updated = append(updated, item.ID.String())
+	}
+	if err := runBatch(len(items), func(i int) error {
+		_, err := h.store.UpdateEvent(r.Context(), canvasID, items[i].ID, items[i].EventPatch)
+		return err
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	h.broadcastBatchUpdate(w, r, updated)
 }
@@ -134,16 +158,21 @@ func (h *Handler) UpdateNotesBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "items: at least one entry is required")
 		return
 	}
+	items := make([]noteItem, 0, len(body.Items))
 	updated := make([]string, 0, len(body.Items))
 	for _, item := range body.Items {
 		if item.ID == uuid.Nil {
 			continue
 		}
-		if _, err := h.store.UpdateNote(r.Context(), canvasID, item.ID, item.NotePatch); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
+		items = append(items, item)
 		updated = append(updated, item.ID.String())
+	}
+	if err := runBatch(len(items), func(i int) error {
+		_, err := h.store.UpdateNote(r.Context(), canvasID, items[i].ID, items[i].NotePatch)
+		return err
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	h.broadcastBatchUpdate(w, r, updated)
 }
@@ -166,16 +195,21 @@ func (h *Handler) UpdateRoadmapItemsBatch(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "items: at least one entry is required")
 		return
 	}
+	items := make([]roadmapItem, 0, len(body.Items))
 	updated := make([]string, 0, len(body.Items))
 	for _, item := range body.Items {
 		if item.ID == uuid.Nil {
 			continue
 		}
-		if _, err := h.store.UpdateRoadmapItem(r.Context(), canvasID, item.ID, item.RoadmapItemPatch); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
+		items = append(items, item)
 		updated = append(updated, item.ID.String())
+	}
+	if err := runBatch(len(items), func(i int) error {
+		_, err := h.store.UpdateRoadmapItem(r.Context(), canvasID, items[i].ID, items[i].RoadmapItemPatch)
+		return err
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	h.broadcastBatchUpdate(w, r, updated)
 }
@@ -198,6 +232,7 @@ func (h *Handler) UpdateChartsBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "items: at least one entry is required")
 		return
 	}
+	items := make([]chartItem, 0, len(body.Items))
 	updated := make([]string, 0, len(body.Items))
 	for _, item := range body.Items {
 		if item.ID == uuid.Nil {
@@ -207,11 +242,15 @@ func (h *Handler) UpdateChartsBatch(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid chart type: "+*item.ChartType)
 			return
 		}
-		if _, err := h.store.UpdateChart(r.Context(), canvasID, item.ID, item.ChartPatch); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
+		items = append(items, item)
 		updated = append(updated, item.ID.String())
+	}
+	if err := runBatch(len(items), func(i int) error {
+		_, err := h.store.UpdateChart(r.Context(), canvasID, items[i].ID, items[i].ChartPatch)
+		return err
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	h.broadcastBatchUpdate(w, r, updated)
 }
@@ -234,16 +273,21 @@ func (h *Handler) UpdateSheetRowsBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "items: at least one entry is required")
 		return
 	}
+	items := make([]rowItem, 0, len(body.Items))
 	updated := make([]string, 0, len(body.Items))
 	for _, item := range body.Items {
 		if item.ID == uuid.Nil {
 			continue
 		}
-		if _, err := h.store.UpdateSheetRow(r.Context(), canvasID, item.ID, item.SheetRowPatch); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
+		items = append(items, item)
 		updated = append(updated, item.ID.String())
+	}
+	if err := runBatch(len(items), func(i int) error {
+		_, err := h.store.UpdateSheetRow(r.Context(), canvasID, items[i].ID, items[i].SheetRowPatch)
+		return err
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	h.broadcastBatchUpdate(w, r, updated)
 }
@@ -271,6 +315,11 @@ func (h *Handler) UpdateSheetColumnsBatch(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "items: at least one entry is required")
 		return
 	}
+	// NOT parallelized (unlike the other batch-updates): a column lives inside its
+	// sheet's `columns` JSON array, so UpdateSheetColumn is a read-modify-write of
+	// that whole array. Two columns of the SAME sheet updated concurrently would
+	// each start from the same snapshot and the second write would clobber the
+	// first (lost update). Column batches are small, so a serial loop is fine here.
 	updated := make([]string, 0, len(body.Items))
 	for _, item := range body.Items {
 		if item.SheetID == uuid.Nil || item.ColumnID == "" {
