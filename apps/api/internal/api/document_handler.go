@@ -281,7 +281,7 @@ func (h *Handler) CreateDocument(w http.ResponseWriter, r *http.Request) {
 			_, _ = h.store.UpdateDocument(r.Context(), canvasID, *sh.DocumentID,
 				store.DocumentPatch{ParentID: parentID, SetParent: true})
 		}
-		broadcastState(r.Context(), h.store, h.hub, canvasID)
+		broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
 		doc, _ := h.store.GetDocument(r.Context(), canvasID, *sh.DocumentID)
 		writeJSON(w, http.StatusCreated, map[string]any{"document": doc, "sheetId": sh.ID})
 		return
@@ -293,7 +293,7 @@ func (h *Handler) CreateDocument(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	broadcastState(r.Context(), h.store, h.hub, canvasID)
+	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
 	writeJSON(w, http.StatusCreated, map[string]any{"document": doc})
 }
 
@@ -391,7 +391,7 @@ func (h *Handler) CreateDocumentsBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	broadcastState(r.Context(), h.store, h.hub, canvasID)
+	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
 	writeJSON(w, http.StatusCreated, map[string]any{"documents": docs})
 }
 
@@ -434,7 +434,7 @@ func (h *Handler) UpdateDocument(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	broadcastState(r.Context(), h.store, h.hub, canvasID)
+	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
 	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
 }
 
@@ -451,6 +451,6 @@ func (h *Handler) DeleteDocument(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	broadcastState(r.Context(), h.store, h.hub, canvasID)
+	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
 	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
 }

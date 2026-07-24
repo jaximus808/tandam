@@ -7,8 +7,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -568,6 +570,19 @@ type supabaseStore struct {
 }
 
 func NewSupabase(projectURL, apiKey string) (Store, error) {
+	// postgrest-go builds no HTTP client of its own — its transport delegates to
+	// http.DefaultTransport, whose MaxIdleConnsPerHost is Go's default of 2. Every
+	// DB call in this process is an HTTPS round-trip to the one Supabase host, and
+	// the batch handlers run up to batchConcurrency (8) of them at once, so with the
+	// stock ceiling only 2 connections stay pooled — the rest re-do the TCP+TLS
+	// handshake every call. Raise the per-host idle pool so concurrent and sustained
+	// calls reuse warm connections. Per-host, so the handful of non-Supabase hosts
+	// (Google OAuth, gotrue) are unaffected. Tune once here, before any request.
+	if t, ok := http.DefaultTransport.(*http.Transport); ok {
+		t.MaxIdleConns = 100
+		t.MaxIdleConnsPerHost = 64
+		t.IdleConnTimeout = 90 * time.Second
+	}
 	client, err := supa.NewClient(projectURL, apiKey, nil)
 	if err != nil {
 		return nil, fmt.Errorf("supabase client: %w", err)
@@ -577,6 +592,46 @@ func NewSupabase(projectURL, apiKey string) (Store, error) {
 
 func (s *supabaseStore) Close() {}
 
+// batchConcurrencyStore bounds how many PostgREST round-trips a fan-out store read
+// runs at once. Kept in step with the api-layer batchConcurrency and under the
+// tuned MaxIdleConnsPerHost (64, see NewSupabase) so a summary read reuses pooled
+// connections and can't exhaust the pool.
+const batchConcurrencyStore = 8
+
+// runStoreBatch runs fn for each index in [0,n) with bounded concurrency and
+// returns the first error observed (the rest still run to completion). It mirrors
+// the api-layer runBatch; duplicated here so the store stays self-contained. fn is
+// called from multiple goroutines, so it must be safe to run concurrently.
+func runStoreBatch(n, concurrency int, fn func(i int) error) error {
+	if n <= 0 {
+		return nil
+	}
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var firstErr error
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if err := fn(i); err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				mu.Unlock()
+			}
+		}(i)
+	}
+	wg.Wait()
+	return firstErr
+}
+
 // isRpcError detects a PostgREST error JSON in an Rpc() string result.
 // This version of supabase-go doesn't return errors from Rpc — they come
 // through as JSON objects with a "code" field.
@@ -585,7 +640,44 @@ func isRpcError(result string) bool {
 	return strings.HasPrefix(t, "{") && strings.Contains(t, `"code"`)
 }
 
-func (s *supabaseStore) bumpVersion(_ context.Context, canvasID uuid.UUID) (int, error) {
+// skipBumpKey marks a context whose per-item Update*/Delete* store calls should
+// NOT bump the canvas version — the batch path opts in via WithoutVersionBump and
+// bumps once itself via BumpCanvasVersion.
+type skipBumpKey struct{}
+
+// WithoutVersionBump returns a context that suppresses the per-item canvas-version
+// bump inside the Update*/Delete* store methods. The batch handlers wrap the
+// context they hand to their per-item store calls with this, then bump the version
+// exactly once (BumpCanvasVersion) after every write in the batch has landed. That
+// turns an N-item batch's 2N Supabase round-trips into N+1 and removes the row-lock
+// contention the N concurrent bumps would otherwise create on the single canvas
+// row. Single (non-batch) callers never set it, so their behavior is unchanged.
+func WithoutVersionBump(ctx context.Context) context.Context {
+	return context.WithValue(ctx, skipBumpKey{}, true)
+}
+
+func skipVersionBump(ctx context.Context) bool {
+	v, _ := ctx.Value(skipBumpKey{}).(bool)
+	return v
+}
+
+// BumpCanvasVersion increments the canvas version once. It always bumps (it does
+// not consult the skip flag), so the batch path can suppress the per-item bumps on
+// its writes yet still bump once at the end by calling this with a plain context.
+func (s *supabaseStore) BumpCanvasVersion(ctx context.Context, canvasID uuid.UUID) (int, error) {
+	return s.doBumpVersion(canvasID)
+}
+
+func (s *supabaseStore) bumpVersion(ctx context.Context, canvasID uuid.UUID) (int, error) {
+	if skipVersionBump(ctx) {
+		// Batch path: the caller bumps once after all writes land. Returning the
+		// current version isn't needed — every batch handler discards this int.
+		return 0, nil
+	}
+	return s.doBumpVersion(canvasID)
+}
+
+func (s *supabaseStore) doBumpVersion(canvasID uuid.UUID) (int, error) {
 	result := s.client.Rpc("bump_canvas_version", "", map[string]string{
 		"canvas_id": canvasID.String(),
 	})
@@ -1406,142 +1498,194 @@ func (s *supabaseStore) GetCanvasSummary(_ context.Context, canvasID uuid.UUID, 
 	}
 	id := canvasID.String()
 
+	// Each kind's count+sample is an independent PostgREST round-trip; run them
+	// concurrently (bounded) instead of ~13 in series so the default canvas_state_read
+	// — the read every session opens with — collapses into a couple of waves. Each
+	// task writes a distinct Sample sub-map, but sum.Counts is a single shared map, so
+	// guard every write to sum/edits with sumMu (Go maps aren't safe for concurrent
+	// writes even to different keys). getCanvasRowState already ran serially above; it
+	// provides the bearings the sum is built from.
+	var sumMu sync.Mutex
+	var edits []*PendingEdit
+
 	// Name-listed kinds: one query each returns the exact count (Content-Range)
 	// AND the capped name-column sample. Only the columns the summary renders a
 	// name from are selected, so heavy JSON columns (config/columns/data/…) never
 	// leave Postgres. Order by id so the sampled page is stable across reads (the
 	// API layer alpha-sorts the names for display on top of that).
-	{
-		var rows []dbDocument
-		n, err := s.client.From("documents").Select("id,name,type", "exact", false).Eq("canvas_id", id).Order("id", nil).Limit(sampleLimit, "").ExecuteTo(&rows)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		sum.Counts["documents"] = int(n)
-		for _, d := range rows {
-			doc := toDocument(d)
-			sum.Sample.Documents[doc.ID.String()] = doc
-		}
+	tasks := []func() error{
+		func() error {
+			var rows []dbDocument
+			n, err := s.client.From("documents").Select("id,name,type", "exact", false).Eq("canvas_id", id).Order("id", nil).Limit(sampleLimit, "").ExecuteTo(&rows)
+			if err != nil {
+				return err
+			}
+			sumMu.Lock()
+			defer sumMu.Unlock()
+			sum.Counts["documents"] = int(n)
+			for _, d := range rows {
+				doc := toDocument(d)
+				sum.Sample.Documents[doc.ID.String()] = doc
+			}
+			return nil
+		},
+		func() error {
+			var rows []dbPin
+			n, err := s.client.From("pins").Select("id,label", "exact", false).Eq("canvas_id", id).Order("id", nil).Limit(sampleLimit, "").ExecuteTo(&rows)
+			if err != nil {
+				return err
+			}
+			sumMu.Lock()
+			defer sumMu.Unlock()
+			sum.Counts["pins"] = int(n)
+			for _, d := range rows {
+				p := toPin(d)
+				sum.Sample.Pins[p.ID.String()] = p
+			}
+			return nil
+		},
+		func() error {
+			var rows []dbEvent
+			n, err := s.client.From("events").Select("id,title", "exact", false).Eq("canvas_id", id).Order("id", nil).Limit(sampleLimit, "").ExecuteTo(&rows)
+			if err != nil {
+				return err
+			}
+			sumMu.Lock()
+			defer sumMu.Unlock()
+			sum.Counts["events"] = int(n)
+			for _, d := range rows {
+				e := toEvent(d)
+				sum.Sample.Events[e.ID.String()] = e
+			}
+			return nil
+		},
+		func() error {
+			var rows []dbNote
+			n, err := s.client.From("notes").Select("id,body", "exact", false).Eq("canvas_id", id).Order("id", nil).Limit(sampleLimit, "").ExecuteTo(&rows)
+			if err != nil {
+				return err
+			}
+			sumMu.Lock()
+			defer sumMu.Unlock()
+			sum.Counts["notes"] = int(n)
+			for _, d := range rows {
+				nt := toNote(d)
+				sum.Sample.Notes[nt.ID.String()] = nt
+			}
+			return nil
+		},
+		func() error {
+			var rows []dbRoadmapItem
+			n, err := s.client.From("roadmap_items").Select("id,title", "exact", false).Eq("canvas_id", id).Order("id", nil).Limit(sampleLimit, "").ExecuteTo(&rows)
+			if err != nil {
+				return err
+			}
+			sumMu.Lock()
+			defer sumMu.Unlock()
+			sum.Counts["roadmapItems"] = int(n)
+			for _, d := range rows {
+				r := toRoadmapItem(d)
+				sum.Sample.RoadmapItems[r.ID.String()] = r
+			}
+			return nil
+		},
+		func() error {
+			var rows []dbSheet
+			n, err := s.client.From("sheets").Select("id,name", "exact", false).Eq("canvas_id", id).Order("id", nil).Limit(sampleLimit, "").ExecuteTo(&rows)
+			if err != nil {
+				return err
+			}
+			sumMu.Lock()
+			defer sumMu.Unlock()
+			sum.Counts["sheets"] = int(n)
+			for _, d := range rows {
+				sh := toSheet(d)
+				sum.Sample.Sheets[sh.ID.String()] = sh
+			}
+			return nil
+		},
+		func() error {
+			var rows []dbChart
+			n, err := s.client.From("charts").Select("id,name", "exact", false).Eq("canvas_id", id).Order("id", nil).Limit(sampleLimit, "").ExecuteTo(&rows)
+			if err != nil {
+				return err
+			}
+			sumMu.Lock()
+			defer sumMu.Unlock()
+			sum.Counts["charts"] = int(n)
+			for _, d := range rows {
+				ch := toChart(d)
+				sum.Sample.Charts[ch.ID.String()] = ch
+			}
+			return nil
+		},
+		func() error {
+			var rows []dbForm
+			n, err := s.client.From("forms").Select("id,name", "exact", false).Eq("canvas_id", id).Order("id", nil).Limit(sampleLimit, "").ExecuteTo(&rows)
+			if err != nil {
+				return err
+			}
+			sumMu.Lock()
+			defer sumMu.Unlock()
+			sum.Counts["forms"] = int(n)
+			for _, d := range rows {
+				f := toForm(d)
+				sum.Sample.Forms[f.ID.String()] = f
+			}
+			return nil
+		},
+		func() error {
+			var rows []dbAgent
+			n, err := s.client.From("agents").Select("id,name", "exact", false).Eq("canvas_id", id).Order("id", nil).Limit(sampleLimit, "").ExecuteTo(&rows)
+			if err != nil {
+				return err
+			}
+			sumMu.Lock()
+			defer sumMu.Unlock()
+			sum.Counts["agents"] = int(n)
+			for _, d := range rows {
+				ag := toAgent(d)
+				sum.Sample.Agents[ag.ID.String()] = ag
+			}
+			return nil
+		},
+		// Count-only kinds: actions are deliberately never name-listed, and sheet_rows
+		// has no name to list — a HEAD count (head=true → no rows transferred) is all
+		// the summary needs.
+		func() error {
+			_, n, err := s.client.From("actions").Select("id", "exact", true).Eq("canvas_id", id).Execute()
+			if err != nil {
+				return err
+			}
+			sumMu.Lock()
+			defer sumMu.Unlock()
+			sum.Counts["actions"] = int(n)
+			return nil
+		},
+		func() error {
+			// sheet_rows is FK'd to sheets (no canvas_id), so scope the count through an
+			// inner join on the parent sheet's canvas_id.
+			_, n, err := s.client.From("sheet_rows").Select("id,sheets!inner(canvas_id)", "exact", true).Eq("sheets.canvas_id", id).Execute()
+			if err != nil {
+				return err
+			}
+			sumMu.Lock()
+			defer sumMu.Unlock()
+			sum.Counts["sheetRows"] = int(n)
+			return nil
+		},
+		func() error {
+			e, err := s.ListPendingEdits(context.Background(), canvasID)
+			if err != nil {
+				return err
+			}
+			sumMu.Lock()
+			defer sumMu.Unlock()
+			edits = e
+			return nil
+		},
 	}
-	{
-		var rows []dbPin
-		n, err := s.client.From("pins").Select("id,label", "exact", false).Eq("canvas_id", id).Order("id", nil).Limit(sampleLimit, "").ExecuteTo(&rows)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		sum.Counts["pins"] = int(n)
-		for _, d := range rows {
-			p := toPin(d)
-			sum.Sample.Pins[p.ID.String()] = p
-		}
-	}
-	{
-		var rows []dbEvent
-		n, err := s.client.From("events").Select("id,title", "exact", false).Eq("canvas_id", id).Order("id", nil).Limit(sampleLimit, "").ExecuteTo(&rows)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		sum.Counts["events"] = int(n)
-		for _, d := range rows {
-			e := toEvent(d)
-			sum.Sample.Events[e.ID.String()] = e
-		}
-	}
-	{
-		var rows []dbNote
-		n, err := s.client.From("notes").Select("id,body", "exact", false).Eq("canvas_id", id).Order("id", nil).Limit(sampleLimit, "").ExecuteTo(&rows)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		sum.Counts["notes"] = int(n)
-		for _, d := range rows {
-			nt := toNote(d)
-			sum.Sample.Notes[nt.ID.String()] = nt
-		}
-	}
-	{
-		var rows []dbRoadmapItem
-		n, err := s.client.From("roadmap_items").Select("id,title", "exact", false).Eq("canvas_id", id).Order("id", nil).Limit(sampleLimit, "").ExecuteTo(&rows)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		sum.Counts["roadmapItems"] = int(n)
-		for _, d := range rows {
-			r := toRoadmapItem(d)
-			sum.Sample.RoadmapItems[r.ID.String()] = r
-		}
-	}
-	{
-		var rows []dbSheet
-		n, err := s.client.From("sheets").Select("id,name", "exact", false).Eq("canvas_id", id).Order("id", nil).Limit(sampleLimit, "").ExecuteTo(&rows)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		sum.Counts["sheets"] = int(n)
-		for _, d := range rows {
-			sh := toSheet(d)
-			sum.Sample.Sheets[sh.ID.String()] = sh
-		}
-	}
-	{
-		var rows []dbChart
-		n, err := s.client.From("charts").Select("id,name", "exact", false).Eq("canvas_id", id).Order("id", nil).Limit(sampleLimit, "").ExecuteTo(&rows)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		sum.Counts["charts"] = int(n)
-		for _, d := range rows {
-			ch := toChart(d)
-			sum.Sample.Charts[ch.ID.String()] = ch
-		}
-	}
-	{
-		var rows []dbForm
-		n, err := s.client.From("forms").Select("id,name", "exact", false).Eq("canvas_id", id).Order("id", nil).Limit(sampleLimit, "").ExecuteTo(&rows)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		sum.Counts["forms"] = int(n)
-		for _, d := range rows {
-			f := toForm(d)
-			sum.Sample.Forms[f.ID.String()] = f
-		}
-	}
-	{
-		var rows []dbAgent
-		n, err := s.client.From("agents").Select("id,name", "exact", false).Eq("canvas_id", id).Order("id", nil).Limit(sampleLimit, "").ExecuteTo(&rows)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		sum.Counts["agents"] = int(n)
-		for _, d := range rows {
-			ag := toAgent(d)
-			sum.Sample.Agents[ag.ID.String()] = ag
-		}
-	}
-
-	// Count-only kinds: actions are deliberately never name-listed, and sheet_rows
-	// has no name to list — a HEAD count (head=true → no rows transferred) is all
-	// the summary needs.
-	{
-		_, n, err := s.client.From("actions").Select("id", "exact", true).Eq("canvas_id", id).Execute()
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		sum.Counts["actions"] = int(n)
-	}
-	{
-		// sheet_rows is FK'd to sheets (no canvas_id), so scope the count through an
-		// inner join on the parent sheet's canvas_id.
-		_, n, err := s.client.From("sheet_rows").Select("id,sheets!inner(canvas_id)", "exact", true).Eq("sheets.canvas_id", id).Execute()
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		sum.Counts["sheetRows"] = int(n)
-	}
-
-	edits, err := s.ListPendingEdits(context.Background(), canvasID)
-	if err != nil {
+	if err := runStoreBatch(len(tasks), batchConcurrencyStore, func(i int) error { return tasks[i]() }); err != nil {
 		return nil, nil, nil, err
 	}
 	return canvas, sum, edits, nil
@@ -2092,9 +2236,9 @@ func noteRow(canvasID uuid.UUID, n *Note, now time.Time) map[string]any {
 		"document_id": uuidPtrStr(n.DocumentID),
 		"body":        n.Body, "image_refs": refs,
 		"parent_kind": n.ParentKind, "created_by": n.CreatedBy,
-		"parent_id":   parentID,
-		"sort_order":  n.SortOrder,
-		"updated_at":  now.Format(time.RFC3339),
+		"parent_id":  parentID,
+		"sort_order": n.SortOrder,
+		"updated_at": now.Format(time.RFC3339),
 	}
 }
 

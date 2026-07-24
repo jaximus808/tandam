@@ -40,7 +40,7 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	broadcastState(r.Context(), h.store, h.hub, canvasID)
+	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
 	writeJSON(w, http.StatusCreated, map[string]string{"agentId": agent.ID.String()})
 }
 
@@ -134,7 +134,7 @@ func (h *Handler) ProposeAction(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	broadcastState(r.Context(), h.store, h.hub, canvasID)
+	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
 	writeJSON(w, http.StatusCreated, action)
 }
 
@@ -205,7 +205,7 @@ func (h *Handler) ProposeActionsBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	broadcastState(r.Context(), h.store, h.hub, canvasID)
+	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
 	writeJSON(w, http.StatusCreated, map[string]any{"actions": actions})
 }
 
@@ -382,7 +382,7 @@ func (h *Handler) DeleteAction(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	broadcastState(r.Context(), h.store, h.hub, canvasID)
+	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
 	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
 }
 
@@ -411,7 +411,7 @@ func (h *Handler) updateActionPayload(w http.ResponseWriter, r *http.Request, pa
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	broadcastState(r.Context(), h.store, h.hub, canvasID)
+	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
 	fresh, err := h.store.GetAction(r.Context(), canvasID, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())

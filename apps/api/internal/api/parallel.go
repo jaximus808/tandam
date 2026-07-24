@@ -9,6 +9,10 @@ import "sync"
 // that to ~ceil(N/batchConcurrency) waves while capping simultaneous connections
 // to Supabase so a large batch can't exhaust PostgREST's pool. 8 sits well under
 // the default limits and already turns the common 10–30 item batch into 2–4 waves.
+//
+// NewSupabase (store.NewSupabase) raises the outbound MaxIdleConnsPerHost to 64 so
+// all 8 concurrent items reuse pooled connections instead of re-handshaking TLS;
+// keep this value under that ceiling.
 const batchConcurrency = 8
 
 // runBatch invokes fn for each index in [0,n) with bounded concurrency and

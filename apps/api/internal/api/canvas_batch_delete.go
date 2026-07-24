@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 
+	"github.com/agentcanvas/api/internal/store"
 	"github.com/google/uuid"
 )
 
@@ -43,6 +44,15 @@ import (
 // moment later off the request goroutine.
 func (h *Handler) broadcastBatchDelete(w http.ResponseWriter, r *http.Request, deleted []string) {
 	canvasID := CanvasIDFromCtx(r.Context())
+	// One version bump per batch — the per-item deletes ran with the bump suppressed
+	// (store.WithoutVersionBump). Skip when nothing was deleted, mirroring the old
+	// serial loop. Synchronous so the async broadcast reflects the new version.
+	if len(deleted) > 0 {
+		if _, err := h.store.BumpCanvasVersion(r.Context(), canvasID); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
 	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted})
 }
@@ -71,7 +81,7 @@ func (h *Handler) DeletePinsBatch(w http.ResponseWriter, r *http.Request) {
 		deleted = append(deleted, id.String())
 	}
 	if err := runBatch(len(ids), func(i int) error {
-		_, err := h.store.DeletePin(r.Context(), canvasID, ids[i])
+		_, err := h.store.DeletePin(store.WithoutVersionBump(r.Context()), canvasID, ids[i])
 		return err
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -104,7 +114,7 @@ func (h *Handler) DeleteEventsBatch(w http.ResponseWriter, r *http.Request) {
 		deleted = append(deleted, id.String())
 	}
 	if err := runBatch(len(ids), func(i int) error {
-		_, err := h.store.DeleteEvent(r.Context(), canvasID, ids[i])
+		_, err := h.store.DeleteEvent(store.WithoutVersionBump(r.Context()), canvasID, ids[i])
 		return err
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -137,7 +147,7 @@ func (h *Handler) DeleteNotesBatch(w http.ResponseWriter, r *http.Request) {
 		deleted = append(deleted, id.String())
 	}
 	if err := runBatch(len(ids), func(i int) error {
-		_, err := h.store.DeleteNote(r.Context(), canvasID, ids[i])
+		_, err := h.store.DeleteNote(store.WithoutVersionBump(r.Context()), canvasID, ids[i])
 		return err
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -170,7 +180,7 @@ func (h *Handler) DeleteRoadmapItemsBatch(w http.ResponseWriter, r *http.Request
 		deleted = append(deleted, id.String())
 	}
 	if err := runBatch(len(ids), func(i int) error {
-		_, err := h.store.DeleteRoadmapItem(r.Context(), canvasID, ids[i])
+		_, err := h.store.DeleteRoadmapItem(store.WithoutVersionBump(r.Context()), canvasID, ids[i])
 		return err
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -203,7 +213,7 @@ func (h *Handler) DeleteChartsBatch(w http.ResponseWriter, r *http.Request) {
 		deleted = append(deleted, id.String())
 	}
 	if err := runBatch(len(ids), func(i int) error {
-		_, err := h.store.DeleteChart(r.Context(), canvasID, ids[i])
+		_, err := h.store.DeleteChart(store.WithoutVersionBump(r.Context()), canvasID, ids[i])
 		return err
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -236,7 +246,7 @@ func (h *Handler) DeleteSheetsBatch(w http.ResponseWriter, r *http.Request) {
 		deleted = append(deleted, id.String())
 	}
 	if err := runBatch(len(ids), func(i int) error {
-		_, err := h.store.DeleteSheet(r.Context(), canvasID, ids[i])
+		_, err := h.store.DeleteSheet(store.WithoutVersionBump(r.Context()), canvasID, ids[i])
 		return err
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -269,7 +279,7 @@ func (h *Handler) DeleteSheetRowsBatch(w http.ResponseWriter, r *http.Request) {
 		deleted = append(deleted, id.String())
 	}
 	if err := runBatch(len(ids), func(i int) error {
-		_, err := h.store.DeleteSheetRow(r.Context(), canvasID, ids[i])
+		_, err := h.store.DeleteSheetRow(store.WithoutVersionBump(r.Context()), canvasID, ids[i])
 		return err
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -310,7 +320,7 @@ func (h *Handler) DeleteSheetColumnsBatch(w http.ResponseWriter, r *http.Request
 		if item.SheetID == uuid.Nil || item.ColumnID == "" {
 			continue
 		}
-		if _, err := h.store.DeleteSheetColumn(r.Context(), canvasID, item.SheetID, item.ColumnID); err != nil {
+		if _, err := h.store.DeleteSheetColumn(store.WithoutVersionBump(r.Context()), canvasID, item.SheetID, item.ColumnID); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -354,7 +364,7 @@ func (h *Handler) DeleteDocumentsBatch(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		if _, err := h.store.DeleteDocument(r.Context(), canvasID, doc.ID); err != nil {
+		if _, err := h.store.DeleteDocument(store.WithoutVersionBump(r.Context()), canvasID, doc.ID); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -387,7 +397,7 @@ func (h *Handler) DeleteFormsBatch(w http.ResponseWriter, r *http.Request) {
 		deleted = append(deleted, id.String())
 	}
 	if err := runBatch(len(ids), func(i int) error {
-		_, err := h.store.DeleteForm(r.Context(), canvasID, ids[i])
+		_, err := h.store.DeleteForm(store.WithoutVersionBump(r.Context()), canvasID, ids[i])
 		return err
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -424,7 +434,7 @@ func (h *Handler) DeleteActionsBatch(w http.ResponseWriter, r *http.Request) {
 		deleted = append(deleted, id.String())
 	}
 	if err := runBatch(len(ids), func(i int) error {
-		_, err := h.store.DeleteAction(r.Context(), canvasID, ids[i])
+		_, err := h.store.DeleteAction(store.WithoutVersionBump(r.Context()), canvasID, ids[i])
 		return err
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())

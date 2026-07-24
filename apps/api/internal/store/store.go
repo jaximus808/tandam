@@ -27,9 +27,9 @@ var (
 // ── Domain types ──────────────────────────────────────────────────────────────
 
 type Canvas struct {
-	ID          uuid.UUID  `json:"id"`
-	Code        string     `json:"code"`
-	Name        string     `json:"name"`
+	ID   uuid.UUID `json:"id"`
+	Code string    `json:"code"`
+	Name string    `json:"name"`
 	// Mode is the ACTIVE mode — whichever view was last opened. It says nothing
 	// about what the canvas contains; EnabledModes does. Anything describing a
 	// canvas to a human (the dashboard cards, its filter) wants EnabledModes.
@@ -669,6 +669,12 @@ type Store interface {
 	CountUnreadNotifications(ctx context.Context, userID uuid.UUID) (int, error)
 	MarkNotificationsRead(ctx context.Context, userID uuid.UUID) error
 	GetCanvasState(ctx context.Context, canvasID uuid.UUID) (*Canvas, *CanvasState, []*PendingEdit, error)
+	// BumpCanvasVersion increments the canvas version once and returns the new
+	// value. The per-item Update*/Delete* methods normally bump it themselves, but
+	// the batch handlers suppress that (see WithoutVersionBump) and call this once
+	// after all writes land — one bump per batch instead of N, and no lock
+	// contention on the canvas row among the concurrent writers.
+	BumpCanvasVersion(ctx context.Context, canvasID uuid.UUID) (int, error)
 	// GetCanvasKinds is the lightweight sibling of GetCanvasState: it loads only
 	// the requested kinds via per-table SELECTs (kinds not asked for stay nil, so
 	// they serialize to null), plus the canvas row and pending edits. Backs the

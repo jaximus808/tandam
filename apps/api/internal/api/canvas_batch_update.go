@@ -43,6 +43,17 @@ import (
 // viewers — the same reasoning as broadcastStateAsync elsewhere.
 func (h *Handler) broadcastBatchUpdate(w http.ResponseWriter, r *http.Request, updated []string) {
 	canvasID := CanvasIDFromCtx(r.Context())
+	// The per-item writes ran with the version bump suppressed (store.WithoutVersionBump);
+	// bump exactly once here so a batch advances the canvas version a single time. Skip
+	// when nothing was applied — matches the old serial loop, which bumped only on real
+	// writes. Synchronous (before the async broadcast) so the broadcasted state carries
+	// the new version.
+	if len(updated) > 0 {
+		if _, err := h.store.BumpCanvasVersion(r.Context(), canvasID); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
 	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
 	writeJSON(w, http.StatusOK, map[string]any{"updated": updated})
 }
@@ -94,7 +105,7 @@ func (h *Handler) UpdatePinsBatch(w http.ResponseWriter, r *http.Request) {
 		updated = append(updated, item.ID.String())
 	}
 	if err := runBatch(len(items), func(i int) error {
-		_, err := h.store.UpdatePin(r.Context(), canvasID, items[i].ID, items[i].PinPatch)
+		_, err := h.store.UpdatePin(store.WithoutVersionBump(r.Context()), canvasID, items[i].ID, items[i].PinPatch)
 		return err
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -131,7 +142,7 @@ func (h *Handler) UpdateEventsBatch(w http.ResponseWriter, r *http.Request) {
 		updated = append(updated, item.ID.String())
 	}
 	if err := runBatch(len(items), func(i int) error {
-		_, err := h.store.UpdateEvent(r.Context(), canvasID, items[i].ID, items[i].EventPatch)
+		_, err := h.store.UpdateEvent(store.WithoutVersionBump(r.Context()), canvasID, items[i].ID, items[i].EventPatch)
 		return err
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -168,7 +179,7 @@ func (h *Handler) UpdateNotesBatch(w http.ResponseWriter, r *http.Request) {
 		updated = append(updated, item.ID.String())
 	}
 	if err := runBatch(len(items), func(i int) error {
-		_, err := h.store.UpdateNote(r.Context(), canvasID, items[i].ID, items[i].NotePatch)
+		_, err := h.store.UpdateNote(store.WithoutVersionBump(r.Context()), canvasID, items[i].ID, items[i].NotePatch)
 		return err
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -205,7 +216,7 @@ func (h *Handler) UpdateRoadmapItemsBatch(w http.ResponseWriter, r *http.Request
 		updated = append(updated, item.ID.String())
 	}
 	if err := runBatch(len(items), func(i int) error {
-		_, err := h.store.UpdateRoadmapItem(r.Context(), canvasID, items[i].ID, items[i].RoadmapItemPatch)
+		_, err := h.store.UpdateRoadmapItem(store.WithoutVersionBump(r.Context()), canvasID, items[i].ID, items[i].RoadmapItemPatch)
 		return err
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -246,7 +257,7 @@ func (h *Handler) UpdateChartsBatch(w http.ResponseWriter, r *http.Request) {
 		updated = append(updated, item.ID.String())
 	}
 	if err := runBatch(len(items), func(i int) error {
-		_, err := h.store.UpdateChart(r.Context(), canvasID, items[i].ID, items[i].ChartPatch)
+		_, err := h.store.UpdateChart(store.WithoutVersionBump(r.Context()), canvasID, items[i].ID, items[i].ChartPatch)
 		return err
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -283,7 +294,7 @@ func (h *Handler) UpdateSheetRowsBatch(w http.ResponseWriter, r *http.Request) {
 		updated = append(updated, item.ID.String())
 	}
 	if err := runBatch(len(items), func(i int) error {
-		_, err := h.store.UpdateSheetRow(r.Context(), canvasID, items[i].ID, items[i].SheetRowPatch)
+		_, err := h.store.UpdateSheetRow(store.WithoutVersionBump(r.Context()), canvasID, items[i].ID, items[i].SheetRowPatch)
 		return err
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -329,7 +340,7 @@ func (h *Handler) UpdateSheetColumnsBatch(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusBadRequest, "invalid column type")
 			return
 		}
-		if _, err := h.store.UpdateSheetColumn(r.Context(), canvasID, item.SheetID, item.ColumnID, item.SheetColumnPatch); err != nil {
+		if _, err := h.store.UpdateSheetColumn(store.WithoutVersionBump(r.Context()), canvasID, item.SheetID, item.ColumnID, item.SheetColumnPatch); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}

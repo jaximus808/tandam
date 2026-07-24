@@ -56,7 +56,7 @@ func (h *Handler) DefineForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res.FormID = f.ID.String()
-	broadcastState(r.Context(), h.store, h.hub, canvasID)
+	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
 	writeJSON(w, http.StatusCreated, res)
 }
 
@@ -92,7 +92,7 @@ func (h *Handler) UpdateForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res.FormID = id.String()
-	broadcastState(r.Context(), h.store, h.hub, canvasID)
+	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
 	writeJSON(w, http.StatusOK, res)
 }
 
@@ -108,7 +108,7 @@ func (h *Handler) DeleteForm(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	broadcastState(r.Context(), h.store, h.hub, canvasID)
+	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
 	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
 }
 

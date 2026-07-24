@@ -23,6 +23,14 @@ export function setCanvasReadOnly(v: boolean) {
 }
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let currentCode: string | null = null;
+// Highest canvas state version we've applied. Single-item writes now broadcast
+// asynchronously on the server (off the request goroutine), so two rapid
+// mutations can have their full-state snapshots arrive out of order; we drop any
+// snapshot strictly older than one already rendered so a late, stale broadcast
+// can't clobber newer state. Strictly-less (not ≤) so equal-version broadcasts
+// that don't bump the version (e.g. an access/role change) still apply. Reset
+// per connection — versions are per-canvas and monotonic.
+let lastAppliedVersion = -1;
 let outboundQueue: WSClientMessage[] = [];
 let reconnectAttempts = 0;
 const QUEUE_MAX = 50;
@@ -110,6 +118,7 @@ export function connectToCanvas(code: string) {
   if (currentCode === code && socket?.readyState === WebSocket.OPEN) return;
   currentCode = code;
   reconnectAttempts = 0;
+  lastAppliedVersion = -1; // fresh canvas — its version line is unrelated to the last
   readOnly = false; // fresh canvas — don't carry a prior board's read-only gate
   emitAccessError(null); // clear any denial from a previous canvas
   if (reconnectTimer) {
@@ -164,11 +173,18 @@ function connect(code: string) {
     try {
       const msg = JSON.parse(e.data as string);
       if (msg.type === "state") {
+        const state = msg.state as CanvasState;
+        // Async broadcasts can arrive reordered — ignore a snapshot older than
+        // one we've already applied (see lastAppliedVersion).
+        if (typeof state?.version === "number") {
+          if (state.version < lastAppliedVersion) return;
+          lastAppliedVersion = state.version;
+        }
         handlers.forEach((h) =>
           h(
             msg.canvas as CanvasMeta,
             [],
-            msg.state as CanvasState,
+            state,
             msg.pendingEdits as PendingEdit[],
             msg.lastChangeBy as ChangeActor | undefined
           )
