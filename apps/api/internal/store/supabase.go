@@ -234,6 +234,7 @@ type dbUser struct {
 	AvatarURL               string `json:"avatar_url"`
 	DefaultCanvasVisibility string `json:"default_canvas_visibility"`
 	DefaultPublicRole       string `json:"default_public_role"`
+	AgentFollowStyle        string `json:"agent_follow_style"`
 	CreatedAt               string `json:"created_at"`
 	LastSeenAt              string `json:"last_seen_at"`
 }
@@ -552,6 +553,7 @@ func toUser(d dbUser) *User {
 		DisplayName: d.DisplayName, AvatarURL: d.AvatarURL,
 		DefaultCanvasVisibility: d.DefaultCanvasVisibility,
 		DefaultPublicRole:       d.DefaultPublicRole,
+		AgentFollowStyle:        d.AgentFollowStyle,
 		CreatedAt:               parseTime(d.CreatedAt), LastSeenAt: parseTime(d.LastSeenAt),
 	}
 }
@@ -3617,6 +3619,23 @@ func (s *supabaseStore) UpdateUserDefaultPublicRole(_ context.Context, id uuid.U
 	var rows []dbUser
 	_, err := s.client.From("users").
 		Update(map[string]string{"default_public_role": role}, "representation", "").
+		Eq("id", id.String()).
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, ErrUserNotFound
+	}
+	return toUser(rows[0]), nil
+}
+
+// UpdateUserAgentFollowStyle sets the user's agent_follow_style and returns the
+// refreshed row (representation) so the caller can echo the fresh user back.
+func (s *supabaseStore) UpdateUserAgentFollowStyle(_ context.Context, id uuid.UUID, style string) (*User, error) {
+	var rows []dbUser
+	_, err := s.client.From("users").
+		Update(map[string]string{"agent_follow_style": style}, "representation", "").
 		Eq("id", id.String()).
 		ExecuteTo(&rows)
 	if err != nil {

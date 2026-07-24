@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import type { CanvasMode, CanvasState } from "../types";
 import { onAgentActivity, type ChangeActor } from "./ws";
+import { readFollowStyle } from "./followStyle";
 
 // How the agent's live presence behaves:
 //   - PRESENCE_MS: how long "Claude" stays shown as connected after its last
@@ -208,10 +209,12 @@ export function useAgentActivity(
     clearTimeout(presenceTimer.current);
     presenceTimer.current = setTimeout(() => setOnline(false), PRESENCE_MS);
 
-    const dur = Math.min(
-      SHOWCASE_MAX_MS,
-      SHOWCASE_MIN_MS + Math.max(0, next.count - 1) * SHOWCASE_PER_ITEM_MS,
-    );
+    // Cinematic reveals run a longer top→bottom pan, so the highlight has to
+    // linger long enough to still be up when the scroll lands at the bottom.
+    const dur =
+      readFollowStyle() === "cinematic"
+        ? Math.min(SHOWCASE_MAX_MS, 3600 + Math.max(0, next.count - 1) * 90)
+        : Math.min(SHOWCASE_MAX_MS, SHOWCASE_MIN_MS + Math.max(0, next.count - 1) * SHOWCASE_PER_ITEM_MS);
     showcaseTimer.current = setTimeout(() => {
       showcaseTimer.current = undefined;
       advance.current();

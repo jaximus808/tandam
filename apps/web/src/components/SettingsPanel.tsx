@@ -3,6 +3,7 @@ import { ChevronsLeft, Trash2 } from "lucide-react";
 import type { CanvasMeta } from "../types";
 import { deleteCanvas } from "../lib/api";
 import DeleteCanvasModal from "./DeleteCanvasModal";
+import FollowStyleControl from "./FollowStyleControl";
 
 /* SettingsPanel — the side-dock view for settings that act on THIS canvas.
    Today that's the danger zone (owner-only delete); future canvas settings and
@@ -57,6 +58,20 @@ export default function SettingsPanel({
             {canvas.name || "Untitled canvas"}
           </p>
           <p className="mt-0.5 font-code text-[11px] tracking-[0.14em] text-ink/40">{canvas.code}</p>
+        </div>
+
+        <div className="mt-6 border-t border-ink/10 pt-4">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-ink/40">
+            Agent activity
+          </p>
+          <p className="mt-2 text-[12px] leading-relaxed text-ink/45">
+            How a batch of agent changes reveals while you follow along. Cinematic glides from the
+            top of the changes to the bottom; Minimal just settles it into view. Saved on this
+            device, and to your account when signed in.
+          </p>
+          <div className="mt-3">
+            <FollowStyleControl />
+          </div>
         </div>
 
         <div className="mt-6 border-t border-ink/10 pt-4">

@@ -43,6 +43,8 @@ import TasksPanel from "./components/TasksPanel";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { useAgentActivity } from "./lib/useAgentActivity";
 import { useAgentNotifications } from "./lib/useAgentNotifications";
+import { useFollowStyle } from "./lib/followStyle";
+import { scrollParentOf, alignTopScroll, alignBottomScroll, animateScrollTop } from "./lib/showcaseScroll";
 import { recordRecent } from "./lib/recentCanvases";
 import { loadTabState, saveTabState } from "./lib/tabState";
 import { loadSidebarState, saveSidebarState } from "./lib/sidebarState";
@@ -707,6 +709,10 @@ export default function App() {
   // Notification center: turns agent actions into transient toasts + a bell log.
   const notify = useAgentNotifications(agentAction);
 
+  // How dramatic the batch auto-scroll is (device-local, account-synced). Read
+  // reactively so flipping it in settings changes the next reveal immediately.
+  const followStyle = useFollowStyle();
+
   // Auto-follow: while following, an agent batch pulls the follower to the
   // document it lives in (so you watch the agent move between tabs).
   useEffect(() => {
@@ -717,18 +723,20 @@ export default function App() {
     if (docId) setFollowDocId(docId);
   }, [agentShowcase, activeDocId, canvasState]);
 
-  // While following, sweep the batch into view with ONE smooth top→bottom pan
-  // rather than hopping to each item. Members may not be mounted yet (the tab is
-  // mid-switch), so retry across a few frames until at least one is present.
-  // A block that already fits gets a single gentle centering; a tall one pans
-  // from its first member to its last so the agent looks like it's scrolling
-  // down the page as it works.
+  // While following, sweep the batch into view. Members may not be mounted yet
+  // (the tab is mid-switch), so retry across a few frames until present. Then
+  // either:
+  //   cinematic — start at the top of the change block and glide all the way to
+  //               the bottom, so you watch every added item scroll past;
+  //   minimal   — a quick settle (center if it fits, else a short two-step nudge).
+  // The follow-style preference (followStyle) chooses; both drive the same halo.
   useEffect(() => {
     if (activeDocId !== null || !agentShowcase || agentShowcase.memberIds.length === 0) return;
     const ids = agentShowcase.memberIds;
     let raf = 0;
     let tries = 0;
     let panTimer: ReturnType<typeof setTimeout> | undefined;
+    let cancelAnim: (() => void) | null = null;
     const mounted = () =>
       ids
         .map((id) => document.querySelector<HTMLElement>(`[data-agent-target="${id}"]`))
@@ -742,24 +750,43 @@ export default function App() {
       els.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
       const first = els[0];
       const last = els[els.length - 1];
-      const span = last.getBoundingClientRect().bottom - first.getBoundingClientRect().top;
-      // Fits in ~90% of the viewport (or a single item) → one centered scroll.
-      if (first === last || span <= window.innerHeight * 0.9) {
-        first.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+
+      if (followStyle === "minimal") {
+        const span = last.getBoundingClientRect().bottom - first.getBoundingClientRect().top;
+        // Fits in ~90% of the viewport (or a single item) → one centered scroll.
+        if (first === last || span <= window.innerHeight * 0.9) {
+          first.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+          return;
+        }
+        // Taller than the viewport → glide to the top, then down to the bottom.
+        first.scrollIntoView({ behavior: "smooth", block: "start", inline: "center" });
+        panTimer = setTimeout(() => {
+          last.scrollIntoView({ behavior: "smooth", block: "end", inline: "center" });
+        }, 850);
         return;
       }
-      // Taller than the viewport → glide to the top, then down to the bottom.
-      first.scrollIntoView({ behavior: "smooth", block: "start", inline: "center" });
-      panTimer = setTimeout(() => {
-        last.scrollIntoView({ behavior: "smooth", block: "end", inline: "center" });
-      }, 850);
+
+      // Cinematic: settle the first change to the top, then glide down to the
+      // last over a distance-based duration so the whole block scrolls past.
+      const container = scrollParentOf(first);
+      const startTop = alignTopScroll(container, first.getBoundingClientRect().top);
+      const endTop = alignBottomScroll(container, last.getBoundingClientRect().bottom);
+      cancelAnim = animateScrollTop(container, startTop, 320);
+      if (endTop > startTop + 2) {
+        panTimer = setTimeout(() => {
+          const dist = endTop - startTop;
+          const dur = Math.max(1400, Math.min(2800, dist / 0.7));
+          cancelAnim = animateScrollTop(container, endTop, dur);
+        }, 360);
+      }
     };
     raf = requestAnimationFrame(run);
     return () => {
       cancelAnimationFrame(raf);
       if (panTimer) clearTimeout(panTimer);
+      cancelAnim?.();
     };
-  }, [agentShowcase, activeDocId]);
+  }, [agentShowcase, activeDocId, followStyle]);
 
   // A user scroll/pan while following = "I'm taking the wheel": pin to the
   // current tab and stop following until they click Follow again. We listen for

@@ -1,3 +1,5 @@
+import { applyFollowStyle, type FollowStyle } from "./followStyle";
+
 export interface User {
   id: string;
   email: string;
@@ -10,6 +12,10 @@ export interface User {
   // creates: "read" (view only) or "write" (can edit). Defaults "read". Does not
   // affect the owner or shared members, who keep their own role.
   defaultPublicRole?: "read" | "write";
+  // Preference for how the agent-activity showcase auto-scrolls a batch into
+  // view: "cinematic" (glide top→bottom) or "minimal". Mirrored into localStorage
+  // on load so the canvas can read it synchronously (see followStyle.ts).
+  agentFollowStyle?: FollowStyle;
   createdAt?: string;
   lastSeenAt?: string;
 }
@@ -45,6 +51,10 @@ function cacheUser(user: User | null): void {
   } catch {
     /* storage disabled / over quota — cache is best-effort */
   }
+  // Mirror the account's follow-style down into the device-local layer so the
+  // canvas honours it immediately (and it follows the user across devices). On
+  // sign-out (user null) we leave the local value alone — it stays a device pref.
+  if (user?.agentFollowStyle) applyFollowStyle(user.agentFollowStyle);
 }
 
 export async function fetchMe(): Promise<User | null> {
@@ -123,6 +133,40 @@ export async function setDefaultPublicRole(role: "read" | "write"): Promise<User
   const user = (await res.json()) as User;
   cacheUser(user);
   return user;
+}
+
+// setAgentFollowStyle PATCHes the signed-in user's follow-style preference and
+// returns the server-confirmed user (refreshing the identity cache, which also
+// mirrors the value into localStorage). Throws on failure.
+export async function setAgentFollowStyle(style: FollowStyle): Promise<User> {
+  const res = await fetch("/api/auth/me", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    body: JSON.stringify({ agentFollowStyle: style }),
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(detail || "Failed to update setting");
+  }
+  const user = (await res.json()) as User;
+  cacheUser(user);
+  return user;
+}
+
+// saveFollowStyle is the one-call setter for the follow-style preference used by
+// the settings UIs. It writes the device-local value immediately (so the change
+// is instant and works for signed-out visitors), then — only if signed in —
+// persists it to the account so it follows the user across devices. An account
+// PATCH failure is swallowed: the local write already took effect.
+export async function saveFollowStyle(style: FollowStyle): Promise<void> {
+  applyFollowStyle(style);
+  if (!getCachedUser()) return;
+  try {
+    await setAgentFollowStyle(style);
+  } catch {
+    /* local write already applied; account sync will retry on next change */
+  }
 }
 
 export async function logout(): Promise<void> {

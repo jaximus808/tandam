@@ -125,12 +125,13 @@ func (h *AuthHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		DefaultCanvasVisibility *string `json:"defaultCanvasVisibility"`
 		DefaultPublicRole       *string `json:"defaultPublicRole"`
+		AgentFollowStyle        *string `json:"agentFollowStyle"`
 	}
 	if err := decode(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	if body.DefaultCanvasVisibility == nil && body.DefaultPublicRole == nil {
+	if body.DefaultCanvasVisibility == nil && body.DefaultPublicRole == nil && body.AgentFollowStyle == nil {
 		writeError(w, http.StatusBadRequest, "no updatable fields provided")
 		return
 	}
@@ -154,6 +155,17 @@ func (h *AuthHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		user, err = h.store.UpdateUserDefaultPublicRole(r.Context(), uid, *pr)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	if fs := body.AgentFollowStyle; fs != nil {
+		if *fs != "cinematic" && *fs != "minimal" {
+			writeError(w, http.StatusBadRequest, "agentFollowStyle must be 'cinematic' or 'minimal'")
+			return
+		}
+		user, err = h.store.UpdateUserAgentFollowStyle(r.Context(), uid, *fs)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return

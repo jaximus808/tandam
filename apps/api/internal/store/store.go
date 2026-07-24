@@ -345,7 +345,11 @@ type User struct {
 	// DefaultPublicRole is the user's preference ('read'|'write') for what a bare
 	// code-holder gets on a PUBLIC canvas they create — applied in CreateCanvas.
 	// Does not affect owner/shared-member access (see ResolveCanvasRole).
-	DefaultPublicRole string    `json:"defaultPublicRole"`
+	DefaultPublicRole string `json:"defaultPublicRole"`
+	// AgentFollowStyle is the user's preference ('cinematic'|'minimal') for how
+	// the agent-activity showcase auto-scrolls a batch change into view. Purely a
+	// client-side display preference; the server just stores and echoes it.
+	AgentFollowStyle string    `json:"agentFollowStyle"`
 	CreatedAt         time.Time `json:"createdAt"`
 	LastSeenAt        time.Time `json:"lastSeenAt"`
 }
@@ -788,6 +792,9 @@ type Store interface {
 	// UpdateUserDefaultPublicRole sets the user's default_public_role preference
 	// ('read'|'write') and returns the refreshed row.
 	UpdateUserDefaultPublicRole(ctx context.Context, id uuid.UUID, role string) (*User, error)
+	// UpdateUserAgentFollowStyle sets the user's agent_follow_style preference
+	// ('cinematic'|'minimal') and returns the refreshed row.
+	UpdateUserAgentFollowStyle(ctx context.Context, id uuid.UUID, style string) (*User, error)
 
 	// Personal access tokens (migration 0027) — user-scoped MCP credentials.
 	// CreatePersonalAccessToken stores the hash and returns the metadata row;

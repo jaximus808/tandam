@@ -13,6 +13,7 @@ import AccountMenu from "../components/AccountMenu";
 import AccessTokensSection from "../components/AccessTokensSection";
 import ConnectedAppsSection from "../components/ConnectedAppsSection";
 import ThemeToggle from "../components/ThemeToggle";
+import FollowStyleControl from "../components/FollowStyleControl";
 import posthog from "../lib/posthog";
 
 interface Props {
@@ -213,6 +214,21 @@ export default function UserSettings({ onHome, onShowCanvases, onShowAbout, onOp
                   </div>
                 </div>
                 <ThemeToggle />
+              </div>
+            </section>
+
+            {/* Agent activity — how dramatic the batch-reveal auto-scroll is when
+                you're following an agent. Saved to your account (and this device).*/}
+            <section className="mt-6 rounded-2xl border border-ink/10 bg-surface p-5 sm:p-6">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-ink">Agent activity reveal</div>
+                  <div className="text-xs text-ink/50">
+                    When an agent adds a batch while you follow it, Cinematic glides from the top of
+                    the changes to the bottom so you see everything; Minimal just settles it into view.
+                  </div>
+                </div>
+                <FollowStyleControl />
               </div>
             </section>
 
