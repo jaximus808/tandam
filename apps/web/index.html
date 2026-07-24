@@ -23,14 +23,22 @@
       })();
     </script>
 
-    <!-- Primary SEO. The card leads with reversed causality ("Claude made this")
-         instead of a feature list — a link preview that names docs/sheets/canvas
-         loses the "Google already does that" argument before anyone clicks.
-         The bare word "Tandem" is kept in the <title> for brand/domain search. -->
-    <title>Tandem — Claude made this. You keep it.</title>
+    <!-- Primary SEO. The <title>, description, and og/twitter TITLES are
+         keyword-first for search discovery: they name the things people actually
+         type ("AI canvas", "MCP", "shared canvas", "AI agents") so Tandem is
+         findable by concept, not just by brand. The og/twitter DESCRIPTIONS still
+         lead with the reversed-causality hook ("Claude made this") — that's the
+         human-facing click driver in a link preview — but even they now work the
+         core keywords in. The bare word "Tandem" is kept everywhere for
+         brand/domain search. -->
+    <title>Tandem — a shared AI canvas for you and your agents, over MCP</title>
     <meta
       name="description"
-      content="The work your AI does in a chat usually vanishes into a scroll you never find again. Tandem is where Claude leaves it — a real artifact you can open, edit, and keep. Not a doc you fill in, not plumbing you never see."
+      content="Tandem is a shared AI canvas you and your AI agents co-edit in real time over MCP. The work your AI does in a chat usually vanishes into a scroll you never find again — Tandem is where Claude leaves it, as a real artifact you can open, edit, and keep. A collaborative canvas for humans and AI agents. Connect Claude, Cursor, or any MCP client."
+    />
+    <meta
+      name="keywords"
+      content="AI canvas, shared canvas, MCP, Model Context Protocol, AI agents, collaborative canvas, human-AI collaboration, Claude canvas, MCP server, real-time canvas, agent workspace, Tandem, Tandem Canvas"
     />
     <link rel="canonical" href="https://tandemcanvas.com/" />
     <meta name="robots" content="index, follow" />
@@ -39,10 +47,10 @@
     <!-- Open Graph (link previews on Slack, iMessage, LinkedIn, Facebook…) -->
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Tandem Canvas" />
-    <meta property="og:title" content="Claude made this. You keep it." />
+    <meta property="og:title" content="Tandem — a shared AI canvas for you and your agents, over MCP" />
     <meta
       property="og:description"
-      content="You ask in the chat you're already in. Claude does the work and leaves a real artifact you can open, edit, and keep. A doc has no agent. An MCP server has no human. This is the one thing that's both."
+      content="A shared AI canvas you and your AI agents co-edit in real time over MCP. You ask in the chat you're already in; Claude does the work and leaves a real artifact you can open, edit, and keep. A doc has no agent. An MCP server has no human. This is the one thing that's both."
     />
     <meta property="og:url" content="https://tandemcanvas.com/" />
     <meta property="og:image" content="https://tandemcanvas.com/og-image.png" />
@@ -51,10 +59,10 @@
 
     <!-- Twitter / X card -->
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Claude made this. You keep it." />
+    <meta name="twitter:title" content="Tandem — a shared AI canvas for you and your agents, over MCP" />
     <meta
       name="twitter:description"
-      content="You ask in the chat you're already in. Claude does the work and leaves a real artifact you can open, edit, and keep — not a doc you fill in, not plumbing you never see."
+      content="A shared AI canvas for you and your AI agents, over MCP. You ask in the chat you're already in; Claude does the work and leaves a real artifact you can open, edit, and keep — not a doc you fill in, not plumbing you never see."
     />
     <meta name="twitter:image" content="https://tandemcanvas.com/og-image.png" />
 
@@ -72,10 +80,12 @@
           {
             "@type": "SoftwareApplication",
             "name": "Tandem Canvas",
+            "alternateName": "Tandem — shared AI canvas over MCP",
             "applicationCategory": "BusinessApplication",
             "operatingSystem": "Web",
             "url": "https://tandemcanvas.com/",
-            "description": "Where the work your AI does in chat becomes a real artifact you can open, edit, and keep.",
+            "description": "Tandem is a shared AI canvas you and your AI agents co-edit in real time over MCP (Model Context Protocol). The work your AI does in chat becomes a real artifact you can open, edit, and keep. Connect Claude, Cursor, or any MCP client.",
+            "keywords": "AI canvas, shared canvas, MCP, Model Context Protocol, AI agents, collaborative canvas, Claude",
             "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
           }
         ]

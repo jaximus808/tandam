@@ -297,8 +297,10 @@ func buildRouteVariants(base []byte) map[string][]byte {
 		html = strings.ReplaceAll(html,
 			`<meta property="og:url" content="`+origin+`/" />`,
 			`<meta property="og:url" content="`+origin+path+`" />`)
-		// Give the route its own title (also used as og/twitter title).
-		const homeTitle = "Tandem Canvas — one canvas for your team and your AI agents"
+		// Give the route its own title (also used as og/twitter title). This
+		// MUST stay byte-for-byte identical to the <title> in apps/web/index.html
+		// or the replace is a silent no-op and the route serves the home title.
+		const homeTitle = "Tandem — a shared AI canvas for you and your agents, over MCP"
 		html = strings.ReplaceAll(html, homeTitle, title)
 		return []byte(html)
 	}
