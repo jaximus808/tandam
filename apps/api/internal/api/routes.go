@@ -177,6 +177,10 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 			r.Patch("/api/canvas/events/{id}", h.UpdateEvent)
 			r.Delete("/api/canvas/events/{id}", h.DeleteEvent)
 
+			// Combined pins + events in one write; events reference brand-new
+			// pins by client-supplied clientId (breaks the pin-ID dependency trap).
+			r.Post("/api/canvas/map/batch", h.CreateMapBatch)
+
 			r.Post("/api/canvas/notes", h.CreateNote)
 			r.Post("/api/canvas/notes/batch", h.CreateNotesBatch)
 			r.Post("/api/canvas/notes/batch-update", h.UpdateNotesBatch)

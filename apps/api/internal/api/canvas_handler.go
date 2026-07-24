@@ -685,6 +685,214 @@ func (h *Handler) CreateEventsBatch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"events": events})
 }
 
+// resolvePinClientRef maps a client-supplied pin handle to the real UUID minted
+// for that pin earlier in the same map batch. `field` and `index` name where the
+// ref lives so a bad reference produces a legible, agent-fixable error rather
+// than a silent miss. Pure + side-effect free so the resolution rules are unit
+// tested directly (see canvas_map_batch_test.go).
+func resolvePinClientRef(clientToPin map[string]uuid.UUID, cid, field string, index int) (uuid.UUID, error) {
+	id, ok := clientToPin[cid]
+	if !ok {
+		return uuid.UUID{}, fmt.Errorf("events[%d]: unknown %s %q — no pin in this batch declared that clientId", index, field, cid)
+	}
+	return id, nil
+}
+
+// POST /api/canvas/map/batch — place pins AND itinerary events in ONE call,
+// with events allowed to reference pins that don't exist yet via a
+// client-supplied `clientId`. This breaks the pin-ID dependency trap: an
+// itinerary entry normally references pins by their real, server-generated
+// UUID, so an agent had to create pins, read back their ids, THEN create the
+// events — two-plus serialized round trips (and model turns) for a single
+// trip. Here the caller tags each pin with a `clientId` and each event refers
+// to pins via `fromClientId`/`toClientId`/`clientPinIds`/`clientPinId`; the
+// server mints the real UUIDs, resolves the client refs against them, and
+// writes pins-then-events under ONE state broadcast.
+//
+// Client refs compose with real-UUID refs (pinIds/pinId/fromPinId/toPinId), so
+// one batch can mix freshly-created pins and pins placed in an earlier call.
+// `document` sets the shared map doc for pins; `itineraryDocument` the shared
+// itinerary doc for events; each pin/event may still override with its own
+// `document`.
+//
+// This is not a single cross-table DB transaction (PostgREST offers none here),
+// but inserting pins before events means an event never points at a missing
+// pin; a failure after the pin insert leaves recoverable orphan pins, not
+// dangling event references.
+func (h *Handler) CreateMapBatch(w http.ResponseWriter, r *http.Request) {
+	canvasID := CanvasIDFromCtx(r.Context())
+	type pinItem struct {
+		store.Pin
+		ClientID string `json:"clientId"` // transport-only handle; not persisted
+		Document string `json:"document"` // per-pin override
+	}
+	type eventItem struct {
+		Title        string      `json:"title"`
+		Start        time.Time   `json:"start"`
+		End          *time.Time  `json:"end"`
+		Timezone     *string     `json:"timezone"`
+		PinIDs       []uuid.UUID `json:"pinIds"`
+		PinID        *uuid.UUID  `json:"pinId"`
+		FromPinID    *uuid.UUID  `json:"fromPinId"`
+		ToPinID      *uuid.UUID  `json:"toPinId"`
+		ClientPinIDs []string    `json:"clientPinIds"` // refs into this batch's pin clientIds
+		ClientPinID  string      `json:"clientPinId"`
+		FromClientID string      `json:"fromClientId"`
+		ToClientID   string      `json:"toClientId"`
+		TravelMode   *string     `json:"travelMode"`
+		DayTag       *string     `json:"dayTag"`
+		Cost         *float64    `json:"cost"`
+		CreatedBy    string      `json:"createdBy"`
+		Document     string      `json:"document"` // per-entry override
+	}
+	var body struct {
+		Document          string      `json:"document"`          // shared map doc for pins
+		ItineraryDocument string      `json:"itineraryDocument"` // shared itinerary doc for events
+		Pins              []pinItem   `json:"pins"`
+		Events            []eventItem `json:"events"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(body.Pins) == 0 && len(body.Events) == 0 {
+		writeError(w, http.StatusBadRequest, "map batch: at least one pin or event is required")
+		return
+	}
+	// Resolve target docs through a per-(type,ref) cache so a shared/default doc
+	// is resolved (and created on demand) exactly once for the whole batch.
+	docCache := map[string]*uuid.UUID{}
+	resolveDoc := func(docType, ref string) (*uuid.UUID, error) {
+		key := docType + "\x00" + ref
+		if cached, ok := docCache[key]; ok {
+			return cached, nil
+		}
+		id, err := h.documentForContent(r.Context(), canvasID, docType, ref)
+		if err != nil {
+			return nil, err
+		}
+		docCache[key] = &id
+		return &id, nil
+	}
+	// Pass 1 — materialize pins, minting a real UUID for each and recording any
+	// clientId → UUID so events can reference pins that don't exist yet. A
+	// clientId must be unique within the batch (a ref has to be unambiguous).
+	clientToPin := map[string]uuid.UUID{}
+	pins := make([]*store.Pin, 0, len(body.Pins))
+	for i := range body.Pins {
+		pin := body.Pins[i].Pin
+		if msg := validateLatLng(pin.Lat, pin.Lng); msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
+			return
+		}
+		pin.ID = uuid.New()
+		pin.Kind = "pin"
+		if pin.CreatedBy == "" {
+			pin.CreatedBy = "agent"
+		}
+		if cid := body.Pins[i].ClientID; cid != "" {
+			if _, dup := clientToPin[cid]; dup {
+				writeError(w, http.StatusBadRequest, fmt.Sprintf("pins: duplicate clientId %q — each clientId must be unique within the batch", cid))
+				return
+			}
+			clientToPin[cid] = pin.ID
+		}
+		ref := body.Pins[i].Document
+		if ref == "" && pin.DocumentID != nil {
+			ref = pin.DocumentID.String()
+		}
+		if ref == "" {
+			ref = body.Document
+		}
+		docID, err := resolveDoc("map", ref)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		pin.DocumentID = docID
+		pins = append(pins, &pin)
+	}
+	// Pass 2 — build events, resolving each client ref against the pin map we
+	// just built. Client refs are appended to any real-UUID refs on the same
+	// field, so the two styles compose.
+	events := make([]*store.Event, 0, len(body.Events))
+	for i := range body.Events {
+		item := body.Events[i]
+		createdBy := item.CreatedBy
+		if createdBy == "" {
+			createdBy = "agent"
+		}
+		pinIDs := append([]uuid.UUID(nil), item.PinIDs...)
+		for _, cid := range item.ClientPinIDs {
+			id, err := resolvePinClientRef(clientToPin, cid, "clientPinId", i)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			pinIDs = append(pinIDs, id)
+		}
+		pinID := item.PinID
+		if item.ClientPinID != "" {
+			id, err := resolvePinClientRef(clientToPin, item.ClientPinID, "clientPinId", i)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			pinID = &id
+		}
+		fromPinID := item.FromPinID
+		if item.FromClientID != "" {
+			id, err := resolvePinClientRef(clientToPin, item.FromClientID, "fromClientId", i)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			fromPinID = &id
+		}
+		toPinID := item.ToPinID
+		if item.ToClientID != "" {
+			id, err := resolvePinClientRef(clientToPin, item.ToClientID, "toClientId", i)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			toPinID = &id
+		}
+		ref := item.Document
+		if ref == "" {
+			ref = body.ItineraryDocument
+		}
+		docID, err := resolveDoc("itinerary", ref)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		events = append(events, &store.Event{
+			ID: uuid.New(), Kind: "event", DocumentID: docID,
+			Title: item.Title, Start: item.Start, End: item.End,
+			Timezone: item.Timezone,
+			PinIDs:   pinIDs, PinID: pinID,
+			FromPinID: fromPinID, ToPinID: toPinID,
+			TravelMode: item.TravelMode, DayTag: item.DayTag,
+			Cost:      item.Cost,
+			CreatedBy: createdBy,
+		})
+	}
+	// Insert pins first (so every event ref resolves to an existing row), then
+	// events — CreatePins/CreateEvents no-op on an empty slice, so a pins-only
+	// or events-only batch works too. One broadcast covers both.
+	if _, err := h.store.CreatePins(r.Context(), canvasID, pins); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if _, err := h.store.CreateEvents(r.Context(), canvasID, events); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	broadcastState(r.Context(), h.store, h.hub, canvasID)
+	writeJSON(w, http.StatusCreated, map[string]any{"pins": pins, "events": events})
+}
+
 // PATCH /api/canvas/events/{id}
 func (h *Handler) UpdateEvent(w http.ResponseWriter, r *http.Request) {
 	canvasID := CanvasIDFromCtx(r.Context())

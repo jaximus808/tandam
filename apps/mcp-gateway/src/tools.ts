@@ -317,6 +317,43 @@ export async function handleTool(
     case "canvas_event_delete_batch":
       return gateway.post("/api/canvas/events/batch-delete", { ids: (args.ids as unknown[]) ?? [] });
 
+    // ── Map (pins + events in one write) ─────────────────────────────────────────
+    case "canvas_map_add_batch":
+      return gateway.post("/api/canvas/map/batch", {
+        document: args.document,
+        itineraryDocument: args.itineraryDocument,
+        pins: ((args.pins as Record<string, unknown>[]) ?? []).map((p) => ({
+          clientId: p.clientId,
+          pinType: p.pinType ?? "marker",
+          lat: p.lat,
+          lng: p.lng,
+          label: p.label,
+          body: p.body,
+          color: p.color,
+          document: p.document,
+          createdBy: "agent",
+        })),
+        events: ((args.events as Record<string, unknown>[]) ?? []).map((e) => ({
+          title: e.title,
+          start: e.start,
+          end: e.end,
+          timezone: e.timezone,
+          clientPinIds: e.clientPinIds,
+          clientPinId: e.clientPinId,
+          fromClientId: e.fromClientId,
+          toClientId: e.toClientId,
+          pinIds: e.pinIds,
+          pinId: e.pinId,
+          fromPinId: e.fromPinId,
+          toPinId: e.toPinId,
+          travelMode: e.travelMode,
+          dayTag: e.dayTag,
+          cost: e.cost,
+          document: e.document,
+          createdBy: "agent",
+        })),
+      });
+
     // ── Notes ──────────────────────────────────────────────────────────────────
     case "canvas_note_add":
       return gateway.post("/api/canvas/notes", {
@@ -1281,7 +1318,10 @@ const RAW_TOOLS = [
       "takes the SAME fields as canvas_event_add (title, start, end, timezone, " +
       "pinIds/pinId, fromPinId+toPinId+travelMode, dayTag, cost). Entries " +
       "reference pins by their real ids, so create the pins first " +
-      "(canvas_pin_add_batch) and use the ids it returns.",
+      "(canvas_pin_add_batch) and use the ids it returns. If you're adding the " +
+      "pins AND the events together from scratch, prefer canvas_map_add_batch — " +
+      "it lets events reference brand-new pins by a clientId, so the whole trip " +
+      "goes out in ONE call with no id round trip.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -1336,6 +1376,114 @@ const RAW_TOOLS = [
         },
       },
       required: ["events"],
+    },
+  },
+  {
+    name: "canvas_map_add_batch",
+    description:
+      "Place pins AND itinerary entries in ONE call — the highest-leverage tool " +
+      "for building a trip from scratch. Normally an itinerary entry references " +
+      "pins by their real ids, so you'd have to add pins, read back their ids, " +
+      "THEN add events — two-plus round trips. Here you give each pin a `clientId` " +
+      "(any short handle you choose, e.g. \"hotel\" or \"p1\") and let events " +
+      "reference those not-yet-created pins via clientPinIds / clientPinId / " +
+      "fromClientId / toClientId. The server mints the real pin ids, resolves your " +
+      "client refs against them, and writes pins + events with a single live " +
+      "update — a whole 13-pin / 8-event itinerary in ONE call. Events may also " +
+      "reference ALREADY-EXISTING pins by real id (pinIds/pinId/fromPinId/toPinId); " +
+      "the two styles compose. Use canvas_pin_add_batch or canvas_event_add_batch " +
+      "instead when you only need one of the two.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        pins: {
+          type: "array",
+          description:
+            "Pins to place. Give a pin a `clientId` when an event in this same call needs to reference it.",
+          items: {
+            type: "object" as const,
+            properties: {
+              clientId: {
+                type: "string",
+                description:
+                  "Your temporary handle for this pin (e.g. \"hotel\", \"p1\"). Events in the SAME call " +
+                  "reference it via clientPinIds/clientPinId/fromClientId/toClientId. Must be unique within " +
+                  "the batch. Not stored — it only wires up references. Omit for pins no event points at.",
+              },
+              pinType: { type: "string", enum: ["marker", "annotation"] },
+              lat: { type: "number" },
+              lng: { type: "number" },
+              label: { type: "string" },
+              body: { type: "string" },
+              color: { type: "string" },
+              document: {
+                type: "string",
+                description:
+                  "Per-pin override of the target map document. Usually omit and set `document` once at top level.",
+              },
+            },
+            required: ["pinType", "lat", "lng"],
+          },
+        },
+        events: {
+          type: "array",
+          description:
+            "Itinerary entries to add. Reference pins from `pins` above by their clientId, or existing pins by real id.",
+          items: {
+            type: "object" as const,
+            properties: {
+              title: { type: "string" },
+              start: {
+                type: "string",
+                description: "Timezone-aware ISO-8601 instant (include offset or Z), e.g. 2024-06-01T18:00:00-05:00.",
+              },
+              end: { type: "string", description: "End / arrival instant, timezone-aware ISO-8601." },
+              timezone: { type: "string", description: "IANA timezone of THIS entry's location, e.g. 'Asia/Tokyo'." },
+              clientPinIds: {
+                type: "array",
+                items: { type: "string" },
+                description:
+                  "clientIds of pins (declared in `pins` above) this entry covers. Resolved to real ids server-side.",
+              },
+              clientPinId: { type: "string", description: "Single pin (by clientId) this entry takes place at." },
+              fromClientId: { type: "string", description: "Origin pin (by clientId) for a travel segment." },
+              toClientId: { type: "string", description: "Destination pin (by clientId) for a travel segment." },
+              pinIds: {
+                type: "array",
+                items: { type: "string" },
+                description: "Real ids of ALREADY-EXISTING pins this entry covers (composes with clientPinIds).",
+              },
+              pinId: { type: "string", description: "Single already-existing pin by real id. Legacy." },
+              fromPinId: { type: "string", description: "Origin pin by real id (already-existing)." },
+              toPinId: { type: "string", description: "Destination pin by real id (already-existing)." },
+              travelMode: {
+                type: "string",
+                enum: ["flight", "train", "drive"],
+                description: "Travel mode. Required when a from/to pin (client or real) is set.",
+              },
+              dayTag: { type: "string", description: "Optional short day-cluster prefix, e.g. 'DAY 1'." },
+              cost: { type: "number", description: "Optional cost; summed into per-day and grand totals." },
+              document: {
+                type: "string",
+                description: "Per-entry override of the target itinerary document.",
+              },
+            },
+            required: ["title", "start"],
+          },
+        },
+        document: {
+          type: "string",
+          description:
+            "Shared target MAP document for every pin in this batch — an existing document id or name; must " +
+            "already exist. Omit to use the canvas's default map doc, created on demand if none exists.",
+        },
+        itineraryDocument: {
+          type: "string",
+          description:
+            "Shared target ITINERARY document for every event in this batch — an existing document id or name; " +
+            "must already exist. Omit to use the canvas's default itinerary, created on demand if none exists.",
+        },
+      },
     },
   },
   {
