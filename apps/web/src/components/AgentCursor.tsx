@@ -1,53 +1,87 @@
 import { useEffect, useRef } from "react";
 import { modeTheme } from "../lib/modeTheme";
-import type { AgentEdit } from "../lib/useAgentActivity";
+import type { AgentShowcase } from "../lib/useAgentActivity";
 
 interface Props {
-  edit: AgentEdit | null;
+  showcase: AgentShowcase | null;
   name: string;
 }
 
+// Present-tense verb for the live label ("Adding", "Updating", "Removing").
+const LIVE_VERB: Record<AgentShowcase["op"], string> = {
+  created: "Adding",
+  updated: "Updating",
+  removed: "Removing",
+};
+
+// "Adding 10 itinerary events" / "Adding a doc". Batches lead with the count;
+// singles read naturally with an article. Every noun pluralises with a plain -s.
+function liveLabel(s: AgentShowcase): string {
+  const verb = LIVE_VERB[s.op];
+  if (s.count > 1) return `${verb} ${s.count} ${s.noun}s`;
+  const article = /^[aeiou]/i.test(s.noun) ? "an" : "a";
+  return `${verb} ${article} ${s.noun}`;
+}
+
 /**
- * A live "agent cursor": when an agent touches an element (data-agent-target),
- * a glowing halo wraps it and a labelled pointer flies in. A new edit within
- * the linger window glides everything to the next element; idle, it fades.
+ * The live agent "showcase" overlay. Instead of hopping a cursor to each item in
+ * a batch, one glowing halo wraps the *union* of every touched element and a
+ * labelled pointer names what's happening ("Adding 10 events"). App pans the
+ * viewport top→bottom across the same members, and because this reads the live
+ * rects each frame the halo stretches to hold them all as they scroll into view.
  *
- * Position is driven by a single always-on rAF that reads the target's rect and
- * writes transforms straight to the DOM — so following + scrolling stay smooth
- * without re-rendering React each frame. CSS transitions do the gliding/fading.
+ * Positioning is driven by a single always-on rAF that writes transforms
+ * straight to the DOM — following + scrolling stay smooth without re-rendering
+ * React each frame. Label text is plain JSX (it only changes once per batch).
  */
-export default function AgentCursor({ edit, name }: Props) {
+export default function AgentCursor({ showcase, name }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const haloRef = useRef<HTMLDivElement>(null);
   const pointerRef = useRef<HTMLDivElement>(null);
-  // Latest edit, read inside the rAF loop without restarting it.
-  const editRef = useRef<AgentEdit | null>(edit);
-  editRef.current = edit;
+  // Latest showcase, read inside the rAF loop without restarting it.
+  const showRef = useRef<AgentShowcase | null>(showcase);
+  showRef.current = showcase;
 
   useEffect(() => {
     let raf = 0;
     const loop = () => {
-      const e = editRef.current;
+      const s = showRef.current;
       const halo = haloRef.current;
       const pointer = pointerRef.current;
       const root = rootRef.current;
       if (halo && pointer && root) {
-        const el = e ? document.querySelector<HTMLElement>(`[data-agent-target="${e.entityId}"]`) : null;
-        // Inactive tabs stay mounted but display:none (keep-alive) — those have
-        // no client rects, so only track an element that's actually visible.
-        if (e && el && el.getClientRects().length > 0) {
-          const r = el.getBoundingClientRect();
-          const t = modeTheme(e.mode);
+        // Union of every member's rect that's actually on screen. Inactive tabs
+        // stay mounted but display:none (keep-alive) — those report no client
+        // rects, so they're naturally skipped.
+        let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+        if (s) {
+          for (const id of s.memberIds) {
+            const el = document.querySelector<HTMLElement>(`[data-agent-target="${id}"]`);
+            if (!el || el.getClientRects().length === 0) continue;
+            const r = el.getBoundingClientRect();
+            left = Math.min(left, r.left);
+            top = Math.min(top, r.top);
+            right = Math.max(right, r.right);
+            bottom = Math.max(bottom, r.bottom);
+          }
+        }
+        const visible = s && left !== Infinity;
+        if (visible) {
+          const t = modeTheme(s!.mode);
           root.style.setProperty("--agent-accent", t.solid);
           root.style.setProperty("--agent-soft", t.soft);
-          halo.style.transform = `translate(${r.left - 4}px, ${r.top - 4}px)`;
-          halo.style.width = `${r.width + 8}px`;
-          halo.style.height = `${r.height + 8}px`;
+          halo.style.transform = `translate(${left - 5}px, ${top - 5}px)`;
+          halo.style.width = `${right - left + 10}px`;
+          halo.style.height = `${bottom - top + 10}px`;
           halo.style.opacity = "1";
-          pointer.style.transform = `translate(${r.left}px, ${r.top}px)`;
+          // Keep the label on screen even when the block is taller than the
+          // viewport and its top has scrolled away — clamp into the frame.
+          const px = Math.min(Math.max(left, 12), window.innerWidth - 150);
+          const py = Math.min(Math.max(top, 14), window.innerHeight - 72);
+          pointer.style.transform = `translate(${px}px, ${py}px)`;
           pointer.style.opacity = "1";
         } else {
-          // No edit, or its element isn't on screen (different tab) — fade out.
+          // Nothing to show (idle, or every member is on a hidden tab) — fade.
           halo.style.opacity = "0";
           pointer.style.opacity = "0";
         }
@@ -58,22 +92,26 @@ export default function AgentCursor({ edit, name }: Props) {
     return () => cancelAnimationFrame(raf);
   }, []);
 
+  const label = showcase ? liveLabel(showcase) : "";
+  const who = showcase?.agentName || name;
+
   return (
     <div ref={rootRef} className="pointer-events-none fixed inset-0 z-[70]" aria-hidden="true">
-      {/* Halo wrapping the changed element. */}
+      {/* Halo wrapping the whole batch. */}
       <div
         ref={haloRef}
-        className="absolute left-0 top-0 rounded-[10px] opacity-0"
+        className="absolute left-0 top-0 rounded-[12px] opacity-0"
         style={{
           border: "1.5px solid var(--agent-accent)",
           background: "var(--agent-soft)",
-          boxShadow: "0 0 0 4px color-mix(in srgb, var(--agent-accent) 12%, transparent), 0 8px 24px -8px var(--agent-accent)",
+          boxShadow:
+            "0 0 0 4px color-mix(in srgb, var(--agent-accent) 12%, transparent), 0 8px 24px -8px var(--agent-accent)",
           transition:
-            "transform .3s cubic-bezier(.22,1,.36,1), width .3s cubic-bezier(.22,1,.36,1), height .3s cubic-bezier(.22,1,.36,1), opacity .35s ease",
+            "transform .32s cubic-bezier(.22,1,.36,1), width .32s cubic-bezier(.22,1,.36,1), height .32s cubic-bezier(.22,1,.36,1), opacity .35s ease",
         }}
       />
 
-      {/* Pointer + label, tip anchored to the element's top-left corner. */}
+      {/* Pointer + label, tip anchored to the block's top-left corner. */}
       <div
         ref={pointerRef}
         className="absolute left-0 top-0 opacity-0"
@@ -100,13 +138,14 @@ export default function AgentCursor({ edit, name }: Props) {
           />
         </svg>
 
-        {/* Name pill, offset to sit beside the arrow. */}
+        {/* Name + live action pill, offset to sit beside the arrow. */}
         <div
-          className="absolute left-[15px] top-[13px] flex items-center gap-1 whitespace-nowrap rounded-[3px] px-1.5 py-0.5 font-code text-[10px] font-medium text-white shadow-sm"
+          className="absolute left-[15px] top-[13px] flex items-center gap-1.5 whitespace-nowrap rounded-[4px] px-2 py-1 font-code text-[10px] font-medium text-white shadow-sm"
           style={{ background: "var(--agent-accent)" }}
         >
           <SparkleGlyph />
-          {name}
+          <span className="font-semibold">{who}</span>
+          {label && <span className="opacity-90">· {label}</span>}
           <span className="ml-0.5 inline-flex gap-[2px]">
             <Dot delay="0ms" />
             <Dot delay="160ms" />

@@ -698,6 +698,7 @@ export default function App() {
   // who's in the room. Safe to call with nulls before a canvas loads.
   const {
     edit: agentEdit,
+    showcase: agentShowcase,
     agents: agentList,
     reading: agentReading,
     lastAction: agentAction,
@@ -706,36 +707,59 @@ export default function App() {
   // Notification center: turns agent actions into transient toasts + a bell log.
   const notify = useAgentNotifications(agentAction);
 
-  // Auto-follow: while following, an agent edit pulls the follower to the
-  // document that edit lives in (so you watch the agent move between tabs).
+  // Auto-follow: while following, an agent batch pulls the follower to the
+  // document it lives in (so you watch the agent move between tabs).
   useEffect(() => {
-    if (activeDocId !== null || !agentEdit || !canvasState) return;
-    const docId = documentIdForEntity(canvasState, agentEdit.entityId);
+    if (activeDocId !== null || !agentShowcase || !canvasState) return;
+    const anchor = agentShowcase.memberIds[0];
+    if (!anchor) return; // label-only segment (e.g. a removal) — nothing to open
+    const docId = documentIdForEntity(canvasState, anchor);
     if (docId) setFollowDocId(docId);
-  }, [agentEdit, activeDocId, canvasState]);
+  }, [agentShowcase, activeDocId, canvasState]);
 
-  // While following, scroll the agent's just-edited element into view so its
-  // cursor is always on screen. The element may not be mounted yet (the tab is
-  // mid-switch), so retry across a few frames until it's present + visible.
+  // While following, sweep the batch into view with ONE smooth top→bottom pan
+  // rather than hopping to each item. Members may not be mounted yet (the tab is
+  // mid-switch), so retry across a few frames until at least one is present.
+  // A block that already fits gets a single gentle centering; a tall one pans
+  // from its first member to its last so the agent looks like it's scrolling
+  // down the page as it works.
   useEffect(() => {
-    if (activeDocId !== null || !agentEdit) return;
-    const id = agentEdit.entityId;
+    if (activeDocId !== null || !agentShowcase || agentShowcase.memberIds.length === 0) return;
+    const ids = agentShowcase.memberIds;
     let raf = 0;
     let tries = 0;
-    const tryScroll = () => {
-      const el = document.querySelector<HTMLElement>(`[data-agent-target="${id}"]`);
-      if (el && el.getClientRects().length > 0) {
-        // center on BOTH axes so nested scrollboxes (e.g. a roadmap column's own
-        // vertical scroll) AND the outer strip (horizontal column scroll) both
-        // move to put the edited line squarely in frame.
-        el.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+    let panTimer: ReturnType<typeof setTimeout> | undefined;
+    const mounted = () =>
+      ids
+        .map((id) => document.querySelector<HTMLElement>(`[data-agent-target="${id}"]`))
+        .filter((el): el is HTMLElement => !!el && el.getClientRects().length > 0);
+    const run = () => {
+      const els = mounted();
+      if (els.length === 0) {
+        if (tries++ < 40) raf = requestAnimationFrame(run);
         return;
       }
-      if (tries++ < 30) raf = requestAnimationFrame(tryScroll);
+      els.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+      const first = els[0];
+      const last = els[els.length - 1];
+      const span = last.getBoundingClientRect().bottom - first.getBoundingClientRect().top;
+      // Fits in ~90% of the viewport (or a single item) → one centered scroll.
+      if (first === last || span <= window.innerHeight * 0.9) {
+        first.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+        return;
+      }
+      // Taller than the viewport → glide to the top, then down to the bottom.
+      first.scrollIntoView({ behavior: "smooth", block: "start", inline: "center" });
+      panTimer = setTimeout(() => {
+        last.scrollIntoView({ behavior: "smooth", block: "end", inline: "center" });
+      }, 850);
     };
-    raf = requestAnimationFrame(tryScroll);
-    return () => cancelAnimationFrame(raf);
-  }, [agentEdit, activeDocId]);
+    raf = requestAnimationFrame(run);
+    return () => {
+      cancelAnimationFrame(raf);
+      if (panTimer) clearTimeout(panTimer);
+    };
+  }, [agentShowcase, activeDocId]);
 
   // A user scroll/pan while following = "I'm taking the wheel": pin to the
   // current tab and stop following until they click Follow again. We listen for
@@ -1443,7 +1467,7 @@ export default function App() {
         <ShareDialog code={canvas.code} canvas={canvas} onClose={() => setShareOpen(false)} />
       )}
 
-      <AgentCursor edit={agentEdit} name={agentList[0]?.name ?? "Claude"} />
+      <AgentCursor showcase={agentShowcase} name={agentList[0]?.name ?? "Claude"} />
     </div>
     </ModeNavContext.Provider>
   );

@@ -3,28 +3,44 @@ import type { CanvasMode, CanvasState } from "../types";
 import { onAgentActivity, type ChangeActor } from "./ws";
 
 // How the agent's live presence behaves:
-//   - CURSOR_MS: the cursor lingers this long on the last-touched element, then
-//     fades. A new edit inside the window glides the cursor to it and resets.
 //   - PRESENCE_MS: how long "Claude" stays shown as connected after its last
 //     edit (the cursor is gone, but we still know it's around).
 //   - READING_MS: how long the "reading" pulse glows after a state read.
-const CURSOR_MS = 2000;
 const PRESENCE_MS = 20_000;
 const READING_MS = 1800;
 
 // A batch push (canvas_*_add_batch etc.) touches many entities in one state
-// broadcast. Instead of jumping the cursor once to the "best" one, we replay
-// every created/updated entity in order, staggered by SEQUENCE_STEP_MS, so the
-// canvas visibly hops across each item like the agent placed them one by one.
-const SEQUENCE_STEP_MS = 320;
-// Cap how many stops a single batch replays — a 200-item batch shouldn't spawn
-// 200 timers or a minute-long light show. Large batches are down-sampled
-// (evenly spaced) but always end on the true last item.
-const MAX_SEQUENCE_STEPS = 20;
+// broadcast. Rather than hop the cursor across each item — which reads as
+// whiplash — we treat the whole batch as ONE "showcase": a single highlight
+// around every touched element and a smooth top→bottom pan (driven in App). A
+// showcase stays up for SHOWCASE_MIN_MS, growing SHOWCASE_PER_ITEM_MS per item
+// up to SHOWCASE_MAX_MS, so bigger batches linger a little longer.
+const SHOWCASE_MIN_MS = 1700;
+const SHOWCASE_PER_ITEM_MS = 110;
+const SHOWCASE_MAX_MS = 5200;
+// Showcases play one-at-a-time from a queue (two batches don't stomp each
+// other — the first finishes its animation before the second starts). Cap the
+// backlog so a flood can't build a minute-long tail; oldest queued get dropped.
+const QUEUE_CAP = 8;
 
 export interface AgentEdit {
   entityId: string;
   mode: CanvasMode;
+}
+
+// A batch of same-mode changes from one broadcast, shown as a single unit: one
+// highlight wrapping all `memberIds`, a smooth pan down them, and an "adding X"
+// label. `id` is unique per segment so effects re-fire even for back-to-back
+// segments of the same shape. A single-item change is just a segment of size 1.
+export interface AgentShowcase {
+  id: number;
+  mode: CanvasMode;
+  memberIds: string[];
+  op: AgentOp;
+  noun: string;
+  count: number;
+  agentName: string;
+  isClaude: boolean;
 }
 
 export interface PresentAgent {
@@ -41,6 +57,7 @@ export interface AgentAction {
   nonce: number;
   op: AgentOp;
   kind: string; // human noun: "doc", "spreadsheet", "map pin", …
+  count: number; // how many of `kind` this action touched (batch size)
   mode: CanvasMode;
   agentName: string;
   isClaude: boolean;
@@ -67,6 +84,41 @@ const KIND_MODE: { key: keyof CanvasState; mode: CanvasMode; noun: string }[] = 
 
 type Snap = { ms: number; mode: CanvasMode; noun: string };
 
+type Change = { id: string; snap: Snap; op: AgentOp };
+
+// Group a broadcast's changes into per-mode segments, ordered by the mode the
+// agent touched first. Each segment becomes one queued showcase — so a batch
+// that spans two modes plays as two clean sweeps (mode A fully, then mode B)
+// rather than interleaving tabs. Within a segment the member order doesn't
+// matter here; App resolves top→bottom from the live DOM when it pans.
+function segmentByMode(changed: Change[]): { mode: CanvasMode; noun: string; op: AgentOp; ids: string[] }[] {
+  const groups = new Map<CanvasMode, { noun: string; firstMs: number; created: number; ids: string[] }>();
+  for (const c of changed) {
+    const g = groups.get(c.snap.mode);
+    if (g) {
+      g.ids.push(c.id);
+      g.firstMs = Math.min(g.firstMs, c.snap.ms);
+      if (c.op === "created") g.created += 1;
+    } else {
+      groups.set(c.snap.mode, {
+        noun: c.snap.noun,
+        firstMs: c.snap.ms,
+        created: c.op === "created" ? 1 : 0,
+        ids: [c.id],
+      });
+    }
+  }
+  return [...groups.entries()]
+    .sort((a, b) => a[1].firstMs - b[1].firstMs)
+    .map(([mode, g]) => ({
+      mode,
+      noun: g.noun,
+      // A mixed group is labelled by its dominant intent; adds win ties.
+      op: g.created >= g.ids.length - g.created ? "created" : "updated",
+      ids: g.ids,
+    }));
+}
+
 // Pick the agent to attribute a change to: prefer a registered online agent
 // (Claude first), else fall back to a generic "Claude".
 function resolveAgent(state: CanvasState | null): PresentAgent {
@@ -80,15 +132,20 @@ function resolveAgent(state: CanvasState | null): PresentAgent {
 
 /**
  * Watches canvas state for agent-authored changes and exposes:
- *   - `edit`     — a transient "cursor target" (the element an agent just touched)
+ *   - `showcase` — the batch currently being spotlighted (all its member ids,
+ *                  mode, and an "adding X" label); App pans it, AgentCursor
+ *                  wraps it. Batches queue and play one-at-a-time.
+ *   - `edit`     — the showcase's first member as a lone cursor target, for
+ *                  consumers that just need "is it editing and where"
  *   - `agents`   — the connected-agents list
  *   - `online`   — whether an agent is presently around
  *   - `reading`  — true for a beat after an agent reads the canvas (state.read)
  *   - `lastAction` — the most recent classified change, for the notification feed
  *
- * The changed entity is found by diffing `updatedAt` against the previous
- * snapshot; whether to fire is gated on the server's `lastChangeBy` hint (read
- * from a ref), so a human editing an agent-created item never triggers it.
+ * Changes are found by diffing `updatedAt` against the previous snapshot and
+ * grouped per mode into showcases; whether to fire is gated on the server's
+ * `lastChangeBy` hint (read from a ref), so a human editing an agent-created
+ * item never triggers it.
  */
 export function useAgentActivity(
   canvasId: string | undefined,
@@ -99,23 +156,67 @@ export function useAgentActivity(
   // doesn't fire the cursor/feed for every pre-existing item.
   const prev = useRef<Map<string, Snap>>(new Map());
   const seededFor = useRef<string | undefined>(undefined);
-  const cursorTimer = useRef<ReturnType<typeof setTimeout>>();
   const presenceTimer = useRef<ReturnType<typeof setTimeout>>();
   const readingTimer = useRef<ReturnType<typeof setTimeout>>();
-  // Pending "replay next item" timers for an in-flight batch sequence. A new
-  // state push cancels whatever's still queued here before starting its own.
-  const sequenceTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  // FIFO of showcases waiting to play, plus the timer that ends the one on
+  // screen. A broadcast appends to `queue`; a single driver plays them strictly
+  // one-at-a-time so two batches never stomp each other's animation.
+  const queue = useRef<AgentShowcase[]>([]);
+  const showcaseTimer = useRef<ReturnType<typeof setTimeout>>();
+  const showcaseSeq = useRef(0);
   const nonce = useRef(0);
 
-  const clearSequence = () => {
-    for (const t of sequenceTimers.current) clearTimeout(t);
-    sequenceTimers.current = [];
-  };
-
-  const [edit, setEdit] = useState<AgentEdit | null>(null);
+  const [showcase, setShowcase] = useState<AgentShowcase | null>(null);
   const [online, setOnline] = useState(false);
   const [reading, setReading] = useState(false);
   const [lastAction, setLastAction] = useState<AgentAction | null>(null);
+
+  // The single cursor target, derived from the active showcase's first member —
+  // kept for consumers (e.g. header presence chip) that only need "is it editing
+  // and where". The rich per-batch view lives in `showcase`.
+  const edit = useMemo<AgentEdit | null>(
+    () => (showcase && showcase.memberIds.length > 0
+      ? { entityId: showcase.memberIds[0], mode: showcase.mode }
+      : null),
+    [showcase],
+  );
+
+  // Play the next queued showcase (if idle). Firing this on completion drains
+  // the queue in order; calling it while one is playing is a no-op — the running
+  // timer will pull the next when it ends.
+  const advance = useRef<() => void>(() => {});
+  advance.current = () => {
+    if (showcaseTimer.current) return; // one is on screen; it'll pull the next
+    const next = queue.current.shift();
+    if (!next) {
+      setShowcase(null);
+      return;
+    }
+    setShowcase(next);
+    // One notification per batch: "created 10 itinerary events".
+    nonce.current += 1;
+    setLastAction({
+      nonce: nonce.current,
+      op: next.op,
+      kind: next.noun,
+      count: next.count,
+      mode: next.mode,
+      agentName: next.agentName,
+      isClaude: next.isClaude,
+    });
+    setOnline(true);
+    clearTimeout(presenceTimer.current);
+    presenceTimer.current = setTimeout(() => setOnline(false), PRESENCE_MS);
+
+    const dur = Math.min(
+      SHOWCASE_MAX_MS,
+      SHOWCASE_MIN_MS + Math.max(0, next.count - 1) * SHOWCASE_PER_ITEM_MS,
+    );
+    showcaseTimer.current = setTimeout(() => {
+      showcaseTimer.current = undefined;
+      advance.current();
+    }, dur);
+  };
 
   // A state read by an agent → glow the "reading" pulse and count it as live
   // presence (so the agent lights up even before its first edit).
@@ -134,10 +235,6 @@ export function useAgentActivity(
   useEffect(() => {
     if (!state) return;
 
-    // A new push supersedes whatever replay sequence was still in flight —
-    // stale timers must not go on firing setEdit for a previous push's items.
-    clearSequence();
-
     // Snapshot every entity with its mode + last-touched time + noun.
     const cur = new Map<string, Snap>();
     for (const { key, mode, noun } of KIND_MODE) {
@@ -151,10 +248,13 @@ export function useAgentActivity(
       prev.current = new Map(cur);
     };
 
-    // First state for this canvas: seed silently, fire nothing.
+    // First state for this canvas: seed silently, fire nothing, reset the queue.
     if (seededFor.current !== canvasId) {
       seededFor.current = canvasId;
-      setEdit(null);
+      queue.current = [];
+      clearTimeout(showcaseTimer.current);
+      showcaseTimer.current = undefined;
+      setShowcase(null);
       setOnline(false);
       setReading(false);
       setLastAction(null);
@@ -162,11 +262,9 @@ export function useAgentActivity(
       return;
     }
 
-    // Every entity created or updated since the last snapshot, oldest first —
-    // that's replay order, so a batch add plays back in the order the agent
-    // actually created the items. Classify created (new id) vs updated
-    // (existing id, newer time).
-    const changed: { id: string; snap: Snap; op: AgentOp }[] = [];
+    // Every entity created or updated since the last snapshot. Classify created
+    // (new id) vs updated (existing id, newer time).
+    const changed: Change[] = [];
     for (const [id, v] of cur) {
       const before = prev.current.get(id);
       if (!before) {
@@ -175,7 +273,6 @@ export function useAgentActivity(
         changed.push({ id, snap: v, op: "updated" });
       }
     }
-    changed.sort((a, b) => a.snap.ms - b.snap.ms);
 
     // No add/update? Look for a removal (an id that vanished).
     let removed: Snap | null = null;
@@ -194,67 +291,41 @@ export function useAgentActivity(
     if (lastChangeBy.current !== "agent") return;
 
     const who = resolveAgent(state);
-    const emit = (op: AgentOp, snap: Snap) => {
-      nonce.current += 1;
-      setLastAction({
-        nonce: nonce.current,
-        op,
-        kind: snap.noun,
-        mode: snap.mode,
+
+    // Turn this broadcast into one-or-more queued showcases (per mode). Removals
+    // have no on-screen anchor left, so they show as a label-only segment.
+    const segments =
+      changed.length > 0
+        ? segmentByMode(changed)
+        : removed
+          ? [{ mode: removed.mode, noun: removed.noun, op: "removed" as AgentOp, ids: [] }]
+          : [];
+
+    for (const seg of segments) {
+      showcaseSeq.current += 1;
+      queue.current.push({
+        id: showcaseSeq.current,
+        mode: seg.mode,
+        memberIds: seg.ids,
+        op: seg.op,
+        noun: seg.noun,
+        count: Math.max(1, seg.ids.length),
         agentName: who.name,
         isClaude: who.isClaude,
       });
-      setOnline(true);
-      clearTimeout(presenceTimer.current);
-      presenceTimer.current = setTimeout(() => setOnline(false), PRESENCE_MS);
-    };
-
-    if (changed.length > 0) {
-      // Down-sample pathologically large batches: keep it a lively few-second
-      // hop rather than a minute of timers, but always land on the real last
-      // item so the final cursor position matches what actually happened.
-      let steps = changed;
-      if (steps.length > MAX_SEQUENCE_STEPS) {
-        const stride = steps.length / MAX_SEQUENCE_STEPS;
-        const sampled: typeof steps = [];
-        for (let i = 0; i < MAX_SEQUENCE_STEPS - 1; i++) {
-          sampled.push(steps[Math.floor(i * stride)]);
-        }
-        sampled.push(steps[steps.length - 1]);
-        steps = sampled;
-      }
-
-      clearTimeout(cursorTimer.current);
-
-      const applyStep = (step: (typeof steps)[number], isLast: boolean) => {
-        setEdit({ entityId: step.id, mode: step.snap.mode });
-        emit(step.op, step.snap);
-        if (isLast) {
-          cursorTimer.current = setTimeout(() => setEdit(null), CURSOR_MS);
-        }
-      };
-
-      // First item jumps immediately — a single-change push (the common case)
-      // gets one instant jump with no artificial delay. Any further items
-      // trail behind on a stagger so the cursor visibly hops across each.
-      applyStep(steps[0], steps.length === 1);
-      for (let i = 1; i < steps.length; i++) {
-        const step = steps[i];
-        const isLast = i === steps.length - 1;
-        const timer = setTimeout(() => applyStep(step, isLast), i * SEQUENCE_STEP_MS);
-        sequenceTimers.current.push(timer);
-      }
-    } else if (removed) {
-      emit("removed", removed);
     }
-  }, [state, canvasId]);
+    // Bound the backlog — drop the oldest queued so a flood can't tail forever.
+    if (queue.current.length > QUEUE_CAP) {
+      queue.current.splice(0, queue.current.length - QUEUE_CAP);
+    }
+    if (segments.length > 0) advance.current();
+  }, [state, canvasId, lastChangeBy]);
 
   useEffect(
     () => () => {
-      clearTimeout(cursorTimer.current);
+      clearTimeout(showcaseTimer.current);
       clearTimeout(presenceTimer.current);
       clearTimeout(readingTimer.current);
-      clearSequence();
     },
     [],
   );
@@ -274,5 +345,5 @@ export function useAgentActivity(
     return list;
   }, [state, online]);
 
-  return { edit, agents, online, reading, lastAction };
+  return { edit, showcase, agents, online, reading, lastAction };
 }

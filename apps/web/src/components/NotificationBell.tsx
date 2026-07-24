@@ -116,7 +116,7 @@ export default function NotificationBell({ log, unread, muted, toggleMute, markR
                       </span>
                       <span className="min-w-0 flex-1 truncate text-[12.5px] leading-tight text-ink">
                         <span className="font-semibold">{n.agentName}</span>{" "}
-                        <span className="text-ink/60">{actionPhrase(n.op, n.kind)}</span>
+                        <span className="text-ink/60">{actionPhrase(n.op, n.kind, n.count)}</span>
                       </span>
                       <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: accent }} />
                       <span className="shrink-0 font-code text-[10px] tabular-nums text-ink/35">

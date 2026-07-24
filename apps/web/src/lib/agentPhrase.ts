@@ -11,8 +11,13 @@ function withArticle(noun: string): string {
   return `${/^[aeiou]/i.test(noun) ? "an" : "a"} ${noun}`;
 }
 
-/** "created a doc", "updated a spreadsheet", "removed a map pin". */
-export function actionPhrase(op: AgentOp, kind: string): string {
+/**
+ * "created a doc", "updated a spreadsheet", "removed a map pin" — and for a
+ * batch, "created 10 itinerary events" (count-led, pluralised). Every noun we
+ * narrate pluralises with a plain -s, so that's all we do.
+ */
+export function actionPhrase(op: AgentOp, kind: string, count = 1): string {
+  if (count > 1) return `${VERB[op]} ${count} ${kind}s`;
   return `${VERB[op]} ${withArticle(kind)}`;
 }
 

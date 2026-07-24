@@ -47,7 +47,7 @@ function Toast({ t, onDismiss }: { t: Notification; onDismiss: (id: number) => v
         <span className="min-w-0 flex-1">
           <span className="block truncate text-[13px] leading-tight text-ink">
             <span className="font-semibold">{t.agentName}</span>{" "}
-            <span className="text-ink/65">{actionPhrase(t.op, t.kind)}</span>
+            <span className="text-ink/65">{actionPhrase(t.op, t.kind, t.count)}</span>
           </span>
           <span className="mt-0.5 flex items-center gap-1.5 font-code text-[10px] uppercase tracking-[0.13em] text-ink/35">
             <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: accent }} />
