@@ -35,6 +35,9 @@ const WEBSITE_URL = "https://www.jaxonp.com/";
 const LINKEDIN_URL = "https://www.linkedin.com/in/jaxon-poentis/";
 const GITHUB_URL = "https://github.com/jaximus808";
 
+// Tandem's own source.
+const REPO_URL = "https://github.com/jaximus808/tandam";
+
 // About is a short, personal page at /about — who built Tandem and where to find
 // him. Kept punchy on purpose: a paragraph, then prominent links out.
 export default function About({ onBack, onOpenMCP, onShowCanvases, onShowSettings, onOpenCanvas }: Props) {
@@ -68,6 +71,33 @@ export default function About({ onBack, onOpenMCP, onShowCanvases, onShowSetting
             table, not narrating at each other. If that resonates, I’d love to hear what you
             build with it.
           </p>
+        </div>
+
+        {/* Source + design. Tandem is open — the repo is the honest version of
+            this story, so link straight to it. */}
+        <div className="mt-12 border-t border-ink/10 pt-8">
+          <span className="font-code text-[11px] uppercase tracking-[0.2em] text-agent">
+            Under the hood
+          </span>
+          <h2 className="mt-3 font-display text-xl font-medium tracking-tight sm:text-2xl">
+            Tandem is open source.
+          </h2>
+          <div className="mt-4 space-y-4 text-[15px] leading-relaxed text-ink/70 sm:text-base">
+            <p>
+              Check out the source code here. It’s a monorepo: a Go API that runs the
+              real-time collaboration hub over WebSockets, a React + Vite frontend, and a
+              stdio MCP server that lets agents edit the same canvas you do. Shared types
+              keep the web app and the agent gateway honest with each other.
+            </p>
+            <p>
+              The design goal is one shared, structured document — notes, roadmaps, sheets,
+              tasks — that both people and agents mutate live, instead of chat transcripts
+              that scroll away. Fittingly, Tandem is planned inside Tandem.
+            </p>
+          </div>
+          <div className="mt-6">
+            <LinkButton href={REPO_URL} icon={GithubIcon} label="View the source on GitHub" primary />
+          </div>
         </div>
 
         {/* Prominent links out. */}
