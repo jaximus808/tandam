@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { listRecent, removeRecent } from "../lib/recentCanvases";
 import { fetchMe, getCachedUser, GOOGLE_CLIENT_ID, type User } from "../lib/auth";
+import { spaLink } from "../lib/spaNav";
 import TandemLogo from "../components/TandemLogo";
 import LandingNav from "../components/LandingNav";
 import CanvasLauncher from "../components/CanvasLauncher";
@@ -1000,6 +1001,68 @@ const AUDIENCES: { title: string; blurb: string; tags: string[]; accent: string;
   },
 ];
 
+// Answers to the questions people actually type into a search box ("what is an
+// MCP canvas", "shared canvas for AI agents"). This is the page's only block of
+// plain, category-level prose — the rest of the landing speaks in brand voice,
+// which only ever matched people already searching for Tandem by name.
+//
+// KEEP IN SYNC with the FAQPage JSON-LD in apps/web/index.html: structured data
+// that doesn't appear on the page is a manual-action risk, so the answers below
+// and the ones in the <head> are the same sentences.
+const FAQS: { q: string; a: React.ReactNode }[] = [
+  {
+    q: "What is an MCP canvas?",
+    a: (
+      <>
+        An MCP canvas is a shared workspace an AI agent can read and write through the{" "}
+        <a
+          href="https://modelcontextprotocol.io"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-agent underline underline-offset-2 hover:text-ink"
+        >
+          Model Context Protocol
+        </a>
+        , while a human edits the same thing live in a browser. Tandem is one: your agent adds pins,
+        events, rows, or notes over MCP and they appear on the canvas instantly, with no
+        copy-pasting out of a chat window.
+      </>
+    ),
+  },
+  {
+    q: "Which AI agents can connect to a Tandem canvas?",
+    a: (
+      <>
+        Any MCP-aware client. Claude Desktop, Claude Code, and claude.ai connect through the hosted
+        connector or the npm package <span className="font-code text-[13px]">@jaximus/tandem-mcp</span>;
+        editors, agent frameworks, and custom orchestrators can spawn the same stdio server. Several
+        agents can work on one canvas at the same time.
+      </>
+    ),
+  },
+  {
+    q: "How is a shared canvas different from a Google Doc?",
+    a: (
+      <>
+        A doc has no agent and an MCP server has no human. Tandem is both: the AI agent builds the
+        artifact and you edit it in the same place, in real time. It also isn't a single document
+        shape — the canvas becomes a map, a schedule, a roadmap, a sheet, or a doc depending on what
+        you asked for.
+      </>
+    ),
+  },
+  {
+    q: "Do I need an account to use Tandem?",
+    a: (
+      <>
+        No. Create a canvas, get a short code, and share it — anyone with the code can open and edit
+        it in the browser and any agent can join with the same code. Signing in with Google is only
+        needed if you want to keep canvases in a dashboard or make one private.
+      </>
+    ),
+  },
+];
+
 const ACCOUNT_PERKS: { icon: string; title: string; desc: string }[] = [
   {
     icon: "save",
@@ -1210,13 +1273,16 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
               className="tandem-rise mt-6 flex flex-wrap items-center gap-x-4 gap-y-2 font-code text-[11px] text-ink/40"
               style={{ animationDelay: "220ms" }}
             >
-              <button
-                onClick={onOpenMCP}
+              {/* anchor, not a button — the hero link to /mcp is the strongest
+                  internal link on the site (see lib/spaNav) */}
+              <a
+                href="/mcp"
+                onClick={spaLink(onOpenMCP)}
                 className="inline-flex items-center gap-1.5 text-[13.5px] font-semibold text-agent transition-colors hover:text-ink"
               >
                 <Icon name="spark" className="h-3.5 w-3.5" />
                 connect an AI agent →
-              </button>
+              </a>
               <span>
                 no sign-up to start
                 {showSignUp && (
@@ -1365,12 +1431,13 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
                 {i === 1 && (
                   <>
                     {" "}
-                    <button
-                      onClick={onOpenMCP}
+                    <a
+                      href="/mcp"
+                      onClick={spaLink(onOpenMCP)}
                       className="font-medium text-agent underline underline-offset-2 transition-colors hover:text-ink"
                     >
                       Setup guide
-                    </button>
+                    </a>
                     .
                   </>
                 )}
@@ -1514,6 +1581,30 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
         </section>
       )}
 
+      {/* FAQ — the plain-language, category-level pass over the same product.
+          Mirrored by the FAQPage JSON-LD in index.html; edit both together. */}
+      <section id="faq" className="border-t border-ink/10">
+        <div className="mx-auto max-w-3xl px-6 py-24">
+          <SysLabel>Questions</SysLabel>
+          <h2 className="mt-3 font-display text-3xl font-medium tracking-tight text-ink sm:text-4xl">
+            A shared canvas for humans and AI agents
+          </h2>
+          <p className="mt-3 leading-relaxed text-ink/65">
+            Tandem is a real-time canvas your agents edit over MCP while you edit it in the browser.
+            The short version, in plain terms:
+          </p>
+
+          <dl className="mt-12 space-y-9">
+            {FAQS.map((f) => (
+              <div key={f.q} className="border-t border-ink/10 pt-6">
+                <dt className="font-display text-lg font-medium text-ink">{f.q}</dt>
+                <dd className="mt-2 leading-relaxed text-ink/65">{f.a}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      </section>
+
       {/* Manifesto / closing CTA — back on the open surface */}
       <section className="relative overflow-hidden">
         <div
@@ -1549,12 +1640,13 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
               Start a canvas
               <Icon name="arrow" className="h-4 w-4" />
             </button>
-            <button
-              onClick={onOpenMCP}
+            <a
+              href="/mcp"
+              onClick={spaLink(onOpenMCP)}
               className="btn-press rounded-md border-[1.5px] border-ink bg-surface px-6 py-3 font-medium text-ink shadow-[4px_4px_0_rgba(28,25,23,0.15)]"
             >
               Connect an agent
-            </button>
+            </a>
           </div>
         </div>
       </section>
@@ -1567,12 +1659,13 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
             <span>Tandem — you and your agents, in tandem.</span>
           </div>
           <div className="flex items-center gap-4">
-            <button
-              onClick={onAbout}
+            <a
+              href="/about"
+              onClick={spaLink(onAbout)}
               className="inline-flex items-center gap-1.5 transition-colors hover:text-ink"
             >
               About
-            </button>
+            </a>
             <p>
               made with <span className="text-agent">♥</span> by{" "}
               <a

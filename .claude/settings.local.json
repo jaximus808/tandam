@@ -119,7 +119,8 @@
       "Bash(echo \"TSC_EXIT=$?\")",
       "Bash(echo \"GO_EXIT=$?\")",
       "mcp__agentcanvas__canvas_pin_add_batch",
-      "mcp__agentcanvas__canvas_event_add_batch"
+      "mcp__agentcanvas__canvas_event_add_batch",
+      "WebFetch(domain:dev.to)"
     ]
   }
 }

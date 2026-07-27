@@ -444,8 +444,11 @@ export default function MCPSupport({
           <span className="font-code text-[11px] uppercase tracking-[0.2em] text-sky-600">
             Bring your own agent
           </span>
+          {/* Keeps the original cadence but spends the h1 — the page's strongest
+              on-page signal — on the words people search ("MCP", "shared canvas")
+              rather than on brand voice alone. */}
           <h1 className="font-display text-4xl font-medium tracking-tight text-ink sm:text-5xl">
-            Any agent, same canvas.
+            Any MCP agent, one shared canvas.
           </h1>
           <p className="text-base text-ink/60 leading-relaxed">
             Tandem's gateway is a standard{" "}

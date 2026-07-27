@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { fetchMe, getCachedUser, type User } from "../lib/auth";
+import { spaLink } from "../lib/spaNav";
 import TandemLogo from "./TandemLogo";
 import AccountMenu from "./AccountMenu";
 
@@ -102,18 +103,22 @@ export default function LandingNav({
           >
             Modes
           </a>
-          <button
-            onClick={onAbout}
+          {/* Real anchors, not buttons — see lib/spaNav: these are the only
+              internal links to /about and /mcp a crawler can follow. */}
+          <a
+            href="/about"
+            onClick={spaLink(onAbout)}
             className="hidden rounded-md px-3 py-1.5 text-ink/55 transition-colors hover:bg-ink/5 hover:text-ink sm:inline"
           >
             About
-          </button>
-          <button
-            onClick={onOpenMCP}
+          </a>
+          <a
+            href="/mcp"
+            onClick={spaLink(onOpenMCP)}
             className="rounded-md px-3 py-1.5 font-medium text-ink/80 transition-colors hover:bg-ink/5"
           >
             Connect an agent
-          </button>
+          </a>
           {user && (
             <button
               onClick={onShowCanvases}

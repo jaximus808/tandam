@@ -23,18 +23,20 @@
       })();
     </script>
 
-    <!-- Primary SEO. The <title>, description, and og/twitter TITLES are
-         keyword-first for search discovery: they name the things people actually
-         type ("AI canvas", "MCP", "shared canvas", "AI agents") so Tandem is
-         findable by concept, not just by brand. The og/twitter DESCRIPTIONS still
-         lead with the reversed-causality hook ("Claude made this") — that's the
-         human-facing click driver in a link preview — but even they now work the
-         core keywords in. The bare word "Tandem" is kept everywhere for
-         brand/domain search. -->
-    <title>Tandem — a shared AI canvas for you and your agents, over MCP</title>
+    <!-- Primary SEO. Search and social pull in opposite directions here, so they
+         get different copy on purpose:
+           · <title>/<description> are the *search* surface — they describe the
+             category in the words people actually type ("shared canvas", "MCP",
+             "AI agents") rather than the brand line, which only ever matched
+             people already searching for Tandem by name.
+           · og:/twitter: below keep the reversed-causality hook ("Claude made
+             this") — a link preview that reads as a feature list loses the
+             "Google already does that" argument before anyone clicks.
+         The bare word "Tandem" stays everywhere for brand/domain search. -->
+    <title>Tandem — a shared MCP canvas for you and your AI agents</title>
     <meta
       name="description"
-      content="Tandem is a shared AI canvas you and your AI agents co-edit in real time over MCP. The work your AI does in a chat usually vanishes into a scroll you never find again — Tandem is where Claude leaves it, as a real artifact you can open, edit, and keep. A collaborative canvas for humans and AI agents. Connect Claude, Cursor, or any MCP client."
+      content="A shared canvas humans and AI agents edit together in real time. Connect Claude or any MCP client — the plan, map, or sheet your agent builds is a real artifact you can open, edit, and keep."
     />
     <meta
       name="keywords"
@@ -66,7 +68,10 @@
     />
     <meta name="twitter:image" content="https://tandemcanvas.com/og-image.png" />
 
-    <!-- Structured data: helps search engines understand the brand + product. -->
+    <!-- Structured data: helps search engines understand the brand + product.
+         The FAQ mirrors the visible FAQ section on the landing page (they must
+         stay in sync — Google penalises structured data that isn't on the page)
+         and is what answer engines quote when asked "what is an MCP canvas". -->
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
@@ -74,7 +79,7 @@
           {
             "@type": "WebSite",
             "name": "Tandem Canvas",
-            "alternateName": "Tandem",
+            "alternateName": ["Tandem", "Tandem MCP Canvas"],
             "url": "https://tandemcanvas.com/"
           },
           {
@@ -82,11 +87,56 @@
             "name": "Tandem Canvas",
             "alternateName": "Tandem — shared AI canvas over MCP",
             "applicationCategory": "BusinessApplication",
+            "applicationSubCategory": "Collaborative canvas / MCP server",
             "operatingSystem": "Web",
             "url": "https://tandemcanvas.com/",
-            "description": "Tandem is a shared AI canvas you and your AI agents co-edit in real time over MCP (Model Context Protocol). The work your AI does in chat becomes a real artifact you can open, edit, and keep. Connect Claude, Cursor, or any MCP client.",
+            "description": "A shared canvas humans and AI agents edit together in real time over the Model Context Protocol (MCP). Connect Claude or any MCP client and the plan, map, schedule, or sheet your agent builds becomes a real artifact you can open, edit, and keep.",
             "keywords": "AI canvas, shared canvas, MCP, Model Context Protocol, AI agents, collaborative canvas, Claude",
+            "featureList": [
+              "Shared canvas edited live by humans and AI agents",
+              "Model Context Protocol (MCP) server — works with Claude and any MCP client",
+              "Real-time multiplayer editing over WebSocket",
+              "Maps, schedules, roadmaps, sheets, docs and charts in one canvas",
+              "Multiple agents on the same canvas at the same time"
+            ],
             "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+          },
+          {
+            "@type": "FAQPage",
+            "mainEntity": [
+              {
+                "@type": "Question",
+                "name": "What is an MCP canvas?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "An MCP canvas is a shared workspace an AI agent can read and write through the Model Context Protocol, while a human edits the same thing live in a browser. Tandem is one: your agent adds pins, events, rows, or notes over MCP and they appear on the canvas instantly, with no copy-pasting out of a chat window."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Which AI agents can connect to a Tandem canvas?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Any MCP-aware client. Claude Desktop, Claude Code, and claude.ai connect through the hosted connector or the npm package @jaximus/tandem-mcp; editors, agent frameworks, and custom orchestrators can spawn the same stdio server. Several agents can work on one canvas at the same time."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "How is a shared canvas different from a Google Doc?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "A doc has no agent and an MCP server has no human. Tandem is both: the AI agent builds the artifact and you edit it in the same place, in real time. It also isn't a single document shape — the canvas becomes a map, a schedule, a roadmap, a sheet, or a doc depending on what you asked for."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Do I need an account to use Tandem?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "No. Create a canvas, get a short code, and share it — anyone with the code can open and edit it in the browser and any agent can join with the same code. Signing in with Google is only needed if you want to keep canvases in a dashboard or make one private."
+                }
+              }
+            ]
           }
         ]
       }

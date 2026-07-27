@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/agentcanvas/api/internal/auth"
@@ -279,16 +280,30 @@ func spaHandler(distPath string) http.Handler {
 	})
 }
 
+// titleRe and descRe match the home page's <title> and meta description in
+// index.html. They're matched by *shape*, not by literal copy: an earlier version
+// of this file string-matched the exact home title, so every time the marketing
+// copy changed the per-route titles silently stopped applying and /mcp and /about
+// went back to being served as duplicates of the landing page.
+var (
+	titleRe = regexp.MustCompile(`(?s)<title>.*?</title>`)
+	descRe  = regexp.MustCompile(`(?s)<meta\s+name="description"\s+content="[^"]*"\s*/?>`)
+)
+
 // buildRouteVariants precomputes per-route index.html variants with a
-// self-referencing canonical and a route-specific title, keyed by request path
-// (no trailing slash). Returns nil if index.html couldn't be read, in which case
-// spaHandler just serves the default for every route.
+// self-referencing canonical and route-specific title/description, keyed by
+// request path (no trailing slash). Returns nil if index.html couldn't be read,
+// in which case spaHandler just serves the default for every route.
+//
+// Titles lead with what the page is in category terms rather than brand voice —
+// these are the only two non-landing URLs Google can index, and "Tandem" alone
+// only matches people who already know the name.
 func buildRouteVariants(base []byte) map[string][]byte {
 	if len(base) == 0 {
 		return nil
 	}
 	const origin = "https://tandemcanvas.com"
-	rewrite := func(path, title string) []byte {
+	rewrite := func(path, title, desc string) []byte {
 		html := string(base)
 		// Point the canonical + og:url at this route instead of the apex.
 		html = strings.ReplaceAll(html,
@@ -297,17 +312,21 @@ func buildRouteVariants(base []byte) map[string][]byte {
 		html = strings.ReplaceAll(html,
 			`<meta property="og:url" content="`+origin+`/" />`,
 			`<meta property="og:url" content="`+origin+path+`" />`)
-		// Give the route its own title (also used as og/twitter title). This
-		// MUST stay byte-for-byte identical to the <title> in apps/web/index.html
-		// or the replace is a silent no-op and the route serves the home title.
-		const homeTitle = "Tandem — a shared AI canvas for you and your agents, over MCP"
-		html = strings.ReplaceAll(html, homeTitle, title)
+		// Give the route its own title + description so it can rank on its own
+		// terms instead of competing with the landing page for the same words.
+		// Matched by shape (see titleRe/descRe) rather than by the exact home
+		// copy, so marketing edits can't silently turn this into a no-op.
+		html = titleRe.ReplaceAllLiteralString(html, "<title>"+title+"</title>")
+		html = descRe.ReplaceAllLiteralString(html,
+			`<meta name="description" content="`+desc+`" />`)
 		return []byte(html)
 	}
 	return map[string][]byte{
 		"/mcp": rewrite("/mcp",
-			"Connect your AI agent — Tandem Canvas MCP"),
+			"Connect any MCP client to a shared canvas — Tandem MCP server",
+			"Point Claude, Claude Code, Cursor, or any MCP-aware agent at a Tandem canvas. Setup for the hosted connector and the @jaximus/tandem-mcp stdio server, plus the full canvas tool surface."),
 		"/about": rewrite("/about",
-			"About — the person behind Tandem Canvas"),
+			"About Tandem — why a shared canvas for AI agents",
+			"Who built Tandem, and why a chat log is the wrong place for work an AI agent did on your behalf."),
 	}
 }

@@ -1,7 +1,17 @@
 # Tandem Canvas — https://tandemcanvas.com
-# Allow everything; canvas/app routes are crawlable but carry no unique
-# metadata, so the landing page is what we expect to rank.
+#
+# Only three URLs are meant to rank: /, /mcp, /about. Everything else is the app
+# — a canvas at /c/{code}, the dashboard, settings, the OAuth consent screen —
+# and all of it serves the landing page's HTML shell, so crawling it spends
+# budget on near-duplicates of "/" and risks putting shared canvas codes in the
+# index. Disallowed here rather than noindexed because the shell can't carry a
+# per-route noindex without rendering JS first.
 User-agent: *
 Allow: /
+Disallow: /c/
+Disallow: /dashboard
+Disallow: /me
+Disallow: /stats
+Disallow: /oauth/
 
 Sitemap: https://tandemcanvas.com/sitemap.xml
