@@ -1,12 +1,14 @@
 import type { CanvasMode } from "../types";
 
 /* ─────────────────────────────────────────────────────────────────────────────
-   Per-mode accent identity. The landing page gives each use-case its own colour;
-   inside a canvas we do the same per *mode*, so switching views visibly changes
-   the room's accent — the active tab, the header rule, and each mode's primary
-   action all pick it up. Colours intentionally mirror the landing's mode tints
-   (Map=sky, Itinerary=amber, Docs=violet, Sheets=emerald, Roadmap=rose,
-   Charts=indigo) so the marketing surface and the product feel like one thing.
+   Per-mode CONTENT identity (Map=sky, Itinerary=amber, Docs=violet,
+   Sheets=emerald, Roadmap=rose, Charts=indigo).
+
+   SCOPE (Design v2 decision, /DESIGN.md): these hues are content-level
+   semantics ONLY — e.g. the docTypes icon tints. They never colour chrome or
+   agent activity: agent presence, the live cursor/halo, and the "editing …"
+   chip all use the single terracotta `agent` token, and interactive chrome
+   uses the one indigo `accent`. Don't wire new chrome to this map.
    ───────────────────────────────────────────────────────────────────────────── */
 
 export interface ModeTheme {
@@ -68,14 +70,3 @@ export const MODE_THEME: Record<CanvasMode, ModeTheme> = {
 export function modeTheme(mode: CanvasMode | undefined): ModeTheme {
   return MODE_THEME[mode ?? "welcome"] ?? MODE_THEME.welcome;
 }
-
-/* The Board pseudo-tab (the client-side task board — NOT a document type)
-   carries the brand teal, so it reads as product chrome rather than another
-   document accent. Driven by the --color-brand channel, so it lifts
-   automatically in dark mode like the rest of the brand colour. */
-export const BOARD_THEME: ModeTheme = {
-  solid: "rgb(var(--color-brand))",
-  soft: "rgb(var(--color-brand) / 0.10)",
-  line: "rgb(var(--color-brand) / 0.24)",
-  hover: "rgb(var(--color-brand))",
-};

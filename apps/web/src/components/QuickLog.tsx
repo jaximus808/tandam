@@ -208,7 +208,7 @@ export default function QuickLog({ code, forms }: { code: string; forms?: Record
               <button
                 onClick={() => setExpandedPersist(true)}
                 title="Expand log"
-                className="flex h-7 w-11 items-center justify-center rounded-md text-ink/30 transition-colors hover:bg-ink/5 hover:text-ink/60"
+                className="flex h-7 w-11 items-center justify-center rounded-md text-ink/30 transition-colors hover:bg-ink/5 hover:text-ink/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
               >
                 <ChevronsLeft size={16} strokeWidth={1.75} />
               </button>
@@ -220,7 +220,7 @@ export default function QuickLog({ code, forms }: { code: string; forms?: Record
                     key={f.id}
                     onClick={() => setOpenId(active ? null : f.id)}
                     title={f.name}
-                    className="flex h-11 w-11 items-center justify-center rounded-md transition-colors"
+                    className="flex h-11 w-11 items-center justify-center rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
                     style={{
                       backgroundColor: active ? tint(f.accent, "1F") : "transparent",
                       boxShadow: active ? `inset 0 0 0 1.5px ${f.accent}` : undefined,
@@ -234,11 +234,11 @@ export default function QuickLog({ code, forms }: { code: string; forms?: Record
               <button
                 title="Forms are defined by your agent — ask it to add one"
                 onClick={showAgentHint}
-                className="flex h-11 w-11 items-center justify-center rounded-md text-ink/35 transition-colors hover:bg-ink/5 hover:text-ink/60"
+                className="flex h-11 w-11 items-center justify-center rounded-md text-ink/35 transition-colors hover:bg-ink/5 hover:text-ink/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
               >
                 <Plus size={18} strokeWidth={1.75} />
               </button>
-              <span className="select-none pb-0.5 text-[9px] font-medium uppercase tracking-wide text-ink/35">Log</span>
+              <span className="select-none pb-0.5 text-[10px] font-medium uppercase tracking-wide text-ink/50">Log</span>
             </div>
           </div>
         </div>

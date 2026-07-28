@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { X } from "lucide-react";
 import { createPortal } from "react-dom";
 import TandemLogo from "./TandemLogo";
 import posthog from "../lib/posthog";
@@ -101,9 +102,9 @@ export default function CanvasLauncher({ initialMode, onJoin, onClose, onOpenMCP
           <button
             onClick={onClose}
             aria-label="Close"
-            className="ml-auto flex h-7 w-7 items-center justify-center rounded-md text-ink/40 transition-colors hover:bg-ink/5 hover:text-ink"
+            className="ml-auto flex h-7 w-7 items-center justify-center rounded-md text-ink/40 transition-colors hover:bg-ink/5 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           >
-            ✕
+            <X size={15} />
           </button>
         </div>
 

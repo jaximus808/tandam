@@ -418,8 +418,11 @@ export default function HeroBoardDemo() {
           <TerminalPane name="session-A" lines={LINES_A} t={t} glow={false} animate={animate} />
           <TerminalPane name="session-B" lines={LINES_B} t={t} glow={glowB} animate={animate} />
         </div>
-        {/* Right: the shared board, moving live. */}
-        <div className="min-w-0">
+        {/* Right: the shared board, moving live. Hidden below sm — three fixed
+            kanban columns collapse to ~90px slivers on a phone, so narrow
+            viewports keep just the terminals (the claim-rejection story still
+            plays in full there). */}
+        <div className="hidden min-w-0 sm:block">
           <BoardPane t={t} animate={animate} />
         </div>
       </div>

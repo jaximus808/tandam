@@ -21,9 +21,12 @@ interface Props {
 }
 
 /* The canvas tab strip — one tab per OPEN document (migration 0024). Double-click
-   to rename, drag to reorder, ✕ to close, + to create any doc type. Rename and
+   to rename, drag to reorder, X to close, + to create any doc type. Rename and
    reorder are shared mutations (document.update / document.reorder); open/close/
-   active-tab are local to this viewer (like switching tabs in a Google Doc). */
+   active-tab are local to this viewer (like switching tabs in a Google Doc).
+   Doc tabs are keyboard-first-class: focusable role=button rows (Enter/Space
+   selects) — divs rather than <button>s only because the close control nests
+   inside (nested buttons are invalid HTML) and dragging stays on the row. */
 export default function DocumentTabs({
   docs,
   activeDocId,
@@ -103,13 +106,26 @@ export default function DocumentTabs({
         return (
           <div
             key={doc.id}
+            role="button"
+            tabIndex={0}
+            aria-pressed={active}
+            aria-label={`Open ${doc.name || DOC_TYPE_LABEL[doc.type]}`}
             draggable={!readOnly && !renaming}
             onDragStart={() => (dragId.current = doc.id)}
             onDragOver={(e) => e.preventDefault()}
             onDrop={() => onDrop(doc.id)}
             onClick={() => onSelect(doc.id)}
+            onKeyDown={(e) => {
+              // Keyboard switching, mirroring the Board tab's real <button>.
+              // Only when the tab row itself is focused — the nested close
+              // button and rename input keep their own key handling.
+              if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
+                e.preventDefault();
+                onSelect(doc.id);
+              }
+            }}
             className={[
-              "group flex items-center gap-1.5 rounded-md pl-2.5 pr-1.5 py-1 text-[13px] font-medium shrink-0 cursor-pointer transition-colors",
+              "group flex items-center gap-1.5 rounded-md pl-2.5 pr-1.5 py-1 text-[13px] font-medium shrink-0 cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
               active ? "bg-accent/[0.08] text-accent" : "text-ink/55 hover:bg-ink/5 hover:text-ink/80",
             ].join(" ")}
             title={DOC_TYPE_LABEL[doc.type]}
@@ -142,7 +158,7 @@ export default function DocumentTabs({
                   e.stopPropagation();
                   onClose(doc.id);
                 }}
-                className="flex h-4 w-4 items-center justify-center rounded text-current/50 opacity-0 hover:bg-ink/10 group-hover:opacity-100"
+                className="flex h-4 w-4 items-center justify-center rounded text-current/50 opacity-0 hover:bg-ink/10 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 group-hover:opacity-100 group-focus-within:opacity-100"
                 title="Close tab"
                 aria-label={`Close ${doc.name}`}
               >

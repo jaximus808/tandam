@@ -83,11 +83,11 @@ export default function OAuthConsent() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-paper px-4 font-brand text-ink">
+    <div className="flex min-h-screen items-center justify-center bg-paper px-4 text-ink">
       <div className="w-full max-w-md rounded-2xl border border-ink/10 bg-surface p-7 shadow-xl shadow-ink/5 sm:p-8">
         <div className="flex items-center gap-2.5">
           <TandemLogo size={30} animate={false} />
-          <span className="font-display text-lg font-semibold tracking-tight">Tandem</span>
+          <span className="text-lg font-semibold tracking-tight">Tandem</span>
         </div>
 
         {phase === "loading" && (
@@ -100,7 +100,7 @@ export default function OAuthConsent() {
 
         {phase === "signedOut" && (
           <>
-            <h1 className="mt-6 font-display text-xl font-medium tracking-tight">
+            <h1 className="mt-6 text-xl font-semibold tracking-tight">
               Sign in to continue
             </h1>
             <p className="mt-1.5 text-sm text-ink/55">
@@ -120,7 +120,7 @@ export default function OAuthConsent() {
 
         {phase === "invalid" && (
           <>
-            <h1 className="mt-6 font-display text-xl font-medium tracking-tight">
+            <h1 className="mt-6 text-xl font-semibold tracking-tight">
               Authorization failed
             </h1>
             <p className="mt-1.5 text-sm text-ink/55">{error}</p>
@@ -137,7 +137,7 @@ export default function OAuthConsent() {
                 <ShieldCheck className="h-5 w-5" />
               </div>
               <div className="min-w-0">
-                <h1 className="font-display text-xl font-medium leading-tight tracking-tight">
+                <h1 className="text-xl font-semibold leading-tight tracking-tight">
                   Authorize {clientName}
                 </h1>
                 <p className="mt-1 text-sm text-ink/55">

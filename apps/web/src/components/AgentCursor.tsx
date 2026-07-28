@@ -1,5 +1,4 @@
-import { useEffect, useRef } from "react";
-import { modeTheme } from "../lib/modeTheme";
+import { useEffect, useRef, type CSSProperties } from "react";
 import type { AgentShowcase } from "../lib/useAgentActivity";
 
 interface Props {
@@ -67,9 +66,6 @@ export default function AgentCursor({ showcase, name }: Props) {
         }
         const visible = s && left !== Infinity;
         if (visible) {
-          const t = modeTheme(s!.mode);
-          root.style.setProperty("--agent-accent", t.solid);
-          root.style.setProperty("--agent-soft", t.soft);
           halo.style.transform = `translate(${left - 5}px, ${top - 5}px)`;
           halo.style.width = `${right - left + 10}px`;
           halo.style.height = `${bottom - top + 10}px`;
@@ -96,7 +92,20 @@ export default function AgentCursor({ showcase, name }: Props) {
   const who = showcase?.agentName || name;
 
   return (
-    <div ref={rootRef} className="pointer-events-none fixed inset-0 z-[70]" aria-hidden="true">
+    // Agent activity is terracotta everywhere: the halo/pointer draw from the
+    // themed `agent` token, not the touched mode's content hue (/DESIGN.md —
+    // modeTheme stays content-level semantics only, e.g. docTypes icons).
+    <div
+      ref={rootRef}
+      className="pointer-events-none fixed inset-0 z-[70]"
+      aria-hidden="true"
+      style={
+        {
+          "--agent-accent": "rgb(var(--color-agent))",
+          "--agent-soft": "rgb(var(--color-agent) / 0.10)",
+        } as CSSProperties
+      }
+    >
       {/* Halo wrapping the whole batch. */}
       <div
         ref={haloRef}

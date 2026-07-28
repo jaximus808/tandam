@@ -1,7 +1,6 @@
 import { useState } from "react";
-import { X } from "lucide-react";
+import { X, Zap } from "lucide-react";
 import type { CanvasMode } from "../types";
-import { modeTheme } from "../lib/modeTheme";
 import type { AgentEdit, PresentAgent } from "../lib/useAgentActivity";
 import { STATE_CHIP } from "../lib/stateChips";
 
@@ -41,12 +40,11 @@ export default function AgentPresence({ agents, edit, reading, onJump, onOpenTas
   // so it must never be un-closable); the avatar cluster re-opens it.
   const [swarmOpen, setSwarmOpen] = useState(true);
   if (agents.length === 0) return null;
-  const t = edit ? modeTheme(edit.mode) : null;
   // Editing takes precedence over reading — if a cursor is live, show where.
   const showReading = !edit && reading;
 
   // "Following them = seeing their task": the most recent claimant among the
-  // present agents gets a compact ⚡ TDM-n chip beside the cluster that clicks
+  // present agents gets a compact Zap TDM-n chip beside the cluster that clicks
   // through to the task on the Board. Working-violet, matching the board's
   // executing treatment.
   const followed = [...agents]
@@ -92,7 +90,7 @@ export default function AgentPresence({ agents, edit, reading, onJump, onOpenTas
             {a.name}
           </span>
           {depth === 0 ? (
-            <span className="shrink-0 rounded-[3px] bg-ink/[0.06] px-1 py-px text-[9px] font-medium uppercase tracking-wide text-ink/45">
+            <span className="shrink-0 rounded-[3px] bg-ink/[0.06] px-1 py-px text-[10px] font-medium uppercase tracking-wide text-ink/50">
               {a.role ?? "planner"}
             </span>
           ) : a.taskLabel && a.taskId ? (
@@ -103,19 +101,21 @@ export default function AgentPresence({ agents, edit, reading, onJump, onOpenTas
               onClick={() => onOpenTask(a.taskId!)}
               title={`${a.taskLabel} — open on the Board`}
               aria-label={`Open ${a.name}'s task ${a.taskTicket ?? ""} on the Board`}
-              className={`min-w-0 truncate text-left text-[10px] font-medium ${STATE_CHIP.executing.text} transition-colors hover:underline`}
+              className={`inline-flex min-w-0 items-center gap-1 text-left text-[10px] font-medium ${STATE_CHIP.executing.text} transition-colors hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40`}
             >
-              ⚡ {a.taskLabel}
+              <Zap size={10} className="shrink-0" />
+              <span className="truncate">{a.taskLabel}</span>
             </button>
           ) : a.taskLabel ? (
             <span
-              className={`min-w-0 truncate text-[10px] font-medium ${STATE_CHIP.executing.text}`}
+              className={`inline-flex min-w-0 items-center gap-1 text-[10px] font-medium ${STATE_CHIP.executing.text}`}
               title={a.taskLabel}
             >
-              ⚡ {a.taskLabel}
+              <Zap size={10} className="shrink-0" />
+              <span className="truncate">{a.taskLabel}</span>
             </span>
           ) : (
-            <span className="text-[10px] font-medium text-ink/35">idle</span>
+            <span className="text-[10px] font-medium text-ink/50">idle</span>
           )}
         </div>
         {kids.length > 0 && (
@@ -132,12 +132,32 @@ export default function AgentPresence({ agents, edit, reading, onJump, onOpenTas
       {/* Avatar cluster — agents are square terracotta chips, like their tags.
           A scan-line sweeps across them while the agent is reading. */}
       <div
-        className={`flex -space-x-1 ${roots.length > 0 ? "cursor-pointer" : ""}`}
+        className={`flex -space-x-1 rounded-md ${
+          roots.length > 0
+            ? "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            : ""
+        }`}
+        role={roots.length > 0 ? "button" : undefined}
+        tabIndex={roots.length > 0 ? 0 : undefined}
+        aria-expanded={roots.length > 0 ? swarmOpen : undefined}
         onClick={roots.length > 0 ? () => setSwarmOpen((o) => !o) : undefined}
+        onKeyDown={
+          roots.length > 0
+            ? (e) => {
+                // Keyboard parity for the swarm-panel toggle (it was a bare
+                // clickable div): Enter/Space on the cluster itself only —
+                // the nested avatar buttons keep their own activation.
+                if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
+                  e.preventDefault();
+                  setSwarmOpen((o) => !o);
+                }
+              }
+            : undefined
+        }
         title={roots.length > 0 ? "Toggle swarm panel" : undefined}
       >
         {agents.map((a) => {
-          const title = [a.isClaude ? `${a.name} (Claude)` : a.name, a.taskLabel && `⚡ ${a.taskLabel}`]
+          const title = [a.isClaude ? `${a.name} (Claude)` : a.name, a.taskLabel && `working ${a.taskLabel}`]
             .filter(Boolean)
             .join(" — ");
           // Agent identity is the ONE place terracotta survives (muted, via the
@@ -177,7 +197,7 @@ export default function AgentPresence({ agents, edit, reading, onJump, onOpenTas
           <button
             onClick={() => setSwarmOpen(false)}
             aria-label="Hide swarm panel"
-            className="absolute right-1.5 top-1.5 rounded p-0.5 text-ink/35 transition-colors hover:bg-ink/5 hover:text-ink/70"
+            className="absolute right-1.5 top-1.5 rounded p-0.5 text-ink/35 transition-colors hover:bg-ink/5 hover:text-ink/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           >
             <X size={12} />
           </button>
@@ -191,29 +211,29 @@ export default function AgentPresence({ agents, edit, reading, onJump, onOpenTas
       {followed?.taskId && (
         <button
           onClick={() => onOpenTask(followed.taskId!)}
-          className={`inline-flex items-center gap-1 rounded-[4px] bg-violet-500/10 px-2 py-1 font-code text-[10.5px] font-medium ring-1 ring-inset ring-violet-500/20 transition-opacity hover:opacity-80 ${STATE_CHIP.executing.text}`}
+          className={`inline-flex items-center gap-1 rounded-[4px] bg-violet-500/10 px-2 py-1 font-code text-[10.5px] font-medium ring-1 ring-inset ring-violet-500/20 transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${STATE_CHIP.executing.text}`}
           title={`${followed.name} is working ${followed.taskLabel ?? "a task"} — open it on the Board`}
           aria-label={`Open ${followed.name}'s task ${followed.taskTicket ?? ""} on the Board`}
         >
-          ⚡ {followed.taskTicket ?? "task"}
+          <Zap size={11} className="shrink-0" />
+          {followed.taskTicket ?? "task"}
         </button>
       )}
 
       {/* Live status chip. Priority: editing (where it's writing) → reading
-          (it's looking at the canvas) → idle ("here"). */}
-      {edit && t ? (
+          (it's looking at the canvas) → idle ("here"). Agent activity is
+          terracotta EVERYWHERE (the `agent` token) — the chip names the mode
+          in words instead of borrowing the mode's content hue (/DESIGN.md:
+          modeTheme is content-level semantics only). */}
+      {edit ? (
         <button
           onClick={() => onJump(edit.mode)}
-          className="inline-flex items-center gap-1.5 rounded-[4px] px-2 py-1 text-[10.5px] font-medium transition-colors"
-          style={{ backgroundColor: t.soft, color: t.solid, boxShadow: `inset 0 0 0 1px ${t.line}` }}
+          className="inline-flex items-center gap-1.5 rounded-[4px] bg-agent/10 px-2 py-1 text-[10.5px] font-medium text-agent ring-1 ring-inset ring-agent/20 transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           title={`Jump to ${MODE_LABEL[edit.mode]} — where it's writing`}
         >
           <span className="relative flex h-1.5 w-1.5">
-            <span
-              className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-70"
-              style={{ backgroundColor: t.solid }}
-            />
-            <span className="relative inline-flex h-1.5 w-1.5 rounded-full" style={{ backgroundColor: t.solid }} />
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-agent opacity-70" />
+            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-agent" />
           </span>
           editing {MODE_LABEL[edit.mode].toLowerCase()}
         </button>
@@ -231,7 +251,7 @@ export default function AgentPresence({ agents, edit, reading, onJump, onOpenTas
           reading
         </span>
       ) : (
-        <span className="text-[10.5px] font-medium text-ink/35">here</span>
+        <span className="text-[10.5px] font-medium text-ink/50">here</span>
       )}
     </div>
   );

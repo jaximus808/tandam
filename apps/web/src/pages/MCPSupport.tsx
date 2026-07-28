@@ -428,7 +428,7 @@ export default function MCPSupport({
 
   return (
     // Page follows the global theme via paper/surface/ink tokens (light + dark).
-    <div className="min-h-screen bg-paper font-brand text-ink antialiased overflow-y-auto scroll-smooth">
+    <div className="min-h-screen bg-paper text-ink antialiased overflow-y-auto scroll-smooth">
       <LandingNav
         onHome={onBack}
         onJoin={onOpenCanvas}
@@ -441,13 +441,13 @@ export default function MCPSupport({
       <div className="max-w-4xl mx-auto px-6 py-12 space-y-14">
         {/* Hero */}
         <section className="space-y-3">
-          <span className="font-code text-[11px] uppercase tracking-[0.2em] text-sky-600">
+          <span className="text-xs font-medium uppercase tracking-wide text-ink/50">
             Bring your own agent
           </span>
           {/* Keeps the original cadence but spends the h1 — the page's strongest
               on-page signal — on the words people search ("MCP", "agent sessions")
               rather than on brand voice alone. */}
-          <h1 className="font-display text-4xl font-medium tracking-tight text-ink sm:text-5xl">
+          <h1 className="text-4xl font-semibold tracking-tight text-ink sm:text-5xl">
             Any MCP agent, one shared state layer.
           </h1>
           <p className="text-base text-ink/60 leading-relaxed">
@@ -495,7 +495,7 @@ export default function MCPSupport({
           {pathTab === "connector" && (
           <div className="space-y-4">
             <div>
-              <h2 className="font-display text-2xl font-medium tracking-tight text-ink">
+              <h2 className="text-2xl font-semibold tracking-tight text-ink">
                 Set up Tandem as a Claude connector
               </h2>
               <p className="mt-1 text-sm text-ink/50">
@@ -589,7 +589,7 @@ export default function MCPSupport({
           {pathTab === "gateway" && (
           <div className="space-y-8">
             <div>
-              <h2 className="font-display text-2xl font-medium tracking-tight text-ink">
+              <h2 className="text-2xl font-semibold tracking-tight text-ink">
                 Wire Tandem into your editor or agent
               </h2>
               <p className="mt-1 text-sm text-ink/50">
@@ -602,7 +602,7 @@ export default function MCPSupport({
           {/* ── A. Remote URL (recommended) ─────────────────────────────────── */}
           <div className="space-y-4">
           <div>
-            <h3 className="flex items-center gap-2 font-display text-xl font-medium tracking-tight text-ink">
+            <h3 className="flex items-center gap-2 text-xl font-semibold tracking-tight text-ink">
               Connect by URL
               <span className="text-[10px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded bg-sky-100 text-sky-700">
                 Recommended
@@ -678,7 +678,7 @@ export default function MCPSupport({
           {/* ── B. Local stdio gateway (fallback) ───────────────────────────── */}
           <div className="space-y-8 border-t border-ink/15 pt-8">
             <div>
-              <h3 className="font-display text-xl font-medium tracking-tight text-ink">
+              <h3 className="text-xl font-semibold tracking-tight text-ink">
                 Or run the local stdio gateway
               </h3>
               <p className="mt-1 text-sm text-ink/50">
@@ -711,7 +711,7 @@ export default function MCPSupport({
           {/* Install */}
           <div className="space-y-4">
           <div>
-            <h4 className="font-display text-lg font-medium tracking-tight text-ink">Install the gateway</h4>
+            <h4 className="text-lg font-semibold tracking-tight text-ink">Install the gateway</h4>
             <p className="mt-1 text-sm text-ink/50">
               Pick whichever fits your setup — the npx form is the easiest and
               works for almost everyone.
@@ -778,7 +778,7 @@ export default function MCPSupport({
           {/* Wire */}
           <div id="wire" className="space-y-4 scroll-mt-20">
           <div>
-            <h4 className="font-display text-lg font-medium tracking-tight text-ink">Wire it into your client</h4>
+            <h4 className="text-lg font-semibold tracking-tight text-ink">Wire it into your client</h4>
             <p className="mt-1 text-sm text-ink/50">
               These snippets all use the npx form. Swap to <span className="font-code text-xs">tandem-mcp</span>{" "}
               if you installed globally, or to a full path if you built from source.
@@ -816,7 +816,7 @@ export default function MCPSupport({
 
           {/* Connect — shared by both paths */}
           <div id="connect" className="space-y-3 scroll-mt-20">
-          <h2 className="font-display text-2xl font-medium tracking-tight text-ink">Connect to a canvas</h2>
+          <h2 className="text-2xl font-semibold tracking-tight text-ink">Connect to a canvas</h2>
           <p className="text-sm text-ink/60 leading-relaxed">
             Create a canvas in your browser (it'll give you an 8-character code
             like <span className="font-code text-xs">TOKYO7X3K</span>), then tell your
@@ -832,7 +832,7 @@ export default function MCPSupport({
         {/* Tool surface */}
         <section id="tools" className="space-y-4 scroll-mt-20">
           <div>
-            <h2 className="font-display text-2xl font-medium tracking-tight text-ink">The tool surface</h2>
+            <h2 className="text-2xl font-semibold tracking-tight text-ink">The tool surface</h2>
             <p className="mt-1 text-sm text-ink/50">
               Every tool operates on whatever canvas this session connected to.
               No IDs to pass around — the JWT held in the gateway pins the
@@ -864,7 +864,7 @@ export default function MCPSupport({
         {/* Multi-agent example */}
         <section id="multi-agent" className="space-y-4 scroll-mt-20">
           <div>
-            <h2 className="font-display text-2xl font-medium tracking-tight text-ink">
+            <h2 className="text-2xl font-semibold tracking-tight text-ink">
               Multi-agent flow: research → report
             </h2>
             <p className="mt-1 text-sm text-ink/50 leading-relaxed">
@@ -931,7 +931,7 @@ export default function MCPSupport({
 
         {/* Authoring your own */}
         <section id="build" className="space-y-3 scroll-mt-20">
-          <h2 className="font-display text-2xl font-medium tracking-tight text-ink">Build your own integration</h2>
+          <h2 className="text-2xl font-semibold tracking-tight text-ink">Build your own integration</h2>
           <p className="text-sm text-ink/60 leading-relaxed">
             The gateway is intentionally thin: it owns a JWT and forwards
             tool calls to the Tandem HTTP API. If you'd rather skip the gateway

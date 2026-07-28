@@ -96,11 +96,10 @@ export default function LandingNav({
         >
           <TandemLogo size={32} />
           <span>Tandem</span>
-          <span className="ml-1 hidden items-center gap-1.5 rounded border border-ink/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-ink/45 md:inline-flex">
-            <span className="relative flex h-1 w-1">
-              <span className="tandem-ping absolute inline-flex h-full w-full rounded-full bg-agent opacity-70" />
-              <span className="relative inline-flex h-1 w-1 rounded-full bg-agent" />
-            </span>
+          {/* Static dot — the one-pulse motion budget is reserved for LIVE
+              "working" indicators; a nav badge is decoration. */}
+          <span className="ml-1 hidden items-center gap-1.5 rounded border border-ink/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-ink/50 md:inline-flex">
+            <span className="inline-flex h-1 w-1 rounded-full bg-agent" />
             agent-native
           </span>
         </button>

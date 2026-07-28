@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { X } from "lucide-react";
 import { listRecent, removeRecent } from "../lib/recentCanvases";
 import { fetchMe, getCachedUser, GOOGLE_CLIENT_ID, type User } from "../lib/auth";
 import { spaLink } from "../lib/spaNav";
@@ -301,16 +302,18 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
         samePageAnchors
       />
 
-      {/* Hero — copy left, the two-terminals-one-queue demo right */}
+      {/* Hero — copy left, the two-terminals-one-queue demo right. ONE fade-up
+          for the whole viewport (the motion-budget contract: at most a single
+          fade-up per section — the demo owns the hero's ongoing motion). */}
       <section className="relative overflow-hidden">
-        <div className="relative mx-auto grid max-w-6xl items-center gap-14 px-6 pb-20 pt-16 lg:grid-cols-[1fr_1.05fr] lg:gap-10 lg:pb-24 lg:pt-20">
+        <div className="tandem-rise relative mx-auto grid max-w-6xl items-center gap-14 px-6 pb-20 pt-16 lg:grid-cols-[1fr_1.05fr] lg:gap-10 lg:pb-24 lg:pt-20">
           {/* Left: copy + actions */}
           <div className="min-w-0 max-w-xl lg:pt-4">
-            <div className="tandem-rise">
+            <div>
               <Eyebrow>One queue · every session · no collisions</Eyebrow>
             </div>
 
-            <div className="tandem-rise mt-5" style={{ animationDelay: "60ms" }}>
+            <div className="mt-5">
               {/* All four headline variants render stacked in one grid cell, the
                   inactive ones invisible — so this block is always as tall as
                   the tallest phrase and the page below never shifts when the
@@ -337,10 +340,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
               </h1>
             </div>
 
-            <p
-              className="tandem-rise mt-6 text-base leading-relaxed text-ink/65"
-              style={{ animationDelay: "120ms" }}
-            >
+            <p className="mt-6 text-base leading-relaxed text-ink/65">
               A shared task queue for parallel agent sessions. Every session claims its own work,
               you approve once per epic, and a live board shows who's doing what. The spec stays
               in git — the churn moves here.
@@ -349,10 +349,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
             {/* Primary actions — the create / join forms live in the launcher modal.
                 Signed in, the primary path is the dashboard (like Supabase's
                 "start your project"); signed out, it's straight to create. */}
-            <div
-              className="tandem-rise mt-8 flex flex-wrap items-center gap-3"
-              style={{ animationDelay: "180ms" }}
-            >
+            <div className="mt-8 flex flex-wrap items-center gap-3">
               {user ? (
                 <>
                   <button
@@ -388,10 +385,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
               )}
             </div>
 
-            <div
-              className="tandem-rise mt-5 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-ink/50"
-              style={{ animationDelay: "220ms" }}
-            >
+            <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-ink/50">
               {/* anchor, not a button — the hero link to /mcp is the strongest
                   internal link on the site (see lib/spaNav) */}
               <a
@@ -426,7 +420,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
 
           {/* Right: two Claude Code terminals draining one queue — the product's
               whole argument, animated (HeroBoardDemo loops ~20s). */}
-          <div className="tandem-rise min-w-0" style={{ animationDelay: "140ms" }}>
+          <div className="min-w-0">
             <HeroBoardDemo />
           </div>
         </div>
@@ -453,17 +447,19 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
                   >
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-sm font-medium text-ink">{r.name}</div>
-                      <div className="text-[11px] text-ink/40">{relativeTime(r.lastOpenedAt)}</div>
+                      <div className="text-[11px] text-ink/50">{relativeTime(r.lastOpenedAt)}</div>
                     </div>
-                    <span className="font-code text-[11px] text-ink/40">{r.code}</span>
+                    <span className="font-code text-[11px] text-ink/50">{r.code}</span>
                   </button>
+                  {/* Always reachable: visible on touch (no hover), revealed on
+                      row hover or its own keyboard focus on sm+. */}
                   <button
                     onClick={() => handleForgetRecent(r.code)}
                     aria-label={`Remove ${r.name} from recents`}
                     title="Remove from recents"
-                    className="text-ink/25 opacity-0 transition-opacity hover:text-ink/60 group-hover:opacity-100"
+                    className="rounded p-1 text-ink/25 transition-opacity hover:text-ink/60 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:opacity-0 sm:group-hover:opacity-100"
                   >
-                    ✕
+                    <X size={14} />
                   </button>
                 </li>
               ))}
@@ -555,7 +551,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
               <div className="divide-y divide-white/10 rounded-lg border border-white/10">
                 {ACCOUNT_PERKS.map((perk) => (
                   <div key={perk.title} className="flex gap-4 p-5">
-                    <div className="grid h-9 w-9 shrink-0 place-items-center rounded-md border border-white/10 bg-white/5 text-indigo-400">
+                    <div className="grid h-9 w-9 shrink-0 place-items-center rounded-md border border-white/10 bg-white/5 text-accent">
                       <Icon name={perk.icon} className="h-[18px] w-[18px]" />
                     </div>
                     <div>
@@ -642,7 +638,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
               About
             </a>
             <p>
-              made with <span>♥</span> by{" "}
+              made by{" "}
               <a
                 href="https://www.jaxonp.com/"
                 target="_blank"

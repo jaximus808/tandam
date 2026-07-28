@@ -36,7 +36,7 @@ export default function CanvasNameEditor({
 
   if (!canEdit) {
     return (
-      <span className="font-display text-[15px] font-medium leading-tight text-ink truncate">
+      <span className="text-[15px] font-medium leading-tight text-ink truncate">
         {name}
       </span>
     );
@@ -82,7 +82,7 @@ export default function CanvasNameEditor({
             setEditing(false);
           }
         }}
-        className="font-display text-[15px] font-medium leading-tight text-ink bg-surface rounded-[3px] border border-ink/15 px-1 py-px outline-none focus:border-ink/30 min-w-0 max-w-[40vw]"
+        className="text-[15px] font-medium leading-tight text-ink bg-surface rounded-[3px] border border-ink/15 px-1 py-px outline-none focus:border-ink/30 min-w-0 max-w-[40vw]"
       />
     );
   }
@@ -92,7 +92,7 @@ export default function CanvasNameEditor({
       type="button"
       onClick={() => setEditing(true)}
       title="Rename this canvas"
-      className="font-display text-[15px] font-medium leading-tight text-ink truncate rounded-[3px] px-1 -mx-1 transition-colors hover:bg-ink/5"
+      className="text-[15px] font-medium leading-tight text-ink truncate rounded-[3px] px-1 -mx-1 transition-colors hover:bg-ink/5"
     >
       {name}
     </button>

@@ -641,15 +641,26 @@ export default function TaskBoard({
       <div
         key={t.id}
         data-task-id={t.id}
+        role="button"
+        tabIndex={0}
         onClick={() => setDetailId(t.id)}
-        className="cursor-pointer rounded-lg border border-ink/10 bg-surface p-2.5 transition-[border-color,box-shadow] hover:border-ink/25 hover:shadow-sm"
+        onKeyDown={(ev: ReactKeyboardEvent) => {
+          // Keyboard parity with the sidebar rows: Enter/Space opens the detail
+          // slide-over. Only when the card itself is focused — keys on inner
+          // controls (approve/reject, epic chip) keep their own behaviour.
+          if ((ev.key === "Enter" || ev.key === " ") && ev.target === ev.currentTarget) {
+            ev.preventDefault();
+            setDetailId(t.id);
+          }
+        }}
+        className="cursor-pointer rounded-lg border border-ink/10 bg-surface p-2.5 transition-[border-color,box-shadow] hover:border-ink/25 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
       >
         <div className="flex items-start justify-between gap-2">
           <span
             className={`min-w-0 text-[13px] font-semibold leading-snug ${terminal ? "text-ink/55" : "text-ink"}`}
           >
             {t.ticketId && (
-              <span className="mr-1.5 font-code text-[10px] font-medium tracking-tight text-ink/45">
+              <span className="mr-1.5 font-code text-[10px] font-medium tracking-tight text-ink/50">
                 {t.ticketId}
               </span>
             )}
@@ -682,7 +693,7 @@ export default function TaskBoard({
             <User size={11} className="shrink-0 text-ink/40" aria-label="Your own todo" />
           )}
           <span
-            className="ml-auto shrink-0 font-code text-[10px] text-ink/35"
+            className="ml-auto shrink-0 font-code text-[10px] text-ink/50"
             title={fullDate(t.createdAt)}
           >
             {ageOf(t.createdAt)}
@@ -740,7 +751,7 @@ export default function TaskBoard({
         >
           {label}
         </span>
-        <span className="shrink-0 font-code text-[10px] text-ink/40">{count}</span>
+        <span className="shrink-0 font-code text-[10px] text-ink/50">{count}</span>
       </div>
     );
   }
@@ -773,7 +784,7 @@ export default function TaskBoard({
           <StateChip state={lifecycle === "finished" ? "done" : e.state} />
         </div>
         <ProgressBar done={done} working={working} total={total} className="mt-1.5 h-1.5" />
-        <div className="mt-1 flex items-center justify-between font-code text-[10px] text-ink/40">
+        <div className="mt-1 flex items-center justify-between font-code text-[10px] text-ink/50">
           <span>
             {done}/{total} done
           </span>
@@ -793,7 +804,7 @@ export default function TaskBoard({
     // drained-in — no approve-era chrome.
     const finished = epicLifecycle(e, list) === "finished";
     return (
-      <div className="shrink-0 border-b border-ink/5 px-4 py-2.5">
+      <div className="shrink-0 border-b border-ink/10 px-4 py-2.5">
         <div className="flex items-center gap-2">
           <Layers size={14} className="shrink-0 text-ink/45" />
           <button
@@ -809,7 +820,7 @@ export default function TaskBoard({
               {drain}
             </span>
           )}
-          <span className="ml-auto shrink-0 font-code text-[11px] text-ink/45">
+          <span className="ml-auto shrink-0 font-code text-[11px] text-ink/50">
             {done}/{total} done
           </span>
         </div>
@@ -831,7 +842,7 @@ export default function TaskBoard({
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
       {/* Toolbar: mobile sidebar toggle + a quiet census of the current scope. */}
-      <div className="flex shrink-0 items-center gap-2 border-b border-ink/5 px-4 py-2">
+      <div className="flex shrink-0 items-center gap-2 border-b border-ink/10 px-4 py-2">
         {!empty && (
           <button
             onClick={() => setSidebarOpen((v) => !v)}
@@ -844,7 +855,7 @@ export default function TaskBoard({
         )}
         <span className="text-sm font-semibold text-ink">Board</span>
         {!empty && (
-          <span className="hidden font-code text-[11px] text-ink/40 sm:inline">
+          <span className="hidden font-code text-[11px] text-ink/50 sm:inline">
             {filtering
               ? `${visibleTasks.length}/${scopedTasks.length} tasks`
               : `${scopedTasks.length} task${scopedTasks.length === 1 ? "" : "s"}`}
@@ -857,7 +868,7 @@ export default function TaskBoard({
       {/* Filter bar: search + chip filters, AND-composed. Horizontal scroll on
           narrow screens rather than wrapping into the board. */}
       {!empty && (
-        <div className="flex shrink-0 items-center gap-1.5 overflow-x-auto border-b border-ink/5 px-4 py-1.5">
+        <div className="flex shrink-0 items-center gap-1.5 overflow-x-auto border-b border-ink/10 px-4 py-1.5">
           <div className="relative shrink-0">
             <Search size={12} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-ink/30" />
             <input
@@ -923,7 +934,7 @@ export default function TaskBoard({
             <button
               onClick={clearFilters}
               title="Clear search and filters (Esc)"
-              className="flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-[11px] font-medium text-ink/45 transition-colors hover:bg-ink/5 hover:text-ink/75"
+              className="flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-[11px] font-medium text-ink/50 transition-colors hover:bg-ink/5 hover:text-ink/75"
             >
               <X size={12} /> Clear
             </button>
@@ -949,10 +960,10 @@ export default function TaskBoard({
           {/* Epic navigator: the timeline sidebar. Hidden on mobile unless
               toggled from the toolbar; always visible on md+. */}
           <aside
-            className={`${sidebarOpen ? "flex" : "hidden"} w-64 shrink-0 flex-col border-r border-ink/5 md:flex`}
+            className={`${sidebarOpen ? "flex" : "hidden"} w-64 shrink-0 flex-col border-r border-ink/10 md:flex`}
           >
             <div className="min-h-0 flex-1 overflow-y-auto pb-2">
-              <div className="sticky top-0 z-10 border-b border-ink/5 bg-paper py-1">
+              <div className="sticky top-0 z-10 border-b border-ink/10 bg-paper py-1">
                 {renderPseudoEntry("all", "All tasks", tasks.length)}
                 {renderPseudoEntry("none", "No epic", epiclessAll.length)}
               </div>
@@ -961,14 +972,14 @@ export default function TaskBoard({
               </div>
               {activeEpics.map((e) => renderEpicEntry(e))}
               {epics.length === 0 && (
-                <p className="px-3 py-1.5 text-[11px] leading-relaxed text-ink/35">
+                <p className="px-3 py-1.5 text-[11px] leading-relaxed text-ink/50">
                   No epics yet — agents propose them as named batches of tasks.
                 </p>
               )}
               {/* Done bucket: finished + rejected epics, collapsed by default.
                   History stays browsable — entries still scope the kanban. */}
               {agedEpics.length > 0 && (
-                <div className="mt-2 border-t border-ink/5">
+                <div className="mt-2 border-t border-ink/10">
                   <button
                     onClick={toggleDoneOpen}
                     aria-expanded={doneOpen}
@@ -994,7 +1005,11 @@ export default function TaskBoard({
                 slim rail. Under a filter, cards simply vanish and the header
                 shows shown/total (within the scope). */}
             <div className="min-h-0 flex-1 overflow-x-auto">
-              <div className="flex h-full gap-3 px-4 py-3">
+              {/* pr on sm+: the QuickLog chip rail floats over the right gutter
+                  (App.tsx renders it absolutely at right-4, z-20). The extra
+                  end-padding lets the last kanban column scroll fully clear of
+                  the rail instead of ending underneath it. */}
+              <div className="flex h-full gap-3 py-3 pl-4 pr-4 sm:pr-24">
                 {COLUMNS.map((col) => {
                   const colAll = scopedTasks.filter((t) => col.states.includes(t.state));
                   const colTasks = filtering
@@ -1013,11 +1028,11 @@ export default function TaskBoard({
                           style={{ backgroundColor: col.dot, opacity: slim ? 0.35 : 1 }}
                         />
                         <span
-                          className={`truncate text-[11px] font-medium uppercase tracking-wide ${slim ? "text-ink/30" : "text-ink/55"}`}
+                          className={`truncate text-[11px] font-medium uppercase tracking-wide ${slim ? "text-ink/50" : "text-ink/60"}`}
                         >
                           {col.label}
                         </span>
-                        <span className="shrink-0 font-code text-[10px] text-ink/35">
+                        <span className="shrink-0 font-code text-[10px] text-ink/50">
                           {filtering ? `${colTasks.length}/${colAll.length}` : colTasks.length}
                         </span>
                       </div>
@@ -1097,6 +1112,7 @@ function TaskDetail({
 }) {
   const isTask = action.type === "task";
   const p = taskPayload(action); // epics read title/body through the same shape
+  const dialogRef = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<DetailConfirm>(null);
@@ -1106,6 +1122,43 @@ function TaskDetail({
 
   const commits = extractCommits(action.result);
   const epicTitle = isTask && p.epicId ? epicTitleById.get(p.epicId) : undefined;
+
+  // aria-modal contract: move focus INTO the dialog on open, keep Tab cycling
+  // inside it, and hand focus back to the opener on close. The component
+  // remounts per action (key={detail.id} upstream), so mount/unmount is
+  // exactly open/close.
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    dialogRef.current?.focus();
+    return () => opener?.focus?.();
+  }, []);
+
+  function trapTab(e: ReactKeyboardEvent) {
+    if (e.key !== "Tab") return;
+    const root = dialogRef.current;
+    if (!root) return;
+    const focusables = Array.from(
+      root.querySelectorAll<HTMLElement>(
+        'button, [href], input, textarea, select, [tabindex]:not([tabindex="-1"])',
+      ),
+    ).filter((el) => !el.hasAttribute("disabled") && el.getClientRects().length > 0);
+    if (focusables.length === 0) {
+      e.preventDefault();
+      return;
+    }
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const current = document.activeElement;
+    if (e.shiftKey) {
+      if (current === first || current === root) {
+        e.preventDefault();
+        last.focus();
+      }
+    } else if (current === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
 
   async function run(fn: () => Promise<void>) {
     if (busy) return;
@@ -1215,13 +1268,17 @@ function TaskDetail({
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
+        aria-label={`${action.ticketId ? `${action.ticketId} — ` : ""}${p.title || "Task detail"}`}
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
-        className="flex h-full w-full max-w-xl flex-col border-l border-ink/10 bg-surface shadow-lg"
+        onKeyDown={trapTab}
+        className="flex h-full w-full max-w-xl flex-col border-l border-ink/10 bg-surface shadow-lg focus-visible:outline-none"
       >
         {/* Header: ticket + state + close. */}
-        <div className="flex shrink-0 items-center gap-2 border-b border-ink/5 px-4 py-3">
+        <div className="flex shrink-0 items-center gap-2 border-b border-ink/10 px-4 py-3">
           {action.ticketId && (
             <span className="shrink-0 font-code text-[12px] font-medium tracking-tight text-ink/50">
               {action.ticketId}
@@ -1323,7 +1380,7 @@ function TaskDetail({
                       className="inline-flex max-w-full items-center gap-1 rounded-[4px] border border-ink/10 bg-ink/[0.03] px-1.5 py-0.5 text-[11px] text-ink/60"
                     >
                       <Link2 size={10} className="shrink-0" />
-                      <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-ink/35">
+                      <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-ink/50">
                         {link.kind}
                       </span>
                       <span className="truncate">{link.label}</span>
@@ -1332,7 +1389,7 @@ function TaskDetail({
                     <span
                       key={id}
                       title="Linked item is not on this canvas (deleted, or from another surface)"
-                      className="inline-flex max-w-full items-center gap-1 rounded-[4px] border border-dashed border-ink/15 px-1.5 py-0.5 font-code text-[10px] text-ink/40"
+                      className="inline-flex max-w-full items-center gap-1 rounded-[4px] border border-dashed border-ink/15 px-1.5 py-0.5 font-code text-[10px] text-ink/50"
                     >
                       <Link2 size={10} className="shrink-0" />
                       <span className="truncate">{id}</span>
@@ -1348,7 +1405,7 @@ function TaskDetail({
             <div className="mt-3 flex items-center gap-1.5">
               <ClaimantChip name={action.claimedBy} />
               {action.claimedAt && (
-                <span className="text-[11px] text-ink/40" title={fullDate(action.claimedAt)}>
+                <span className="text-[11px] text-ink/50" title={fullDate(action.claimedAt)}>
                   {action.state === "executing" ? "working for" : "claimed"} {ageOf(action.claimedAt)}
                   {action.state === "executing" ? "" : " ago"}
                 </span>
@@ -1395,7 +1452,7 @@ function TaskDetail({
           )}
 
           {/* Provenance + timestamps. */}
-          <div className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-ink/5 pt-3 text-[11px] text-ink/45">
+          <div className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-ink/10 pt-3 text-[11px] text-ink/50">
             <span className="inline-flex items-center gap-1">
               {isTask && p.assignee === "human" ? (
                 <>
@@ -1416,7 +1473,7 @@ function TaskDetail({
 
         {/* Step-in controls: exactly the current state's legal human moves. */}
         {!readOnly && !editing && (
-          <div className="shrink-0 border-t border-ink/5 px-4 py-3">
+          <div className="shrink-0 border-t border-ink/10 px-4 py-3">
             {error && (
               <div className="mb-2 rounded-md border border-rose-500/20 bg-rose-500/10 px-2.5 py-1.5 text-[12px] text-rose-600 dark:text-rose-400">
                 {error}

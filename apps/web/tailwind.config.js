@@ -11,11 +11,6 @@ module.exports = {
         // Inter (variable) is the ONE UI + display face (Design v2). Headings
         // are Inter at tight tracking and 600 weight — no display serif.
         sans: ['"Inter Variable"', "Inter", "ui-sans-serif", "system-ui", "sans-serif"],
-        // Legacy aliases: font-brand / font-display remap to the same Inter
-        // stack so pre-v2 markup degrades to canon automatically. New code
-        // should not use them; wave B/C sweeps them out.
-        brand: ['"Inter Variable"', "Inter", "ui-sans-serif", "system-ui", "sans-serif"],
-        display: ['"Inter Variable"', "Inter", "ui-sans-serif", "system-ui", "sans-serif"],
         // JetBrains Mono — strictly machine text: tickets (TDM-n), commit
         // hashes, terminal content, canvas codes, keyboard hints. Never for
         // labels, eyebrows, or nav.
@@ -42,9 +37,6 @@ module.exports = {
         // The agent-presence signature (muted terracotta). Strictly presence
         // chips / cursors / attribution — never a ground, heading, or CTA.
         agent: "rgb(var(--color-agent) / <alpha-value>)",
-        // Legacy alias — the channel now points at accent so old markup lands
-        // on canon. Do not use in new code; wave B/C removes usages.
-        brand: "rgb(var(--color-brand) / <alpha-value>)",
       },
     },
   },

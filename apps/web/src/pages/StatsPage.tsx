@@ -68,14 +68,14 @@ function StatCard({
     <div className="relative overflow-hidden rounded-2xl border border-ink/10 bg-surface px-6 py-7">
       <span aria-hidden className="absolute inset-x-0 top-0 h-1" style={{ backgroundColor: accent }} />
       <div className="flex items-baseline gap-1">
-        <span className="font-display text-5xl font-semibold tracking-tight tabular-nums text-ink sm:text-6xl">
+        <span className="text-5xl font-semibold tracking-tight tabular-nums text-ink sm:text-6xl">
           {shown.toLocaleString()}
         </span>
         {suffix && (
-          <span className="font-display text-2xl font-medium tabular-nums text-ink/40">{suffix}</span>
+          <span className="text-2xl font-medium tabular-nums text-ink/40">{suffix}</span>
         )}
       </div>
-      <div className="mt-2 font-display text-sm font-medium text-ink">{label}</div>
+      <div className="mt-2 text-sm font-medium text-ink">{label}</div>
       {hint && <div className="mt-0.5 text-xs leading-snug text-ink/40">{hint}</div>}
     </div>
   );
@@ -107,7 +107,7 @@ export default function StatsPage({ onHome, onOpenMCP, onShowCanvases, onShowSet
   const ready = load.status === "ready" ? load.stats : null;
 
   return (
-    <div className="flex min-h-screen flex-col bg-paper font-brand text-ink">
+    <div className="flex min-h-screen flex-col bg-paper text-ink">
       <SiteHeader
         onHome={onHome}
         label="By the numbers"
@@ -128,7 +128,7 @@ export default function StatsPage({ onHome, onOpenMCP, onShowCanvases, onShowSet
 
       <main className="mx-auto w-full max-w-4xl flex-1 px-6 py-10">
         <div className="mb-8">
-          <h1 className="font-display text-2xl font-medium tracking-tight">Tandem, by the numbers</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Tandem, by the numbers</h1>
           <p className="mt-1 text-sm text-ink/50">
             Private dashboard — not linked from the homepage. Refresh to pull live counts.
           </p>
@@ -179,10 +179,10 @@ export default function StatsPage({ onHome, onOpenMCP, onShowCanvases, onShowSet
             {/* The recurrence bar — the one number that actually matters. */}
             <div className="mt-8 rounded-2xl border border-ink/10 bg-surface px-6 py-5">
               <div className="flex items-center justify-between">
-                <span className="font-display text-sm font-medium text-ink">
+                <span className="text-sm font-medium text-ink">
                   Recurrence — the success metric
                 </span>
-                <span className="font-display text-sm font-semibold tabular-nums text-amber-600">
+                <span className="text-sm font-semibold tabular-nums text-amber-600">
                   {ready.recurringPct}%
                 </span>
               </div>

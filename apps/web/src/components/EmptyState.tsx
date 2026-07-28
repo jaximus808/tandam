@@ -21,7 +21,7 @@ export default function EmptyState({ title, hint, action }: Props) {
             {action.label}
           </button>
         )}
-        <p className="mt-3 text-[11px] uppercase tracking-wide text-ink/30">
+        <p className="mt-3 text-[11px] uppercase tracking-wide text-ink/50">
           Nothing placed here yet
         </p>
       </div>

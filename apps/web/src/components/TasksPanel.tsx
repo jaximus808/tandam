@@ -415,7 +415,7 @@ export default function TasksPanel({
           <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-ink/75">
             {p.title || "Untitled epic"}
           </span>
-          <span className="shrink-0 text-[10px] text-ink/35">
+          <span className="shrink-0 text-[10px] text-ink/50">
             {done}/{children.length}
           </span>
           <span className={`${CHIP_BASE} ${chip.chip}`}>
@@ -441,7 +441,7 @@ export default function TasksPanel({
             {p.title || "Untitled epic"}
           </span>
           {children.length > 0 && (
-            <span className="shrink-0 text-[10px] text-ink/35">
+            <span className="shrink-0 text-[10px] text-ink/50">
               {done}/{children.length}
             </span>
           )}
@@ -491,7 +491,7 @@ export default function TasksPanel({
         {children.length > 0 ? (
           <div className="flex flex-col gap-1.5">{children.map(renderTask)}</div>
         ) : (
-          <p className="px-1 text-[11px] text-ink/35">No tasks under this epic yet.</p>
+          <p className="px-1 text-[11px] text-ink/50">No tasks under this epic yet.</p>
         )}
       </div>
     );
@@ -543,9 +543,19 @@ export default function TasksPanel({
         {/* Bulk triage entry point: with several proposed cards, select them all
             and approve in one shot. Keyboard: j/k move, x select, a approve. */}
         {!readOnly && proposedIds.length > 1 && (
-          <div className="mb-2 flex items-center justify-between rounded-md border border-ink/10 bg-ink/[0.03] px-2.5 py-1.5">
-            <span className="text-[11px] text-ink/50" title="Keyboard: j/k move focus · x select · a approve">
-              {proposedIds.length} awaiting approval
+          <div className="mb-2 flex items-center justify-between gap-2 rounded-md border border-ink/10 bg-ink/[0.03] px-2.5 py-1.5">
+            <span className="flex min-w-0 items-baseline gap-2">
+              <span className="truncate text-[11px] text-ink/50">
+                {proposedIds.length} awaiting approval
+              </span>
+              {/* The triage vocabulary, made visible (mono is sanctioned for
+                  keyboard hints). Full legend in the tooltip. */}
+              <span
+                className="shrink-0 font-code text-[10px] text-ink/50"
+                title="Keyboard: j/k move focus · x select · a approve"
+              >
+                j k · x · a
+              </span>
             </span>
             <button
               onClick={() => {
@@ -675,7 +685,7 @@ function TaskBody({ body }: { body: string }) {
       {(overflows || expanded) && (
         <button
           onClick={() => setExpanded((v) => !v)}
-          className="mt-0.5 flex items-center gap-0.5 text-[11px] font-medium text-ink/40 transition-colors hover:text-ink/70"
+          className="mt-0.5 flex items-center gap-0.5 text-[11px] font-medium text-ink/50 transition-colors hover:text-ink/70"
         >
           {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
           {expanded ? "Show less" : "Show more"}
@@ -734,7 +744,7 @@ function TaskCard({
           )}
           <span className={`text-[13px] font-semibold leading-snug ${terminal ? "text-ink/55" : "text-ink"}`}>
             {task.ticketId && (
-              <span className="mr-1.5 font-code text-[10px] font-medium tracking-tight text-ink/45">
+              <span className="mr-1.5 font-code text-[10px] font-medium tracking-tight text-ink/50">
                 {task.ticketId}
               </span>
             )}
@@ -746,7 +756,7 @@ function TaskCard({
             <button
               onClick={onEdit}
               title="Edit task"
-              className="rounded-md p-0.5 text-ink/25 opacity-0 transition-opacity hover:bg-ink/5 hover:text-ink/60 group-hover/task:opacity-100"
+              className="rounded-md p-0.5 text-ink/25 opacity-0 transition-opacity hover:bg-ink/5 hover:text-ink/60 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 group-hover/task:opacity-100"
             >
               <Pencil size={12} />
             </button>
@@ -755,7 +765,7 @@ function TaskCard({
             <button
               onClick={onDelete}
               title="Delete task"
-              className="rounded-md p-0.5 text-ink/25 opacity-0 transition-opacity hover:bg-rose-50 hover:text-rose-600 group-hover/task:opacity-100"
+              className="rounded-md p-0.5 text-ink/25 opacity-0 transition-opacity hover:bg-rose-500/10 hover:text-rose-600 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 group-hover/task:opacity-100 dark:hover:text-rose-400"
             >
               <Trash2 size={12} />
             </button>
@@ -791,7 +801,7 @@ function TaskCard({
       )}
       <div className="mt-1.5 flex items-center gap-1.5">
         <AssigneeChip assignee={p.assignee} />
-        <span className="text-[10px] text-ink/35">
+        <span className="text-[10px] text-ink/50">
           by {task.proposedBy}
           {task.state === "proposed" && " · awaiting approval"}
           {task.state === "executing" && task.claimedBy && ` · claimed by ${task.claimedBy}`}
@@ -988,7 +998,7 @@ function Composer({
                   >
                     {linked.has(t.id) && <Check size={10} className="text-white" />}
                   </span>
-                  <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-ink/35">
+                  <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-ink/50">
                     {t.kind === "roadmap" ? "goal" : "note"}
                   </span>
                   <span className="truncate">{t.label}</span>
@@ -1017,7 +1027,7 @@ function Composer({
         </button>
       </div>
       {!editing && (
-        <p className="text-[10px] leading-snug text-ink/35">
+        <p className="text-[10px] leading-snug text-ink/50">
           Your tasks are ready immediately — no approval needed. Agent sessions pull only
           “For the agent” tasks from the queue.
         </p>

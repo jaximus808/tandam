@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { Sparkles, Save, MonitorSmartphone, Copy, type LucideIcon } from "lucide-react";
+import { Sparkles, Save, MonitorSmartphone, Copy, X, type LucideIcon } from "lucide-react";
 import { loadGoogleId, loginWithGoogle, GOOGLE_CLIENT_ID, type User } from "../lib/auth";
 import TandemLogo from "./TandemLogo";
 import posthog from "../lib/posthog";
@@ -106,9 +106,9 @@ export default function SignInModal({ onClose, onSignedIn }: Props) {
           <button
             onClick={onClose}
             aria-label="Close"
-            className="absolute top-2 right-2 z-10 w-7 h-7 flex items-center justify-center rounded-full text-ink/55 hover:bg-ink/5 hover:text-ink/70 transition-colors"
+            className="absolute top-2 right-2 z-10 w-7 h-7 flex items-center justify-center rounded-full text-ink/55 hover:bg-ink/5 hover:text-ink/70 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           >
-            ✕
+            <X size={15} />
           </button>
           <div className="relative h-full flex flex-col items-center justify-center gap-2">
             <TandemLogo size={52} />

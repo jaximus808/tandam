@@ -8,10 +8,12 @@ Vercel. Nothing clever that costs clarity.
 
 DIRECTION CONTRACT — THESIS: a coordination tool for people who ship; the surface
 must feel engineered, not decorated. It refuses the warm-editorial arrangement the
-category's AI-built competitors all share. OWN-WORLD: cool neutral ground, hairline
-borders, one indigo accent doing all interactive work, mono strictly for machine
-text; recognizable with content removed by its restraint and rhythm. STORY: "these
-people sweat details, my agents' work is safe here" → create a canvas. FIRST
+category's AI-built competitors all share. IDENTITY: identity lives in the content
+(terminals, receipts, live board); the skin stays invisible — cool neutral ground,
+hairline borders, one indigo accent doing all interactive work, mono strictly for
+machine text. The skin makes no recognizability claim of its own; if a screen is
+memorable, it should be because of what it shows, not how it is dressed. STORY:
+"these people sweat details, my agents' work is safe here" → create a canvas. FIRST
 VIEWPORT (landing): headline + subhead left, live terminals+board demo right, one
 filled primary button. FORM: canon, user-pinned; no seed roll.
 
@@ -30,6 +32,11 @@ markup survives; their VALUES move from warm to cool:
 - **agent** (agent-presence signature): terracotta survives ONLY here, muted:
   light `#C2571B` → keep, but usage shrinks to presence chips/cursors/attribution.
   Never a ground, never a heading color, never a CTA.
+  DECIDED (TDM-19): agent ACTIVITY is terracotta EVERYWHERE — the live
+  cursor/halo, the header "editing {mode}" chip, and the reading chip all draw
+  from this token. The six per-mode hues (`lib/modeTheme.ts`) are content-level
+  semantics only (e.g. docTypes icon tints) and never colour chrome or agent
+  presence.
 - **Semantic states** (chips, dots, bars — muted, consistent, never neon):
   proposed amber-600, ready sky-600, working violet-600, done emerald-600,
   failed rose-600, rejected zinc-500. Backgrounds at /10 alpha, text at 600 (light)
@@ -49,6 +56,14 @@ markup survives; their VALUES move from warm to cool:
   in ink/50, used sparingly.)
 - Scale: 12 / 13 / 14 (body) / 16 / 20 / 24 / 32 / 44-56 (landing hero only).
   Line-height 1.5 body, 1.2 headings.
+- **Metadata contrast floor**: any text set BELOW 12px (ages, counts, tickets,
+  provenance, captions, keyboard hints, micro-labels) renders at **ink/50
+  minimum** — small + faint is unreadable, especially on dark paper. Sub-12px
+  text may be quiet; it may not be both tiny and ghosted. (De-emphasis at these
+  sizes comes from weight/size, not alpha below 50.) Placeholders, disabled
+  states, and icon-only controls with hover/focus states are exempt. The 12px
+  eyebrow spec above (ink/50) already sits on the floor.
+- Size floor for labels: nothing below 10px.
 
 ## Surfaces & depth
 
@@ -79,7 +94,7 @@ letter/word animations).
   36px (landing) height; hover darkens 6%; focus ring accent/40 2px offset.
   Secondary: surface + ink/15 border. Ghost: text ink/70 hover surface.
 - **Chips** (state/ticket/agent): 11px, 4px radius, /10 bg + 600 text, no borders
-  unless interactive. Ticket chips mono 10px ink/45.
+  unless interactive. Ticket chips mono 10px ink/50 (the metadata floor).
 - **Cards** (board/task): surface, ink/10 border, 8px radius, shadow-sm on hover
   only, 10-12px padding.
 - **Inputs**: surface, ink/15 border, focus accent ring; 13px; labels 12px/500 ink/60.

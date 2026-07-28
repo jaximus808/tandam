@@ -1,3 +1,4 @@
+import { X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
@@ -497,10 +498,10 @@ function NoteCard({
         )}
         <button
           onClick={handleDelete}
-          className="text-xs text-ink/40 hover:text-rose-600 dark:hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity"
+          className="rounded p-0.5 text-ink/40 hover:text-rose-600 dark:hover:text-rose-400 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 transition-opacity"
           title="Delete note"
         >
-          ✕
+          <X size={13} />
         </button>
       </div>
 
