@@ -256,7 +256,7 @@ function BoardCard({
         </span>
       </div>
       {state === "working" && (
-        <span className="mt-1 inline-flex min-w-0 items-center gap-1 text-[10.5px] font-medium text-violet-600 dark:text-violet-400">
+        <span className="mt-1 inline-flex max-w-full min-w-0 items-center gap-1 text-[10.5px] font-medium text-violet-600 dark:text-violet-400">
           <Zap size={10} className="shrink-0" />
           <span className="truncate">{task.claimant}</span>
         </span>
@@ -279,9 +279,9 @@ function BoardPane({ t, animate }: { t: number; animate: boolean }) {
   return (
     <div className="flex h-full min-w-0 flex-col overflow-hidden rounded-lg border border-ink/10 bg-paper p-3 shadow-sm">
       {/* Header: board label + agent chips (terracotta = agent, app-wide). */}
-      <div className="flex min-w-0 items-center gap-2">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
         <span className="shrink-0 text-[12px] font-semibold text-ink">Board</span>
-        <span className="min-w-0 truncate whitespace-nowrap font-code text-[10px] text-ink/40">
+        <span className="shrink-0 whitespace-nowrap font-code text-[10px] text-ink/40">
           4 tasks · 1 epic
         </span>
         <span className="ml-auto flex shrink-0 items-center gap-1">
