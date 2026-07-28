@@ -12,8 +12,7 @@ import {
 } from "lucide-react";
 import type { CanvasState, Document, DocumentType } from "../types";
 import { sendOp } from "../lib/ws";
-import { modeTheme } from "../lib/modeTheme";
-import { DOC_TYPE_TO_MODE, DOC_TYPE_LABEL } from "../lib/docTypes";
+import { DOC_TYPE_LABEL } from "../lib/docTypes";
 
 /* ─────────────────────────────────────────────────────────────────────────────
    DocumentExplorer — the left-hand document sidebar, as a folder tree (item 8.5).
@@ -212,27 +211,23 @@ export default function DocumentExplorer({
     const byType: Record<string, Document[]> = {};
     for (const d of docs) if (d.type !== "folder") (byType[d.type] ??= []).push(d);
     const groups = GROUP_ORDER.filter((t) => byType[t]?.length);
-    return groups.map((type) => {
-      const t = modeTheme(DOC_TYPE_TO_MODE[type]);
-      return (
-        <div key={type} className="mb-2">
-          <div
-            className="mb-1 flex items-center gap-1.5 px-2"
-            style={{ paddingLeft: 8 + depth * 14 }}
-          >
-            <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: t.solid }} />
-            <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink/40">
-              {DOC_TYPE_LABEL[type]} · {byType[type].length}
-            </span>
-          </div>
-          <div className="flex flex-col gap-0.5">
-            {byType[type].map((doc) => (
-              <DocRow key={doc.id} doc={doc} theme={t} depth={depth} {...rowShared} />
-            ))}
-          </div>
+    return groups.map((type) => (
+      <div key={type} className="mb-2">
+        <div
+          className="mb-1 flex items-center gap-1.5 px-2"
+          style={{ paddingLeft: 8 + depth * 14 }}
+        >
+          <span className="text-[11px] font-medium uppercase tracking-wide text-ink/45">
+            {DOC_TYPE_LABEL[type]} · {byType[type].length}
+          </span>
         </div>
-      );
-    });
+        <div className="flex flex-col gap-0.5">
+          {byType[type].map((doc) => (
+            <DocRow key={doc.id} doc={doc} depth={depth} {...rowShared} />
+          ))}
+        </div>
+      </div>
+    ));
   }
 
   // Renders one folder and, when expanded, its subtree.
@@ -291,7 +286,7 @@ export default function DocumentExplorer({
             <button
               onClick={onCreateFolder}
               title="New folder"
-              className="flex h-7 w-7 items-center justify-center rounded-lg text-ink/35 transition-colors hover:bg-ink/5 hover:text-ink/60"
+              className="flex h-7 w-7 items-center justify-center rounded-md text-ink/35 transition-colors hover:bg-ink/5 hover:text-ink/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
             >
               <FolderPlus size={16} strokeWidth={1.75} />
             </button>
@@ -299,7 +294,7 @@ export default function DocumentExplorer({
           <button
             onClick={onClose}
             title="Hide documents"
-            className="flex h-7 w-7 items-center justify-center rounded-lg text-ink/35 transition-colors hover:bg-ink/5 hover:text-ink/60"
+            className="flex h-7 w-7 items-center justify-center rounded-md text-ink/35 transition-colors hover:bg-ink/5 hover:text-ink/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           >
             <ChevronsLeft size={16} strokeWidth={1.75} />
           </button>
@@ -316,7 +311,7 @@ export default function DocumentExplorer({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search documents"
-            className="w-full rounded-lg border border-ink/15 bg-surface py-1.5 pl-8 pr-2.5 text-[13px] text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
+            className="w-full rounded-md border border-ink/15 bg-surface py-1.5 pl-8 pr-2.5 text-[13px] text-ink outline-none placeholder:text-ink/30 focus:border-accent/50 focus:ring-2 focus:ring-accent/40"
           />
         </div>
       </div>
@@ -415,8 +410,8 @@ function FolderRow({
 
   if (renaming) {
     return (
-      <div className="flex items-center gap-2 rounded-lg py-1.5 pr-2" style={{ paddingLeft: pad }}>
-        <Folder size={14} className="shrink-0 text-amber-500" />
+      <div className="flex items-center gap-2 rounded-md py-1.5 pr-2" style={{ paddingLeft: pad }}>
+        <Folder size={14} className="shrink-0 text-ink/40" />
         <input
           autoFocus
           value={s.draft}
@@ -426,7 +421,7 @@ function FolderRow({
             if (e.key === "Enter") s.onCommitRename(folder.id);
             if (e.key === "Escape") s.onCancelRename();
           }}
-          className="w-full rounded bg-surface px-1.5 py-0.5 text-[13px] text-ink outline-none ring-1 ring-ink/20"
+          className="w-full rounded bg-surface px-1.5 py-0.5 text-[13px] text-ink outline-none ring-2 ring-accent/40"
         />
       </div>
     );
@@ -455,8 +450,8 @@ function FolderRow({
         s.onDropOn(folder.id);
       }}
       className={[
-        "group/row flex cursor-pointer items-center gap-1 rounded-lg py-1.5 pr-2 text-[13px] font-medium transition-colors",
-        isDropTarget ? "bg-amber-100 ring-1 ring-amber-300" : "text-ink/80 hover:bg-ink/[0.04]",
+        "group/row flex cursor-pointer items-center gap-1 rounded-md py-1.5 pr-2 text-[13px] font-medium transition-colors",
+        isDropTarget ? "bg-accent/[0.08] ring-1 ring-accent/30" : "text-ink/80 hover:bg-ink/[0.04]",
       ].join(" ")}
       style={{ paddingLeft: pad }}
       title={collapsed ? `Expand ${label}` : `Collapse ${label}`}
@@ -467,9 +462,9 @@ function FolderRow({
         <ChevronDown size={14} className="shrink-0 text-ink/40" />
       )}
       {collapsed ? (
-        <Folder size={15} className="shrink-0 text-amber-500" />
+        <Folder size={15} className="shrink-0 text-ink/40" />
       ) : (
-        <FolderOpen size={15} className="shrink-0 text-amber-500" />
+        <FolderOpen size={15} className="shrink-0 text-ink/40" />
       )}
       <span className="min-w-0 flex-1 truncate">{label}</span>
 
@@ -514,7 +509,7 @@ function FolderRow({
                   s.onAskDelete(folder.id);
                 }}
                 title="Delete folder"
-                className="flex h-5 w-5 items-center justify-center rounded text-ink/50 hover:bg-rose-50 hover:text-rose-600"
+                className="flex h-5 w-5 items-center justify-center rounded text-ink/50 hover:bg-rose-600/10 hover:text-rose-600"
               >
                 <Trash2 size={12} />
               </button>
@@ -528,12 +523,10 @@ function FolderRow({
 
 function DocRow({
   doc,
-  theme,
   depth,
   ...s
 }: RowShared & {
   doc: Document;
-  theme: ReturnType<typeof modeTheme>;
   depth: number;
 }) {
   const label = doc.name || DOC_TYPE_LABEL[doc.type];
@@ -545,8 +538,8 @@ function DocRow({
 
   if (renaming) {
     return (
-      <div className="flex items-center gap-2 rounded-lg py-1.5 pr-2" style={{ paddingLeft: pad }}>
-        <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: theme.solid }} />
+      <div className="flex items-center gap-2 rounded-md py-1.5 pr-2" style={{ paddingLeft: pad }}>
+        <span className="h-2 w-2 shrink-0 rounded-full bg-ink/25" />
         <input
           autoFocus
           value={s.draft}
@@ -556,7 +549,7 @@ function DocRow({
             if (e.key === "Enter") s.onCommitRename(doc.id);
             if (e.key === "Escape") s.onCancelRename();
           }}
-          className="w-full rounded bg-surface px-1.5 py-0.5 text-[13px] text-ink outline-none ring-1 ring-ink/20"
+          className="w-full rounded bg-surface px-1.5 py-0.5 text-[13px] text-ink outline-none ring-2 ring-accent/40"
         />
       </div>
     );
@@ -573,13 +566,13 @@ function DocRow({
       onClick={() => s.onOpen(doc.id)}
       onDoubleClick={() => s.onStartRename(doc)}
       className={[
-        "group/row flex cursor-pointer items-center gap-2 rounded-lg py-1.5 pr-2 text-[13px] transition-colors",
-        active ? "" : "text-ink/70 hover:bg-ink/[0.04] hover:text-ink",
+        "group/row flex cursor-pointer items-center gap-2 rounded-md py-1.5 pr-2 text-[13px] transition-colors",
+        active ? "bg-accent/[0.08] text-accent" : "text-ink/70 hover:bg-ink/[0.04] hover:text-ink",
       ].join(" ")}
-      style={active ? { backgroundColor: theme.soft, color: theme.solid, paddingLeft: pad } : { paddingLeft: pad }}
+      style={{ paddingLeft: pad }}
       title={open ? `${label} — open` : `Open ${label}`}
     >
-      <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: theme.solid }} />
+      <span className={["h-2 w-2 shrink-0 rounded-full bg-current", active ? "" : "opacity-30"].join(" ")} />
       <span className={`min-w-0 flex-1 truncate ${active ? "font-medium" : ""}`}>{label}</span>
 
       {deleting ? (
@@ -631,7 +624,7 @@ function DocRow({
                   s.onAskDelete(doc.id);
                 }}
                 title="Delete document"
-                className="flex h-5 w-5 items-center justify-center rounded text-current/50 hover:bg-rose-50 hover:text-rose-600"
+                className="flex h-5 w-5 items-center justify-center rounded text-current/50 hover:bg-rose-600/10 hover:text-rose-600"
               >
                 <Trash2 size={12} />
               </button>

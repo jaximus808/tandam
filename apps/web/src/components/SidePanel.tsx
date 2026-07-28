@@ -62,7 +62,7 @@ export default function SidePanel({
     <aside
       ref={ref}
       style={{ width }}
-      className="relative z-20 hidden shrink-0 flex-col border-r border-ink/10 bg-surface/90 backdrop-blur sm:flex"
+      className="relative z-20 hidden shrink-0 flex-col border-r border-ink/10 bg-surface sm:flex"
     >
       {children}
       {/* Resize handle: a wide invisible hit area straddling the right edge with a

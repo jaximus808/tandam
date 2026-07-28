@@ -33,24 +33,28 @@ export default function SiteHeader({
   onOpenCanvas,
 }: Props) {
   return (
-    <header className="sticky top-0 z-40 flex items-center gap-2 border-b border-ink/10 bg-paper/85 px-4 py-3 backdrop-blur sm:px-6">
-      <button onClick={onHome} className="group flex items-center gap-1.5" title="Back to home">
+    <header className="sticky top-0 z-40 flex items-center gap-2 border-b border-ink/10 bg-paper px-4 py-3 sm:px-6">
+      <button
+        onClick={onHome}
+        className="group flex items-center gap-1.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
+        title="Back to home"
+      >
         <TandemLogo size={28} animate={false} />
-        <span className="hidden font-semibold tracking-tight transition-colors group-hover:text-sky-600 sm:inline">
+        <span className="hidden font-semibold tracking-tight transition-colors group-hover:text-accent sm:inline">
           Tandem
         </span>
       </button>
       {label != null && (
         <>
           <span className="text-ink/20">/</span>
-          <span className="font-display text-[15px] font-medium">{label}</span>
+          <span className="text-sm font-medium">{label}</span>
         </>
       )}
       <div className="ml-auto flex items-center gap-1 sm:gap-1.5">
         {onOpenMCP && (
           <button
             onClick={onOpenMCP}
-            className="hidden rounded-md px-3 py-1.5 text-sm font-medium text-ink/80 transition-colors hover:bg-ink/5 sm:inline"
+            className="hidden h-8 items-center rounded-md px-3 text-[13px] font-medium text-ink/70 transition-colors hover:bg-ink/5 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper sm:inline-flex"
           >
             Connect an agent
           </button>

@@ -8,13 +8,17 @@ module.exports = {
   theme: {
     extend: {
       fontFamily: {
-        // Hanken Grotesk is the workhorse UI/body face — also the default sans
-        // so the whole app inherits it without every element opting in.
-        sans: ['"Hanken Grotesk"', "ui-sans-serif", "system-ui", "sans-serif"],
-        brand: ['"Hanken Grotesk"', "ui-sans-serif", "system-ui", "sans-serif"],
-        // Fraunces — the editorial display face for titles and canvas names.
-        display: ['"Fraunces"', "ui-serif", "Georgia", "serif"],
-        // JetBrains Mono — codes, technical labels, anything monospaced.
+        // Inter (variable) is the ONE UI + display face (Design v2). Headings
+        // are Inter at tight tracking and 600 weight — no display serif.
+        sans: ['"Inter Variable"', "Inter", "ui-sans-serif", "system-ui", "sans-serif"],
+        // Legacy aliases: font-brand / font-display remap to the same Inter
+        // stack so pre-v2 markup degrades to canon automatically. New code
+        // should not use them; wave B/C sweeps them out.
+        brand: ['"Inter Variable"', "Inter", "ui-sans-serif", "system-ui", "sans-serif"],
+        display: ['"Inter Variable"', "Inter", "ui-sans-serif", "system-ui", "sans-serif"],
+        // JetBrains Mono — strictly machine text: tickets (TDM-n), commit
+        // hashes, terminal content, canvas codes, keyboard hints. Never for
+        // labels, eyebrows, or nav.
         code: ['"JetBrains Mono"', "ui-monospace", "SFMono-Regular", "monospace"],
       },
       // Semantic tokens are driven by CSS variables (channels defined in
@@ -28,14 +32,18 @@ module.exports = {
         paper: "rgb(var(--color-paper) / <alpha-value>)",
         // Card / panel surface — white in light, elevated near-black in dark.
         surface: "rgb(var(--color-surface) / <alpha-value>)",
-        // Warm near-black text in light; warm off-white in dark. Borders use ink
+        // Cool near-black text in light; cool off-white in dark. Borders use ink
         // at low alpha (ink/10, ink/15) so hairlines flip with the theme.
         ink: "rgb(var(--color-ink) / <alpha-value>)",
-        // The agent signature colour. Humans are ink, agents are terracotta —
-        // every agent-authored thing on a surface carries this.
+        // The single interactive hue (indigo): primary buttons, links, focus
+        // rings, active nav, selected states. The only saturated colour allowed
+        // outside semantic state chips + agent presence.
+        accent: "rgb(var(--color-accent) / <alpha-value>)",
+        // The agent-presence signature (muted terracotta). Strictly presence
+        // chips / cursors / attribution — never a ground, heading, or CTA.
         agent: "rgb(var(--color-agent) / <alpha-value>)",
-        // The Tandem brand teal — the mark's colour (see TandemLogo). Used for
-        // neutral brand accents that shouldn't read as "agent" terracotta.
+        // Legacy alias — the channel now points at accent so old markup lands
+        // on canon. Do not use in new code; wave B/C removes usages.
         brand: "rgb(var(--color-brand) / <alpha-value>)",
       },
     },

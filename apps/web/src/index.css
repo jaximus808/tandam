@@ -2,40 +2,45 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ── Theme tokens ────────────────────────────────────────────────────────────
+/* ── Theme tokens (Design System v2 — "Precision Canon", see /DESIGN.md) ─────
    Semantic colours live here as space-separated RGB channels so Tailwind's
    `rgb(var(--color-x) / <alpha-value>)` can apply any opacity (see
-   tailwind.config.js). Light values match the original hard-coded hex exactly,
-   so light mode is unchanged. `.dark` (set on <html> by the boot script +
-   lib/theme.ts) flips the neutrals to a warm dark palette; the agent/brand
-   accents are nudged brighter so they hold contrast on a dark surface. */
+   tailwind.config.js). Cool neutral ground; ONE saturated interactive hue
+   (accent, indigo). `agent` terracotta survives strictly for agent presence
+   (chips/cursors/attribution). `brand` is a legacy alias now pointed at the
+   accent channel so old `text-brand`/`bg-brand` markup degrades to canon —
+   wave B/C removes those usages. `.dark` (set on <html> by the boot script +
+   lib/theme.ts) flips the channels. */
 :root {
-  --color-paper: 251 250 248; /* #FBFAF8 */
-  --color-surface: 255 255 255; /* white cards */
-  --color-ink: 28 25 23; /* #1C1917 */
-  --color-agent: 199 91 57; /* #C75B39 */
-  --color-brand: 13 110 102; /* #0D6E66 */
+  --color-paper: 250 250 250; /* #FAFAFA — page ground */
+  --color-surface: 255 255 255; /* #FFFFFF — cards / panels */
+  --color-ink: 24 24 27; /* #18181B — text + hairlines via alpha */
+  --color-accent: 79 70 229; /* #4F46E5 — the single interactive hue */
+  --color-agent: 194 87 27; /* #C2571B — agent presence only, muted */
+  --color-brand: 79 70 229; /* legacy alias → accent */
   color-scheme: light;
 }
 :root.dark {
-  --color-paper: 24 22 20; /* warm near-black page */
-  --color-surface: 33 30 28; /* slightly-elevated card */
-  --color-ink: 237 234 229; /* warm off-white text */
-  --color-agent: 224 122 84; /* lifted terracotta */
-  --color-brand: 42 157 143; /* lifted teal */
+  --color-paper: 10 10 11; /* #0A0A0B */
+  --color-surface: 20 20 22; /* #141416 — one visible step above paper */
+  --color-ink: 228 228 231; /* #E4E4E7 — cool off-white */
+  --color-accent: 99 102 241; /* #6366F1 */
+  --color-agent: 224 122 84; /* lifted terracotta for dark contrast */
+  --color-brand: 99 102 241; /* legacy alias → accent */
   color-scheme: dark;
 }
 
 /* Opt a subtree OUT of dark mode by re-asserting the light channel values.
-   Used for surfaces not yet dark-ready (the marketing Landing hero, Stats) so
-   they render consistently light instead of half-flipped — until each gets its
-   own dark-mode pass. Remove the class from a page once it's fully converted. */
+   Used for surfaces not yet dark-ready so they render consistently light
+   instead of half-flipped — until each gets its own dark-mode pass. Remove
+   the class from a page once it's fully converted. */
 .theme-light {
-  --color-paper: 251 250 248;
+  --color-paper: 250 250 250;
   --color-surface: 255 255 255;
-  --color-ink: 28 25 23;
-  --color-agent: 199 91 57;
-  --color-brand: 13 110 102;
+  --color-ink: 24 24 27;
+  --color-accent: 79 70 229;
+  --color-agent: 194 87 27;
+  --color-brand: 79 70 229;
   color-scheme: light;
 }
 
@@ -49,7 +54,7 @@ body {
 /* Brand-wide selection + a calmer, paper-friendly scrollbar so the canvas
    chrome feels finished rather than default-OS. */
 ::selection {
-  background: rgba(56, 189, 248, 0.22);
+  background: rgb(var(--color-accent) / 0.2);
 }
 .tandem-scroll {
   scrollbar-width: thin;
@@ -68,17 +73,6 @@ body {
 .tandem-scroll::-webkit-scrollbar-thumb:hover {
   background: rgba(100, 116, 139, 0.5);
   background-clip: padding-box;
-}
-
-/* When you switch canvas modes, the incoming view eases up into place — a
-   small editorial flourish that makes view-switching feel intentional. */
-@keyframes tandem-mode-enter {
-  from { opacity: 0; transform: translateY(6px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-.tandem-mode-enter { animation: tandem-mode-enter 0.32s cubic-bezier(0.22, 1, 0.36, 1) both; }
-@media (prefers-reduced-motion: reduce) {
-  .tandem-mode-enter { animation: none; }
 }
 
 /* Leaflet container needs an explicit height */
@@ -119,7 +113,7 @@ body {
   --tw-prose-body: rgb(var(--color-ink) / 0.8);
   --tw-prose-headings: rgb(var(--color-ink));
   --tw-prose-lead: rgb(var(--color-ink) / 0.7);
-  --tw-prose-links: rgb(var(--color-brand));
+  --tw-prose-links: rgb(var(--color-accent));
   --tw-prose-bold: rgb(var(--color-ink));
   --tw-prose-counters: rgb(var(--color-ink) / 0.55);
   --tw-prose-bullets: rgb(var(--color-ink) / 0.3);
@@ -209,68 +203,15 @@ body {
   .tandem-ping { animation: none; }
 }
 
-/* ───────────────────────────────────────────────────────────────────────────
-   The worksurface design language. The whole site is "one shared canvas":
-   a dot-grid surface, content treated as selected objects (frames + handles
-   + editor tags), hard offset shadows instead of blur, mono system labels,
-   and a live op feed. Humans are ink (#1C1917); agents are terracotta.
-   ─────────────────────────────────────────────────────────────────────────── */
-
-/* The dot-grid worksurface itself. Layer over bg-paper. */
-.surface-grid {
-  background-image: radial-gradient(rgb(var(--color-ink) / 0.13) 1.1px, transparent 1.1px);
-  background-size: 22px 22px;
-}
-.surface-grid-faint {
-  background-image: radial-gradient(rgb(var(--color-ink) / 0.08) 1px, transparent 1px);
-  background-size: 22px 22px;
-}
-
-/* Selection-frame corner handles: little white squares with ink borders,
-   like a selected object on a design canvas. Place inside a relative box. */
-.sel-handle {
-  position: absolute;
-  width: 7px;
-  height: 7px;
-  background: #fff;
-  border: 1.5px solid currentColor;
-  z-index: 2;
-}
-/* Pressable "object" buttons: a hard offset shadow you physically push into. */
-.btn-press {
-  transition: transform 0.12s ease, box-shadow 0.12s ease;
-}
-.btn-press:hover { transform: translate(1px, 1px); }
-.btn-press:active { transform: translate(3px, 3px); box-shadow: 0 0 0 0 transparent !important; }
-
-/* Terminal block-cursor blink. */
+/* Terminal block-cursor blink — machine text on the landing demo terminals. */
 @keyframes tandem-caret {
   0%, 49% { opacity: 1; }
   50%, 100% { opacity: 0; }
 }
 .tandem-caret { animation: tandem-caret 1.1s step-end infinite; }
 
-/* Free-roaming cursors that wander the page surface (not just the demo). */
-@keyframes tandem-roam-a {
-  0%   { transform: translate(0, 0); }
-  25%  { transform: translate(-60px, 90px); }
-  50%  { transform: translate(40px, 170px); }
-  75%  { transform: translate(110px, 60px); }
-  100% { transform: translate(0, 0); }
-}
-@keyframes tandem-roam-b {
-  0%   { transform: translate(0, 0); }
-  30%  { transform: translate(90px, -50px); }
-  60%  { transform: translate(-50px, -110px); }
-  100% { transform: translate(0, 0); }
-}
-.tandem-roam-a { animation: tandem-roam-a 26s ease-in-out infinite; }
-.tandem-roam-b { animation: tandem-roam-b 31s ease-in-out infinite; }
-
 @media (prefers-reduced-motion: reduce) {
-  .tandem-caret,
-  .tandem-roam-a,
-  .tandem-roam-b { animation: none; }
+  .tandem-caret { animation: none; }
 }
 
 /* ───────────────────────────────────────────────────────────────────────────
