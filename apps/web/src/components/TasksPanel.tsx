@@ -13,6 +13,7 @@ import {
   type TaskDraft,
 } from "../lib/api";
 import { epicLifecycle } from "../lib/epicLifecycle";
+import { CHIP_BASE, STATE_CHIP } from "../lib/stateChips";
 
 /* ─────────────────────────────────────────────────────────────────────────────
    TasksPanel — the work queue.
@@ -25,15 +26,6 @@ import { epicLifecycle } from "../lib/epicLifecycle";
    the canvas JWT; state comes back over the WS full-state broadcast like every
    other entity, so the panel just re-renders from props. Desktop-only v1.
    ──────────────────────────────────────────────────────────────────────────── */
-
-const STATE_CHIP: Record<string, { label: string; bg: string; fg: string }> = {
-  proposed:  { label: "Proposed",  bg: "#F59E0B1A", fg: "#B45309" },
-  approved:  { label: "Ready",     bg: "#0EA5E91A", fg: "#0369A1" },
-  executing: { label: "Working",   bg: "#8B5CF61A", fg: "#6D28D9" },
-  done:      { label: "Done",      bg: "#10B9811A", fg: "#047857" },
-  failed:    { label: "Failed",    bg: "#F43F5E1A", fg: "#BE123C" },
-  rejected:  { label: "Rejected",  bg: "#1111110D", fg: "#57534E" },
-};
 
 function taskPayload(a: Action): TaskPayload {
   return (a.payload ?? {}) as TaskPayload;
@@ -288,7 +280,7 @@ export default function TasksPanel({
     if (editingId === t.id) {
       const p = taskPayload(t);
       return (
-        <div key={t.id} className="rounded-xl border border-ink/20 bg-surface p-2.5">
+        <div key={t.id} className="rounded-lg border border-accent/40 bg-surface p-2.5">
           <Composer
             targets={targets}
             initial={{
@@ -360,14 +352,14 @@ export default function TasksPanel({
                   posthog.capture("agent_task_approved", { canvas_code: code, task_title: taskPayload(t).title });
                 })}
                 disabled={busyId === t.id}
-                className="flex flex-1 items-center justify-center gap-1 rounded-lg bg-ink px-2 py-1.5 text-xs font-semibold text-paper transition-opacity disabled:opacity-40"
+                className="flex flex-1 items-center justify-center gap-1 rounded-md bg-accent px-2 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40"
               >
                 <Check size={13} /> Approve
               </button>
               <button
                 onClick={() => setRejectingId(t.id)}
                 disabled={busyId === t.id}
-                className="flex flex-1 items-center justify-center gap-1 rounded-lg border border-ink/15 px-2 py-1.5 text-xs font-medium text-ink/60 transition-colors hover:border-ink/30 disabled:opacity-40"
+                className="flex flex-1 items-center justify-center gap-1 rounded-md border border-ink/15 px-2 py-1.5 text-xs font-medium text-ink/60 transition-colors hover:border-ink/30 disabled:opacity-40"
               >
                 <X size={13} /> Reject
               </button>
@@ -381,7 +373,7 @@ export default function TasksPanel({
             onClick={() => void run(t.id, async () => releaseTask(code, t.id))}
             disabled={busyId === t.id}
             title="Return this task to the queue and clear its claim (for when the agent session died mid-task)"
-            className="mt-2 flex w-full items-center justify-center gap-1 rounded-lg border border-ink/15 px-2 py-1.5 text-xs font-medium text-ink/60 transition-colors hover:border-ink/30 disabled:opacity-40"
+            className="mt-2 flex w-full items-center justify-center gap-1 rounded-md border border-ink/15 px-2 py-1.5 text-xs font-medium text-ink/60 transition-colors hover:border-ink/30 disabled:opacity-40"
           >
             <RotateCcw size={13} /> Release
           </button>
@@ -416,7 +408,7 @@ export default function TasksPanel({
           key={epic.id}
           onClick={toggleOpen}
           title={p.body || p.title}
-          className="mb-1.5 flex w-full items-center gap-1.5 rounded-lg px-1 py-1 text-left opacity-60 transition-opacity hover:opacity-100"
+          className="mb-1.5 flex w-full items-center gap-1.5 rounded-md px-1 py-1 text-left opacity-60 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
         >
           <ChevronRight size={12} className="shrink-0 text-ink/40" />
           <Layers size={12} className="shrink-0 text-ink/40" />
@@ -426,10 +418,7 @@ export default function TasksPanel({
           <span className="shrink-0 text-[10px] text-ink/35">
             {done}/{children.length}
           </span>
-          <span
-            className="shrink-0 rounded-[4px] px-1.5 py-px text-[10px] font-semibold uppercase tracking-[0.08em]"
-            style={{ backgroundColor: chip.bg, color: chip.fg }}
-          >
+          <span className={`${CHIP_BASE} ${chip.chip}`}>
             {chip.label}
           </span>
         </button>
@@ -456,10 +445,7 @@ export default function TasksPanel({
               {done}/{children.length}
             </span>
           )}
-          <span
-            className="shrink-0 rounded-[4px] px-1.5 py-px text-[10px] font-semibold uppercase tracking-[0.08em]"
-            style={{ backgroundColor: chip.bg, color: chip.fg }}
-          >
+          <span className={`${CHIP_BASE} ${chip.chip}`}>
             {chip.label}
           </span>
         </div>
@@ -487,14 +473,14 @@ export default function TasksPanel({
                   }
                   disabled={busyId === epic.id}
                   title="Approves the epic and every proposed task under it"
-                  className="flex flex-1 items-center justify-center gap-1 rounded-lg bg-ink px-2 py-1.5 text-xs font-semibold text-paper transition-opacity disabled:opacity-40"
+                  className="flex flex-1 items-center justify-center gap-1 rounded-md bg-accent px-2 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40"
                 >
                   <Check size={13} /> Approve epic
                 </button>
                 <button
                   onClick={() => setRejectingId(epic.id)}
                   disabled={busyId === epic.id}
-                  className="flex flex-1 items-center justify-center gap-1 rounded-lg border border-ink/15 px-2 py-1.5 text-xs font-medium text-ink/60 transition-colors hover:border-ink/30 disabled:opacity-40"
+                  className="flex flex-1 items-center justify-center gap-1 rounded-md border border-ink/15 px-2 py-1.5 text-xs font-medium text-ink/60 transition-colors hover:border-ink/30 disabled:opacity-40"
                 >
                   <X size={13} /> Reject
                 </button>
@@ -519,7 +505,7 @@ export default function TasksPanel({
           {!readOnly && !composing && (
             <button
               onClick={() => setComposing(true)}
-              className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-ink/50 transition-colors hover:bg-ink/5 hover:text-ink/80"
+              className="flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-ink/50 transition-colors hover:bg-ink/5 hover:text-ink/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
             >
               <Plus size={14} /> New task
             </button>
@@ -527,7 +513,7 @@ export default function TasksPanel({
           <button
             onClick={onClose}
             title="Hide tasks"
-            className="flex h-7 w-7 items-center justify-center rounded-lg text-ink/35 transition-colors hover:bg-ink/5 hover:text-ink/60"
+            className="flex h-7 w-7 items-center justify-center rounded-md text-ink/35 transition-colors hover:bg-ink/5 hover:text-ink/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           >
             <ChevronsLeft size={16} strokeWidth={1.75} />
           </button>
@@ -549,7 +535,7 @@ export default function TasksPanel({
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
         {error && (
-          <div className="mb-2 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-[12px] text-rose-700">
+          <div className="mb-2 rounded-md border border-rose-500/20 bg-rose-500/10 px-2.5 py-1.5 text-[12px] text-rose-600 dark:text-rose-400">
             {error}
           </div>
         )}
@@ -557,7 +543,7 @@ export default function TasksPanel({
         {/* Bulk triage entry point: with several proposed cards, select them all
             and approve in one shot. Keyboard: j/k move, x select, a approve. */}
         {!readOnly && proposedIds.length > 1 && (
-          <div className="mb-2 flex items-center justify-between rounded-lg border border-ink/10 bg-ink/[0.03] px-2.5 py-1.5">
+          <div className="mb-2 flex items-center justify-between rounded-md border border-ink/10 bg-ink/[0.03] px-2.5 py-1.5">
             <span className="text-[11px] text-ink/50" title="Keyboard: j/k move focus · x select · a approve">
               {proposedIds.length} awaiting approval
             </span>
@@ -566,7 +552,7 @@ export default function TasksPanel({
                 setSelected(new Set(proposedIds));
                 lastPickedRef.current = proposedIds[proposedIds.length - 1] ?? null;
               }}
-              className="text-[11px] font-semibold text-ink/60 transition-colors hover:text-ink"
+              className="text-[11px] font-medium text-accent transition-colors hover:text-accent/80"
             >
               Select all proposed
             </button>
@@ -582,7 +568,7 @@ export default function TasksPanel({
 
         {epics.length > 0 && (
           <div className="mb-3">
-            <div className="mb-1.5 px-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink/35">
+            <div className="mb-1.5 px-1 text-[10px] font-medium uppercase tracking-wide text-ink/50">
               Epics · {epics.length}
             </div>
             {epics.map(renderEpicGroup)}
@@ -607,13 +593,13 @@ export default function TasksPanel({
             onClick={() => void approveMany([...selected])}
             disabled={batchBusy}
             title="Approve every selected task in one batch (keyboard: a)"
-            className="flex flex-1 items-center justify-center gap-1 rounded-lg bg-ink px-2 py-1.5 text-xs font-semibold text-paper transition-opacity disabled:opacity-40"
+            className="flex flex-1 items-center justify-center gap-1 rounded-md bg-accent px-2 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40"
           >
             <Check size={13} /> {batchBusy ? "Approving…" : `Approve ${selected.size}`}
           </button>
           <button
             onClick={() => setSelected(new Set())}
-            className="rounded-lg border border-ink/15 px-2.5 py-1.5 text-xs font-medium text-ink/60 transition-colors hover:border-ink/30"
+            className="rounded-md border border-ink/15 px-2.5 py-1.5 text-xs font-medium text-ink/60 transition-colors hover:border-ink/30"
           >
             Clear
           </button>
@@ -635,7 +621,7 @@ function Section({
   if (tasks.length === 0) return null;
   return (
     <div className="mb-3">
-      <div className="mb-1.5 px-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink/35">
+      <div className="mb-1.5 px-1 text-[10px] font-medium uppercase tracking-wide text-ink/50">
         {title} · {tasks.length}
       </div>
       <div className="flex flex-col gap-1.5">{tasks.map(children)}</div>
@@ -648,12 +634,11 @@ function AssigneeChip({ assignee }: { assignee?: "agent" | "human" }) {
   const isHuman = assignee === "human";
   return (
     <span
-      className="inline-flex shrink-0 items-center gap-1 rounded-[4px] px-1.5 py-px text-[10px] font-semibold uppercase tracking-[0.08em]"
-      style={
+      className={`inline-flex items-center gap-1 ${CHIP_BASE} ${
         isHuman
-          ? { backgroundColor: "#1111110A", color: "#57534E" }
-          : { backgroundColor: "#0EA5E914", color: "#0369A1" }
-      }
+          ? "bg-zinc-500/10 text-zinc-500 dark:text-zinc-400"
+          : "bg-sky-500/10 text-sky-600 dark:text-sky-400"
+      }`}
       title={isHuman ? "Your own todo — agents never pull this" : "Agent task — agent sessions pull this from the queue"}
     >
       {isHuman ? <User size={10} /> : <Bot size={10} />}
@@ -729,9 +714,9 @@ function TaskCard({
     <div
       data-task-id={task.id}
       className={[
-        "group/task rounded-xl border bg-surface p-2.5",
-        selected ? "border-ink/45" : "border-ink/10",
-        focused ? "ring-2 ring-ink/20" : "",
+        "group/task rounded-lg border bg-surface p-2.5 transition-shadow hover:shadow-sm",
+        selected ? "border-accent/60" : "border-ink/10",
+        focused ? "ring-2 ring-accent/40" : "",
       ].join(" ")}
     >
       <div className="flex items-start justify-between gap-2">
@@ -740,18 +725,16 @@ function TaskCard({
             <button
               onClick={(e) => onToggleSelect(e.shiftKey)}
               title={selected ? "Remove from selection" : "Select for batch approval (shift-click selects a range)"}
-              className="mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border"
-              style={{
-                backgroundColor: selected ? "#111111" : "transparent",
-                borderColor: selected ? "#111111" : "rgba(17,17,17,0.25)",
-              }}
+              className={`mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+                selected ? "border-accent bg-accent" : "border-ink/25 bg-transparent"
+              }`}
             >
-              {selected && <Check size={10} color="#fff" />}
+              {selected && <Check size={10} className="text-white" />}
             </button>
           )}
           <span className={`text-[13px] font-semibold leading-snug ${terminal ? "text-ink/55" : "text-ink"}`}>
             {task.ticketId && (
-              <span className="mr-1.5 font-mono text-[10px] font-medium tracking-tight text-ink/40">
+              <span className="mr-1.5 font-code text-[10px] font-medium tracking-tight text-ink/45">
                 {task.ticketId}
               </span>
             )}
@@ -777,10 +760,7 @@ function TaskCard({
               <Trash2 size={12} />
             </button>
           )}
-          <span
-            className="rounded-[4px] px-1.5 py-px text-[10px] font-semibold uppercase tracking-[0.08em]"
-            style={{ backgroundColor: chip.bg, color: chip.fg }}
-          >
+          <span className={`${CHIP_BASE} ${chip.chip}`}>
             {chip.label}
           </span>
         </span>
@@ -800,12 +780,12 @@ function TaskCard({
         </div>
       )}
       {task.state === "done" && task.result && (
-        <p className="mt-1.5 rounded-lg bg-emerald-50 px-2 py-1.5 text-[12px] leading-snug text-emerald-800">
+        <p className="mt-1.5 rounded-md bg-emerald-500/10 px-2 py-1.5 text-[12px] leading-snug text-emerald-700 dark:text-emerald-300">
           {task.result}
         </p>
       )}
       {(task.state === "failed" || task.state === "rejected") && task.error && (
-        <p className="mt-1.5 rounded-lg bg-rose-50 px-2 py-1.5 text-[12px] leading-snug text-rose-800">
+        <p className="mt-1.5 rounded-md bg-rose-500/10 px-2 py-1.5 text-[12px] leading-snug text-rose-700 dark:text-rose-300">
           {task.error}
         </p>
       )}
@@ -839,13 +819,13 @@ function DeleteConfirm({
       <button
         onClick={onConfirm}
         disabled={busy}
-        className="rounded-lg bg-rose-600 px-2.5 py-1.5 text-xs font-semibold text-white transition-opacity disabled:opacity-40"
+        className="rounded-md bg-rose-600 px-2.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-rose-700 disabled:opacity-40"
       >
         Delete
       </button>
       <button
         onClick={onCancel}
-        className="rounded-lg border border-ink/15 px-2.5 py-1.5 text-xs font-medium text-ink/60 hover:border-ink/30"
+        className="rounded-md border border-ink/15 px-2.5 py-1.5 text-xs font-medium text-ink/60 hover:border-ink/30"
       >
         Cancel
       </button>
@@ -875,19 +855,19 @@ function RejectForm({
           if (e.key === "Escape") onCancel();
         }}
         placeholder="Why reject? (optional)"
-        className="w-full rounded-lg border border-ink/15 bg-surface px-2.5 py-1.5 text-[12px] text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
+        className="w-full rounded-md border border-ink/15 bg-surface px-2.5 py-1.5 text-[12px] text-ink outline-none placeholder:text-ink/30 focus:border-accent/50 focus:ring-2 focus:ring-accent/40"
       />
       <div className="flex gap-1.5">
         <button
           onClick={() => onConfirm(reason.trim())}
           disabled={busy}
-          className="flex-1 rounded-lg bg-rose-600 px-2 py-1.5 text-xs font-semibold text-white transition-opacity disabled:opacity-40"
+          className="flex-1 rounded-md bg-rose-600 px-2 py-1.5 text-xs font-medium text-white transition-colors hover:bg-rose-700 disabled:opacity-40"
         >
           Reject task
         </button>
         <button
           onClick={onCancel}
-          className="rounded-lg border border-ink/15 px-2.5 py-1.5 text-xs font-medium text-ink/60 hover:border-ink/30"
+          className="rounded-md border border-ink/15 px-2.5 py-1.5 text-xs font-medium text-ink/60 hover:border-ink/30"
         >
           Cancel
         </button>
@@ -950,7 +930,7 @@ function Composer({
   return (
     <div className="flex flex-col gap-2">
       {/* Who is this for? Agent tasks land in the agent queue; yours don't. */}
-      <div className="flex rounded-lg border border-ink/10 bg-ink/[0.03] p-0.5">
+      <div className="flex rounded-md border border-ink/10 bg-ink/[0.03] p-0.5">
         {(["agent", "human"] as const).map((a) => {
           const active = assignee === a;
           return (
@@ -958,8 +938,8 @@ function Composer({
               key={a}
               onClick={() => setAssignee(a)}
               className={[
-                "flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1 text-xs font-semibold transition-colors",
-                active ? "bg-surface text-ink shadow-sm" : "text-ink/40 hover:text-ink/65",
+                "flex flex-1 items-center justify-center gap-1.5 rounded px-2 py-1 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
+                active ? "bg-surface text-accent shadow-sm" : "text-ink/40 hover:text-ink/65",
               ].join(" ")}
             >
               {a === "agent" ? <Bot size={13} /> : <User size={13} />}
@@ -974,14 +954,14 @@ function Composer({
         onChange={(e) => setTitle(e.target.value)}
         onKeyDown={(e) => e.key === "Enter" && void submit()}
         placeholder={assignee === "agent" ? "What should the agent do?" : "What do you need to do?"}
-        className="w-full rounded-lg border border-ink/15 bg-surface px-2.5 py-1.5 text-sm text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
+        className="w-full rounded-md border border-ink/15 bg-surface px-2.5 py-1.5 text-sm text-ink outline-none placeholder:text-ink/30 focus:border-accent/50 focus:ring-2 focus:ring-accent/40"
       />
       <textarea
         value={body}
         onChange={(e) => setBody(e.target.value)}
         placeholder="Brief: what, why, acceptance criteria (optional)"
         rows={3}
-        className="w-full resize-none rounded-lg border border-ink/15 bg-surface px-2.5 py-1.5 text-[13px] text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
+        className="w-full resize-none rounded-md border border-ink/15 bg-surface px-2.5 py-1.5 text-[13px] text-ink outline-none placeholder:text-ink/30 focus:border-accent/50 focus:ring-2 focus:ring-accent/40"
       />
 
       {targets.length > 0 && (
@@ -994,7 +974,7 @@ function Composer({
             {linked.size > 0 ? `${linked.size} linked` : "Link roadmap items / notes"}
           </button>
           {pickerOpen && (
-            <div className="mt-1.5 max-h-40 overflow-y-auto rounded-lg border border-ink/10 bg-ink/[0.02] p-1">
+            <div className="mt-1.5 max-h-40 overflow-y-auto rounded-md border border-ink/10 bg-ink/[0.02] p-1">
               {targets.map((t) => (
                 <button
                   key={t.id}
@@ -1002,13 +982,11 @@ function Composer({
                   className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-[12px] text-ink/70 hover:bg-ink/5"
                 >
                   <span
-                    className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border"
-                    style={{
-                      backgroundColor: linked.has(t.id) ? "#111111" : "transparent",
-                      borderColor: linked.has(t.id) ? "#111111" : "rgba(17,17,17,0.2)",
-                    }}
+                    className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border transition-colors ${
+                      linked.has(t.id) ? "border-accent bg-accent" : "border-ink/20 bg-transparent"
+                    }`}
                   >
-                    {linked.has(t.id) && <Check size={10} color="#fff" />}
+                    {linked.has(t.id) && <Check size={10} className="text-white" />}
                   </span>
                   <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-ink/35">
                     {t.kind === "roadmap" ? "goal" : "note"}
@@ -1027,13 +1005,13 @@ function Composer({
         <button
           onClick={() => void submit()}
           disabled={!title.trim() || saving}
-          className="flex-1 rounded-lg bg-ink px-3 py-1.5 text-sm font-semibold text-paper transition-opacity disabled:opacity-40"
+          className="flex-1 rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40"
         >
           {saving ? "Saving…" : submitLabel}
         </button>
         <button
           onClick={onCancel}
-          className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm font-medium text-ink/60 hover:border-ink/30"
+          className="rounded-md border border-ink/15 px-3 py-1.5 text-sm font-medium text-ink/60 hover:border-ink/30"
         >
           Cancel
         </button>

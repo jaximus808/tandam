@@ -24,6 +24,7 @@ import {
 } from "../lib/api";
 import posthog from "../lib/posthog";
 import { epicLifecycle, TERMINAL_STATES } from "../lib/epicLifecycle";
+import { CHIP_BASE, STATE_CHIP } from "../lib/stateChips";
 
 /* ─────────────────────────────────────────────────────────────────────────────
    TaskBoard — the full-page task surface, opened from the pinned "Board" tab.
@@ -65,23 +66,15 @@ import { epicLifecycle, TERMINAL_STATES } from "../lib/epicLifecycle";
    re-queue (failed). Destructive actions confirm inline (two-step).
    ──────────────────────────────────────────────────────────────────────────── */
 
-const STATE_CHIP: Record<string, { label: string; bg: string; fg: string }> = {
-  proposed:  { label: "Proposed",  bg: "#F59E0B1A", fg: "#B45309" },
-  approved:  { label: "Ready",     bg: "#0EA5E91A", fg: "#0369A1" },
-  executing: { label: "Working",   bg: "#8B5CF61A", fg: "#6D28D9" },
-  done:      { label: "Done",      bg: "#10B9811A", fg: "#047857" },
-  failed:    { label: "Failed",    bg: "#F43F5E1A", fg: "#BE123C" },
-  rejected:  { label: "Rejected",  bg: "#1111110D", fg: "#57534E" },
-};
-
-// Kanban columns. `dot` is the header accent; Failed + Rejected share the
-// terminal "closed" column so dead work doesn't take two lanes.
+// Kanban columns. `dot` is the header hue (from the shared six-hue state set);
+// Failed + Rejected share the terminal "closed" column so dead work doesn't
+// take two lanes.
 const COLUMNS: { key: string; label: string; states: ActionState[]; dot: string }[] = [
-  { key: "proposed", label: "Proposed", states: ["proposed"], dot: "#F59E0B" },
-  { key: "ready",    label: "Ready",    states: ["approved"], dot: "#0EA5E9" },
-  { key: "working",  label: "Working",  states: ["executing"], dot: "#8B5CF6" },
-  { key: "done",     label: "Done",     states: ["done"], dot: "#10B981" },
-  { key: "closed",   label: "Failed / Rejected", states: ["failed", "rejected"], dot: "#F43F5E" },
+  { key: "proposed", label: "Proposed", states: ["proposed"], dot: STATE_CHIP.proposed.dot },
+  { key: "ready",    label: "Ready",    states: ["approved"], dot: STATE_CHIP.approved.dot },
+  { key: "working",  label: "Working",  states: ["executing"], dot: STATE_CHIP.executing.dot },
+  { key: "done",     label: "Done",     states: ["done"], dot: STATE_CHIP.done.dot },
+  { key: "closed",   label: "Failed / Rejected", states: ["failed", "rejected"], dot: STATE_CHIP.failed.dot },
 ];
 
 // Sidebar scope — which lens the kanban shows: "all" | "none" | an epic id.
@@ -180,11 +173,11 @@ function ProgressBar({
   return (
     <div className={`flex overflow-hidden rounded-full bg-ink/[0.08] ${className}`}>
       {total > 0 && done > 0 && (
-        <div className="h-full bg-emerald-500" style={{ width: `${(done / total) * 100}%` }} />
+        <div className={`h-full ${STATE_CHIP.done.dot}`} style={{ width: `${(done / total) * 100}%` }} />
       )}
       {total > 0 && working > 0 && (
         <div
-          className="h-full animate-pulse bg-violet-500/80"
+          className={`h-full animate-pulse opacity-80 ${STATE_CHIP.executing.dot}`}
           style={{ width: `${(working / total) * 100}%` }}
         />
       )}
@@ -195,10 +188,7 @@ function ProgressBar({
 function StateChip({ state, className = "" }: { state: string; className?: string }) {
   const chip = STATE_CHIP[state] ?? STATE_CHIP.proposed;
   return (
-    <span
-      className={`shrink-0 rounded-[4px] px-1.5 py-px text-[10px] font-semibold uppercase tracking-[0.08em] ${className}`}
-      style={{ backgroundColor: chip.bg, color: chip.fg }}
-    >
+    <span className={`${CHIP_BASE} ${chip.chip} ${className}`}>
       {chip.label}
     </span>
   );
@@ -208,7 +198,7 @@ function StateChip({ state, className = "" }: { state: string; className?: strin
 function ClaimantChip({ name, className = "" }: { name: string; className?: string }) {
   return (
     <span
-      className={`inline-flex min-w-0 items-center gap-1 text-[11px] font-medium text-violet-600 dark:text-violet-400 ${className}`}
+      className={`inline-flex min-w-0 items-center gap-1 text-[11px] font-medium ${STATE_CHIP.executing.text} ${className}`}
       title={`Being worked on by ${name}`}
     >
       <Zap size={11} className="shrink-0" />
@@ -243,13 +233,13 @@ function ApproveRejectControls({
           <button
             onClick={onReject}
             disabled={busy}
-            className="flex-1 rounded-lg bg-rose-600 px-2 py-1 text-[11px] font-semibold text-white transition-opacity disabled:opacity-40"
+            className="flex-1 rounded-md bg-rose-600 px-2 py-1 text-[11px] font-medium text-white transition-colors hover:bg-rose-700 disabled:opacity-40"
           >
             Confirm reject
           </button>
           <button
             onClick={() => setRejecting(false)}
-            className="rounded-lg border border-ink/15 px-2 py-1 text-[11px] font-medium text-ink/60 transition-colors hover:border-ink/30"
+            className="rounded-md border border-ink/15 px-2 py-1 text-[11px] font-medium text-ink/60 transition-colors hover:border-ink/30"
           >
             Cancel
           </button>
@@ -259,14 +249,14 @@ function ApproveRejectControls({
           <button
             onClick={onApprove}
             disabled={busy}
-            className="flex flex-1 items-center justify-center gap-1 rounded-lg bg-ink px-2 py-1 text-[11px] font-semibold text-paper transition-opacity disabled:opacity-40"
+            className="flex flex-1 items-center justify-center gap-1 rounded-md bg-accent px-2 py-1 text-[11px] font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40"
           >
             <Check size={12} /> {approveLabel}
           </button>
           <button
             onClick={() => setRejecting(true)}
             disabled={busy}
-            className="flex flex-1 items-center justify-center gap-1 rounded-lg border border-ink/15 px-2 py-1 text-[11px] font-medium text-ink/60 transition-colors hover:border-ink/30 disabled:opacity-40"
+            className="flex flex-1 items-center justify-center gap-1 rounded-md border border-ink/15 px-2 py-1 text-[11px] font-medium text-ink/60 transition-colors hover:border-ink/30 disabled:opacity-40"
           >
             <X size={12} /> Reject
           </button>
@@ -293,7 +283,7 @@ const NO_FILTERS: Filters = {
 };
 
 const FILTER_SELECT_CLS =
-  "h-7 max-w-[10rem] shrink-0 rounded-lg border border-ink/15 bg-surface px-1.5 text-[11px] font-medium text-ink/70 outline-none transition-colors focus:border-ink/40";
+  "h-7 max-w-[10rem] shrink-0 rounded-md border border-ink/15 bg-surface px-1.5 text-[11px] font-medium text-ink/70 outline-none transition-colors focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/40";
 
 export default function TaskBoard({
   code,
@@ -652,14 +642,14 @@ export default function TaskBoard({
         key={t.id}
         data-task-id={t.id}
         onClick={() => setDetailId(t.id)}
-        className="cursor-pointer rounded-xl border border-ink/10 bg-surface p-2.5 transition-colors hover:border-ink/25"
+        className="cursor-pointer rounded-lg border border-ink/10 bg-surface p-2.5 transition-[border-color,box-shadow] hover:border-ink/25 hover:shadow-sm"
       >
         <div className="flex items-start justify-between gap-2">
           <span
             className={`min-w-0 text-[13px] font-semibold leading-snug ${terminal ? "text-ink/55" : "text-ink"}`}
           >
             {t.ticketId && (
-              <span className="mr-1.5 font-code text-[10px] font-medium tracking-tight text-ink/40">
+              <span className="mr-1.5 font-code text-[10px] font-medium tracking-tight text-ink/45">
                 {t.ticketId}
               </span>
             )}
@@ -721,8 +711,8 @@ export default function TaskBoard({
 
   const entryCls = (selected: boolean) =>
     [
-      "cursor-pointer border-l-2 px-3 py-2 transition-colors",
-      selected ? "border-ink bg-ink/[0.05]" : "border-transparent hover:bg-ink/[0.03]",
+      "cursor-pointer border-l-2 px-3 py-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40",
+      selected ? "border-accent bg-accent/[0.08]" : "border-transparent hover:bg-ink/[0.03]",
     ].join(" ");
 
   function entryKeyDown(s: string) {
@@ -746,7 +736,7 @@ export default function TaskBoard({
         className={`flex items-center gap-1.5 ${entryCls(selected)}`}
       >
         <span
-          className={`min-w-0 flex-1 truncate text-[12.5px] font-semibold ${selected ? "text-ink" : "text-ink/70"}`}
+          className={`min-w-0 flex-1 truncate text-[12.5px] font-semibold ${selected ? "text-accent" : "text-ink/70"}`}
         >
           {label}
         </span>
@@ -775,7 +765,7 @@ export default function TaskBoard({
         <div className="flex items-center gap-1.5">
           <Layers size={12} className="shrink-0 text-ink/45" />
           <span
-            className={`min-w-0 flex-1 truncate text-[12.5px] font-semibold ${selected ? "text-ink" : "text-ink/80"}`}
+            className={`min-w-0 flex-1 truncate text-[12.5px] font-semibold ${selected ? "text-accent" : "text-ink/80"}`}
             title={p.title || "Untitled epic"}
           >
             {p.title || "Untitled epic"}
@@ -875,7 +865,7 @@ export default function TaskBoard({
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
               placeholder='Search tasks  ·  "/"'
-              className="h-7 w-44 rounded-lg border border-ink/15 bg-surface pl-[26px] pr-2 text-[12px] text-ink outline-none placeholder:text-ink/30 focus:border-ink/40 sm:w-52"
+              className="h-7 w-44 rounded-md border border-ink/15 bg-surface pl-[26px] pr-2 text-[12px] text-ink outline-none placeholder:text-ink/30 focus:border-accent/50 focus:ring-2 focus:ring-accent/40 sm:w-52"
             />
           </div>
           <select
@@ -921,9 +911,9 @@ export default function TaskBoard({
             aria-pressed={filters.hasCommit}
             title="Only tasks whose result mentions a commit hash"
             className={[
-              "flex h-7 shrink-0 items-center gap-1 rounded-lg border px-2 text-[11px] font-medium transition-colors",
+              "flex h-7 shrink-0 items-center gap-1 rounded-md border px-2 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
               filters.hasCommit
-                ? "border-ink/60 bg-ink text-paper"
+                ? "border-accent/40 bg-accent/[0.08] text-accent"
                 : "border-ink/15 text-ink/60 hover:border-ink/30",
             ].join(" ")}
           >
@@ -933,7 +923,7 @@ export default function TaskBoard({
             <button
               onClick={clearFilters}
               title="Clear search and filters (Esc)"
-              className="flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 text-[11px] font-medium text-ink/45 transition-colors hover:bg-ink/5 hover:text-ink/75"
+              className="flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-[11px] font-medium text-ink/45 transition-colors hover:bg-ink/5 hover:text-ink/75"
             >
               <X size={12} /> Clear
             </button>
@@ -942,7 +932,7 @@ export default function TaskBoard({
       )}
 
       {error && (
-        <div className="mx-4 mt-2 shrink-0 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-[12px] text-rose-700 dark:border-rose-900 dark:bg-rose-950 dark:text-rose-300">
+        <div className="mx-4 mt-2 shrink-0 rounded-md border border-rose-500/20 bg-rose-500/10 px-2.5 py-1.5 text-[12px] text-rose-600 dark:text-rose-400">
           {error}
         </div>
       )}
@@ -966,7 +956,7 @@ export default function TaskBoard({
                 {renderPseudoEntry("all", "All tasks", tasks.length)}
                 {renderPseudoEntry("none", "No epic", epiclessAll.length)}
               </div>
-              <div className="px-3 pb-0.5 pt-2.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-ink/30">
+              <div className="px-3 pb-0.5 pt-2.5 text-[10px] font-medium uppercase tracking-wide text-ink/50">
                 Epic timeline
               </div>
               {activeEpics.map((e) => renderEpicEntry(e))}
@@ -982,7 +972,7 @@ export default function TaskBoard({
                   <button
                     onClick={toggleDoneOpen}
                     aria-expanded={doneOpen}
-                    className="flex w-full items-center gap-1 px-3 pb-1 pt-2.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-ink/30 transition-colors hover:text-ink/55"
+                    className="flex w-full items-center gap-1 px-3 pb-1 pt-2.5 text-[10px] font-medium uppercase tracking-wide text-ink/50 transition-colors hover:text-ink/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
                   >
                     <ChevronRight
                       size={10}
@@ -1023,7 +1013,7 @@ export default function TaskBoard({
                           style={{ backgroundColor: col.dot, opacity: slim ? 0.35 : 1 }}
                         />
                         <span
-                          className={`truncate text-[11px] font-semibold uppercase tracking-[0.12em] ${slim ? "text-ink/30" : "text-ink/55"}`}
+                          className={`truncate text-[11px] font-medium uppercase tracking-wide ${slim ? "text-ink/30" : "text-ink/55"}`}
                         >
                           {col.label}
                         </span>
@@ -1032,7 +1022,7 @@ export default function TaskBoard({
                         </span>
                       </div>
                       {slim ? (
-                        <div className="flex-1 rounded-xl border border-dashed border-ink/10" />
+                        <div className="flex-1 rounded-lg border border-dashed border-ink/10" />
                       ) : (
                         <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pb-2 pr-0.5">
                           {colTasks.map((t) =>
@@ -1200,13 +1190,13 @@ function TaskDetail({
         <button
           onClick={onGo}
           disabled={busy}
-          className="shrink-0 rounded-lg bg-rose-600 px-2.5 py-1.5 text-xs font-semibold text-white transition-opacity disabled:opacity-40"
+          className="shrink-0 rounded-md bg-rose-600 px-2.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-rose-700 disabled:opacity-40"
         >
           {label}
         </button>
         <button
           onClick={() => setConfirm(null)}
-          className="shrink-0 rounded-lg border border-ink/15 px-2.5 py-1.5 text-xs font-medium text-ink/60 hover:border-ink/30"
+          className="shrink-0 rounded-md border border-ink/15 px-2.5 py-1.5 text-xs font-medium text-ink/60 hover:border-ink/30"
         >
           Cancel
         </button>
@@ -1215,20 +1205,20 @@ function TaskDetail({
   }
 
   const primaryBtn =
-    "flex flex-1 items-center justify-center gap-1 rounded-lg bg-ink px-2.5 py-1.5 text-xs font-semibold text-paper transition-opacity disabled:opacity-40";
+    "flex flex-1 items-center justify-center gap-1 rounded-md bg-accent px-2.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40";
   const quietBtn =
-    "flex items-center justify-center gap-1 rounded-lg border border-ink/15 px-2.5 py-1.5 text-xs font-medium text-ink/60 transition-colors hover:border-ink/30 disabled:opacity-40";
+    "flex items-center justify-center gap-1 rounded-md border border-ink/15 px-2.5 py-1.5 text-xs font-medium text-ink/60 transition-colors hover:border-ink/30 disabled:opacity-40";
 
   return (
     <div
-      className="fixed inset-0 z-[2000] flex justify-end bg-ink/20 backdrop-blur-[2px]"
+      className="fixed inset-0 z-[2000] flex justify-end bg-ink/25"
       onClick={onClose}
     >
       <div
         role="dialog"
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}
-        className="flex h-full w-full max-w-xl flex-col border-l border-ink/10 bg-surface shadow-2xl shadow-ink/15"
+        className="flex h-full w-full max-w-xl flex-col border-l border-ink/10 bg-surface shadow-lg"
       >
         {/* Header: ticket + state + close. */}
         <div className="flex shrink-0 items-center gap-2 border-b border-ink/5 px-4 py-3">
@@ -1245,7 +1235,7 @@ function TaskDetail({
           <StateChip state={action.state} />
           {isTask && p.requiresApproval && action.state === "proposed" && (
             <span
-              className="shrink-0 rounded-[4px] bg-amber-500/10 px-1.5 py-px text-[10px] font-semibold uppercase tracking-[0.08em] text-amber-700 dark:text-amber-400"
+              className={`${CHIP_BASE} bg-amber-500/10 text-amber-600 dark:text-amber-400`}
               title="The agent flagged this task as needing explicit approval"
             >
               needs approval
@@ -1270,14 +1260,14 @@ function TaskDetail({
                 onChange={(e) => setEditTitle(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && saveEdit()}
                 placeholder="Task title"
-                className="w-full rounded-lg border border-ink/15 bg-surface px-2.5 py-1.5 text-sm font-semibold text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
+                className="w-full rounded-md border border-ink/15 bg-surface px-2.5 py-1.5 text-sm font-semibold text-ink outline-none placeholder:text-ink/30 focus:border-accent/50 focus:ring-2 focus:ring-accent/40"
               />
               <textarea
                 value={editBody}
                 onChange={(e) => setEditBody(e.target.value)}
                 placeholder="Brief: what, why, acceptance criteria (optional)"
                 rows={10}
-                className="w-full resize-y rounded-lg border border-ink/15 bg-surface px-2.5 py-1.5 text-[13px] leading-relaxed text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
+                className="w-full resize-y rounded-md border border-ink/15 bg-surface px-2.5 py-1.5 text-[13px] leading-relaxed text-ink outline-none placeholder:text-ink/30 focus:border-accent/50 focus:ring-2 focus:ring-accent/40"
               />
               <div className="flex gap-1.5">
                 <button onClick={saveEdit} disabled={!editTitle.trim() || busy} className={primaryBtn}>
@@ -1321,7 +1311,7 @@ function TaskDetail({
               tooltip so provenance is never silently dropped. */}
           {(p.linkedIds ?? []).length > 0 && (
             <div className="mt-3">
-              <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink/35">
+              <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-ink/50">
                 Linked context
               </div>
               <div className="flex flex-wrap gap-1">
@@ -1369,10 +1359,10 @@ function TaskDetail({
           {/* Result — commit hashes surfaced as monospace chips. */}
           {action.result && (
             <div className="mt-3">
-              <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink/35">
+              <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-ink/50">
                 Result
               </div>
-              <p className="whitespace-pre-wrap rounded-lg bg-emerald-50 px-2.5 py-2 text-[12.5px] leading-relaxed text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
+              <p className="whitespace-pre-wrap rounded-md bg-emerald-500/10 px-2.5 py-2 text-[12.5px] leading-relaxed text-emerald-700 dark:text-emerald-300">
                 {action.result}
               </p>
               {commits.length > 0 && (
@@ -1381,7 +1371,7 @@ function TaskDetail({
                     <span
                       key={c}
                       title="Commit referenced in the result"
-                      className="inline-flex items-center gap-1 rounded-[4px] border border-emerald-600/20 bg-emerald-500/10 px-1.5 py-0.5 font-code text-[10.5px] text-emerald-700 dark:text-emerald-300"
+                      className="inline-flex items-center gap-1 rounded-[4px] border border-emerald-600/20 bg-emerald-500/10 px-1.5 py-0.5 font-code text-[10.5px] text-emerald-600 dark:text-emerald-400"
                     >
                       <GitCommitHorizontal size={10} className="shrink-0" />
                       {c.length > 12 ? c.slice(0, 12) : c}
@@ -1395,10 +1385,10 @@ function TaskDetail({
           {/* Failure / rejection detail. */}
           {(action.state === "failed" || action.state === "rejected") && action.error && (
             <div className="mt-3">
-              <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink/35">
+              <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-ink/50">
                 {action.state === "failed" ? "Error" : "Rejection reason"}
               </div>
-              <p className="whitespace-pre-wrap rounded-lg bg-rose-50 px-2.5 py-2 text-[12.5px] leading-relaxed text-rose-800 dark:bg-rose-950 dark:text-rose-200">
+              <p className="whitespace-pre-wrap rounded-md bg-rose-500/10 px-2.5 py-2 text-[12.5px] leading-relaxed text-rose-700 dark:text-rose-300">
                 {action.error}
               </p>
             </div>
@@ -1428,7 +1418,7 @@ function TaskDetail({
         {!readOnly && !editing && (
           <div className="shrink-0 border-t border-ink/5 px-4 py-3">
             {error && (
-              <div className="mb-2 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-[12px] text-rose-700 dark:border-rose-900 dark:bg-rose-950 dark:text-rose-300">
+              <div className="mb-2 rounded-md border border-rose-500/20 bg-rose-500/10 px-2.5 py-1.5 text-[12px] text-rose-600 dark:text-rose-400">
                 {error}
               </div>
             )}
@@ -1444,13 +1434,13 @@ function TaskDetail({
                         disabled={busy}
                         role="switch"
                         aria-checked={!!p.requiresApproval}
-                        className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border"
-                        style={{
-                          backgroundColor: p.requiresApproval ? "#111111" : "transparent",
-                          borderColor: p.requiresApproval ? "#111111" : "rgba(17,17,17,0.25)",
-                        }}
+                        className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+                          p.requiresApproval
+                            ? "border-accent bg-accent"
+                            : "border-ink/25 bg-transparent"
+                        }`}
                       >
-                        {p.requiresApproval && <Check size={10} color="#fff" />}
+                        {p.requiresApproval && <Check size={10} className="text-white" />}
                       </button>
                       <span onClick={toggleRequiresApproval}>
                         Requires explicit approval (won't auto-flow with its epic)
