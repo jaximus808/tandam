@@ -45,9 +45,31 @@ export interface AgentShowcase {
 }
 
 export interface PresentAgent {
+  id: string;
   name: string;
   isClaude: boolean;
+  role?: string;
+  // The registered parent (orchestrator) agent id — the structural link the
+  // swarm tree groups on. Absent = unparented, renders flat.
+  parentId?: string;
+  // "TDM-7 Make claiming atomic" — the executing task whose claimedBy matches
+  // this agent's name (or id). Absent when the agent holds no claim.
+  taskLabel?: string;
 }
+
+// ── Swarm liveness ───────────────────────────────────────────────────────────
+// Registered-agent rows only carry last_seen_at (bumped at register and on
+// task_start / task_complete server-side) — there is no disconnect signal, and
+// the DB `status` never flips to offline on its own. Liveness is therefore a
+// client-side judgement:
+//   - an agent holding an EXECUTING task claim is alive, full stop (a long
+//     task legitimately goes quiet for many minutes);
+//   - otherwise a parented executor (subagents are short-lived) goes stale
+//     after EXECUTOR_STALE_MS and DISAPPEARS from the tree — no ghost rows;
+//   - unparented agents get the looser AGENT_STALE_MS before dropping;
+//   - a stale planner stays visible while any live child points at it.
+const EXECUTOR_STALE_MS = 60_000;
+const AGENT_STALE_MS = 5 * 60_000;
 
 export type AgentOp = "created" | "updated" | "removed";
 
@@ -127,8 +149,8 @@ function resolveAgent(state: CanvasState | null): PresentAgent {
     /claude/i.test(a.model ?? "") || /claude/i.test(a.name ?? "");
   const online = state ? Object.values(state.agents).filter((a) => a.status === "online") : [];
   const pick = online.find(claudey) ?? online[0];
-  if (pick) return { name: pick.name || "Agent", isClaude: claudey(pick) };
-  return { name: "Claude", isClaude: true };
+  if (pick) return { id: pick.id, name: pick.name || "Agent", isClaude: claudey(pick) };
+  return { id: "live", name: "Claude", isClaude: true };
 }
 
 /**
@@ -171,6 +193,13 @@ export function useAgentActivity(
   const [online, setOnline] = useState(false);
   const [reading, setReading] = useState(false);
   const [lastAction, setLastAction] = useState<AgentAction | null>(null);
+  // Slow tick so staleness re-evaluates between broadcasts — a dead executor
+  // clears from the tree without waiting for the next state push.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNowMs(Date.now()), 15_000);
+    return () => clearInterval(t);
+  }, []);
 
   // The single cursor target, derived from the active showcase's first member —
   // kept for consumers (e.g. header presence chip) that only need "is it editing
@@ -334,19 +363,48 @@ export function useAgentActivity(
   );
 
   const agents = useMemo<PresentAgent[]>(() => {
-    const list: PresentAgent[] = [];
-    for (const a of state ? Object.values(state.agents) : []) {
-      if (a.status === "online") {
-        list.push({
-          name: a.name || "Agent",
-          isClaude: /claude/i.test(a.model ?? "") || /claude/i.test(a.name ?? ""),
-        });
-      }
+    const all = state ? Object.values(state.agents) : [];
+    // Task attribution: claimant identity (task_start stamps the registered
+    // agent NAME, id as fallback) → "TDM-7 <title>" label of the executing task.
+    const claims = new Map<string, string>();
+    for (const act of Object.values(state?.actions ?? {})) {
+      if (act.type !== "task" || act.state !== "executing" || !act.claimedBy) continue;
+      const title = (act.payload as { title?: string }).title ?? "";
+      claims.set(act.claimedBy, [act.ticketId, title].filter(Boolean).join(" ") || "a task");
     }
+    const claudey = (a: { name?: string; model?: string }) =>
+      /claude/i.test(a.model ?? "") || /claude/i.test(a.name ?? "");
+    const present = (a: (typeof all)[number]): PresentAgent => ({
+      id: a.id,
+      name: a.name || "Agent",
+      isClaude: claudey(a),
+      role: a.role,
+      parentId: a.parentAgentId,
+      taskLabel: claims.get(a.name) ?? claims.get(a.id),
+    });
+    const live = new Map<string, PresentAgent>();
+    for (const a of all) {
+      if (a.status !== "online") continue;
+      const p = present(a);
+      const staleMs = a.parentAgentId ? EXECUTOR_STALE_MS : AGENT_STALE_MS;
+      const fresh = nowMs - Date.parse(a.lastSeen) < staleMs;
+      // An executing claim counts as alive regardless of last_seen — a long
+      // task is quiet by nature. Stale AND claimless = ghost: drop it.
+      if (p.taskLabel === undefined && !fresh) continue;
+      live.set(a.id, p);
+    }
+    // An orchestrator may go quiet while its subagents work — keep a stale
+    // parent on the board as long as any live child points at it.
+    for (const child of [...live.values()]) {
+      if (!child.parentId || live.has(child.parentId)) continue;
+      const parent = state?.agents[child.parentId];
+      if (parent && parent.status === "online") live.set(parent.id, present(parent));
+    }
+    const list = [...live.values()];
     // No agent has formally registered, but we just saw it read/write — show it.
-    if (list.length === 0 && online) list.push({ name: "Claude", isClaude: true });
+    if (list.length === 0 && online) list.push({ id: "live", name: "Claude", isClaude: true });
     return list;
-  }, [state, online]);
+  }, [state, online, nowMs]);
 
   return { edit, showcase, agents, online, reading, lastAction };
 }

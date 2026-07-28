@@ -227,13 +227,16 @@ export interface Action {
 }
 
 // Minimal identity so the canvas knows who is writing (provenance) and who is
-// connected. Exactly one planner + one executor in v1.
+// connected. `parentAgentId` links an executor subagent to the orchestrator
+// (planner) that spawned it — the structural signal the swarm view groups on.
+// Absent = unparented (renders flat).
 export interface Agent {
   id: EntityId;
   kind: "agent";
   name: string;
   role: AgentRole;
   model?: string;
+  parentAgentId?: EntityId;
   status: AgentStatus;
   lastSeen: string;
 }

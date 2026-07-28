@@ -371,15 +371,18 @@ type TaskLink struct {
 }
 
 // Agent is minimal identity so the canvas knows who is writing (provenance) and
-// can show who is connected. Exactly one planner + one executor in v1.
+// can show who is connected. ParentAgentID links an executor subagent to the
+// orchestrator (planner) that spawned it — the structural signal the swarm view
+// groups on. Nil = unparented (renders flat).
 type Agent struct {
-	ID         uuid.UUID `json:"id"`
-	Kind       string    `json:"kind"` // always "agent"
-	Name       string    `json:"name"`
-	Role       string    `json:"role"`
-	Model      *string   `json:"model,omitempty"`
-	Status     string    `json:"status"`
-	LastSeenAt time.Time `json:"lastSeen"`
+	ID            uuid.UUID  `json:"id"`
+	Kind          string     `json:"kind"` // always "agent"
+	Name          string     `json:"name"`
+	Role          string     `json:"role"`
+	Model         *string    `json:"model,omitempty"`
+	ParentAgentID *uuid.UUID `json:"parentAgentId,omitempty"`
+	Status        string     `json:"status"`
+	LastSeenAt    time.Time  `json:"lastSeen"`
 }
 
 type User struct {
@@ -821,6 +824,12 @@ type Store interface {
 
 	// Agents (v1 identity / provenance)
 	RegisterAgent(ctx context.Context, canvasID uuid.UUID, a *Agent) (int, error)
+	// TouchAgentLastSeen bumps last_seen_at (and re-marks online) for the agent a
+	// claimant identity resolves to — the liveness heartbeat behind the swarm
+	// view. Claimant is the task_start/complete identity: the registered agent
+	// NAME (preferred) or agent id. Best-effort; no version bump (presence-only —
+	// the fresh timestamp rides the caller's own state broadcast).
+	TouchAgentLastSeen(ctx context.Context, canvasID uuid.UUID, claimant string) error
 
 	// Actions (v1 execution primitive)
 	CreateAction(ctx context.Context, canvasID uuid.UUID, a *Action) (int, error)
