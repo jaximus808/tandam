@@ -210,6 +210,8 @@ type dbAction struct {
 	Payload      json.RawMessage `json:"payload"`
 	ProposedBy   string          `json:"proposed_by"`
 	ApprovedBy   *string         `json:"approved_by"`
+	ClaimedBy    *string         `json:"claimed_by"`
+	ClaimedAt    *string         `json:"claimed_at"`
 	Result       *string         `json:"result"`
 	Error        *string         `json:"error"`
 	LinkedPinIDs json.RawMessage `json:"linked_pin_ids"`
@@ -505,9 +507,14 @@ func toAction(d dbAction) *Action {
 		Type: d.Type, State: d.State,
 		Payload:    d.Payload,
 		ProposedBy: d.ProposedBy, ApprovedBy: d.ApprovedBy,
+		ClaimedBy: d.ClaimedBy,
 		Result: d.Result, Error: d.Error,
 		LinkedPinIDs: []uuid.UUID{},
 		CreatedAt:    parseTime(d.CreatedAt), UpdatedAt: parseTime(d.UpdatedAt),
+	}
+	if d.ClaimedAt != nil && *d.ClaimedAt != "" {
+		t := parseTime(*d.ClaimedAt)
+		a.ClaimedAt = &t
 	}
 	if len(a.Payload) == 0 {
 		a.Payload = json.RawMessage("{}")
@@ -2665,6 +2672,92 @@ func (s *supabaseStore) UpdateActionState(ctx context.Context, canvasID, id uuid
 		return 0, err
 	}
 	return s.bumpVersion(ctx, canvasID)
+}
+
+// ClaimAction atomically claims an approved action: the single conditional
+// UPDATE (… WHERE state = 'approved') is the whole race guard — the row stops
+// matching the moment the first claim lands, so two concurrent task_starts
+// can't both win (the old flow validated in Go then updated unconditionally).
+// On no-match we re-read the action to report WHY (not found / already claimed
+// / wrong state), mirroring ClaimCanvas.
+func (s *supabaseStore) ClaimAction(ctx context.Context, canvasID, id uuid.UUID, claimedBy string) (*Action, int, error) {
+	var rows []dbAction
+	_, err := s.client.From("actions").
+		Update(map[string]any{
+			"state":      "executing",
+			"claimed_by": claimedBy,
+			"claimed_at": time.Now().UTC().Format(time.RFC3339Nano),
+		}, "representation", "").
+		Eq("id", id.String()).
+		Eq("canvas_id", canvasID.String()).
+		Eq("state", "approved").
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(rows) == 1 {
+		v, verr := s.bumpVersion(ctx, canvasID)
+		if verr != nil {
+			return nil, 0, verr
+		}
+		return toAction(rows[0]), v, nil
+	}
+	// No row updated — disambiguate the reason from current state.
+	existing, gerr := s.GetAction(ctx, canvasID, id)
+	if gerr != nil {
+		return nil, 0, ErrActionNotFound
+	}
+	if existing.State == "executing" {
+		holder := ""
+		if existing.ClaimedBy != nil {
+			holder = *existing.ClaimedBy
+		}
+		// Idempotency: a NAMED claimant retrying its own claim (e.g. after a
+		// timed-out response) gets its claim back, not a conflict. The generic
+		// "agent" identity is excluded on purpose — two anonymous sessions must
+		// never both be told they won.
+		if holder != "" && holder != "agent" && holder == claimedBy {
+			return existing, 0, nil
+		}
+		return nil, 0, &AlreadyClaimedError{ClaimedBy: holder}
+	}
+	return nil, 0, fmt.Errorf("%w: cannot claim task in state %q", ErrIllegalActionState, existing.State)
+}
+
+// ReleaseAction frees a stuck claim (executing → approved, claim columns
+// cleared) with the same conditional-UPDATE + re-read-to-disambiguate pattern
+// as ClaimAction. A release of an already-released task is an idempotent
+// success.
+func (s *supabaseStore) ReleaseAction(ctx context.Context, canvasID, id uuid.UUID) (*Action, int, error) {
+	var rows []dbAction
+	_, err := s.client.From("actions").
+		Update(map[string]any{
+			"state":      "approved",
+			"claimed_by": nil,
+			"claimed_at": nil,
+		}, "representation", "").
+		Eq("id", id.String()).
+		Eq("canvas_id", canvasID.String()).
+		Eq("state", "executing").
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(rows) == 1 {
+		v, verr := s.bumpVersion(ctx, canvasID)
+		if verr != nil {
+			return nil, 0, verr
+		}
+		return toAction(rows[0]), v, nil
+	}
+	existing, gerr := s.GetAction(ctx, canvasID, id)
+	if gerr != nil {
+		return nil, 0, ErrActionNotFound
+	}
+	if existing.State == "approved" {
+		return existing, 0, nil // already back in the queue — idempotent retry
+	}
+	return nil, 0, fmt.Errorf("%w: cannot release task in state %q", ErrIllegalActionState, existing.State)
 }
 
 // UpdateActionPayload replaces an action's payload without touching its state —

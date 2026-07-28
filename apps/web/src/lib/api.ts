@@ -165,6 +165,18 @@ export async function deleteTask(code: string, id: string): Promise<void> {
   );
 }
 
+// Release a stuck claim: an executing task whose agent session died goes back
+// to the queue (approved) with claimedBy/claimedAt cleared. Human-only by
+// surface — this endpoint is deliberately not exposed through the MCP gateway.
+export async function releaseTask(code: string, id: string): Promise<void> {
+  await authedFetch(
+    code,
+    `/api/canvas/actions/${id}/release`,
+    { method: "POST" },
+    "Could not release task",
+  );
+}
+
 export async function approveAction(code: string, id: string): Promise<void> {
   await authedFetch(
     code,

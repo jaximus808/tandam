@@ -192,6 +192,8 @@ export interface Action {
   payload: NavigatePayload | TaskPayload;
   proposedBy: string;        // agent id (provenance)
   approvedBy?: string;       // human/agent id that approved
+  claimedBy?: string;        // agent holding the executing claim (task_start)
+  claimedAt?: string;        // when the claim was taken
   result?: string;           // execution outcome summary
   error?: string;            // failure detail
   linkedPinIds: EntityId[];  // pins this action references

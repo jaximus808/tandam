@@ -41,6 +41,9 @@ export interface CanvasSession {
   // Set by the `agent_register` tool; used as `proposedBy` on action.propose so
   // the canvas records which agent authored each action (v1 provenance).
   agentId?: string;
+  // Human-readable name given at agent_register; preferred over agentId as the
+  // claimant identity on task_start so the board shows WHO holds a claim.
+  agentName?: string;
 }
 
 export class Gateway {
@@ -201,9 +204,12 @@ export class Gateway {
     this.session = parsed;
   }
 
-  /** Remember the registered agent id on the session (set by agent_register). */
-  setAgentId(agentId: string): void {
-    if (this.session) this.session.agentId = agentId;
+  /** Remember the registered agent identity on the session (set by agent_register). */
+  setAgentId(agentId: string, name?: string): void {
+    if (this.session) {
+      this.session.agentId = agentId;
+      if (name) this.session.agentName = name;
+    }
   }
 
   getSession(): CanvasSession {
@@ -317,6 +323,25 @@ export class Gateway {
     });
     await this.assertOk("PATCH", path, res);
     return res.json() as Promise<T>;
+  }
+
+  /**
+   * PATCH that surfaces an HTTP 409 as structured data instead of throwing.
+   * task_start uses it: losing an atomic task claim is an EXPECTED outcome the
+   * model should route on ("pick the next task"), not an error string.
+   */
+  async patchWithConflict<T, C>(
+    path: string,
+    body: unknown
+  ): Promise<{ data?: T; conflict?: C }> {
+    const res = await this.safeFetch(path, {
+      method: "PATCH",
+      headers: this.authHeaders(),
+      body: JSON.stringify(body),
+    });
+    if (res.status === 409) return { conflict: (await res.json()) as C };
+    await this.assertOk("PATCH", path, res);
+    return { data: (await res.json()) as T };
   }
 
   async del<T>(path: string): Promise<T> {

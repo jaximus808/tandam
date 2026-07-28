@@ -1,12 +1,13 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import posthog from "../lib/posthog";
-import { Bot, Check, ChevronDown, ChevronsLeft, ChevronUp, Link2, Pencil, Plus, Trash2, User, X } from "lucide-react";
+import { Bot, Check, ChevronDown, ChevronsLeft, ChevronUp, Link2, Pencil, Plus, RotateCcw, Trash2, User, X } from "lucide-react";
 import type { Action, CanvasState, TaskPayload } from "../types";
 import {
   approveAction,
   createTask,
   deleteTask,
   rejectAction,
+  releaseTask,
   updateTask,
   type TaskDraft,
 } from "../lib/api";
@@ -173,6 +174,18 @@ export default function TasksPanel({
               </button>
             </div>
           )
+        ) : t.state === "executing" && !readOnly ? (
+          // Stuck-claim escape hatch: an executing task whose agent session
+          // died goes back to the queue with its claim cleared. Human-only —
+          // agents have no tool for this endpoint.
+          <button
+            onClick={() => void run(t.id, async () => releaseTask(code, t.id))}
+            disabled={busyId === t.id}
+            title="Return this task to the queue and clear its claim (for when the agent session died mid-task)"
+            className="mt-2 flex w-full items-center justify-center gap-1 rounded-lg border border-ink/15 px-2 py-1.5 text-xs font-medium text-ink/60 transition-colors hover:border-ink/30 disabled:opacity-40"
+          >
+            <RotateCcw size={13} /> Release
+          </button>
         ) : null}
       </TaskCard>
     );
@@ -398,6 +411,7 @@ function TaskCard({
         <span className="text-[10px] text-ink/35">
           by {task.proposedBy}
           {task.state === "proposed" && " · awaiting approval"}
+          {task.state === "executing" && task.claimedBy && ` · claimed by ${task.claimedBy}`}
         </span>
       </div>
       {children}

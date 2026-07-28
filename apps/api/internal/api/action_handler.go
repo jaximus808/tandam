@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -348,6 +349,10 @@ func (h *Handler) UpdateActionState(w http.ResponseWriter, r *http.Request) {
 		Result  *string         `json:"result"`
 		Error   *string         `json:"error"`
 		Payload json.RawMessage `json:"payload"`
+		// AgentName is the claimant identity for state='executing' (task_start).
+		// Canvas JWTs carry no per-agent identity, so the gateway passes the
+		// registered agent name/id here; empty falls back to the generic "agent".
+		AgentName string `json:"agentName"`
 	}
 	if err := decode(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -358,7 +363,12 @@ func (h *Handler) UpdateActionState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch body.State {
-	case "executing", "done", "failed":
+	case "executing":
+		// Task-start is a CLAIM, not a plain transition: approved → executing is
+		// decided atomically in the DB so concurrent starts get exactly one winner.
+		h.claimAction(w, r, body.AgentName)
+		return
+	case "done", "failed":
 		// allowed via update_state; approve/reject have their own endpoints
 	default:
 		writeError(w, http.StatusBadRequest, "state must be 'executing', 'done', or 'failed'")
@@ -367,6 +377,78 @@ func (h *Handler) UpdateActionState(w http.ResponseWriter, r *http.Request) {
 	h.transitionAction(w, r, body.State, store.ActionStatePatch{
 		Result: body.Result, Error: body.Error, Payload: body.Payload,
 	})
+}
+
+// claimAction is the task-start path: approved → executing decided by a single
+// conditional UPDATE in the store (WHERE state='approved'), replacing the old
+// read-check-write flow where two concurrent task_starts could both win. The
+// loser gets a structured 409 carrying who holds the claim, so it can move on
+// to the next task instead of duplicating work.
+func (h *Handler) claimAction(w http.ResponseWriter, r *http.Request, agentName string) {
+	canvasID := CanvasIDFromCtx(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	if agentName == "" {
+		agentName = "agent"
+	}
+	action, _, err := h.store.ClaimAction(r.Context(), canvasID, id, agentName)
+	if err != nil {
+		var claimed *store.AlreadyClaimedError
+		switch {
+		case errors.As(err, &claimed):
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"error":     "already_claimed",
+				"claimedBy": claimed.ClaimedBy,
+			})
+		case errors.Is(err, store.ErrActionNotFound):
+			writeError(w, http.StatusNotFound, "action not found")
+		case errors.Is(err, store.ErrIllegalActionState):
+			writeError(w, http.StatusBadRequest, err.Error())
+		default:
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
+	writeJSON(w, http.StatusOK, map[string]any{"action": action})
+}
+
+// POST /api/canvas/actions/{id}/release — stuck-claim escape hatch: an
+// executing task whose agent session died goes back to approved with its
+// claim cleared, so the queue can hand it out again.
+//
+// HUMAN-ONLY BY SURFACE, not by token: a canvas JWT is identical for a browser
+// and an MCP/agent caller (both come from /api/mcp/auth), and anonymous web
+// users on public canvases carry no session cookie — so the token genuinely
+// cannot distinguish human from agent here. The gate is that this endpoint is
+// deliberately NOT exposed through the MCP gateway (no tool maps to it — an
+// agent that lost a claim must ask a human, never un-claim a peer itself);
+// only the web Tasks panel's Release button calls it. If canvas tokens ever
+// grow an origin claim (browser vs gateway), enforce it here instead.
+func (h *Handler) ReleaseAction(w http.ResponseWriter, r *http.Request) {
+	canvasID := CanvasIDFromCtx(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	action, _, err := h.store.ReleaseAction(r.Context(), canvasID, id)
+	if err != nil {
+		switch {
+		case errors.Is(err, store.ErrActionNotFound):
+			writeError(w, http.StatusNotFound, "action not found")
+		case errors.Is(err, store.ErrIllegalActionState):
+			writeError(w, http.StatusBadRequest, err.Error())
+		default:
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
+	writeJSON(w, http.StatusOK, map[string]any{"action": action})
 }
 
 // DELETE /api/canvas/actions/{id}  — remove an action (e.g. delete a task from

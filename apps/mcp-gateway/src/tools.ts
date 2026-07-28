@@ -720,7 +720,9 @@ export async function handleTool(
         role: args.role,
         model: args.model,
       })) as { agentId: string };
-      if (res?.agentId) gateway.setAgentId(res.agentId);
+      if (res?.agentId) {
+        gateway.setAgentId(res.agentId, args.name ? String(args.name) : undefined);
+      }
       return res;
     }
 
@@ -797,6 +799,7 @@ export async function handleTool(
           state: string;
           payload?: { title?: string; assignee?: string };
           proposedBy: string;
+          claimedBy?: string;
           result?: string;
           createdAt: string;
         }>;
@@ -808,6 +811,7 @@ export async function handleTool(
         state: a.state,
         assignee: a.payload?.assignee ?? "agent",
         proposedBy: a.proposedBy,
+        ...(a.claimedBy ? { claimedBy: a.claimedBy } : {}),
         ...(a.result ? { result: a.result } : {}),
         createdAt: a.createdAt,
       }));
@@ -828,15 +832,41 @@ export async function handleTool(
     case "canvas_task_get":
       return gateway.get(`/api/canvas/actions/${args.id}`);
 
-    case "canvas_task_start":
-      return gateway.patch(`/api/canvas/actions/${args.id}`, { state: "executing" });
+    case "canvas_task_start": {
+      // The claim is atomic server-side: exactly one concurrent task_start wins.
+      // A 409 loss is an expected outcome, surfaced as data (not a thrown error)
+      // so the model routes to the next task instead of retrying or stalling.
+      const session = gateway.getSession();
+      const claimant =
+        (args.agentName as string | undefined) ?? session.agentName ?? session.agentId;
+      const res = await gateway.patchWithConflict<Record<string, unknown>, { claimedBy?: string }>(
+        `/api/canvas/actions/${args.id}`,
+        { state: "executing", ...(claimant ? { agentName: claimant } : {}) }
+      );
+      if (res.conflict) {
+        const claimedBy = res.conflict.claimedBy || "another agent";
+        return {
+          claimed: false,
+          claimedBy,
+          message:
+            `This task is already claimed by "${claimedBy}" — another session got it first. ` +
+            `Do NOT work on it. Call canvas_task_list with state "approved" and pick the next task.`,
+        };
+      }
+      return res.data;
+    }
 
     case "canvas_task_complete": {
       const { action } = (await gateway.get(`/api/canvas/actions/${args.id}`)) as {
         action: { state: string };
       };
       if (action.state === "approved") {
-        await gateway.patch(`/api/canvas/actions/${args.id}`, { state: "executing" });
+        const s = gateway.getSession();
+        const claimant = s.agentName ?? s.agentId;
+        await gateway.patch(`/api/canvas/actions/${args.id}`, {
+          state: "executing",
+          ...(claimant ? { agentName: claimant } : {}),
+        });
       }
       return gateway.patch(`/api/canvas/actions/${args.id}`, {
         state: args.status ?? "done",
@@ -2719,10 +2749,20 @@ const RAW_TOOLS = [
     name: "canvas_task_start",
     description:
       "Claim an approved task before working on it (approved → executing) so other " +
-      "sessions listing the queue skip it.",
+      "sessions listing the queue skip it. The claim is ATOMIC: if another session " +
+      "already claimed it you get { claimed: false, claimedBy } back — do not work " +
+      "on that task; call canvas_task_list (state 'approved') and pick the next one. " +
+      "The claimant name (agentName, or your agent_register identity) shows on the board.",
     inputSchema: {
       type: "object" as const,
-      properties: { id: { type: "string" } },
+      properties: {
+        id: { type: "string" },
+        agentName: {
+          type: "string",
+          description:
+            "Name to record as the claimant (defaults to your agent_register identity).",
+        },
+      },
       required: ["id"],
     },
   },

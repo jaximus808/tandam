@@ -22,7 +22,28 @@ var (
 	// ErrInvalidGrant is returned by the OAuth code/refresh consumers when the
 	// grant is missing, expired, revoked, or already used.
 	ErrInvalidGrant = errors.New("invalid grant")
+	// ErrActionNotFound is returned by ClaimAction/ReleaseAction when the id
+	// doesn't resolve to an action in the canvas.
+	ErrActionNotFound = errors.New("action not found")
+	// ErrIllegalActionState wraps a ClaimAction/ReleaseAction that matched no
+	// row because the action is in a state the transition doesn't apply to
+	// (e.g. claiming a task still in 'proposed').
+	ErrIllegalActionState = errors.New("illegal action state transition")
 )
+
+// AlreadyClaimedError is returned by ClaimAction when the conditional claim
+// matched no row because another agent already holds it (state 'executing').
+// Carries the current holder so the API can tell the loser who beat it.
+type AlreadyClaimedError struct {
+	ClaimedBy string
+}
+
+func (e *AlreadyClaimedError) Error() string {
+	if e.ClaimedBy == "" {
+		return "task already claimed"
+	}
+	return "task already claimed by " + e.ClaimedBy
+}
 
 // ── Domain types ──────────────────────────────────────────────────────────────
 
@@ -303,6 +324,10 @@ type Action struct {
 	Payload      json.RawMessage `json:"payload"`
 	ProposedBy   string          `json:"proposedBy"`
 	ApprovedBy   *string         `json:"approvedBy,omitempty"`
+	// ClaimedBy/ClaimedAt record which agent holds the executing claim (set by
+	// ClaimAction, cleared by ReleaseAction). Migration 0032.
+	ClaimedBy    *string         `json:"claimedBy,omitempty"`
+	ClaimedAt    *time.Time      `json:"claimedAt,omitempty"`
 	Result       *string         `json:"result,omitempty"`
 	Error        *string         `json:"error,omitempty"`
 	LinkedPinIDs []uuid.UUID     `json:"linkedPinIds"`
@@ -776,6 +801,16 @@ type Store interface {
 	GetAction(ctx context.Context, canvasID, id uuid.UUID) (*Action, error)
 	ListActions(ctx context.Context, canvasID uuid.UUID, stateFilter, typeFilter, assigneeFilter string) ([]*Action, error)
 	UpdateActionState(ctx context.Context, canvasID, id uuid.UUID, patch ActionStatePatch) (int, error)
+	// ClaimAction atomically claims an approved action for claimedBy — a single
+	// conditional UPDATE (… WHERE state='approved') decides the winner in the DB,
+	// so two concurrent task_starts can't both win. Returns the claimed action +
+	// new canvas version, ErrActionNotFound, *AlreadyClaimedError (with the
+	// current holder), or an ErrIllegalActionState-wrapped error for other states.
+	ClaimAction(ctx context.Context, canvasID, id uuid.UUID, claimedBy string) (*Action, int, error)
+	// ReleaseAction frees a stuck claim: executing → approved, clearing
+	// claimed_by/claimed_at, via the same conditional-UPDATE pattern. Human-only —
+	// the gate lives at the route surface (see api.ReleaseAction).
+	ReleaseAction(ctx context.Context, canvasID, id uuid.UUID) (*Action, int, error)
 	UpdateActionPayload(ctx context.Context, canvasID, id uuid.UUID, payload json.RawMessage) (int, error)
 	DeleteAction(ctx context.Context, canvasID, id uuid.UUID) (int, error)
 	GetLinkedEntities(ctx context.Context, canvasID uuid.UUID, ids []uuid.UUID) ([]TaskLink, error)
