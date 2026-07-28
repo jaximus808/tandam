@@ -284,6 +284,12 @@ export default function App() {
   // mirrors visitedModes' keep-alive so toggling away keeps scroll positions.
   const [boardOpen, setBoardOpen] = useState(false);
   const [boardVisited, setBoardVisited] = useState(false);
+  // TDM-14: one-shot focus handoff — clicking an agent's task in the header
+  // presence (avatar / mini-chip / swarm tree) opens the Board centred on that
+  // task. TaskBoard consumes it (scope → the task's epic, card scrolled into
+  // view, detail slide-over open) and hands it back via onFocusHandled so
+  // normal browsing resumes.
+  const [boardFocusTaskId, setBoardFocusTaskId] = useState<string | null>(null);
 
   // ── Document tabs (migration 0024) ──────────────────────────────────────────
   // A canvas is a bag of named documents; the tab strip shows the OPEN ones.
@@ -1011,6 +1017,13 @@ export default function App() {
     setBoardVisited(true);
   }
 
+  // Follow an agent to its task: open the Board with a one-shot focus on the
+  // task it's working (see boardFocusTaskId above).
+  function openBoardTask(taskId: string) {
+    setBoardFocusTaskId(taskId);
+    openBoard();
+  }
+
   // Following is armed even before any agent shows up — distinguish "an agent is
   // here" from "on, waiting for one" so the button reads as live, not dead.
   const agentPresent = agentList.length > 0;
@@ -1152,7 +1165,7 @@ export default function App() {
         />
 
         <div className="ml-auto flex items-center gap-2 shrink-0">
-          <AgentPresence agents={agentList} edit={agentEdit} reading={agentReading} onJump={() => setActiveDocId(null)} />
+          <AgentPresence agents={agentList} edit={agentEdit} reading={agentReading} onJump={() => setActiveDocId(null)} onOpenTask={openBoardTask} />
           <button
             onClick={toggleFollow}
             className={[
@@ -1378,6 +1391,8 @@ export default function App() {
               code={canvas.code}
               state={canvasState}
               readOnly={canvas.yourRole === "read"}
+              focusTaskId={boardFocusTaskId}
+              onFocusHandled={() => setBoardFocusTaskId(null)}
             />
           </div>
         )}

@@ -9,6 +9,10 @@ interface Props {
   edit: AgentEdit | null;
   reading: boolean;
   onJump: (mode: CanvasMode) => void;
+  // Follow an agent to its task: opens the Board focused on the given task
+  // (scope → epic, detail slide-over open). Fired from any presence surface
+  // where an agent shows a claimed task.
+  onOpenTask: (taskId: string) => void;
 }
 
 const MODE_LABEL: Record<CanvasMode, string> = {
@@ -31,7 +35,7 @@ const MODE_LABEL: Record<CanvasMode, string> = {
  * task it claimed. Structural only (parentId set at agent_register); agents
  * without a present parent render flat as before.
  */
-export default function AgentPresence({ agents, edit, reading, onJump }: Props) {
+export default function AgentPresence({ agents, edit, reading, onJump, onOpenTask }: Props) {
   // Swarm panel visibility — dismissible (it floats over mode content at z-40,
   // so it must never be un-closable); the avatar cluster re-opens it.
   const [swarmOpen, setSwarmOpen] = useState(true);
@@ -39,6 +43,14 @@ export default function AgentPresence({ agents, edit, reading, onJump }: Props) 
   const t = edit ? modeTheme(edit.mode) : null;
   // Editing takes precedence over reading — if a cursor is live, show where.
   const showReading = !edit && reading;
+
+  // "Following them = seeing their task": the most recent claimant among the
+  // present agents gets a compact ⚡ TDM-n chip beside the cluster that clicks
+  // through to the task on the Board. Working-violet, matching the board's
+  // executing treatment.
+  const followed = [...agents]
+    .filter((a) => a.taskId)
+    .sort((x, y) => (y.taskClaimedAt ?? "").localeCompare(x.taskClaimedAt ?? ""))[0];
 
   // Group executors under their (present) parent. An executor whose parent is
   // gone stays in the flat cluster only.
@@ -77,6 +89,17 @@ export default function AgentPresence({ agents, edit, reading, onJump }: Props) 
             <span className="shrink-0 rounded-[3px] bg-ink/[0.06] px-1 py-px font-code text-[9px] uppercase tracking-[0.12em] text-ink/45">
               {a.role ?? "planner"}
             </span>
+          ) : a.taskLabel && a.taskId ? (
+            // Following this executor = seeing its task: click through to the
+            // Board, scoped to the task's epic with its detail open.
+            <button
+              onClick={() => onOpenTask(a.taskId!)}
+              title={`${a.taskLabel} — open on the Board`}
+              aria-label={`Open ${a.name}'s task ${a.taskTicket ?? ""} on the Board`}
+              className="min-w-0 truncate text-left font-code text-[10px] text-agent transition-colors hover:underline"
+            >
+              ⚡ {a.taskLabel}
+            </button>
           ) : a.taskLabel ? (
             <span className="min-w-0 truncate font-code text-[10px] text-agent" title={a.taskLabel}>
               ⚡ {a.taskLabel}
@@ -103,21 +126,36 @@ export default function AgentPresence({ agents, edit, reading, onJump }: Props) 
         onClick={roots.length > 0 ? () => setSwarmOpen((o) => !o) : undefined}
         title={roots.length > 0 ? "Toggle swarm panel" : undefined}
       >
-        {agents.map((a) => (
-          <span
-            key={a.id}
-            title={[a.isClaude ? `${a.name} (Claude)` : a.name, a.taskLabel && `⚡ ${a.taskLabel}`]
-              .filter(Boolean)
-              .join(" — ")}
-            className="relative grid h-6 w-6 place-items-center overflow-hidden rounded-[5px] ring-2 ring-paper"
-            style={{
-              background: a.isClaude ? "#C75B39" : "#1C1917",
-            }}
-          >
-            <Sparkle />
-            {showReading && <span aria-hidden="true" className="tandem-scan absolute inset-0" />}
-          </span>
-        ))}
+        {agents.map((a) => {
+          const title = [a.isClaude ? `${a.name} (Claude)` : a.name, a.taskLabel && `⚡ ${a.taskLabel}`]
+            .filter(Boolean)
+            .join(" — ");
+          const cls = "relative grid h-6 w-6 place-items-center overflow-hidden rounded-[5px] ring-2 ring-paper";
+          const bg = { background: a.isClaude ? "#C75B39" : "#1C1917" };
+          // Mid-task agents click through to their task on the Board
+          // (stopPropagation so the cluster's swarm-panel toggle doesn't fire).
+          return a.taskId ? (
+            <button
+              key={a.id}
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenTask(a.taskId!);
+              }}
+              title={`${title} — open on the Board`}
+              aria-label={`Open ${a.name}'s task ${a.taskTicket ?? ""} on the Board`}
+              className={`${cls} cursor-pointer`}
+              style={bg}
+            >
+              <Sparkle />
+              {showReading && <span aria-hidden="true" className="tandem-scan absolute inset-0" />}
+            </button>
+          ) : (
+            <span key={a.id} title={title} className={cls} style={bg}>
+              <Sparkle />
+              {showReading && <span aria-hidden="true" className="tandem-scan absolute inset-0" />}
+            </span>
+          );
+        })}
       </div>
 
       {/* Swarm tree — visible while any executor is nested under a present
@@ -133,6 +171,24 @@ export default function AgentPresence({ agents, edit, reading, onJump }: Props) 
           </button>
           {roots.map((r) => renderNode(r, 0))}
         </div>
+      )}
+
+      {/* Mid-task mini-chip — the most recent claimant's ticket, one click from
+          the task itself. Sits beside the cluster, styled like the header's
+          other status chips. */}
+      {followed?.taskId && (
+        <button
+          onClick={() => onOpenTask(followed.taskId!)}
+          className="inline-flex items-center gap-1 rounded-[4px] px-2 py-1 font-code text-[10.5px] font-medium text-violet-600 transition-opacity hover:opacity-80 dark:text-violet-400"
+          style={{
+            backgroundColor: "rgba(139,92,246,0.10)",
+            boxShadow: "inset 0 0 0 1px rgba(139,92,246,0.22)",
+          }}
+          title={`${followed.name} is working ${followed.taskLabel ?? "a task"} — open it on the Board`}
+          aria-label={`Open ${followed.name}'s task ${followed.taskTicket ?? ""} on the Board`}
+        >
+          ⚡ {followed.taskTicket ?? "task"}
+        </button>
       )}
 
       {/* Live status chip. Priority: editing (where it's writing) → reading
