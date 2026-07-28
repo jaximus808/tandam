@@ -1455,6 +1455,7 @@ export default function App() {
                   state={scopedState}
                   code={canvas.code}
                   readOnly={canvas.yourRole === "read"}
+                  onOpenBoard={openBoard}
                 />
               )}
               {m === "sheets" && <SheetsMode state={scopedState} canvasCode={canvas.code} />}

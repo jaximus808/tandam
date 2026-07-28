@@ -170,6 +170,30 @@ export async function deleteTask(code: string, id: string): Promise<void> {
   );
 }
 
+// ── Epics (actions of type "epic") ───────────────────────────────────────────
+// Same born-approved rule as human tasks: the approval gate exists for
+// agent-proposed work, and the human author IS the gate. Under the default
+// "epic" approval policy an approved epic also lets agent tasks filed under it
+// flow straight to the queue.
+
+export type EpicDraft = {
+  title: string;
+  body?: string;
+  linkedIds?: string[];
+};
+
+export async function createEpic(code: string, epic: EpicDraft): Promise<void> {
+  await authedFetch(
+    code,
+    "/api/canvas/actions",
+    {
+      method: "POST",
+      body: { type: "epic", state: "approved", proposedBy: "human", payload: epic },
+    },
+    "Could not create epic",
+  );
+}
+
 // Release a stuck claim: an executing task whose agent session died goes back
 // to the queue (approved) with claimedBy/claimedAt cleared. Human-only by
 // surface — this endpoint is deliberately not exposed through the MCP gateway.
