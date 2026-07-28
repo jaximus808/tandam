@@ -223,12 +223,13 @@ type dbAction struct {
 }
 
 type dbAgent struct {
-	ID         string  `json:"id"`
-	Name       string  `json:"name"`
-	Role       string  `json:"role"`
-	Model      *string `json:"model"`
-	Status     string  `json:"status"`
-	LastSeenAt string  `json:"last_seen_at"`
+	ID            string  `json:"id"`
+	Name          string  `json:"name"`
+	Role          string  `json:"role"`
+	Model         *string `json:"model"`
+	ParentAgentID *string `json:"parent_agent_id"`
+	Status        string  `json:"status"`
+	LastSeenAt    string  `json:"last_seen_at"`
 }
 
 type dbUser struct {
@@ -539,9 +540,15 @@ func toAction(d dbAction) *Action {
 
 func toAgent(d dbAgent) *Agent {
 	id, _ := uuid.Parse(d.ID)
-	return &Agent{ID: id, Kind: "agent",
+	a := &Agent{ID: id, Kind: "agent",
 		Name: d.Name, Role: d.Role, Model: d.Model, Status: d.Status,
 		LastSeenAt: parseTime(d.LastSeenAt)}
+	if d.ParentAgentID != nil {
+		if pid, err := uuid.Parse(*d.ParentAgentID); err == nil {
+			a.ParentAgentID = &pid
+		}
+	}
+	return a
 }
 
 func toSheetRow(d dbSheetRow) *SheetRow {
@@ -2544,10 +2551,38 @@ func (s *supabaseStore) RegisterAgent(ctx context.Context, canvasID uuid.UUID, a
 	if a.Model != nil {
 		row["model"] = *a.Model
 	}
+	// Key added only when set, so an API deployed ahead of migration 0035 (which
+	// adds the column) still inserts unparented registrations cleanly.
+	if a.ParentAgentID != nil {
+		row["parent_agent_id"] = a.ParentAgentID.String()
+	}
 	if err := s.exec(s.client.From("agents").Insert(row, false, "", "minimal", "")); err != nil {
 		return 0, err
 	}
 	return s.bumpVersion(ctx, canvasID)
+}
+
+// TouchAgentLastSeen bumps last_seen_at for the agent the claimant identity
+// names — called on task_start/complete so a working subagent's presence stays
+// fresh without a dedicated heartbeat. Claimant is the registered agent NAME
+// (the gateway's preferred claimant) or an agent id; the generic "agent"
+// fallback names nobody and is skipped. Presence-only: no version bump — the
+// fresh timestamp rides the caller's own state broadcast.
+func (s *supabaseStore) TouchAgentLastSeen(_ context.Context, canvasID uuid.UUID, claimant string) error {
+	if claimant == "" || claimant == "agent" {
+		return nil
+	}
+	col := "name"
+	if _, err := uuid.Parse(claimant); err == nil {
+		col = "id"
+	}
+	return s.exec(s.client.From("agents").
+		Update(map[string]any{
+			"last_seen_at": time.Now().UTC().Format(time.RFC3339),
+			"status":       "online",
+		}, "minimal", "").
+		Eq("canvas_id", canvasID.String()).
+		Eq(col, claimant))
 }
 
 // ── Actions (v1 execution primitive) ──────────────────────────────────────────

@@ -719,6 +719,7 @@ export async function handleTool(
         name: args.name,
         role: args.role,
         model: args.model,
+        parentAgentId: args.parentAgentId,
       })) as { agentId: string };
       if (res?.agentId) {
         gateway.setAgentId(res.agentId, args.name ? String(args.name) : undefined);
@@ -2604,14 +2605,24 @@ const RAW_TOOLS = [
     name: "agent_register",
     description:
       "Identify this agent to the canvas on connect. Returns an agentId that is " +
-      "recorded as the author (provenance) of actions this session proposes. v1 " +
-      "expects exactly one 'planner' and one 'executor' per canvas.",
+      "recorded as the author (provenance) of actions this session proposes. " +
+      "Multi-agent swarms: an orchestrator registers as role 'planner' and threads " +
+      "its returned agentId into each subagent's spawn prompt; each subagent then " +
+      "registers role 'executor' with parentAgentId = that id, so the board shows " +
+      "the swarm grouped under the orchestrator.",
     inputSchema: {
       type: "object" as const,
       properties: {
         name: { type: "string", description: "Human-readable agent name." },
         role: { type: "string", enum: ["planner", "executor"] },
         model: { type: "string", description: "Optional model id, e.g. 'claude-opus-4-8'." },
+        parentAgentId: {
+          type: "string",
+          description:
+            "For subagents spawned by an orchestrator: the orchestrator's registered " +
+            "agentId, so the presence view nests this executor under it. Omit when " +
+            "not spawned by another registered agent.",
+        },
       },
       required: ["role"],
     },

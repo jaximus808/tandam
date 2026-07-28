@@ -22,6 +22,12 @@ const MODE_LABEL: Record<CanvasMode, string> = {
 /**
  * Header presence: who's in the room (agents), and — when one is mid-edit — a
  * live "editing {Mode}" chip you can click to jump to where it's working.
+ *
+ * Swarm view (v1): when executors register with a parentId pointing at a
+ * present orchestrator, a tree panel drops below the cluster — planner as the
+ * parent node, its executors nested beneath, each labelled with the executing
+ * task it claimed. Structural only (parentId set at agent_register); agents
+ * without a present parent render flat as before.
  */
 export default function AgentPresence({ agents, edit, reading, onJump }: Props) {
   if (agents.length === 0) return null;
@@ -29,15 +35,30 @@ export default function AgentPresence({ agents, edit, reading, onJump }: Props) 
   // Editing takes precedence over reading — if a cursor is live, show where.
   const showReading = !edit && reading;
 
+  // Group executors under their (present) parent. An executor whose parent is
+  // gone stays in the flat cluster only.
+  const byId = new Map(agents.map((a) => [a.id, a]));
+  const children = new Map<string, PresentAgent[]>();
+  for (const a of agents) {
+    if (a.parentId && byId.has(a.parentId)) {
+      const kids = children.get(a.parentId) ?? [];
+      kids.push(a);
+      children.set(a.parentId, kids);
+    }
+  }
+  const parents = agents.filter((a) => children.has(a.id));
+
   return (
-    <div className="hidden items-center gap-2 sm:flex">
+    <div className="relative hidden items-center gap-2 sm:flex">
       {/* Avatar cluster — agents are square terracotta chips, like their tags.
           A scan-line sweeps across them while the agent is reading. */}
       <div className="flex -space-x-1">
-        {agents.map((a, i) => (
+        {agents.map((a) => (
           <span
-            key={`${a.name}-${i}`}
-            title={a.isClaude ? `${a.name} (Claude)` : a.name}
+            key={a.id}
+            title={[a.isClaude ? `${a.name} (Claude)` : a.name, a.taskLabel && `⚡ ${a.taskLabel}`]
+              .filter(Boolean)
+              .join(" — ")}
             className="relative grid h-6 w-6 place-items-center overflow-hidden rounded-[5px] ring-2 ring-paper"
             style={{
               background: a.isClaude ? "#C75B39" : "#1C1917",
@@ -48,6 +69,39 @@ export default function AgentPresence({ agents, edit, reading, onJump }: Props) 
           </span>
         ))}
       </div>
+
+      {/* Swarm tree — visible while any executor is nested under a present
+          orchestrator; clears as executors finish and drop offline. */}
+      {parents.length > 0 && (
+        <div className="absolute right-0 top-full z-40 mt-2 w-72 rounded-lg border border-ink/10 bg-paper p-2.5 shadow-lg">
+          {parents.map((p) => (
+            <div key={p.id} className="mb-2 last:mb-0">
+              <div className="flex min-w-0 items-center gap-2">
+                <MiniChip isClaude={p.isClaude} size={5} />
+                <span className="truncate font-code text-[11px] font-medium text-ink">{p.name}</span>
+                <span className="shrink-0 rounded-[3px] bg-ink/[0.06] px-1 py-px font-code text-[9px] uppercase tracking-[0.12em] text-ink/45">
+                  {p.role ?? "planner"}
+                </span>
+              </div>
+              <div className="ml-[9px] mt-1.5 space-y-1.5 border-l border-ink/10 pl-2.5">
+                {(children.get(p.id) ?? []).map((c) => (
+                  <div key={c.id} className="flex min-w-0 items-center gap-1.5">
+                    <MiniChip isClaude={c.isClaude} size={4} />
+                    <span className="shrink-0 font-code text-[10.5px] text-ink/80">{c.name}</span>
+                    {c.taskLabel ? (
+                      <span className="min-w-0 truncate font-code text-[10px] text-agent" title={c.taskLabel}>
+                        ⚡ {c.taskLabel}
+                      </span>
+                    ) : (
+                      <span className="font-code text-[10px] text-ink/35">idle</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Live status chip. Priority: editing (where it's writing) → reading
           (it's looking at the canvas) → idle ("here"). */}
@@ -85,6 +139,20 @@ export default function AgentPresence({ agents, edit, reading, onJump }: Props) 
         <span className="font-code text-[10.5px] font-medium text-ink/35">here</span>
       )}
     </div>
+  );
+}
+
+// Small square agent chip for tree rows — same terracotta identity as the
+// header cluster, sized down.
+function MiniChip({ isClaude, size }: { isClaude: boolean; size: 4 | 5 }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={`${size === 5 ? "h-[18px] w-[18px]" : "h-3.5 w-3.5"} grid shrink-0 place-items-center rounded-[4px]`}
+      style={{ background: isClaude ? "#C75B39" : "#1C1917" }}
+    >
+      <Sparkle />
+    </span>
   );
 }
 

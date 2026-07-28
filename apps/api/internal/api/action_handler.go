@@ -16,13 +16,17 @@ import (
 
 // ── Agents (v1 identity / provenance) ─────────────────────────────────────────
 
-// POST /api/canvas/agents  — an agent identifies itself on connect.
+// POST /api/canvas/agents  — an agent identifies itself on connect. An
+// orchestrator's subagents pass parentAgentId (the orchestrator's registered
+// agent id) so the swarm view can group them structurally; absent → unparented,
+// flat display, exactly as before.
 func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 	canvasID := CanvasIDFromCtx(r.Context())
 	var body struct {
-		Name  string  `json:"name"`
-		Role  string  `json:"role"`
-		Model *string `json:"model"`
+		Name          string     `json:"name"`
+		Role          string     `json:"role"`
+		Model         *string    `json:"model"`
+		ParentAgentID *uuid.UUID `json:"parentAgentId"`
 	}
 	if err := decode(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -38,13 +42,18 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 	agent := &store.Agent{
 		ID: uuid.New(), Kind: "agent",
 		Name: body.Name, Role: body.Role, Model: body.Model,
+		ParentAgentID: body.ParentAgentID,
 	}
 	if _, err := h.store.RegisterAgent(r.Context(), canvasID, agent); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
-	writeJSON(w, http.StatusCreated, map[string]string{"agentId": agent.ID.String()})
+	resp := map[string]any{"agentId": agent.ID.String()}
+	if agent.ParentAgentID != nil {
+		resp["parentAgentId"] = agent.ParentAgentID.String()
+	}
+	writeJSON(w, http.StatusCreated, resp)
 }
 
 // ── Actions (v1 execution primitive) ──────────────────────────────────────────
@@ -592,6 +601,12 @@ func (h *Handler) UpdateActionState(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		// Liveness heartbeat: completing (or failing) a task proves the agent is
+		// alive — refresh its last_seen_at so the swarm view gets a short grace
+		// window between tasks instead of flickering offline. Best-effort.
+		if err := h.store.TouchAgentLastSeen(r.Context(), canvasID, body.AgentName); err != nil {
+			log.Printf("complete: touching agent last_seen (%s): %v", body.AgentName, err)
+		}
 	}
 	h.transitionAction(w, r, body.State, store.ActionStatePatch{
 		Result: body.Result, Error: body.Error, Payload: body.Payload,
@@ -630,6 +645,12 @@ func (h *Handler) claimAction(w http.ResponseWriter, r *http.Request, agentName 
 			writeError(w, http.StatusInternalServerError, err.Error())
 		}
 		return
+	}
+	// Liveness heartbeat: a claim proves the agent is alive — refresh its
+	// last_seen_at so the swarm view's staleness threshold stays honest.
+	// Best-effort; a failed touch must never fail the claim.
+	if err := h.store.TouchAgentLastSeen(r.Context(), canvasID, agentName); err != nil {
+		log.Printf("claim %s: touching agent last_seen (%s): %v", id, agentName, err)
 	}
 	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
 	writeJSON(w, http.StatusOK, map[string]any{"action": action})
