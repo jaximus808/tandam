@@ -155,7 +155,7 @@ export default function ItineraryMode({
           const dayTz = dayEvents.find((e) => e.timezone)?.timezone;
           return (
           <section key={day} className="mb-8">
-            <h2 className="font-display text-lg font-medium tracking-tight text-ink mb-3 sticky top-0 bg-paper/90 backdrop-blur py-1.5 z-10 flex items-baseline justify-between gap-3">
+            <h2 className="text-lg font-semibold tracking-tight text-ink mb-3 sticky top-0 bg-paper py-1.5 z-10 flex items-baseline justify-between gap-3">
               <span>{formatDay(day)}</span>
               {sumCost(dayEvents) > 0 && (
                 <span className="text-sm font-normal text-ink/40">{formatCost(sumCost(dayEvents))}</span>
@@ -226,7 +226,7 @@ function EventCard({
           if (confirm("Delete this event?")) sendOp({ op: "event.delete", id: ev.id });
         }}
         title="Delete event"
-        className="absolute top-2 right-2 z-10 opacity-0 group-hover/ev:opacity-100 text-ink/30 hover:text-red-600 transition-opacity p-1"
+        className="absolute top-2 right-2 z-10 opacity-0 group-hover/ev:opacity-100 text-ink/30 hover:text-rose-600 dark:hover:text-rose-400 transition-opacity p-1"
       >
         <Trash2 size={14} />
       </button>
@@ -281,7 +281,7 @@ function EventCard({
           {eventPins.map((p) => (
             <span
               key={p!.id}
-              className="inline-flex items-center gap-1 text-xs rounded-full px-2 py-0.5 bg-amber-500/10 text-amber-600"
+              className="inline-flex items-center gap-1 text-xs rounded-full px-2 py-0.5 bg-ink/5 text-ink/70"
             >
               <span
                 className="w-2 h-2 rounded-full shrink-0"
@@ -485,7 +485,7 @@ function TimeEditor({ ev, onClose }: { ev: CanvasEvent; onClose: () => void }) {
             if (e.key === "Enter") { e.preventDefault(); commitStart(); onClose(); }
             else if (e.key === "Escape") { e.preventDefault(); onClose(); }
           }}
-          className="text-xs text-ink/70 bg-blue-500/10 rounded px-1 outline-none ring-1 ring-blue-400/40"
+          className="text-xs text-ink/70 bg-accent/10 rounded px-1 outline-none ring-1 ring-accent/40"
         />
         <button
           onClick={() => { commitStart(); commitEnd(); onClose(); }}

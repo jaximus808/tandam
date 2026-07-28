@@ -113,21 +113,21 @@ export default function UserSettings({ onHome, onShowCanvases, onShowAbout, onOp
   const user = load.status === "ready" ? load.user : null;
 
   return (
-    <div className="flex min-h-screen flex-col bg-paper font-brand text-ink">
+    <div className="flex min-h-screen flex-col bg-paper text-ink">
       {/* Top chrome — breadcrumb + account menu, mirroring the Dashboard page. */}
-      <header className="sticky top-0 z-40 flex items-center gap-2 border-b border-ink/10 bg-paper/85 px-4 py-3 backdrop-blur sm:px-6">
+      <header className="sticky top-0 z-40 flex items-center gap-2 border-b border-ink/10 bg-paper px-4 py-3 sm:px-6">
         <button onClick={onHome} className="group flex items-center gap-1.5" title="Back to home">
           <TandemLogo size={28} animate={false} />
-          <span className="hidden font-semibold tracking-tight transition-colors group-hover:text-sky-600 sm:inline">
+          <span className="hidden font-semibold tracking-tight transition-colors group-hover:text-accent sm:inline">
             Tandem
           </span>
         </button>
         <span className="text-ink/20">/</span>
-        <button onClick={onShowCanvases} className="font-display text-[15px] font-medium text-ink/50 transition-colors hover:text-ink">
+        <button onClick={onShowCanvases} className="text-[15px] font-medium text-ink/50 transition-colors hover:text-ink">
           Dashboard
         </button>
         <span className="text-ink/20">/</span>
-        <span className="font-display text-[15px] font-medium">Settings</span>
+        <span className="text-[15px] font-medium">Settings</span>
         <div className="ml-auto flex items-center gap-2">
           <AccountMenu onShowCanvases={onShowCanvases} onShowAbout={onShowAbout} onUserChange={handleUserChange} onOpenCanvas={onOpenCanvas} />
         </div>
@@ -137,20 +137,20 @@ export default function UserSettings({ onHome, onShowCanvases, onShowAbout, onOp
         {load.status === "loading" && (
           <div className="space-y-4">
             <div className="h-8 w-48 animate-pulse rounded-lg bg-surface/60" />
-            <div className="h-32 animate-pulse rounded-2xl border border-ink/10 bg-surface/60" />
-            <div className="h-40 animate-pulse rounded-2xl border border-ink/10 bg-surface/60" />
+            <div className="h-32 animate-pulse rounded-lg border border-ink/10 bg-surface/60" />
+            <div className="h-40 animate-pulse rounded-lg border border-ink/10 bg-surface/60" />
           </div>
         )}
 
         {load.status === "signedOut" && (
-          <div className="mx-auto max-w-md rounded-2xl border border-ink/10 bg-surface px-8 py-10 text-center">
-            <p className="font-display text-lg font-medium">Sign in to manage your account</p>
+          <div className="mx-auto max-w-md rounded-lg border border-ink/10 bg-surface px-8 py-10 text-center">
+            <p className="text-lg font-semibold tracking-tight">Sign in to manage your account</p>
             <p className="mt-1.5 text-sm text-ink/55">
               Account settings live here once you’re signed in — your profile, preferences, and more.
             </p>
             <button
               onClick={onHome}
-              className="mt-5 rounded-lg bg-ink px-4 py-2 text-sm font-medium text-paper hover:opacity-90"
+              className="mt-5 rounded-md bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
             >
               Back to home
             </button>
@@ -160,14 +160,14 @@ export default function UserSettings({ onHome, onShowCanvases, onShowAbout, onOp
         {user && (
           <>
             <div className="mb-8">
-              <h1 className="font-display text-2xl font-medium tracking-tight">Account settings</h1>
+              <h1 className="text-2xl font-semibold tracking-tight">Account settings</h1>
               <p className="mt-1 text-sm text-ink/55">Manage your profile and preferences.</p>
             </div>
 
             {/* Profile — name / email / avatar from Google. */}
-            <section className="rounded-2xl border border-ink/10 bg-surface p-5 sm:p-6">
+            <section className="rounded-lg border border-ink/10 bg-surface p-5 sm:p-6">
               <div className="flex items-center gap-4">
-                <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-full bg-blue-600 text-lg font-semibold text-white">
+                <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-full bg-accent text-lg font-semibold text-white">
                   {user.avatarUrl ? (
                     <img
                       src={user.avatarUrl}
@@ -180,19 +180,19 @@ export default function UserSettings({ onHome, onShowCanvases, onShowAbout, onOp
                   )}
                 </div>
                 <div className="min-w-0">
-                  <div className="truncate font-display text-lg font-medium leading-tight">
+                  <div className="truncate text-lg font-semibold leading-tight tracking-tight">
                     {user.displayName || "Account"}
                   </div>
                   <div className="truncate text-sm text-ink/55">{user.email}</div>
                   {user.createdAt && (
-                    <div className="mt-0.5 font-code text-[11px] text-ink/40">
+                    <div className="mt-0.5 text-[11px] text-ink/40">
                       Joined {shortDate(user.createdAt)}
                     </div>
                   )}
                 </div>
                 <button
                   onClick={handleLogout}
-                  className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-ink/15 px-3 py-1.5 text-sm font-medium text-ink/70 transition-colors hover:border-ink/40 hover:bg-paper"
+                  className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-md border border-ink/15 bg-surface px-3 py-1.5 text-sm font-medium text-ink/70 transition-colors hover:bg-ink/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
                 >
                   <LogOut className="h-4 w-4" />
                   <span className="hidden sm:inline">Sign out</span>
@@ -205,7 +205,7 @@ export default function UserSettings({ onHome, onShowCanvases, onShowAbout, onOp
 
             {/* Appearance — theme preference. Device-local (persisted in this
                 browser), defaults to your OS setting. */}
-            <section className="mt-6 rounded-2xl border border-ink/10 bg-surface p-5 sm:p-6">
+            <section className="mt-6 rounded-lg border border-ink/10 bg-surface p-5 sm:p-6">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="min-w-0">
                   <div className="text-sm font-medium text-ink">Appearance</div>
@@ -219,7 +219,7 @@ export default function UserSettings({ onHome, onShowCanvases, onShowAbout, onOp
 
             {/* Agent activity — how dramatic the batch-reveal auto-scroll is when
                 you're following an agent. Saved to your account (and this device).*/}
-            <section className="mt-6 rounded-2xl border border-ink/10 bg-surface p-5 sm:p-6">
+            <section className="mt-6 rounded-lg border border-ink/10 bg-surface p-5 sm:p-6">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="min-w-0">
                   <div className="text-sm font-medium text-ink">Agent activity reveal</div>
@@ -234,7 +234,7 @@ export default function UserSettings({ onHome, onShowCanvases, onShowAbout, onOp
 
             {/* Default canvas visibility — per-account preference applied to
                 canvases you create. Reads from `me`, PATCHes optimistically. */}
-            <section className="mt-6 rounded-2xl border border-ink/10 bg-surface p-5 sm:p-6">
+            <section className="mt-6 rounded-lg border border-ink/10 bg-surface p-5 sm:p-6">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="min-w-0">
                   <div className="text-sm font-medium text-ink">Default canvas visibility</div>
@@ -253,7 +253,7 @@ export default function UserSettings({ onHome, onShowCanvases, onShowAbout, onOp
             {/* Default public access — for canvases created public, whether a bare
                 code-holder can edit or only view. Owners and people you share with
                 keep their own access regardless. */}
-            <section className="mt-6 rounded-2xl border border-ink/10 bg-surface p-5 sm:p-6">
+            <section className="mt-6 rounded-lg border border-ink/10 bg-surface p-5 sm:p-6">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="min-w-0">
                   <div className="text-sm font-medium text-ink">Default public access</div>
@@ -280,7 +280,7 @@ export default function UserSettings({ onHome, onShowCanvases, onShowAbout, onOp
 
             {/* Placeholder home for the remaining account setting — a follow-up
                 task. Kept visible (disabled) so the shell reads as intentional. */}
-            <section className="mt-6 overflow-hidden rounded-2xl border border-ink/10 bg-surface">
+            <section className="mt-6 overflow-hidden rounded-lg border border-ink/10 bg-surface">
               <SettingRow
                 icon={Bell}
                 title="Notifications"
@@ -289,7 +289,7 @@ export default function UserSettings({ onHome, onShowCanvases, onShowAbout, onOp
             </section>
 
             {/* Danger zone — account deletion, wired up in a follow-up. */}
-            <section className="mt-6 overflow-hidden rounded-2xl border border-red-200 bg-surface">
+            <section className="mt-6 overflow-hidden rounded-lg border border-rose-500/25 bg-surface">
               <SettingRow
                 icon={Trash2}
                 title="Delete account"
@@ -321,17 +321,17 @@ function SettingRow({
   return (
     <div className="flex items-center gap-3.5 border-b border-ink/[0.07] px-5 py-4 last:border-b-0 sm:px-6">
       <div
-        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${
-          danger ? "bg-red-50 text-red-500" : "bg-ink/[0.04] text-ink/45"
+        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-md ${
+          danger ? "bg-rose-500/10 text-rose-600 dark:text-rose-400" : "bg-ink/[0.04] text-ink/45"
         }`}
       >
         <Icon className="h-4 w-4" />
       </div>
       <div className="min-w-0">
-        <div className={`text-sm font-medium ${danger ? "text-red-600" : "text-ink"}`}>{title}</div>
+        <div className={`text-sm font-medium ${danger ? "text-rose-600 dark:text-rose-400" : "text-ink"}`}>{title}</div>
         <div className="text-xs text-ink/50">{desc}</div>
       </div>
-      <span className="ml-auto shrink-0 rounded-full border border-ink/10 bg-ink/[0.03] px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.1em] text-ink/40">
+      <span className="ml-auto shrink-0 rounded-full border border-ink/10 bg-ink/[0.03] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-ink/40">
         Soon
       </span>
     </div>
@@ -355,7 +355,7 @@ function VisibilitySegmented({
     { key: "public", label: "Public", icon: Globe },
   ];
   return (
-    <div className="inline-flex shrink-0 rounded-lg border border-ink/10 bg-ink/[0.03] p-0.5">
+    <div className="inline-flex shrink-0 rounded-md border border-ink/10 bg-ink/[0.03] p-0.5">
       {opts.map(({ key, label, icon: Icon }) => {
         const active = value === key;
         return (
@@ -365,8 +365,8 @@ function VisibilitySegmented({
             disabled={disabled}
             aria-pressed={active}
             onClick={() => onChange(key)}
-            className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
-              active ? "bg-paper text-ink shadow-sm" : "text-ink/50 hover:text-ink"
+            className={`inline-flex items-center gap-1.5 rounded-[5px] px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-60 ${
+              active ? "bg-accent text-white" : "text-ink/50 hover:text-ink"
             }`}
           >
             <Icon className="h-3.5 w-3.5" />
@@ -394,7 +394,7 @@ function PublicRoleSegmented({
     { key: "write", label: "Can edit", icon: Pencil },
   ];
   return (
-    <div className="inline-flex shrink-0 rounded-lg border border-ink/10 bg-ink/[0.03] p-0.5">
+    <div className="inline-flex shrink-0 rounded-md border border-ink/10 bg-ink/[0.03] p-0.5">
       {opts.map(({ key, label, icon: Icon }) => {
         const active = value === key;
         return (
@@ -404,8 +404,8 @@ function PublicRoleSegmented({
             disabled={disabled}
             aria-pressed={active}
             onClick={() => onChange(key)}
-            className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
-              active ? "bg-paper text-ink shadow-sm" : "text-ink/50 hover:text-ink"
+            className={`inline-flex items-center gap-1.5 rounded-[5px] px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-60 ${
+              active ? "bg-accent text-white" : "text-ink/50 hover:text-ink"
             }`}
           >
             <Icon className="h-3.5 w-3.5" />

@@ -25,11 +25,11 @@ export default function AccessDenied({
   const notFound = status.kind === "notFound";
 
   return (
-    <div className="flex h-screen flex-col bg-paper font-brand text-ink">
+    <div className="flex h-screen flex-col bg-paper text-ink">
       <header className="flex items-center gap-2 border-b border-ink/10 px-4 py-3">
         <button onClick={onHome} className="group flex items-center gap-1.5" title="Back to home">
           <TandemLogo size={28} animate={false} />
-          <span className="hidden font-semibold tracking-tight transition-colors group-hover:text-sky-600 sm:inline">
+          <span className="hidden font-semibold tracking-tight transition-colors group-hover:text-accent sm:inline">
             Tandem
           </span>
         </button>
@@ -39,11 +39,11 @@ export default function AccessDenied({
       </header>
 
       <main className="flex flex-1 items-center justify-center px-6">
-        <div className="w-full max-w-md rounded-2xl border-[1.5px] border-ink/15 bg-surface px-8 py-10 text-center shadow-[8px_8px_0_rgba(28,25,23,0.06)]">
+        <div className="w-full max-w-md rounded-lg border border-ink/10 bg-surface px-8 py-10 text-center shadow-sm">
           <div className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-ink/[0.06] text-ink/60">
             <Lock className="h-5 w-5" aria-hidden="true" />
           </div>
-          <h1 className="mt-5 font-display text-xl font-medium tracking-tight">
+          <h1 className="mt-5 text-xl font-semibold tracking-tight">
             {notFound ? "Canvas not found" : "You don’t have access"}
           </h1>
           <p className="mx-auto mt-2 max-w-xs text-sm leading-relaxed text-ink/60">{status.message}</p>
@@ -65,7 +65,7 @@ export default function AccessDenied({
           <div className="mt-6 flex items-center justify-center gap-2">
             <button
               onClick={onHome}
-              className="btn-press rounded-md border-[1.5px] border-ink bg-surface px-4 py-2 text-sm font-medium text-ink shadow-[3px_3px_0_rgba(28,25,23,0.15)]"
+              className="rounded-md border border-ink/15 bg-surface px-4 py-2 text-sm font-medium text-ink transition-colors hover:bg-ink/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
             >
               Back to home
             </button>

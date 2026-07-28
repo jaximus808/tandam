@@ -42,7 +42,7 @@ const REPO_URL = "https://github.com/jaximus808/tandam";
 // him. Kept punchy on purpose: a paragraph, then prominent links out.
 export default function About({ onBack, onOpenMCP, onShowCanvases, onShowSettings, onOpenCanvas }: Props) {
   return (
-    <div className="min-h-screen bg-paper font-brand text-ink antialiased">
+    <div className="min-h-screen bg-paper text-ink antialiased">
       <LandingNav
         onHome={onBack}
         onJoin={onOpenCanvas}
@@ -53,10 +53,10 @@ export default function About({ onBack, onOpenMCP, onShowCanvases, onShowSetting
       />
 
       <main className="mx-auto max-w-3xl px-6 py-16 sm:py-24">
-        <span className="font-code text-[11px] uppercase tracking-[0.2em] text-agent">
+        <span className="text-xs font-medium uppercase tracking-wide text-ink/50">
           The person behind it
         </span>
-        <h1 className="mt-3 font-display text-3xl font-medium tracking-tight sm:text-4xl">
+        <h1 className="mt-3 text-3xl font-semibold tracking-tight sm:text-[2rem]">
           Hi, I’m Jaxon.
         </h1>
 
@@ -76,10 +76,10 @@ export default function About({ onBack, onOpenMCP, onShowCanvases, onShowSetting
         {/* Source + design. Tandem is open — the repo is the honest version of
             this story, so link straight to it. */}
         <div className="mt-12 border-t border-ink/10 pt-8">
-          <span className="font-code text-[11px] uppercase tracking-[0.2em] text-agent">
+          <span className="text-xs font-medium uppercase tracking-wide text-ink/50">
             Under the hood
           </span>
-          <h2 className="mt-3 font-display text-xl font-medium tracking-tight sm:text-2xl">
+          <h2 className="mt-3 text-xl font-semibold tracking-tight sm:text-2xl">
             Tandem is open source.
           </h2>
           <div className="mt-4 space-y-4 text-[15px] leading-relaxed text-ink/70 sm:text-base">
@@ -129,10 +129,10 @@ function LinkButton({
       target="_blank"
       rel="noopener noreferrer"
       className={[
-        "group inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all",
+        "group inline-flex items-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
         primary
-          ? "btn-press bg-ink text-paper shadow-[2px_2px_0_#0D6E66]"
-          : "border border-ink/15 text-ink/75 hover:border-ink/40 hover:bg-surface",
+          ? "bg-accent text-white hover:bg-accent/90"
+          : "border border-ink/15 bg-surface text-ink/75 hover:bg-ink/5",
       ].join(" ")}
     >
       <Icon className="h-4 w-4" />

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { Bell, BellOff, Check } from "lucide-react";
-import { modeTheme } from "../lib/modeTheme";
 import { actionPhrase, shortAgo } from "../lib/agentPhrase";
 import type { Notification } from "../lib/useAgentNotifications";
 
@@ -49,7 +48,7 @@ export default function NotificationBell({ log, unread, muted, toggleMute, markR
       <button
         onClick={toggleOpen}
         className={[
-          "relative grid h-8 w-8 place-items-center rounded-lg transition-colors",
+          "relative grid h-8 w-8 place-items-center rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
           open ? "bg-ink/[0.06] text-ink" : "text-ink/55 hover:bg-ink/5 hover:text-ink/80",
         ].join(" ")}
         title={muted ? "Agent alerts — popups muted" : "Agent activity"}
@@ -72,17 +71,17 @@ export default function NotificationBell({ log, unread, muted, toggleMute, markR
           <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
           <div
             role="menu"
-            className="tandem-fade-in absolute left-0 z-40 mt-1.5 w-[18rem] max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-xl border border-ink/10 bg-surface shadow-[4px_4px_0_rgba(28,25,23,0.06)]"
+            className="tandem-fade-in absolute left-0 z-40 mt-1.5 w-[18rem] max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-lg border border-ink/10 bg-surface shadow-lg"
           >
             {/* Header — title + the popup mute toggle the bell controls. */}
             <div className="flex items-center justify-between gap-2 border-b border-ink/[0.07] px-3 py-2">
-              <span className="font-code text-[10.5px] uppercase tracking-[0.16em] text-ink/45">
+              <span className="text-xs font-medium uppercase tracking-wide text-ink/50">
                 Agent activity
               </span>
               <button
                 onClick={toggleMute}
                 className={[
-                  "inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-code text-[10px] font-medium transition-colors",
+                  "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors",
                   muted
                     ? "bg-ink/[0.05] text-ink/45 hover:text-ink/70"
                     : "bg-agent/10 text-agent hover:bg-agent/15",
@@ -98,40 +97,38 @@ export default function NotificationBell({ log, unread, muted, toggleMute, markR
             {log.length === 0 ? (
               <div className="px-3 py-6 text-center">
                 <p className="text-[13px] text-ink/45">No agent activity yet.</p>
-                <p className="mt-1 font-code text-[10px] uppercase tracking-[0.13em] text-ink/30">
-                  changes appear here live
+                <p className="mt-1 text-[10px] font-medium uppercase tracking-wide text-ink/30">
+                  Changes appear here live
                 </p>
               </div>
             ) : (
               <ul className="max-h-[18rem] overflow-y-auto py-1">
-                {log.map((n) => {
-                  const accent = modeTheme(n.mode).solid;
-                  return (
-                    <li key={n.id} className="flex items-center gap-2.5 px-3 py-1.5">
-                      <span
-                        className="grid h-6 w-6 shrink-0 place-items-center rounded-[5px]"
-                        style={{ background: n.isClaude ? "#C75B39" : "#1C1917" }}
-                      >
-                        <Sparkle />
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-[12.5px] leading-tight text-ink">
-                        <span className="font-semibold">{n.agentName}</span>{" "}
-                        <span className="text-ink/60">{actionPhrase(n.op, n.kind, n.count)}</span>
-                      </span>
-                      <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: accent }} />
-                      <span className="shrink-0 font-code text-[10px] tabular-nums text-ink/35">
-                        {shortAgo(n.at, now)}
-                      </span>
-                    </li>
-                  );
-                })}
+                {log.map((n) => (
+                  <li key={n.id} className="flex items-center gap-2.5 px-3 py-1.5">
+                    <span
+                      className={`grid h-6 w-6 shrink-0 place-items-center rounded-[5px] ${
+                        n.isClaude ? "bg-agent" : "bg-ink"
+                      }`}
+                    >
+                      <Sparkle />
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-[12.5px] leading-tight text-ink">
+                      <span className="font-semibold">{n.agentName}</span>{" "}
+                      <span className="text-ink/60">{actionPhrase(n.op, n.kind, n.count)}</span>
+                    </span>
+                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-agent" />
+                    <span className="shrink-0 font-code text-[10px] tabular-nums text-ink/35">
+                      {shortAgo(n.at, now)}
+                    </span>
+                  </li>
+                ))}
               </ul>
             )}
 
             {log.length > 0 && (
               <button
                 onClick={clearLog}
-                className="flex w-full items-center justify-center gap-1.5 border-t border-ink/[0.07] py-2 font-code text-[10.5px] uppercase tracking-[0.13em] text-ink/40 transition-colors hover:bg-ink/[0.03] hover:text-ink/70"
+                className="flex w-full items-center justify-center gap-1.5 border-t border-ink/[0.07] py-2 text-[11px] font-medium uppercase tracking-wide text-ink/40 transition-colors hover:bg-ink/[0.03] hover:text-ink/70"
               >
                 <Check className="h-3 w-3" />
                 Clear

@@ -3,8 +3,7 @@ import { ArrowUpRight, Clock, Copy, Layers, Plus } from "lucide-react";
 import type { DocumentType } from "../types";
 import { CAPABILITIES, STARTER_PROMPTS, type Capability } from "../lib/starterPrompts";
 import { listRecent } from "../lib/recentCanvases";
-import { CREATABLE_DOC_TYPES, DOC_TYPE_LABEL, DOC_TYPE_TO_MODE } from "../lib/docTypes";
-import { modeTheme } from "../lib/modeTheme";
+import { CREATABLE_DOC_TYPES, DOC_TYPE_LABEL } from "../lib/docTypes";
 
 interface Props {
   canvasName: string;
@@ -37,8 +36,7 @@ function relativeTime(ts: number): string {
 /* The zero-open-tabs start page (roadmap item 10) — a VS Code-style welcome for
    an empty worksurface. Leads with what you can ask your agent to build (each
    capability doubles as a copyable prompt) rather than one-click templates; a
-   compact start strip and recently opened canvases sit alongside. Still the blank
-   surface: dot grid + a selection frame around the canvas name. */
+   compact start strip and recently opened canvases sit alongside. */
 export default function WelcomeMode({
   canvasName,
   currentCode,
@@ -61,51 +59,26 @@ export default function WelcomeMode({
 
   return (
     <div className="tandem-scroll relative flex-1 overflow-y-auto bg-paper">
-      <div
-        aria-hidden="true"
-        className="surface-grid pointer-events-none absolute inset-0"
-        style={{
-          maskImage: "radial-gradient(110% 80% at 50% 0%, black 50%, transparent 100%)",
-          WebkitMaskImage: "radial-gradient(110% 80% at 50% 0%, black 50%, transparent 100%)",
-        }}
-      />
       <div className="relative mx-auto max-w-5xl space-y-12 px-6 py-14">
         <div className="tandem-mode-enter text-center">
           <div>
-            <span className="inline-flex items-center gap-2 rounded-md border border-ink/15 bg-surface px-3 py-1 font-code text-[10.5px] text-ink/55">
-              <span className="relative flex h-1.5 w-1.5">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand opacity-70" />
-                <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-brand" />
-              </span>
-              blank surface · ready for you and your agents
+            <span className="inline-flex items-center gap-2 rounded-md border border-ink/15 bg-surface px-3 py-1 text-[11px] font-medium text-ink/55">
+              <span className="inline-flex h-1.5 w-1.5 rounded-full bg-accent" />
+              Blank surface · ready for you and your agents
             </span>
           </div>
 
-          <div className="mt-9 inline-block">
-            <div className="relative text-ink">
-              <span aria-hidden="true" className="pointer-events-none absolute -inset-x-4 -inset-y-3 border-[1.5px] border-current opacity-25" />
-              <span aria-hidden="true" className="sel-handle" style={{ top: -15, left: -19 }} />
-              <span aria-hidden="true" className="sel-handle" style={{ top: -15, right: -19 }} />
-              <span aria-hidden="true" className="sel-handle" style={{ bottom: -15, left: -19 }} />
-              <span aria-hidden="true" className="sel-handle" style={{ bottom: -15, right: -19 }} />
-              <span className="pointer-events-none absolute -left-4 -top-3 -translate-y-[calc(100%+5px)]">
-                <span className="inline-flex items-center rounded-[3px] bg-ink px-1.5 py-0.5 font-code text-[10px] font-medium leading-none text-paper">
-                  you
-                </span>
-              </span>
-              <h1 className="font-display text-4xl font-medium tracking-tight">
-                {canvasName ? canvasName : "Welcome to Tandem"}
-              </h1>
-            </div>
-          </div>
+          <h1 className="mt-9 text-[2rem] font-semibold leading-[1.2] tracking-tight text-ink">
+            {canvasName ? canvasName : "Welcome to Tandem"}
+          </h1>
 
           <p className="mt-7 text-[15px] leading-relaxed text-ink/55">
             Just start prompting your agent — the canvas takes shape as you go. Here's a taste
             of what it can build.
           </p>
-          <p className="mt-3 font-code text-[11px] text-ink/40">
-            no agent connected yet?{" "}
-            <button onClick={onOpenConnect} className="font-medium text-brand hover:underline">
+          <p className="mt-3 text-[12px] text-ink/50">
+            No agent connected yet?{" "}
+            <button onClick={onOpenConnect} className="font-medium text-accent hover:underline">
               open the connect dialog
             </button>{" "}
             ·{" "}
@@ -113,7 +86,7 @@ export default function WelcomeMode({
               href="/mcp"
               target="_blank"
               rel="noopener noreferrer"
-              className="font-medium text-brand hover:underline"
+              className="font-medium text-accent hover:underline"
             >
               MCP setup guide →
             </a>
@@ -127,40 +100,36 @@ export default function WelcomeMode({
           {docCount > 0 && (
             <button
               onClick={onOpenAll}
-              className="group inline-flex items-center gap-3.5 rounded-2xl bg-[#14A090] px-8 py-5 text-white transition-colors hover:bg-brand"
+              className="group inline-flex items-center gap-3 rounded-md bg-accent px-6 py-3.5 text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2"
             >
-              <Layers size={24} className="opacity-90" />
-              <span className="text-xl font-semibold tracking-tight">Open all tabs</span>
-              <span className="rounded-full bg-white/15 px-2.5 py-0.5 font-code text-[11px] font-medium text-white/85">
+              <Layers size={20} className="opacity-90" />
+              <span className="text-base font-semibold tracking-tight">Open all tabs</span>
+              <span className="rounded-full bg-white/15 px-2.5 py-0.5 text-[11px] font-medium text-white/85">
                 {docCount} doc{docCount === 1 ? "" : "s"}
               </span>
             </button>
           )}
 
           <div className="flex flex-wrap items-center justify-center gap-2">
-            <span className="mr-1 font-code text-[11px] text-ink/35">
+            <span className="mr-1 text-[11px] text-ink/40">
               {docCount > 0 ? "or start a blank tab:" : "start a blank tab:"}
             </span>
-            {CREATABLE_DOC_TYPES.map((type) => {
-              const t = modeTheme(DOC_TYPE_TO_MODE[type]);
-              return (
-                <button
-                  key={type}
-                  onClick={() => onCreateDoc(type)}
-                  className="group inline-flex items-center gap-1.5 rounded-md border border-ink/15 bg-surface px-2.5 py-1.5 text-[13px] font-medium text-ink/75 transition-colors hover:border-ink/50 hover:text-ink"
-                >
-                  <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: t.solid }} />
-                  {DOC_TYPE_LABEL[type]}
-                  <Plus size={12} className="text-ink/30 transition-colors group-hover:text-ink/60" />
-                </button>
-              );
-            })}
+            {CREATABLE_DOC_TYPES.map((type) => (
+              <button
+                key={type}
+                onClick={() => onCreateDoc(type)}
+                className="group inline-flex items-center gap-1.5 rounded-md border border-ink/15 bg-surface px-2.5 py-1.5 text-[13px] font-medium text-ink/75 transition-colors hover:bg-ink/5 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              >
+                {DOC_TYPE_LABEL[type]}
+                <Plus size={12} className="text-ink/30 transition-colors group-hover:text-ink/60" />
+              </button>
+            ))}
           </div>
         </div>
 
         {/* What the agent can build — each card is a copyable prompt to try it. */}
         <section>
-          <h2 className="mb-3 font-code text-[11px] font-medium uppercase tracking-[0.22em] text-ink/40">
+          <h2 className="mb-3 text-xs font-medium uppercase tracking-wide text-ink/50">
             Things to try
           </h2>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -178,10 +147,10 @@ export default function WelcomeMode({
         {/* A few cross-cutting prompts + recently opened canvases side by side. */}
         <div className="grid gap-x-10 gap-y-10 lg:grid-cols-5">
           <section className="lg:col-span-3">
-            <h2 className="mb-3 font-code text-[11px] font-medium uppercase tracking-[0.22em] text-ink/40">
+            <h2 className="mb-3 text-xs font-medium uppercase tracking-wide text-ink/50">
               More prompts to start
             </h2>
-            <ul className="overflow-hidden rounded-md border border-ink/15 bg-surface">
+            <ul className="overflow-hidden rounded-lg border border-ink/10 bg-surface">
               {STARTER_PROMPTS.map((p, idx) => (
                 <li
                   key={idx}
@@ -190,12 +159,12 @@ export default function WelcomeMode({
                   }`}
                 >
                   <span className="mr-3 text-sm text-ink/75">
-                    <span aria-hidden className="mr-2 select-none font-code text-brand">›</span>
+                    <span aria-hidden className="mr-2 select-none font-code text-accent">›</span>
                     {p}
                   </span>
                   <button
                     onClick={() => copyPrompt(p, `prompt:${idx}`)}
-                    className="shrink-0 rounded-[4px] border border-ink/10 px-2 py-1 font-code text-[10px] font-medium text-ink/50 transition-colors hover:border-brand/50 hover:text-brand"
+                    className="shrink-0 rounded-[4px] border border-ink/10 px-2 py-1 text-[10px] font-medium text-ink/50 transition-colors hover:border-accent/50 hover:text-accent"
                   >
                     {copied === `prompt:${idx}` ? "copied ✓" : "copy"}
                   </button>
@@ -205,18 +174,18 @@ export default function WelcomeMode({
           </section>
 
           <section className="lg:col-span-2">
-            <h2 className="mb-3 font-code text-[11px] font-medium uppercase tracking-[0.22em] text-ink/40">
+            <h2 className="mb-3 text-xs font-medium uppercase tracking-wide text-ink/50">
               Recent canvases
             </h2>
             {recents.length === 0 ? (
-              <div className="rounded-md border border-dashed border-ink/15 bg-surface/50 px-4 py-6 text-center">
+              <div className="rounded-lg border border-dashed border-ink/15 bg-surface/50 px-4 py-6 text-center">
                 <Clock size={16} className="mx-auto mb-2 text-ink/25" />
                 <p className="text-[12px] leading-relaxed text-ink/45">
                   Canvases you open show up here for quick re-entry.
                 </p>
               </div>
             ) : (
-              <ul className="overflow-hidden rounded-md border border-ink/15 bg-surface">
+              <ul className="overflow-hidden rounded-lg border border-ink/10 bg-surface">
                 {recents.map((c, idx) => (
                   <li key={c.code} className={idx > 0 ? "border-t border-ink/10" : ""}>
                     <button
@@ -224,18 +193,18 @@ export default function WelcomeMode({
                       className="group flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-paper"
                     >
                       <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-medium text-ink group-hover:text-brand">
+                        <div className="truncate text-sm font-medium text-ink group-hover:text-accent">
                           {c.name || "Untitled canvas"}
                         </div>
                         <div className="mt-0.5 flex items-center gap-2 font-code text-[10px] text-ink/40">
-                          <span className="tracking-[0.14em]">{c.code}</span>
+                          <span>{c.code}</span>
                           <span aria-hidden>·</span>
                           <span>{relativeTime(c.lastOpenedAt)}</span>
                         </div>
                       </div>
                       <ArrowUpRight
                         size={14}
-                        className="shrink-0 text-ink/25 transition-colors group-hover:text-brand"
+                        className="shrink-0 text-ink/25 transition-colors group-hover:text-accent"
                       />
                     </button>
                   </li>
@@ -245,8 +214,8 @@ export default function WelcomeMode({
           </section>
         </div>
 
-        <p className="pt-2 text-center font-code text-[10.5px] text-ink/35">
-          tabs open as your agent builds · the “+” in the strip above starts a new document
+        <p className="pt-2 text-center text-[11px] text-ink/40">
+          Tabs open as your agent builds · the “+” in the strip above starts a new document
         </p>
       </div>
     </div>
@@ -266,22 +235,17 @@ function CapabilityCard({
     <button
       onClick={onCopy}
       title="Copy this prompt"
-      className="group relative flex flex-col rounded-md border border-ink/15 bg-surface p-4 text-left transition-all hover:-translate-y-0.5 hover:border-ink/70 hover:shadow-[4px_4px_0_rgba(28,25,23,0.12)]"
+      className="group relative flex flex-col rounded-lg border border-ink/10 bg-surface p-4 text-left transition-all hover:border-ink/20 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
     >
-      <div className="flex items-center gap-2.5">
-        <div className="inline-grid h-9 w-9 place-items-center rounded-[5px] border border-ink/10 bg-paper text-xl" aria-hidden>
-          {cap.emoji}
-        </div>
-        <div className="font-medium text-ink">{cap.title}</div>
-      </div>
+      <div className="font-medium text-ink">{cap.title}</div>
       <div className="mt-2 text-xs leading-relaxed text-ink/55">{cap.blurb}</div>
-      <div className="mt-3 flex items-start gap-2 rounded-[5px] border border-ink/10 bg-paper/60 px-2.5 py-2">
-        <span aria-hidden className="mt-px select-none font-code text-[13px] leading-none text-brand">›</span>
+      <div className="mt-3 flex items-start gap-2 rounded-md border border-ink/10 bg-paper/60 px-2.5 py-2">
+        <span aria-hidden className="mt-px select-none font-code text-[13px] leading-none text-accent">›</span>
         <span className="text-[12px] leading-relaxed text-ink/70">{cap.prompt}</span>
       </div>
       <span
-        className={`absolute right-3 top-3 inline-flex items-center gap-1 font-code text-[10px] font-medium transition-colors ${
-          copied ? "text-brand" : "text-ink/30 group-hover:text-ink/55"
+        className={`absolute right-3 top-3 inline-flex items-center gap-1 text-[10px] font-medium transition-colors ${
+          copied ? "text-accent" : "text-ink/30 group-hover:text-ink/55"
         }`}
       >
         {copied ? "copied ✓" : <Copy size={12} />}

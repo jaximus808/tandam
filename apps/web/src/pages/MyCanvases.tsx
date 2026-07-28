@@ -15,7 +15,6 @@ import {
 import type { CanvasMeta, CanvasMode } from "../types";
 import { listMyCanvases, listSharedWithMe, deleteCanvas } from "../lib/api";
 import { fetchMe, getCachedUser, type User } from "../lib/auth";
-import { modeTheme } from "../lib/modeTheme";
 import TandemLogo from "../components/TandemLogo";
 import AccountMenu from "../components/AccountMenu";
 import CanvasLauncher from "../components/CanvasLauncher";
@@ -192,22 +191,22 @@ export default function MyCanvases({ onOpenCanvas, onHome, onOpenMCP, onShowSett
   const firstName = user?.displayName ? user.displayName.split(" ")[0] : null;
 
   return (
-    <div className="flex min-h-screen flex-col bg-paper font-brand text-ink">
+    <div className="flex min-h-screen flex-col bg-paper text-ink">
       {/* Top chrome — breadcrumb, inbox, account, primary "New canvas" CTA. */}
-      <header className="sticky top-0 z-40 flex items-center gap-2 border-b border-ink/10 bg-paper/85 px-4 py-3 backdrop-blur sm:px-6">
+      <header className="sticky top-0 z-40 flex items-center gap-2 border-b border-ink/10 bg-paper px-4 py-3 sm:px-6">
         <button onClick={onHome} className="group flex items-center gap-1.5" title="Back to home">
           <TandemLogo size={28} animate={false} />
-          <span className="hidden font-semibold tracking-tight transition-colors group-hover:text-sky-600 sm:inline">
+          <span className="hidden font-semibold tracking-tight transition-colors group-hover:text-accent sm:inline">
             Tandem
           </span>
         </button>
         <span className="text-ink/20">/</span>
-        <span className="font-display text-[15px] font-medium">Dashboard</span>
+        <span className="text-[15px] font-medium">Dashboard</span>
         <div className="ml-auto flex items-center gap-2">
           {load.status === "ready" && (
             <button
               onClick={() => setLauncherOpen(true)}
-              className="btn-press inline-flex items-center gap-1.5 rounded-md bg-ink px-3.5 py-1.5 text-sm font-medium text-paper shadow-[2px_2px_0_#0D6E66]"
+              className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3.5 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
             >
               <Plus className="h-4 w-4" />
               <span className="hidden sm:inline">New canvas</span>
@@ -223,35 +222,37 @@ export default function MyCanvases({ onOpenCanvas, onHome, onOpenMCP, onShowSett
             {Array.from({ length: 6 }).map((_, i) => (
               <div
                 key={i}
-                className="h-28 animate-pulse rounded-2xl border border-ink/10 bg-surface/60"
+                className="h-28 animate-pulse rounded-lg border border-ink/10 bg-surface/60"
               />
             ))}
           </div>
         )}
 
         {load.status === "signedOut" && (
-          <div className="mx-auto max-w-md rounded-2xl border border-ink/10 bg-surface px-8 py-10 text-center">
-            <p className="font-display text-lg font-medium">Sign in to see your canvases</p>
+          <div className="mx-auto max-w-md rounded-lg border border-ink/10 bg-surface px-8 py-10 text-center">
+            <p className="text-lg font-semibold tracking-tight">Sign in to see your canvases</p>
             <p className="mt-1.5 text-sm text-ink/55">
               Canvases you create while signed in are saved to your account and show up here on every
               device.
             </p>
             <button
               onClick={onHome}
-              className="mt-5 rounded-lg bg-ink px-4 py-2 text-sm font-medium text-paper hover:opacity-90"
+              className="mt-5 rounded-md bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
             >
               Back to home
             </button>
           </div>
         )}
 
-        {load.status === "error" && <p className="text-sm text-red-600">{load.message}</p>}
+        {load.status === "error" && (
+          <p className="text-sm text-rose-600 dark:text-rose-400">{load.message}</p>
+        )}
 
         {load.status === "ready" && (
           <>
             {/* Title + count */}
             <div className="mb-6">
-              <h1 className="font-display text-2xl font-medium tracking-tight">
+              <h1 className="text-2xl font-semibold tracking-tight">
                 {firstName ? `${firstName}'s canvases` : "Your canvases"}
               </h1>
               <p className="mt-1 text-sm text-ink/55">
@@ -276,15 +277,15 @@ export default function MyCanvases({ onOpenCanvas, onHome, onOpenMCP, onShowSett
                 />
 
                 {visible.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-ink/20 bg-surface/60 px-8 py-12 text-center">
-                    <p className="font-display text-base font-medium">No canvases match</p>
+                  <div className="rounded-lg border border-dashed border-ink/20 bg-surface/60 px-8 py-12 text-center">
+                    <p className="text-base font-semibold tracking-tight">No canvases match</p>
                     <p className="mt-1 text-sm text-ink/55">Try a different search or filter.</p>
                     <button
                       onClick={() => {
                         setQuery("");
                         setModeFilter("all");
                       }}
-                      className="mt-4 rounded-lg border border-ink/20 px-3 py-1.5 text-sm font-medium text-ink/70 hover:bg-surface"
+                      className="mt-4 rounded-md border border-ink/15 bg-surface px-3 py-1.5 text-sm font-medium text-ink/70 hover:bg-ink/5"
                     >
                       Clear filters
                     </button>
@@ -304,7 +305,7 @@ export default function MyCanvases({ onOpenCanvas, onHome, onOpenMCP, onShowSett
             {/* Shared with you — canvases other owners granted you access to. */}
             {load.shared.length > 0 && (
               <section className="mt-12">
-                <h2 className="font-display text-lg font-medium tracking-tight">Shared with you</h2>
+                <h2 className="text-lg font-semibold tracking-tight">Shared with you</h2>
                 <p className="mt-1 text-sm text-ink/55">
                   {load.shared.length} {load.shared.length === 1 ? "canvas" : "canvases"} others gave
                   you access to
@@ -392,7 +393,7 @@ function CanvasMenu({ onDelete, label }: { onDelete: () => void; label: string }
                 setOpen(false);
                 onDelete();
               }}
-              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-medium text-red-600 transition-colors hover:bg-red-50"
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-medium text-rose-600 transition-colors hover:bg-rose-500/10 dark:text-rose-400"
             >
               <Trash2 className="h-4 w-4" />
               Delete
@@ -436,7 +437,7 @@ function Toolbar({
           value={query}
           onChange={(e) => onQuery(e.target.value)}
           placeholder="Search by name or code…"
-          className="w-full rounded-lg border border-ink/15 bg-surface py-2 pl-9 pr-8 text-sm placeholder:text-ink/35 focus:border-ink/40 focus:outline-none focus:ring-1 focus:ring-ink/20"
+          className="w-full rounded-md border border-ink/15 bg-surface py-2 pl-9 pr-8 text-sm placeholder:text-ink/35 focus:border-accent/60 focus:outline-none focus:ring-2 focus:ring-accent/20"
         />
         {query && (
           <button
@@ -466,13 +467,13 @@ function Toolbar({
           options={SORTS.map((s) => ({ value: s.key, label: s.label }))}
         />
         {/* view toggle */}
-        <div className="flex shrink-0 overflow-hidden rounded-lg border border-ink/15 bg-surface">
+        <div className="flex shrink-0 overflow-hidden rounded-md border border-ink/15 bg-surface">
           <button
             onClick={() => onView("grid")}
             aria-label="Grid view"
             aria-pressed={view === "grid"}
-            className={`flex h-[38px] w-9 items-center justify-center transition-colors ${
-              view === "grid" ? "bg-ink text-paper" : "text-ink/45 hover:bg-ink/5"
+            className={`flex h-[38px] w-9 items-center justify-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${
+              view === "grid" ? "bg-accent text-white" : "text-ink/45 hover:bg-ink/5"
             }`}
           >
             <LayoutGrid className="h-4 w-4" />
@@ -481,8 +482,8 @@ function Toolbar({
             onClick={() => onView("list")}
             aria-label="List view"
             aria-pressed={view === "list"}
-            className={`flex h-[38px] w-9 items-center justify-center border-l border-ink/15 transition-colors ${
-              view === "list" ? "bg-ink text-paper" : "text-ink/45 hover:bg-ink/5"
+            className={`flex h-[38px] w-9 items-center justify-center border-l border-ink/15 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${
+              view === "list" ? "bg-accent text-white" : "text-ink/45 hover:bg-ink/5"
             }`}
           >
             <ListIcon className="h-4 w-4" />
@@ -508,7 +509,7 @@ function Select({
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="h-[38px] cursor-pointer appearance-none rounded-lg border border-ink/15 bg-surface py-2 pl-3 pr-8 text-sm font-medium text-ink/70 focus:border-ink/40 focus:outline-none focus:ring-1 focus:ring-ink/20"
+        className="h-[38px] cursor-pointer appearance-none rounded-md border border-ink/15 bg-surface py-2 pl-3 pr-8 text-sm font-medium text-ink/70 focus:border-accent/60 focus:outline-none focus:ring-2 focus:ring-accent/20"
       >
         {options.map((o) => (
           <option key={o.value} value={o.value}>
@@ -525,15 +526,15 @@ function Select({
 
 function EmptyState({ onCreate }: { onCreate: () => void }) {
   return (
-    <div className="rounded-2xl border border-dashed border-ink/20 bg-surface/60 px-8 py-14 text-center">
-      <p className="font-display text-lg font-medium">No canvases yet</p>
+    <div className="rounded-lg border border-dashed border-ink/20 bg-surface/60 px-8 py-14 text-center">
+      <p className="text-lg font-semibold tracking-tight">No canvases yet</p>
       <p className="mx-auto mt-1.5 max-w-md text-sm text-ink/55">
         Create a canvas while signed in and it’ll live here. Already have an anonymous canvas? Open it
         and hit <span className="font-medium">Copy to my account</span>.
       </p>
       <button
         onClick={onCreate}
-        className="btn-press mt-5 inline-flex items-center gap-1.5 rounded-lg bg-ink px-4 py-2 text-sm font-medium text-paper shadow-[2px_2px_0_#0D6E66]"
+        className="mt-5 inline-flex items-center gap-1.5 rounded-md bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       >
         <Plus className="h-4 w-4" />
         Create a canvas
@@ -559,26 +560,22 @@ function VisibilityBadge({ c }: { c: CanvasMeta }) {
 
 /* ── mode chips ─────────────────────────────────────────────────────────────── */
 
-// The modes a canvas has enabled, each in its own accent. Caps at `max` chips and
-// rolls the rest into a "+N" so a canvas using every mode can't blow out the card;
-// the full list stays available on hover.
+// The modes a canvas has enabled, as quiet neutral chips (Design v2: no per-mode
+// rainbow accents in chrome). Caps at `max` chips and rolls the rest into a "+N"
+// so a canvas using every mode can't blow out the card.
 function ModeBadges({ modes, max = 2 }: { modes: CanvasMode[]; max?: number }) {
   const shown = modes.slice(0, max);
   const rest = modes.length - shown.length;
   return (
     <span className="flex items-center gap-1">
-      {shown.map((m) => {
-        const t = modeTheme(m);
-        return (
-          <span
-            key={m}
-            className="rounded-full px-2 py-0.5 text-[11px] font-medium capitalize"
-            style={{ backgroundColor: t.soft, color: t.solid }}
-          >
-            {m}
-          </span>
-        );
-      })}
+      {shown.map((m) => (
+        <span
+          key={m}
+          className="rounded-full bg-ink/5 px-2 py-0.5 text-[11px] font-medium capitalize text-ink/60"
+        >
+          {m}
+        </span>
+      ))}
       {rest > 0 && (
         <span
           className="rounded-full border border-ink/15 bg-ink/10 px-1.5 py-0.5 text-[10px] font-medium text-ink/70"
@@ -612,12 +609,8 @@ function CanvasCard({
   onDelete?: (c: CanvasMeta) => void;
 }) {
   const modes = modesOf(c);
-  // The top rule takes the primary (first) enabled mode's accent — stable, unlike
-  // the active mode, which shifts as you switch tabs inside the canvas.
-  const t = modeTheme(modes[0]);
   return (
-    <li className="group relative overflow-hidden rounded-2xl border border-ink/10 bg-surface transition-all hover:-translate-y-0.5 hover:border-ink/20 hover:shadow-md">
-      <span aria-hidden className="absolute inset-x-0 top-0 z-0 h-0.5" style={{ backgroundColor: t.solid }} />
+    <li className="group relative overflow-hidden rounded-lg border border-ink/10 bg-surface transition-all hover:border-ink/20 hover:shadow-sm">
       {/* Stretched click target — transparent, covers the whole tile. */}
       <button
         onClick={() => onOpen(c.code)}
@@ -628,7 +621,7 @@ function CanvasCard({
           DOM), so it must not eat its clicks — the options menu opts back in. */}
       <div className="pointer-events-none relative p-4">
         <div className="flex items-start justify-between gap-3">
-          <span className="font-display text-base font-medium leading-snug text-ink">
+          <span className="text-base font-semibold leading-snug tracking-tight text-ink">
             {c.name || "Untitled canvas"}
           </span>
           <div className="flex shrink-0 items-center gap-1">
@@ -643,7 +636,7 @@ function CanvasCard({
           </div>
         </div>
         <div className="mt-3 flex items-center justify-between gap-2 text-xs text-ink/40">
-          <span className="font-code tracking-[0.15em]">{c.code}</span>
+          <span className="font-code">{c.code}</span>
           <div className="flex items-center gap-2">
             {!role && <VisibilityBadge c={c} />}
             <span>{timeAgo(c.updatedAt)}</span>
@@ -668,10 +661,10 @@ function CanvasTable({
   // The modes column is wide enough for two chips + a "+N" overflow.
   const cols = "sm:grid-cols-[1fr_10rem_6rem_8rem_6rem_2.5rem]";
   return (
-    <div className="overflow-hidden rounded-2xl border border-ink/10 bg-surface">
+    <div className="overflow-hidden rounded-lg border border-ink/10 bg-surface">
       {/* header row (desktop only) */}
       <div
-        className={`hidden gap-3 border-b border-ink/10 bg-paper px-4 py-2.5 font-code text-[10px] font-medium uppercase tracking-[0.14em] text-ink/40 sm:grid ${cols}`}
+        className={`hidden gap-3 border-b border-ink/10 bg-paper px-4 py-2.5 text-[11px] font-medium uppercase tracking-wide text-ink/50 sm:grid ${cols}`}
       >
         <span>Name</span>
         <span>Modes</span>
@@ -683,7 +676,6 @@ function CanvasTable({
       <ul>
         {canvases.map((c, i) => {
           const modes = modesOf(c);
-          const t = modeTheme(modes[0]);
           return (
             <li
               key={c.id}
@@ -701,14 +693,9 @@ function CanvasTable({
                 className={`pointer-events-none relative grid grid-cols-1 gap-1 px-4 py-3 sm:items-center sm:gap-3 ${cols}`}
               >
                 <div className="flex min-w-0 items-center gap-2.5">
-                  <span
-                    aria-hidden
-                    className="h-6 w-1 shrink-0 rounded-full"
-                    style={{ backgroundColor: t.solid }}
-                  />
                   <div className="min-w-0">
                     <div className="truncate font-medium text-ink">{c.name || "Untitled canvas"}</div>
-                    <div className="font-code text-[11px] tracking-[0.14em] text-ink/35">{c.code}</div>
+                    <div className="font-code text-[11px] text-ink/35">{c.code}</div>
                   </div>
                 </div>
                 <span className="hidden sm:block">

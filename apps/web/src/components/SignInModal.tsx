@@ -12,18 +12,16 @@ interface Props {
 
 function FeatureRow({
   icon: Icon,
-  tint,
   title,
   desc,
 }: {
   icon: LucideIcon;
-  tint: string;
   title: string;
   desc: string;
 }) {
   return (
     <div className="flex items-start gap-3">
-      <div className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${tint}`}>
+      <div className="shrink-0 w-8 h-8 rounded-md bg-accent/10 text-accent flex items-center justify-center">
         <Icon className="w-4 h-4" />
       </div>
       <div className="min-w-0">
@@ -86,9 +84,9 @@ export default function SignInModal({ onClose, onSignedIn }: Props) {
     };
   }, [onSignedIn]);
 
-  // Portal to body: the header that renders AccountMenu uses backdrop-blur,
-  // which creates a containing block for position:fixed — without the portal
-  // the modal anchors to the ~56px header instead of the viewport.
+  // Portal to body: header filter/transform effects can create a containing
+  // block for position:fixed — without the portal the modal could anchor to
+  // the ~56px header instead of the viewport.
   return createPortal(
     <div
       className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/40 p-4"
@@ -100,31 +98,21 @@ export default function SignInModal({ onClose, onSignedIn }: Props) {
         role="dialog"
         aria-modal="true"
         aria-labelledby="signin-title"
-        className="w-full max-w-sm bg-surface rounded-2xl shadow-xl overflow-hidden"
+        className="w-full max-w-sm bg-surface rounded-[10px] border border-ink/10 shadow-lg overflow-hidden"
       >
-        {/* Banner: the orbit logo doubles as "agents around a canvas". The
-            gradient is a fixed light pastel, so pin the banner to the light
-            palette — otherwise the token-based pill + close button flip dark and
-            go unreadable on the still-light banner in dark mode. */}
-        <div className="theme-light relative h-32 bg-gradient-to-br from-sky-100 via-blue-50 to-indigo-100 overflow-hidden">
-          <div
-            aria-hidden="true"
-            className="absolute -top-8 -left-6 w-28 h-28 rounded-full bg-sky-300/40 blur-2xl"
-          />
-          <div
-            aria-hidden="true"
-            className="absolute -bottom-10 right-0 w-32 h-32 rounded-full bg-indigo-300/40 blur-2xl"
-          />
+        {/* Banner: the orbit logo doubles as "agents around a canvas". Follows
+            the app theme like every other modal. */}
+        <div className="relative h-32 bg-paper border-b border-ink/10 dark:border-white/10 overflow-hidden">
           <button
             onClick={onClose}
             aria-label="Close"
-            className="absolute top-2 right-2 z-10 w-7 h-7 flex items-center justify-center rounded-full bg-surface/70 text-ink/55 hover:bg-surface hover:text-ink/70 backdrop-blur transition"
+            className="absolute top-2 right-2 z-10 w-7 h-7 flex items-center justify-center rounded-full text-ink/55 hover:bg-ink/5 hover:text-ink/70 transition-colors"
           >
             ✕
           </button>
           <div className="relative h-full flex flex-col items-center justify-center gap-2">
             <TandemLogo size={52} />
-            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-surface/80 text-[11px] font-semibold text-blue-700 shadow-sm backdrop-blur">
+            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-accent/10 text-[11px] font-medium text-accent">
               <Sparkles className="w-3 h-3" />
               Your canvases, saved
             </span>
@@ -143,19 +131,16 @@ export default function SignInModal({ onClose, onSignedIn }: Props) {
           <div className="mt-4 space-y-3">
             <FeatureRow
               icon={Save}
-              tint="bg-blue-50 text-blue-600"
               title="Keep your canvases"
               desc="Saved to your account — not just a link you might lose."
             />
             <FeatureRow
               icon={MonitorSmartphone}
-              tint="bg-emerald-50 text-emerald-600"
               title="On every device"
               desc="Sign in on your laptop or phone — they're all here."
             />
             <FeatureRow
               icon={Copy}
-              tint="bg-violet-50 text-violet-600"
               title="Make any canvas yours"
               desc="Copy a canvas you have the code to into your account."
             />
@@ -165,7 +150,7 @@ export default function SignInModal({ onClose, onSignedIn }: Props) {
             {GOOGLE_CLIENT_ID ? (
               <div ref={googleBtnRef} />
             ) : (
-              <p className="text-sm text-red-600">Sign-in isn't configured.</p>
+              <p className="text-sm text-rose-600 dark:text-rose-400">Sign-in isn't configured.</p>
             )}
           </div>
 

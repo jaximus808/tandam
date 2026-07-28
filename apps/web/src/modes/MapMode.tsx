@@ -617,8 +617,8 @@ export default function MapMode({
   if (error || !map) {
     return (
       <div className="flex-1 flex items-center justify-center text-sm">
-        <div className="bg-surface rounded-xl border border-red-100 px-6 py-4 text-center">
-          <p className="text-red-600 font-medium">Couldn't load map</p>
+        <div className="bg-surface rounded-lg border border-rose-500/20 px-6 py-4 text-center">
+          <p className="text-rose-600 dark:text-rose-400 font-medium">Couldn't load map</p>
           <p className="text-ink/55 text-xs mt-1">{error?.message ?? "unknown error"}</p>
         </div>
       </div>
@@ -639,7 +639,7 @@ export default function MapMode({
           className={[
             "w-full text-left py-2.5 transition-colors max-sm:py-1.5",
             indent ? "pl-8 pr-4 max-sm:pl-6 max-sm:pr-3" : "px-4 max-sm:px-3",
-            isSelected ? "bg-blue-500/10" : "hover:bg-ink/5",
+            isSelected ? "bg-accent/10" : "hover:bg-ink/5",
           ].join(" ")}
         >
           <div className="flex items-center gap-2">
@@ -858,7 +858,7 @@ export default function MapMode({
 
         {pins.length === 0 && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <div className="bg-surface/90 rounded-xl px-6 py-4 text-center shadow text-ink/55 text-sm">
+            <div className="bg-surface rounded-lg border border-ink/10 px-6 py-4 text-center shadow-sm text-ink/55 text-sm">
               <div className="font-medium text-ink/70">{map.name}</div>
               <div className="text-xs mt-1">Ask Claude to add locations.</div>
             </div>
@@ -877,9 +877,9 @@ export default function MapMode({
                 : "Auto-center off — camera stays put"
             }
             className={[
-              "flex items-center justify-center w-9 h-9 rounded-lg border shadow-sm transition-colors",
+              "flex items-center justify-center w-9 h-9 rounded-md border shadow-sm transition-colors",
               autoFollow
-                ? "bg-blue-500 text-white border-blue-500 hover:bg-blue-600"
+                ? "bg-accent text-white border-accent hover:bg-accent/90"
                 : "bg-surface text-ink/60 border-ink/15 hover:bg-ink/5",
             ].join(" ")}
           >
@@ -950,7 +950,7 @@ export default function MapMode({
             // !w override beats the inline desktop pixel width.
             "max-sm:absolute max-sm:bottom-3 max-sm:right-3 max-sm:left-auto max-sm:top-auto",
             "max-sm:z-[1000] max-sm:max-h-[44vh] max-sm:!w-[min(58vw,232px)]",
-            "max-sm:rounded-2xl max-sm:border max-sm:border-ink/15 max-sm:shadow-2xl",
+            "max-sm:rounded-[10px] max-sm:border max-sm:border-ink/15 max-sm:shadow-lg",
           ].join(" ")}
         >
           {/* Drag handle on the LEFT edge of the right-docked panel (desktop only) */}
@@ -959,14 +959,14 @@ export default function MapMode({
             aria-label="Resize pin directory"
             className={[
               "absolute left-0 top-0 bottom-0 w-1.5 -ml-0.5 z-10 cursor-col-resize max-sm:hidden",
-              "hover:bg-blue-400/40 active:bg-blue-500/60 transition-colors",
-              dir.resizing ? "bg-blue-500/60" : "",
+              "hover:bg-accent/40 active:bg-accent/60 transition-colors",
+              dir.resizing ? "bg-accent/60" : "",
             ].join(" ")}
           />
 
           <div className="px-4 py-2.5 border-b border-ink/10 flex items-center justify-between max-sm:px-3 max-sm:py-2 sm:py-3">
             <div className="flex items-center gap-2">
-              <h2 className="font-display text-base font-medium tracking-tight text-ink max-sm:text-sm">Pins</h2>
+              <h2 className="text-base font-semibold tracking-tight text-ink max-sm:text-sm">Pins</h2>
               <span className="font-code text-[11px] text-ink/40">{pins.length}</span>
             </div>
             <button

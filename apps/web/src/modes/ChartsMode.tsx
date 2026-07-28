@@ -2,9 +2,6 @@ import { useMemo, useState } from "react";
 import type { CanvasState, Chart, ChartType, Sheet, SheetRow } from "../types";
 import { sendOp } from "../lib/ws";
 import EmptyState from "../components/EmptyState";
-import { modeTheme } from "../lib/modeTheme";
-
-const ACCENT = modeTheme("charts");
 
 interface Props {
   state: CanvasState;
@@ -75,12 +72,11 @@ export default function ChartsMode({ state }: Props) {
     <div className="flex-1 flex flex-col min-h-0 bg-paper">
       <div className="shrink-0 max-w-5xl mx-auto w-full px-6 pt-6 pb-3">
         <div className="flex items-center justify-between">
-          <h1 className="font-display text-xl font-medium tracking-tight text-ink">Charts</h1>
+          <h1 className="text-xl font-semibold tracking-tight text-ink">Charts</h1>
           <button
             onClick={handleAddChart}
             disabled={sheets.length === 0}
-            className="text-sm px-3.5 py-1.5 rounded-lg text-white font-medium shadow-sm transition-opacity hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
-            style={{ backgroundColor: ACCENT.solid }}
+            className="rounded-md bg-accent px-3.5 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40 disabled:cursor-not-allowed"
             title={sheets.length === 0 ? "Create a sheet first — charts read from sheet data" : "Add a chart"}
           >
             + New chart
@@ -135,26 +131,26 @@ function ChartCard({
   return (
     <div
       data-agent-target={chart.id}
-      className="rounded-xl border border-ink/15 bg-surface shadow-sm overflow-hidden flex flex-col"
+      className="rounded-lg border border-ink/10 bg-surface shadow-sm overflow-hidden flex flex-col"
     >
       <div className="flex items-center justify-between gap-2 px-4 py-2.5 border-b border-ink/10">
         <input
           value={chart.name}
           onChange={(e) => sendOp({ op: "chart.update", id: chart.id, partial: { name: e.target.value } })}
           placeholder="Untitled chart"
-          className="text-sm font-semibold text-ink bg-transparent focus:outline-none focus:border-b focus:border-blue-300 min-w-0 flex-1"
+          className="text-sm font-semibold text-ink bg-transparent focus:outline-none focus:border-b focus:border-accent/40 min-w-0 flex-1"
         />
         <div className="flex items-center gap-1 shrink-0">
           <button
             onClick={() => setEditing((v) => !v)}
-            className={`text-xs px-2 py-1 rounded ${editing ? "bg-blue-500/15 text-blue-600" : "text-ink/55 hover:bg-ink/10"}`}
+            className={`text-xs px-2 py-1 rounded ${editing ? "bg-accent/10 text-accent" : "text-ink/55 hover:bg-ink/10"}`}
             title="Configure chart"
           >
             Edit
           </button>
           <button
             onClick={handleDelete}
-            className="text-ink/40 hover:text-red-600 px-1.5 py-1 rounded hover:bg-red-500/10"
+            className="text-ink/40 hover:text-rose-600 dark:hover:text-rose-400 px-1.5 py-1 rounded hover:bg-rose-500/10"
             title="Delete chart"
           >
             <svg width="12" height="12" viewBox="0 0 12 12">
