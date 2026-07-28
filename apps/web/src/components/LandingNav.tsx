@@ -7,9 +7,9 @@ import AccountMenu from "./AccountMenu";
 // The marketing top nav shared by the public surfaces — Landing, MCP support,
 // and About. Keeping it one component guarantees these pages present the SAME
 // navbar; it only gives way to the app chrome (Dashboard / Settings use
-// SiteHeader, a canvas has its live editing header). The "Use cases" / "Modes"
-// links anchor within the Landing page, so off Landing they navigate home first
-// (samePageAnchors=false → absolute /#hash).
+// SiteHeader, a canvas has its live editing header). The "How it works" /
+// "Quickstart" links anchor within the Landing page, so off Landing they
+// navigate home first (samePageAnchors=false → absolute /#hash).
 interface Props {
   // Brand click — back to the home surface. On Landing itself this just scrolls
   // to the top (already home).
@@ -69,8 +69,8 @@ export default function LandingNav({
     };
   }, []);
 
-  const useCasesHref = samePageAnchors ? "#use-cases" : "/#use-cases";
-  const modesHref = samePageAnchors ? "#modes" : "/#modes";
+  const howItWorksHref = samePageAnchors ? "#how-it-works" : "/#how-it-works";
+  const quickstartHref = samePageAnchors ? "#quickstart" : "/#quickstart";
 
   return (
     <header className="sticky top-0 z-40 border-b border-ink/10 bg-paper/85 backdrop-blur">
@@ -92,16 +92,16 @@ export default function LandingNav({
         </button>
         <nav className="ml-auto flex items-center gap-1 text-sm sm:gap-1.5">
           <a
-            href={useCasesHref}
+            href={howItWorksHref}
             className="hidden rounded-md px-3 py-1.5 text-ink/55 transition-colors hover:bg-ink/5 hover:text-ink sm:inline"
           >
-            Use cases
+            How it works
           </a>
           <a
-            href={modesHref}
+            href={quickstartHref}
             className="hidden rounded-md px-3 py-1.5 text-ink/55 transition-colors hover:bg-ink/5 hover:text-ink sm:inline"
           >
-            Modes
+            Quickstart
           </a>
           {/* Real anchors, not buttons — see lib/spaNav: these are the only
               internal links to /about and /mcp a crawler can follow. */}
