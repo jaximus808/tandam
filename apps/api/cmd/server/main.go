@@ -34,7 +34,7 @@ func main() {
 		log.Fatalf("image dir: %v", err)
 	}
 
-	db, err := store.NewSupabase(cfg.SupabaseURL, cfg.SupabaseKey)
+	db, err := store.NewSupabase(cfg.SupabaseURL, cfg.SupabaseKey, store.WithClaimTTL(cfg.ClaimTTL))
 	if err != nil {
 		log.Fatalf("supabase: %v", err)
 	}

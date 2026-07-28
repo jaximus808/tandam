@@ -841,9 +841,14 @@ type Store interface {
 	UpdateActionState(ctx context.Context, canvasID, id uuid.UUID, patch ActionStatePatch) (int, error)
 	// ClaimAction atomically claims an approved action for claimedBy — a single
 	// conditional UPDATE (… WHERE state='approved') decides the winner in the DB,
-	// so two concurrent task_starts can't both win. Returns the claimed action +
-	// new canvas version, ErrActionNotFound, *AlreadyClaimedError (with the
-	// current holder), or an ErrIllegalActionState-wrapped error for other states.
+	// so two concurrent task_starts can't both win. An 'executing' claim older
+	// than the claim TTL (lazy expiry, no sweeper; see store.DefaultClaimTTL /
+	// WithClaimTTL, 0 disables) is atomically taken over by a second conditional
+	// UPDATE (… WHERE state='executing' AND claimed_at < cutoff), restamping
+	// claimed_by/claimed_at. Returns the claimed action + new canvas version,
+	// ErrActionNotFound, *AlreadyClaimedError (with the current holder — the
+	// NEW one if a takeover race was lost), or an ErrIllegalActionState-wrapped
+	// error for other states.
 	ClaimAction(ctx context.Context, canvasID, id uuid.UUID, claimedBy string) (*Action, int, error)
 	// ReleaseAction frees a stuck claim: executing → approved, clearing
 	// claimed_by/claimed_at, via the same conditional-UPDATE pattern. Human-only —

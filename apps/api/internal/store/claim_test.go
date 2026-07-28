@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -40,19 +41,32 @@ func newFakeActionsServer(canvasID, actionID uuid.UUID, state string) *fakeActio
 	}
 }
 
-// matches applies PostgREST eq. filters from the query string to the row.
+// matches applies PostgREST eq./lt. filters from the query string to the row.
 func (f *fakeActionsServer) matches(q map[string][]string) bool {
 	for key, vals := range q {
 		if key == "select" || len(vals) == 0 {
 			continue
 		}
-		want, ok := strings.CutPrefix(vals[0], "eq.")
-		if !ok {
-			continue // non-eq operators aren't used by the claim path
+		if want, ok := strings.CutPrefix(vals[0], "eq."); ok {
+			if got, _ := f.row[key].(string); got != want {
+				return false
+			}
+			continue
 		}
-		if got, _ := f.row[key].(string); got != want {
-			return false
+		if want, ok := strings.CutPrefix(vals[0], "lt."); ok {
+			// Timestamp lt — the claim-TTL cutoff predicate. Parse both sides:
+			// lexicographic compare lies across differing fractional-second
+			// widths. A nil/unparsable row value doesn't match, mirroring
+			// Postgres (`NULL < x` is not true).
+			got, _ := f.row[key].(string)
+			gt, gerr := time.Parse(time.RFC3339Nano, got)
+			wt, werr := time.Parse(time.RFC3339Nano, want)
+			if gerr != nil || werr != nil || !gt.Before(wt) {
+				return false
+			}
+			continue
 		}
+		// other operators aren't used by the claim path
 	}
 	return true
 }
@@ -201,6 +215,182 @@ func TestClaimAndReleaseEdges(t *testing.T) {
 	// Released task is claimable again.
 	if _, _, err := st.ClaimAction(ctx, canvasID, actionID, "agent-b"); err != nil {
 		t.Fatalf("re-claim after release failed: %v", err)
+	}
+}
+
+// TDM-7 lazy claim expiry: an 'executing' claim older than the TTL is
+// atomically taken over — two racing takeovers produce exactly one winner
+// (the first restamps claimed_at to now, so the loser's `claimed_at < cutoff`
+// predicate stops matching) and the loser's 409 names the NEW holder, not the
+// dead one.
+func TestClaimActionExpiredTakeoverSingleWinner(t *testing.T) {
+	canvasID, actionID := uuid.New(), uuid.New()
+	fake := newFakeActionsServer(canvasID, actionID, "executing")
+	fake.row["claimed_by"] = "dead-agent"
+	fake.row["claimed_at"] = time.Now().UTC().Add(-30 * time.Minute).Format(time.RFC3339Nano)
+	srv := httptest.NewServer(fake.handler())
+	defer srv.Close()
+
+	st, err := NewSupabase(srv.URL, "test-key") // default TTL: 15m
+	if err != nil {
+		t.Fatalf("NewSupabase: %v", err)
+	}
+
+	names := []string{"agent-a", "agent-b"}
+	actions := make([]*Action, 2)
+	claimErrs := make([]error, 2)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range names {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			actions[i], _, claimErrs[i] = st.ClaimAction(context.Background(), canvasID, actionID, names[i])
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	winners, losers := 0, 0
+	winnerName := ""
+	var loserErr error
+	for i := range names {
+		if claimErrs[i] == nil {
+			winners++
+			winnerName = names[i]
+			if actions[i] == nil || actions[i].State != "executing" {
+				t.Fatalf("takeover winner %s got action %+v, want state executing", names[i], actions[i])
+			}
+			if actions[i].ClaimedBy == nil || *actions[i].ClaimedBy != names[i] {
+				t.Fatalf("takeover winner %s got claimedBy %v, want own name", names[i], actions[i].ClaimedBy)
+			}
+		} else {
+			losers++
+			loserErr = claimErrs[i]
+		}
+	}
+	if winners != 1 || losers != 1 {
+		t.Fatalf("want exactly 1 takeover winner and 1 loser, got %d winners (errs: %v)", winners, claimErrs)
+	}
+	var already *AlreadyClaimedError
+	if !errors.As(loserErr, &already) {
+		t.Fatalf("takeover loser error = %v, want *AlreadyClaimedError", loserErr)
+	}
+	if already.ClaimedBy != winnerName {
+		t.Fatalf("loser told claimedBy=%q, want the NEW holder %q (not the dead one)", already.ClaimedBy, winnerName)
+	}
+	if got, _ := fake.row["claimed_by"].(string); got != winnerName {
+		t.Fatalf("row claimed_by=%q, want %q", got, winnerName)
+	}
+}
+
+// A takeover restamps the claim columns: claimed_by is the new claimant and
+// claimed_at is fresh (so the new claim gets a full TTL of its own, and a
+// second late takeover attempt no longer matches the cutoff).
+func TestClaimActionTakeoverRestampsClaim(t *testing.T) {
+	canvasID, actionID := uuid.New(), uuid.New()
+	fake := newFakeActionsServer(canvasID, actionID, "executing")
+	fake.row["claimed_by"] = "dead-agent"
+	staleAt := time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339Nano)
+	fake.row["claimed_at"] = staleAt
+	srv := httptest.NewServer(fake.handler())
+	defer srv.Close()
+
+	st, err := NewSupabase(srv.URL, "test-key")
+	if err != nil {
+		t.Fatalf("NewSupabase: %v", err)
+	}
+
+	a, _, err := st.ClaimAction(context.Background(), canvasID, actionID, "agent-b")
+	if err != nil {
+		t.Fatalf("takeover of expired claim failed: %v", err)
+	}
+	if a.State != "executing" || a.ClaimedBy == nil || *a.ClaimedBy != "agent-b" {
+		t.Fatalf("takeover returned state %q claimedBy %v, want executing/agent-b", a.State, a.ClaimedBy)
+	}
+	if a.ClaimedAt == nil || time.Since(*a.ClaimedAt) > time.Minute {
+		t.Fatalf("takeover claimed_at=%v, want a just-now timestamp (stale was %s)", a.ClaimedAt, staleAt)
+	}
+}
+
+// A NON-expired executing claim still conflicts exactly as before — the TTL
+// path must not weaken the live-claim guarantee.
+func TestClaimActionNonExpiredStill409s(t *testing.T) {
+	canvasID, actionID := uuid.New(), uuid.New()
+	fake := newFakeActionsServer(canvasID, actionID, "executing")
+	fake.row["claimed_by"] = "busy-agent"
+	fake.row["claimed_at"] = time.Now().UTC().Add(-1 * time.Minute).Format(time.RFC3339Nano)
+	srv := httptest.NewServer(fake.handler())
+	defer srv.Close()
+
+	st, err := NewSupabase(srv.URL, "test-key")
+	if err != nil {
+		t.Fatalf("NewSupabase: %v", err)
+	}
+
+	var already *AlreadyClaimedError
+	if _, _, err := st.ClaimAction(context.Background(), canvasID, actionID, "agent-b"); !errors.As(err, &already) {
+		t.Fatalf("claim on live claim = %v, want *AlreadyClaimedError", err)
+	}
+	if already.ClaimedBy != "busy-agent" {
+		t.Fatalf("conflict names %q, want live holder busy-agent", already.ClaimedBy)
+	}
+	if got, _ := fake.row["claimed_by"].(string); got != "busy-agent" {
+		t.Fatalf("live claim was overwritten: claimed_by=%q", got)
+	}
+}
+
+// WithClaimTTL(0) disables expiry: even an ancient claim is honored forever
+// (until an explicit release), preserving the pre-TDM-7 behavior.
+func TestClaimActionTTLZeroDisablesTakeover(t *testing.T) {
+	canvasID, actionID := uuid.New(), uuid.New()
+	fake := newFakeActionsServer(canvasID, actionID, "executing")
+	fake.row["claimed_by"] = "dead-agent"
+	fake.row["claimed_at"] = time.Now().UTC().Add(-24 * time.Hour).Format(time.RFC3339Nano)
+	srv := httptest.NewServer(fake.handler())
+	defer srv.Close()
+
+	st, err := NewSupabase(srv.URL, "test-key", WithClaimTTL(0))
+	if err != nil {
+		t.Fatalf("NewSupabase: %v", err)
+	}
+
+	var already *AlreadyClaimedError
+	if _, _, err := st.ClaimAction(context.Background(), canvasID, actionID, "agent-b"); !errors.As(err, &already) {
+		t.Fatalf("claim with TTL=0 = %v, want *AlreadyClaimedError", err)
+	}
+	if already.ClaimedBy != "dead-agent" {
+		t.Fatalf("conflict names %q, want dead-agent", already.ClaimedBy)
+	}
+	if got, _ := fake.row["claimed_by"].(string); got != "dead-agent" {
+		t.Fatalf("TTL=0 still took over the claim: claimed_by=%q", got)
+	}
+}
+
+// The takeover path only ever fires on 'executing' rows — done/failed/proposed
+// /rejected tasks keep refusing claims even when stale claim columns linger.
+func TestClaimActionTakeoverIgnoresNonExecutingStates(t *testing.T) {
+	canvasID, actionID := uuid.New(), uuid.New()
+	fake := newFakeActionsServer(canvasID, actionID, "done")
+	fake.row["claimed_by"] = "dead-agent"
+	fake.row["claimed_at"] = time.Now().UTC().Add(-24 * time.Hour).Format(time.RFC3339Nano)
+	srv := httptest.NewServer(fake.handler())
+	defer srv.Close()
+
+	st, err := NewSupabase(srv.URL, "test-key")
+	if err != nil {
+		t.Fatalf("NewSupabase: %v", err)
+	}
+
+	for _, state := range []string{"proposed", "done", "failed", "rejected"} {
+		fake.row["state"] = state
+		if _, _, err := st.ClaimAction(context.Background(), canvasID, actionID, "agent-b"); !errors.Is(err, ErrIllegalActionState) {
+			t.Fatalf("claim of stale-claim %s task = %v, want ErrIllegalActionState", state, err)
+		}
+		if got, _ := fake.row["state"].(string); got != state {
+			t.Fatalf("claim mutated %s row to state %q", state, got)
+		}
 	}
 }
 
