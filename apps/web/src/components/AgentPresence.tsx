@@ -50,7 +50,12 @@ export default function AgentPresence({ agents, edit, reading, onJump, onOpenTas
   // executing treatment.
   const followed = [...agents]
     .filter((a) => a.taskId)
-    .sort((x, y) => (y.taskClaimedAt ?? "").localeCompare(x.taskClaimedAt ?? ""))[0];
+    // Numeric compare, not string: RFC3339Nano strips trailing zeros, so a
+    // lexicographic sort misorders same-second claims (".5Z" < "Z").
+    .sort(
+      (x, y) =>
+        (Date.parse(y.taskClaimedAt ?? "") || 0) - (Date.parse(x.taskClaimedAt ?? "") || 0),
+    )[0];
 
   // Group executors under their (present) parent. An executor whose parent is
   // gone stays in the flat cluster only.

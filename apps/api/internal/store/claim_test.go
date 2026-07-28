@@ -488,3 +488,42 @@ func TestRequeueActionRejectsEpics(t *testing.T) {
 		t.Fatalf("epic requeue mutated state to %q", got)
 	}
 }
+
+// QA wave-3 BLOCKER regression: a NAMED claimant re-claiming its own EXPIRED
+// claim must RESTAMP claimed_at (self-takeover), not return the stale claim.
+// Without the restamp, a long task's harness retry leaves claimed_at
+// permanently past the TTL, and any rival's takeover then double-executes the
+// task while the original holder is still working it.
+func TestClaimActionSameClaimantExpiredReclaimRestamps(t *testing.T) {
+	canvasID, actionID := uuid.New(), uuid.New()
+	fake := newFakeActionsServer(canvasID, actionID, "executing")
+	fake.row["claimed_by"] = "agent-a"
+	staleAt := time.Now().UTC().Add(-30 * time.Minute)
+	fake.row["claimed_at"] = staleAt.Format(time.RFC3339Nano)
+	srv := httptest.NewServer(fake.handler())
+	defer srv.Close()
+
+	st, err := NewSupabase(srv.URL, "test-key") // default TTL: 15m
+	if err != nil {
+		t.Fatalf("NewSupabase: %v", err)
+	}
+
+	// The holder retries its own claim: idempotent success AND a fresh stamp.
+	a, _, cerr := st.ClaimAction(context.Background(), canvasID, actionID, "agent-a")
+	if cerr != nil {
+		t.Fatalf("self-reclaim of expired claim errored: %v", cerr)
+	}
+	if a == nil || a.ClaimedBy == nil || *a.ClaimedBy != "agent-a" {
+		t.Fatalf("self-reclaim returned %+v, want agent-a's claim", a)
+	}
+	if a.ClaimedAt == nil || !a.ClaimedAt.After(staleAt.Add(time.Minute)) {
+		t.Fatalf("self-reclaim did not restamp claimed_at: got %v (stale was %v)", a.ClaimedAt, staleAt)
+	}
+
+	// A rival arriving right after must now LOSE (claim no longer expired).
+	_, _, rerr := st.ClaimAction(context.Background(), canvasID, actionID, "agent-b")
+	var claimed *AlreadyClaimedError
+	if !errors.As(rerr, &claimed) || claimed.ClaimedBy != "agent-a" {
+		t.Fatalf("rival after restamp: err = %v, want AlreadyClaimedError{agent-a}", rerr)
+	}
+}

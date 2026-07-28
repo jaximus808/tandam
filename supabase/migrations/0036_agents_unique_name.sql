@@ -20,7 +20,7 @@ WITH ranked AS (
   SELECT id, canvas_id, name,
          row_number() OVER (
            PARTITION BY canvas_id, name
-           ORDER BY last_seen_at DESC, id DESC
+           ORDER BY last_seen_at DESC, created_at DESC, id DESC
          ) AS rn
   FROM agents
 )
@@ -41,7 +41,7 @@ WITH ranked AS (
   SELECT id,
          row_number() OVER (
            PARTITION BY canvas_id, name
-           ORDER BY last_seen_at DESC, id DESC
+           ORDER BY last_seen_at DESC, created_at DESC, id DESC
          ) AS rn
   FROM agents
 )
@@ -53,5 +53,7 @@ WHERE agents.id = ranked.id
 -- ── 3. One row per (canvas_id, name), from here on ────────────────────────────
 -- The ON CONFLICT target for RegisterAgent's upsert and the claim path's
 -- touch-or-create; its backing index also serves the touch-by-name lookup.
+ALTER TABLE agents
+  DROP CONSTRAINT IF EXISTS agents_canvas_name_key;
 ALTER TABLE agents
   ADD CONSTRAINT agents_canvas_name_key UNIQUE (canvas_id, name);

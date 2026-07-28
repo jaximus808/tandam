@@ -25,16 +25,24 @@ type agentFakeStore struct {
 	touched    []string   // claimant identities passed to TouchOrCreateAgent
 }
 
-// RegisterAgent models the store's (canvas_id, name) UPSERT: an existing name
-// keeps its id and gets its fields refreshed in place; a new name gets a
-// DB-style generated id. Mirrors the real contract — a.ID carries the
-// surviving row's id on return.
+// RegisterAgent models the store's (canvas_id, name) UPSERT with MERGE
+// semantics: an existing name keeps its id, supplied fields refresh in place,
+// and absent model/parentAgentId are left UNCHANGED (the real upsert omits
+// those keys when nil, so ON CONFLICT doesn't touch them — a re-registering
+// subagent must not be silently unparented). A new name gets a DB-style
+// generated id. a.ID carries the surviving row's id on return.
 func (f *agentFakeStore) RegisterAgent(_ context.Context, _ uuid.UUID, a *store.Agent) (int, error) {
 	f.touchMu.Lock()
 	defer f.touchMu.Unlock()
 	for _, existing := range f.registered {
 		if existing.Name == a.Name {
 			a.ID = existing.ID
+			if a.Model == nil {
+				a.Model = existing.Model
+			}
+			if a.ParentAgentID == nil {
+				a.ParentAgentID = existing.ParentAgentID
+			}
 			*existing = *a
 			return 1, nil
 		}
@@ -326,6 +334,29 @@ func TestReRegisterSameNameKeepsAgentID(t *testing.T) {
 	}
 	if got.Role != "planner" || got.Model == nil || *got.Model != "claude-fable-5" {
 		t.Fatalf("re-register did not refresh fields: role=%q model=%v", got.Role, got.Model)
+	}
+}
+
+// Re-registering WITHOUT parentAgentId must keep the existing parent — a
+// subagent that lost its session handle re-registers bare, and unparenting it
+// would drop it from the swarm tree (QA wave-3 finding 3).
+func TestReRegisterWithoutParentKeepsParent(t *testing.T) {
+	canvasID := uuid.New()
+	parentID := uuid.New()
+	fake := &agentFakeStore{agents: map[uuid.UUID]*store.Agent{
+		parentID: {ID: parentID, Name: "orchestrator", Role: "planner"},
+	}}
+	h := NewHandler(fake, nil, nil)
+
+	registerResponse(t, h, canvasID, map[string]any{
+		"name": "executor-1", "role": "executor", "parentAgentId": parentID.String(),
+	})
+	registerResponse(t, h, canvasID, map[string]any{
+		"name": "executor-1", "role": "executor",
+	})
+	got := fake.agentNamed("executor-1")
+	if got == nil || got.ParentAgentID == nil || *got.ParentAgentID != parentID {
+		t.Fatalf("bare re-register unparented the agent: %+v", got)
 	}
 }
 

@@ -74,12 +74,12 @@ interface LinkedEpic {
   state: string;
   done: number;
   total: number;
+  // Lifecycle-finished (approved + every task terminal, incl. failed/rejected)
+  // — keeps this chip's verdict consistent with the Board's Done bucket
+  // instead of showing a partial bar forever when some tasks failed.
+  finished: boolean;
 }
 
-// TaskBoard's epic-scope handoff (TDM-13): the Board reads this key on mount to
-// open its kanban scoped to a single epic. Chip-click writes it, then flips to
-// the Board pseudo-tab.
-const BOARD_EPIC_SCOPE_KEY = "tandem.board.epic";
 
 // Shared down the tree so any roadmap row can offer "create agent task from this"
 // without threading code/readOnly/handlers through every layer. openCreateTask /
@@ -204,12 +204,14 @@ interface Props {
   state: CanvasState;
   code: string;
   readOnly: boolean;
-  // Open the Board pseudo-tab (App-level). When provided, epic chips become
-  // clickable and jump to the Board scoped to that epic.
-  onOpenBoard?: () => void;
+  // Open the Board pseudo-tab scoped to an epic (App-level one-shot handoff —
+  // the board stays mounted after first visit, so a localStorage write alone
+  // would only apply on the FIRST open and silently corrupt the saved scope
+  // on every later one). When provided, epic chips become clickable.
+  onOpenBoardForEpic?: (epicId: string) => void;
 }
 
-export default function RoadmapMode({ state, code, readOnly, onOpenBoard }: Props) {
+export default function RoadmapMode({ state, code, readOnly, onOpenBoardForEpic }: Props) {
   const items = state.roadmapItems;
 
   // Which roadmap items already have tasks pointing at them (via task
@@ -235,14 +237,15 @@ export default function RoadmapMode({ state, code, readOnly, onOpenBoard }: Prop
   const linkedEpics = useMemo(() => {
     const actions = Object.values(state.actions ?? {}) as Action[];
     // Per-epic task progress: total tasks pointing at it, and how many are done.
-    const progress = new Map<string, { done: number; total: number }>();
+    const progress = new Map<string, { done: number; total: number; terminal: number }>();
     for (const a of actions) {
       if (a.type !== "task") continue;
       const eid = (a.payload as TaskPayload).epicId;
       if (!eid) continue;
-      const p = progress.get(eid) ?? { done: 0, total: 0 };
+      const p = progress.get(eid) ?? { done: 0, total: 0, terminal: 0 };
       p.total += 1;
       if (a.state === "done") p.done += 1;
+      if (a.state === "done" || a.state === "failed" || a.state === "rejected") p.terminal += 1;
       progress.set(eid, p);
     }
     const map = new Map<string, LinkedEpic[]>();
@@ -251,10 +254,19 @@ export default function RoadmapMode({ state, code, readOnly, onOpenBoard }: Prop
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     for (const e of epics) {
       const p = e.payload as EpicPayload;
-      const prog = progress.get(e.id) ?? { done: 0, total: 0 };
+      const prog = progress.get(e.id) ?? { done: 0, total: 0, terminal: 0 };
+      const finished =
+        e.state === "approved" && prog.total > 0 && prog.terminal === prog.total;
       for (const rid of p.linkedIds ?? []) {
         const arr = map.get(rid) ?? [];
-        arr.push({ id: e.id, title: p.title || "Untitled epic", state: e.state, ...prog });
+        arr.push({
+          id: e.id,
+          title: p.title || "Untitled epic",
+          state: e.state,
+          done: prog.done,
+          total: prog.total,
+          finished,
+        });
         map.set(rid, arr);
       }
     }
@@ -274,18 +286,9 @@ export default function RoadmapMode({ state, code, readOnly, onOpenBoard }: Prop
       linkedEpics,
       openCreateTask: setTaskFor,
       openCreateEpic: setEpicFor,
-      openBoardForEpic: onOpenBoard
-        ? (epicId: string) => {
-            try {
-              localStorage.setItem(BOARD_EPIC_SCOPE_KEY, epicId);
-            } catch {
-              /* preference only — the Board still opens, just unscoped */
-            }
-            onOpenBoard();
-          }
-        : undefined,
+      openBoardForEpic: onOpenBoardForEpic,
     }),
-    [code, readOnly, linkedTasks, linkedEpics, onOpenBoard],
+    [code, readOnly, linkedTasks, linkedEpics, onOpenBoardForEpic],
   );
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -1410,7 +1413,7 @@ function EpicChip({
   size: "sm" | "xs";
   onOpen?: (epicId: string) => void;
 }) {
-  const pct = epic.total > 0 ? Math.round((epic.done / epic.total) * 100) : 0;
+  const pct = epic.finished ? 100 : epic.total > 0 ? Math.round((epic.done / epic.total) * 100) : 0;
   const base = `inline-flex min-w-0 items-center gap-1 rounded-[4px] border border-ink/10 bg-ink/[0.04] font-medium text-ink/60 ${
     size === "xs" ? "px-1 py-px text-[9px]" : "px-1.5 py-0.5 text-[10px]"
   }`;
@@ -1429,14 +1432,20 @@ function EpicChip({
       <span className="shrink-0 tabular-nums text-ink/45">
         {epic.done}/{epic.total}
       </span>
-      {epic.state !== "approved" && (
-        <span
-          className={`shrink-0 rounded-[3px] px-1 text-[8px] font-semibold uppercase tracking-[0.06em] ${
-            EPIC_STATE_TAG[epic.state] ?? EPIC_STATE_TAG.proposed
-          }`}
-        >
-          {epic.state}
+      {epic.finished ? (
+        <span className="shrink-0 rounded-[3px] bg-emerald-500/15 px-1 text-[8px] font-semibold uppercase tracking-[0.06em] text-emerald-700 dark:text-emerald-400">
+          done
         </span>
+      ) : (
+        epic.state !== "approved" && (
+          <span
+            className={`shrink-0 rounded-[3px] px-1 text-[8px] font-semibold uppercase tracking-[0.06em] ${
+              EPIC_STATE_TAG[epic.state] ?? EPIC_STATE_TAG.proposed
+            }`}
+          >
+            {epic.state}
+          </span>
+        )
       )}
     </>
   );

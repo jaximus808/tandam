@@ -77,10 +77,28 @@ function CopyButton({ text, label }: { text: string; label: string }) {
       type="button"
       aria-label={`Copy ${label}`}
       onClick={() => {
-        navigator.clipboard?.writeText(text).then(() => {
+        const flash = () => {
           setCopied(true);
           window.setTimeout(() => setCopied(false), 1600);
-        });
+        };
+        // navigator.clipboard exists only in secure contexts (https/localhost)
+        // — an http self-host or LAN demo gets the execCommand fallback so the
+        // page's primary conversion path never fails silently.
+        if (navigator.clipboard) {
+          navigator.clipboard.writeText(text).then(flash, () => {});
+        } else {
+          const ta = document.createElement("textarea");
+          ta.value = text;
+          ta.style.position = "fixed";
+          ta.style.opacity = "0";
+          document.body.appendChild(ta);
+          ta.select();
+          try {
+            if (document.execCommand("copy")) flash();
+          } finally {
+            document.body.removeChild(ta);
+          }
+        }
       }}
       className={`inline-flex shrink-0 items-center gap-1.5 rounded-[5px] border px-2 py-1 font-code text-[10px] transition-colors ${
         copied

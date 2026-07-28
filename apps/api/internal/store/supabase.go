@@ -2597,18 +2597,20 @@ func (s *supabaseStore) RegisterAgent(ctx context.Context, canvasID uuid.UUID, a
 // as before, and 0036's dedupe collapses them when it lands.
 func (s *supabaseStore) upsertAgentByName(canvasID uuid.UUID, a *Agent) (*Agent, error) {
 	now := time.Now().UTC()
-	// model / parent_agent_id are ALWAYS present (nil when unset) so a
-	// re-registration refreshes them — omitting the keys would leave a stale
-	// model or parent from an earlier registration in place on conflict. This
-	// requires 0035's parent_agent_id column, which necessarily predates 0036.
+	// model / parent_agent_id are included ONLY when the caller supplied them —
+	// ON CONFLICT DO UPDATE writes exactly the payload's keys, so an absent key
+	// means "leave unchanged". This matters for swarms: the gateway passes
+	// parentAgentId straight through, so a subagent re-registering after a
+	// session reset (without re-threading its orchestrator id) must NOT be
+	// silently unparented — that would drop it from the swarm tree and flip it
+	// to the looser unparented liveness bucket. Explicit unparenting is not
+	// expressible over the API today; if it's ever needed, add a sentinel.
 	row := map[string]any{
-		"canvas_id":       canvasID.String(),
-		"name":            a.Name,
-		"role":            a.Role,
-		"status":          "online",
-		"last_seen_at":    now.Format(time.RFC3339),
-		"model":           nil,
-		"parent_agent_id": nil,
+		"canvas_id":    canvasID.String(),
+		"name":         a.Name,
+		"role":         a.Role,
+		"status":       "online",
+		"last_seen_at": now.Format(time.RFC3339),
 	}
 	if a.Model != nil {
 		row["model"] = *a.Model
@@ -2963,7 +2965,27 @@ func (s *supabaseStore) ClaimAction(ctx context.Context, canvasID, id uuid.UUID,
 		// timed-out response) gets its claim back, not a conflict. The generic
 		// "agent" identity is excluded on purpose — two anonymous sessions must
 		// never both be told they won.
+		//
+		// TTL interaction: the reclaim must RESTAMP an expired claim (via the
+		// same atomic takeover UPDATE — a self-takeover), never return it as-is.
+		// Otherwise a long-running task whose harness retries task_start keeps a
+		// permanently-expired claimed_at, and any rival's takeover then produces
+		// the exact double-execution the atomic claim exists to prevent.
 		if holder != "" && holder != "agent" && holder == claimedBy {
+			if s.claimTTL > 0 && existing.ClaimedAt != nil && now.Sub(*existing.ClaimedAt) >= s.claimTTL {
+				a, v, ok, terr := s.takeOverExpiredClaim(ctx, canvasID, id, claimedBy, now)
+				if terr != nil {
+					// A lost self-takeover race means someone ELSE now holds it —
+					// surface that as the conflict it is.
+					return nil, 0, terr
+				}
+				if ok {
+					return a, v, nil
+				}
+				// No takeover happened (e.g. claimed_at refreshed concurrently by
+				// our own parallel retry) — the claim is live again; fall through
+				// to the idempotent success below.
+			}
 			return existing, 0, nil
 		}
 		// Expired claim → atomic takeover. The Go-side expiry check is only an

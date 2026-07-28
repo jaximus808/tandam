@@ -290,6 +290,8 @@ export default function App() {
   // view, detail slide-over open) and hands it back via onFocusHandled so
   // normal browsing resumes.
   const [boardFocusTaskId, setBoardFocusTaskId] = useState<string | null>(null);
+  // One-shot epic-scope handoff (roadmap epic chip → Board scoped to it).
+  const [boardFocusEpicId, setBoardFocusEpicId] = useState<string | null>(null);
 
   // ── Document tabs (migration 0024) ──────────────────────────────────────────
   // A canvas is a bag of named documents; the tab strip shows the OPEN ones.
@@ -1024,6 +1026,14 @@ export default function App() {
     openBoard();
   }
 
+  // Roadmap epic chip → Board scoped to that epic. The board stays mounted
+  // after first visit, so this rides the same one-shot prop mechanism as
+  // openBoardTask (a localStorage write alone only applies at mount).
+  function openBoardForEpic(epicId: string) {
+    setBoardFocusEpicId(epicId);
+    openBoard();
+  }
+
   // Following is armed even before any agent shows up — distinguish "an agent is
   // here" from "on, waiting for one" so the button reads as live, not dead.
   const agentPresent = agentList.length > 0;
@@ -1392,6 +1402,8 @@ export default function App() {
               state={canvasState}
               readOnly={canvas.yourRole === "read"}
               focusTaskId={boardFocusTaskId}
+              focusEpicId={boardFocusEpicId}
+              onScopeHandled={() => setBoardFocusEpicId(null)}
               onFocusHandled={() => setBoardFocusTaskId(null)}
             />
           </div>
@@ -1455,7 +1467,7 @@ export default function App() {
                   state={scopedState}
                   code={canvas.code}
                   readOnly={canvas.yourRole === "read"}
-                  onOpenBoard={openBoard}
+                  onOpenBoardForEpic={openBoardForEpic}
                 />
               )}
               {m === "sheets" && <SheetsMode state={scopedState} canvasCode={canvas.code} />}

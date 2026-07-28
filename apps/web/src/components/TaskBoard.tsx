@@ -301,6 +301,8 @@ export default function TaskBoard({
   readOnly,
   focusTaskId,
   onFocusHandled,
+  focusEpicId,
+  onScopeHandled,
 }: {
   code: string;
   state: CanvasState;
@@ -310,6 +312,11 @@ export default function TaskBoard({
   // detail — then hand the token back via onFocusHandled.
   focusTaskId?: string | null;
   onFocusHandled?: () => void;
+  // One-shot EPIC-scope handoff (roadmap chip → "open the Board scoped to this
+  // epic"): same pattern as focusTaskId, needed because the board stays
+  // mounted after first visit so a localStorage write alone never re-scopes.
+  focusEpicId?: string | null;
+  onScopeHandled?: () => void;
 }) {
   // Sidebar scope — raw as stored; validated against the live epic set below.
   const [scope, setScope] = useState<string>(() => {
@@ -372,6 +379,25 @@ export default function TaskBoard({
   function selectScope(s: string) {
     setScope(s);
     setSidebarOpen(false); // mobile: picking a scope dismisses the drawer
+    // Scoping to an AGED epic (finished/rejected — filed in the Done bucket)
+    // must reveal its sidebar entry: without this the selection highlights
+    // nothing and the board looks scoped to a ghost (QA wave-3 finding 5).
+    if (s !== "all" && s !== "none") {
+      const epic = (state.actions ?? {})[s];
+      if (epic && epic.type === "epic") {
+        const own = Object.values(state.actions ?? {}).filter(
+          (a) => a.type === "task" && taskPayload(a).epicId === s,
+        );
+        if (epicLifecycle(epic, own) !== "active") {
+          setDoneOpen(true);
+          try {
+            localStorage.setItem(DONE_OPEN_KEY, "1");
+          } catch {
+            /* preference only */
+          }
+        }
+      }
+    }
     try {
       localStorage.setItem(SCOPE_KEY, s);
     } catch {
@@ -541,6 +567,10 @@ export default function TaskBoard({
     if (!focusTaskId) return;
     const t = (state.actions ?? {})[focusTaskId];
     if (t) {
+      // "Follow this agent" is an unconditional jump: stale filters (a state
+      // or claimant filter from earlier browsing) would hide the very card we
+      // are about to scroll to (QA wave-3 finding 6).
+      clearFilters();
       const eid = taskPayload(t).epicId;
       if (eid && epicIds.has(eid)) selectScope(eid);
       else if (effectiveScope !== "all") selectScope("none");
@@ -558,6 +588,16 @@ export default function TaskBoard({
     onFocusHandled?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusTaskId]);
+
+  // Epic-scope handoff: a roadmap chip asked for this epic. One-shot, mirrors
+  // the task-focus effect above (the board stays mounted, so props are the
+  // only reliable channel — a bare localStorage write never re-scopes).
+  useEffect(() => {
+    if (!focusEpicId) return;
+    if (epicIds.has(focusEpicId)) selectScope(focusEpicId);
+    onScopeHandled?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusEpicId]);
 
   // Keyboard: "/" focuses search; Escape closes the detail panel first, then
   // clears the filters. Bound per-render so the closures stay fresh.
