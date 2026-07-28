@@ -55,12 +55,12 @@ export default function MobileNavDrawer({
     <div className="fixed inset-0 z-[90] sm:hidden">
       {/* Scrim — tap outside the panel to dismiss. */}
       <div
-        className="absolute inset-0 bg-ink/30 backdrop-blur-[1px]"
+        className="absolute inset-0 bg-ink/40"
         onClick={onClose}
         aria-hidden="true"
       />
       <aside
-        className="absolute inset-x-0 bottom-0 flex max-h-[80vh] flex-col rounded-t-2xl border-t border-ink/10 bg-surface shadow-xl animate-[drawer-in_180ms_ease-out]"
+        className="absolute inset-x-0 bottom-0 flex max-h-[80vh] flex-col rounded-t-[10px] border-t border-ink/10 bg-surface shadow-lg animate-[drawer-in_180ms_ease-out]"
         role="dialog"
         aria-modal="true"
         aria-label="Canvas navigation"
@@ -78,9 +78,9 @@ export default function MobileNavDrawer({
                 key={item.id}
                 onClick={() => onSelectView(item.id)}
                 className={[
-                  "relative flex h-9 flex-1 items-center justify-center rounded-lg transition-colors",
+                  "relative flex h-9 flex-1 items-center justify-center rounded-md transition-colors",
                   isActive
-                    ? "bg-ink/[0.06] text-ink"
+                    ? "bg-accent/[0.08] text-accent"
                     : "text-ink/40 hover:bg-ink/5 hover:text-ink/70",
                 ].join(" ")}
                 title={item.label}
@@ -89,7 +89,7 @@ export default function MobileNavDrawer({
               >
                 <Icon size={19} strokeWidth={1.75} />
                 {badge > 0 && (
-                  <span className="absolute right-2 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#C75B39] px-1 text-[9px] font-bold text-white">
+                  <span className="absolute right-2 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-agent px-1 text-[9px] font-bold text-white">
                     {badge}
                   </span>
                 )}
@@ -98,7 +98,7 @@ export default function MobileNavDrawer({
           })}
           <button
             onClick={onClose}
-            className="ml-1 flex h-9 w-9 items-center justify-center rounded-lg text-ink/40 transition-colors hover:bg-ink/5 hover:text-ink/70"
+            className="ml-1 flex h-9 w-9 items-center justify-center rounded-md text-ink/40 transition-colors hover:bg-ink/5 hover:text-ink/70"
             title="Close"
             aria-label="Close navigation"
           >

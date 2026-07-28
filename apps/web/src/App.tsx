@@ -50,7 +50,6 @@ import { recordRecent } from "./lib/recentCanvases";
 import { loadTabState, saveTabState } from "./lib/tabState";
 import { loadSidebarState, saveSidebarState } from "./lib/sidebarState";
 import { MOCK_ENABLED, mockCanvas } from "./lib/mockFixture";
-import { BOARD_THEME, modeTheme } from "./lib/modeTheme";
 import posthog from "./lib/posthog";
 
 // A canvas is a bag of named documents (migration 0024). Each document renders
@@ -982,18 +981,10 @@ export default function App() {
 
   if (!canvasState || !canvas) {
     return (
-      <div className="relative flex h-screen flex-col items-center justify-center overflow-hidden bg-paper font-brand text-ink">
-        <div
-          aria-hidden="true"
-          className="surface-grid-faint absolute inset-0"
-          style={{
-            maskImage: "radial-gradient(60% 60% at 50% 50%, black 30%, transparent 100%)",
-            WebkitMaskImage: "radial-gradient(60% 60% at 50% 50%, black 30%, transparent 100%)",
-          }}
-        />
+      <div className="relative flex h-screen flex-col items-center justify-center overflow-hidden bg-paper text-ink">
         <TandemLogo size={56} />
         <p className="relative mt-6 text-sm font-medium text-ink/70">Joining canvas</p>
-        <p className="relative mt-2 rounded-[4px] border border-ink/15 bg-surface px-2.5 py-1 font-code text-xs tracking-[0.3em] text-ink/50">
+        <p className="relative mt-2 rounded-[4px] border border-ink/10 bg-surface px-2.5 py-1 font-code text-xs tracking-[0.3em] text-ink/50">
           {canvasCode}
         </p>
       </div>
@@ -1041,7 +1032,6 @@ export default function App() {
   const inWelcome = !hasTabs;
   // Toggling off pins the view to the current tab; on resumes following.
   const toggleFollow = () => setActiveDocId(following ? effectiveDocId : null);
-  const theme = boardOpen ? BOARD_THEME : modeTheme(effectiveMode);
 
   // ── Document tab actions ────────────────────────────────────────────────────
   function selectDoc(id: string) {
@@ -1105,28 +1095,20 @@ export default function App() {
 
   return (
     <ModeNavContext.Provider value={setMode}>
-    <div className="flex flex-col h-screen bg-paper font-brand text-ink overflow-hidden">
+    <div className="flex flex-col h-screen bg-paper text-ink overflow-hidden">
       {/* z-[80] so the header (and its bell dropdown) sits above the agent
           cursor overlay (z-[70]); modals are z-[2000] and still cover it. */}
-      <header className="relative z-[80] flex items-center gap-1.5 px-3 py-2.5 bg-paper/85 backdrop-blur border-b border-ink/5 shrink-0 sm:gap-2 sm:px-4">
-        {/* Accent rule across the top of the chrome — picks up the active mode's
-            colour and eases between them as you switch views. */}
-        <span
-          aria-hidden="true"
-          className="absolute inset-x-0 top-0 h-0.5 transition-colors duration-500"
-          style={{ backgroundColor: theme.solid }}
-        />
-
+      <header className="relative z-[80] flex items-center gap-1.5 px-3 py-2.5 bg-paper border-b border-ink/10 shrink-0 sm:gap-2 sm:px-4">
         {/* On mobile the nav-drawer trigger lives as a FAB stacked under the
             QuickLog button (see below) — off the header so the canvas title has
             room. The desktop left dock is `hidden sm:flex`. */}
         <button
           onClick={() => handleJoin("")}
-          className="group flex items-center gap-1.5 text-sm shrink-0"
+          className="group flex items-center gap-1.5 text-sm shrink-0 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
           title="Back to home"
         >
           <TandemLogo size={28} animate={false} />
-          <span className="hidden font-semibold tracking-tight text-ink transition-colors group-hover:text-sky-600 sm:inline">
+          <span className="hidden font-semibold tracking-tight text-ink transition-colors group-hover:text-accent sm:inline">
             Tandem
           </span>
         </button>
@@ -1154,7 +1136,7 @@ export default function App() {
           </span>
           {canvas.yourRole === "read" && (
             <span
-              className="inline-flex items-center gap-1 rounded-[3px] border border-ink/15 bg-ink/[0.04] px-1.5 py-px font-code text-[10px] uppercase tracking-[0.12em] text-ink/50 shrink-0"
+              className="inline-flex items-center gap-1 rounded-[4px] bg-ink/5 px-1.5 py-px text-[11px] font-medium text-ink/60 shrink-0"
               title="You have view-only access to this canvas"
             >
               <span className="h-1 w-1 rounded-full bg-ink/35" />
@@ -1179,10 +1161,9 @@ export default function App() {
           <button
             onClick={toggleFollow}
             className={[
-              "inline-flex items-center gap-1.5 rounded-lg h-8 px-3 text-sm font-medium transition-colors",
-              following ? "" : "text-ink/55 hover:bg-ink/5 hover:text-ink/80",
+              "inline-flex items-center gap-1.5 rounded-md h-8 px-3 text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper",
+              following ? "bg-accent/[0.08] text-accent" : "text-ink/55 hover:bg-ink/5 hover:text-ink/80",
             ].join(" ")}
-            style={following ? { backgroundColor: theme.soft, color: theme.solid } : undefined}
             title={
               following
                 ? agentPresent
@@ -1194,14 +1175,13 @@ export default function App() {
           >
             <span className="relative flex h-1.5 w-1.5">
               {following && (
-                <span
-                  className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-70"
-                  style={{ backgroundColor: theme.solid }}
-                />
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-70" />
               )}
               <span
-                className="relative inline-flex h-1.5 w-1.5 rounded-full"
-                style={{ backgroundColor: following ? theme.solid : "#9ca3af" }}
+                className={[
+                  "relative inline-flex h-1.5 w-1.5 rounded-full",
+                  following ? "bg-accent" : "bg-ink/30",
+                ].join(" ")}
               />
             </span>
             <span className="hidden sm:inline">
@@ -1209,7 +1189,7 @@ export default function App() {
             </span>
           </button>
           {claiming ? (
-            <span className="hidden rounded-md border border-ink/20 px-3 py-1.5 text-sm font-medium text-ink/60 sm:inline-block">
+            <span className="hidden h-8 items-center rounded-md border border-ink/15 bg-surface px-3 text-[13px] font-medium text-ink/60 sm:inline-flex">
               Saving to your account…
             </span>
           ) : me ? (
@@ -1217,7 +1197,7 @@ export default function App() {
               <button
                 onClick={handleCopyToAccount}
                 disabled={copying}
-                className="hidden rounded-md border border-ink/20 px-3 py-1.5 text-sm font-medium text-ink/75 transition-colors hover:border-ink/50 hover:bg-surface disabled:opacity-60 sm:inline-block"
+                className="hidden h-8 items-center rounded-md border border-ink/15 bg-surface px-3 text-[13px] font-medium text-ink/80 transition-colors hover:border-ink/25 hover:bg-ink/[0.03] disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper sm:inline-flex"
                 title="Save a copy of this canvas to your account so it shows up in My canvases on every device"
               >
                 {copying ? "Copying…" : "Copy to my account"}
@@ -1233,8 +1213,7 @@ export default function App() {
               <button
                 onClick={handleSignedOutCopyClick}
                 disabled={copying}
-                className="btn-press rounded-md px-3 py-1.5 text-sm font-medium text-white shadow-sm transition-opacity disabled:opacity-60"
-                style={{ backgroundColor: theme.solid }}
+                className="inline-flex h-8 items-center rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-[filter] hover:brightness-[0.94] disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
                 title="Sign in and get your own editable copy of this canvas"
               >
                 {copying ? "Copying…" : (
@@ -1249,7 +1228,7 @@ export default function App() {
           {me && canvas.ownerUserId === me.id && (
             <button
               onClick={() => setShareOpen(true)}
-              className="rounded-md border border-ink/20 px-3 py-1.5 text-sm font-medium text-ink/75 transition-colors hover:border-ink/50 hover:bg-surface"
+              className="inline-flex h-8 items-center rounded-md border border-ink/15 bg-surface px-3 text-[13px] font-medium text-ink/80 transition-colors hover:border-ink/25 hover:bg-ink/[0.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
               title="Control who can open and edit this canvas"
             >
               Share
@@ -1257,7 +1236,7 @@ export default function App() {
           )}
           <button
             onClick={() => setConnectOpen(true)}
-            className="btn-press rounded-md px-3.5 py-1.5 text-sm font-medium bg-ink text-paper shadow-[2px_2px_0_#0D6E66]"
+            className="inline-flex h-8 items-center rounded-md bg-accent px-3.5 text-[13px] font-medium text-white transition-[filter] hover:brightness-[0.94] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
           >
             Connect
           </button>
@@ -1293,7 +1272,7 @@ export default function App() {
 
       {claimNotice && (
         <div className="pointer-events-none fixed inset-x-0 top-16 z-50 flex justify-center">
-          <div className="pointer-events-auto rounded-full bg-ink px-4 py-2 text-sm font-medium text-paper shadow-lg">
+          <div className="pointer-events-auto rounded-lg bg-ink px-4 py-2 text-sm font-medium text-paper shadow-lg">
             {claimNotice} ✓
           </div>
         </div>
@@ -1363,7 +1342,7 @@ export default function App() {
             loaded, so even on the empty homepage (zero tabs) the "+" is there to
             start one. z-[75] keeps its add-menu above the mode content but below
             the header (z-[80]). */}
-        <div className="relative z-[75] flex items-center px-3 py-1 bg-paper/70 backdrop-blur border-b border-ink/5 shrink-0 sm:px-4">
+        <div className="relative z-[75] flex items-center px-3 py-1 bg-paper border-b border-ink/10 shrink-0 sm:px-4">
           <DocumentTabs
             docs={openDocs}
             activeDocId={boardOpen ? null : effectiveDocId}
@@ -1377,7 +1356,7 @@ export default function App() {
         </div>
 
         {canvas.yourRole === "read" && (
-          <div className="flex items-center justify-center gap-2 border-b border-ink/10 bg-paper px-4 py-1.5 text-center font-code text-[11.5px] text-ink/55">
+          <div className="flex items-center justify-center gap-2 border-b border-ink/10 bg-paper px-4 py-1.5 text-center text-xs text-ink/55">
             <span className="inline-block h-1.5 w-1.5 rounded-full bg-ink/30" />
             View only — you can follow along but not edit this canvas.
           </div>
@@ -1487,13 +1466,13 @@ export default function App() {
             thumb reach than the top-left. Badges proposed tasks like the rail. */}
         <button
           onClick={() => setMobileNavOpen(true)}
-          className="fixed bottom-5 right-5 z-30 flex h-12 w-12 items-center justify-center rounded-full border border-black/10 bg-white text-[#2A2620] shadow-[2px_2px_0_#0D6E66] active:translate-y-px sm:hidden"
+          className="fixed bottom-5 right-5 z-30 flex h-12 w-12 items-center justify-center rounded-full border border-ink/10 bg-surface text-ink shadow-lg active:translate-y-px sm:hidden"
           title="Menu"
           aria-label="Open navigation"
         >
           <Menu size={20} strokeWidth={1.75} />
           {proposedTaskCount > 0 && (
-            <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#C75B39] px-1 text-[9px] font-bold text-white">
+            <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-agent px-1 text-[9px] font-bold text-white">
               {proposedTaskCount}
             </span>
           )}

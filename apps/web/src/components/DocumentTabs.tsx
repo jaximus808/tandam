@@ -2,8 +2,7 @@ import { useRef, useState } from "react";
 import { X, Plus } from "lucide-react";
 import type { Document, DocumentType } from "../types";
 import { sendOp } from "../lib/ws";
-import { BOARD_THEME, modeTheme } from "../lib/modeTheme";
-import { DOC_TYPE_TO_MODE, DOC_TYPE_LABEL, CREATABLE_DOC_TYPES } from "../lib/docTypes";
+import { DOC_TYPE_LABEL, CREATABLE_DOC_TYPES } from "../lib/docTypes";
 
 interface Props {
   /** Open documents, in display (sortOrder) order. */
@@ -75,21 +74,19 @@ export default function DocumentTabs({
   return (
     <div className="flex items-center gap-0.5 min-w-0">
       {/* Pinned Board pseudo-tab — outside the scrollable doc-tab list so it's
-          always reachable, styled like a tab but in the brand teal (it's product
-          chrome, not a document). */}
+          always reachable, styled like a tab (it's product chrome, not a
+          document). Active/selected = accent, like every tab. */}
       <button
         onClick={onSelectBoard}
         className={[
-          "flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-sm font-medium shrink-0 transition-colors",
-          boardActive ? "" : "text-ink/55 hover:bg-ink/5 hover:text-ink/80",
+          "flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[13px] font-medium shrink-0 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
+          boardActive ? "bg-accent/[0.08] text-accent" : "text-ink/55 hover:bg-ink/5 hover:text-ink/80",
         ].join(" ")}
-        style={boardActive ? { backgroundColor: BOARD_THEME.soft, color: BOARD_THEME.solid } : undefined}
         title="Task board — every task and epic on this canvas"
         aria-pressed={boardActive}
       >
         <span
-          className="h-2 w-2 rounded-full shrink-0"
-          style={{ backgroundColor: BOARD_THEME.solid }}
+          className={["h-2 w-2 rounded-full shrink-0 bg-current", boardActive ? "" : "opacity-40"].join(" ")}
         />
         Board
       </button>
@@ -101,7 +98,6 @@ export default function DocumentTabs({
           is why the menu never appeared. */}
       <div className="flex items-center gap-0.5 min-w-0 overflow-x-auto no-scrollbar">
       {docs.map((doc) => {
-        const t = modeTheme(DOC_TYPE_TO_MODE[doc.type]);
         const active = doc.id === activeDocId;
         const renaming = renamingId === doc.id;
         return (
@@ -113,13 +109,12 @@ export default function DocumentTabs({
             onDrop={() => onDrop(doc.id)}
             onClick={() => onSelect(doc.id)}
             className={[
-              "group flex items-center gap-1.5 rounded-lg pl-2.5 pr-1.5 py-1 text-sm font-medium shrink-0 cursor-pointer transition-colors",
-              active ? "" : "text-ink/55 hover:bg-ink/5 hover:text-ink/80",
+              "group flex items-center gap-1.5 rounded-md pl-2.5 pr-1.5 py-1 text-[13px] font-medium shrink-0 cursor-pointer transition-colors",
+              active ? "bg-accent/[0.08] text-accent" : "text-ink/55 hover:bg-ink/5 hover:text-ink/80",
             ].join(" ")}
-            style={active ? { backgroundColor: t.soft, color: t.solid } : undefined}
             title={DOC_TYPE_LABEL[doc.type]}
           >
-            <span className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: t.solid }} />
+            <span className={["h-2 w-2 rounded-full shrink-0 bg-current", active ? "" : "opacity-40"].join(" ")} />
             {renaming ? (
               <input
                 autoFocus
@@ -131,7 +126,7 @@ export default function DocumentTabs({
                   if (e.key === "Enter") commitRename(doc.id);
                   if (e.key === "Escape") setRenamingId(null);
                 }}
-                className="w-24 bg-surface/80 rounded px-1 py-0 text-sm text-ink outline-none ring-1 ring-ink/15"
+                className="w-24 bg-surface rounded px-1 py-0 text-[13px] text-ink outline-none ring-2 ring-accent/40"
               />
             ) : (
               <span
@@ -163,7 +158,7 @@ export default function DocumentTabs({
         <div className="relative shrink-0">
           <button
             onClick={() => setAddOpen((o) => !o)}
-            className="ml-0.5 flex h-7 w-7 items-center justify-center rounded-lg text-ink/45 hover:bg-ink/5 hover:text-ink/70 transition-colors"
+            className="ml-0.5 flex h-7 w-7 items-center justify-center rounded-md text-ink/45 hover:bg-ink/5 hover:text-ink/70 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
             title="New document"
             aria-haspopup="menu"
             aria-expanded={addOpen}
@@ -175,28 +170,25 @@ export default function DocumentTabs({
               <div className="fixed inset-0 z-10" onClick={() => setAddOpen(false)} />
               <div
                 role="menu"
-                className="absolute left-0 mt-1.5 z-20 min-w-[11rem] rounded-xl bg-surface border border-ink/10 shadow-lg shadow-ink/5 py-1"
+                className="absolute left-0 mt-1.5 z-20 min-w-[11rem] rounded-lg bg-surface border border-ink/10 shadow-lg py-1"
               >
                 <div className="px-3 py-1 text-[11px] font-medium uppercase tracking-wide text-ink/45">
                   New document
                 </div>
-                {CREATABLE_DOC_TYPES.map((type) => {
-                  const t = modeTheme(DOC_TYPE_TO_MODE[type]);
-                  return (
-                    <button
-                      key={type}
-                      role="menuitem"
-                      onClick={() => {
-                        onCreate(type);
-                        setAddOpen(false);
-                      }}
-                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-medium text-ink/70 hover:bg-ink/10"
-                    >
-                      <span className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: t.solid }} />
-                      {DOC_TYPE_LABEL[type]}
-                    </button>
-                  );
-                })}
+                {CREATABLE_DOC_TYPES.map((type) => (
+                  <button
+                    key={type}
+                    role="menuitem"
+                    onClick={() => {
+                      onCreate(type);
+                      setAddOpen(false);
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] font-medium text-ink/70 hover:bg-ink/5 hover:text-ink"
+                  >
+                    <span className="h-2 w-2 rounded-full shrink-0 bg-ink/25" />
+                    {DOC_TYPE_LABEL[type]}
+                  </button>
+                ))}
               </div>
             </>
           )}
