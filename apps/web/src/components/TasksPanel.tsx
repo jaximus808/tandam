@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import posthog from "../lib/posthog";
-import { Bot, Check, ChevronDown, ChevronsLeft, ChevronUp, Layers, Link2, Pencil, Plus, RotateCcw, Trash2, User, X } from "lucide-react";
+import { Bot, Check, ChevronDown, ChevronRight, ChevronsLeft, ChevronUp, Layers, Link2, Pencil, Plus, RotateCcw, Trash2, User, X } from "lucide-react";
 import type { Action, CanvasState, EpicPayload, TaskPayload } from "../types";
 import {
   approveAction,
@@ -12,6 +12,7 @@ import {
   updateTask,
   type TaskDraft,
 } from "../lib/api";
+import { epicLifecycle } from "../lib/epicLifecycle";
 
 /* ─────────────────────────────────────────────────────────────────────────────
    TasksPanel — the work queue.
@@ -76,6 +77,9 @@ export default function TasksPanel({
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // TDM-9 age-out: finished/rejected epic groups collapse to a one-line
+  // header; ids here are the ones the user expanded (per-session only).
+  const [openEpics, setOpenEpics] = useState<Set<string>>(new Set());
 
   const tasks = useMemo(
     () =>
@@ -391,12 +395,58 @@ export default function TasksPanel({
   // whole batch flips to Ready on the next state push.
   function renderEpicGroup(epic: Action) {
     const p = (epic.payload ?? {}) as EpicPayload;
-    const chip = STATE_CHIP[epic.state] ?? STATE_CHIP.proposed;
     const children = tasksByEpic.get(epic.id) ?? [];
     const done = children.filter((t) => t.state === "done").length;
+    // TDM-9 age-out: a finished (approved + all tasks terminal) or rejected
+    // epic collapses to a one-line header until expanded on demand.
+    const lifecycle = epicLifecycle(epic, children);
+    const retired = lifecycle !== "active";
+    const open = openEpics.has(epic.id);
+    const chip = STATE_CHIP[lifecycle === "finished" ? "done" : epic.state] ?? STATE_CHIP.proposed;
+    const toggleOpen = () =>
+      setOpenEpics((prev) => {
+        const next = new Set(prev);
+        if (next.has(epic.id)) next.delete(epic.id);
+        else next.add(epic.id);
+        return next;
+      });
+    if (retired && !open) {
+      return (
+        <button
+          key={epic.id}
+          onClick={toggleOpen}
+          title={p.body || p.title}
+          className="mb-1.5 flex w-full items-center gap-1.5 rounded-lg px-1 py-1 text-left opacity-60 transition-opacity hover:opacity-100"
+        >
+          <ChevronRight size={12} className="shrink-0 text-ink/40" />
+          <Layers size={12} className="shrink-0 text-ink/40" />
+          <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-ink/75">
+            {p.title || "Untitled epic"}
+          </span>
+          <span className="shrink-0 text-[10px] text-ink/35">
+            {done}/{children.length}
+          </span>
+          <span
+            className="shrink-0 rounded-[4px] px-1.5 py-px text-[10px] font-semibold uppercase tracking-[0.08em]"
+            style={{ backgroundColor: chip.bg, color: chip.fg }}
+          >
+            {chip.label}
+          </span>
+        </button>
+      );
+    }
     return (
       <div key={epic.id} className="mb-3">
         <div className="mb-1.5 flex items-center gap-1.5 px-1">
+          {retired && (
+            <button
+              onClick={toggleOpen}
+              title="Collapse"
+              className="shrink-0 text-ink/40 transition-colors hover:text-ink/70"
+            >
+              <ChevronDown size={12} />
+            </button>
+          )}
           <Layers size={12} className="shrink-0 text-ink/40" />
           <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-ink/75" title={p.body || p.title}>
             {p.title || "Untitled epic"}

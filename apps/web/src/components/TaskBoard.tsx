@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboa
 import {
   Bot,
   Check,
+  ChevronRight,
   GitCommitHorizontal,
   Layers,
   Link2,
@@ -22,6 +23,7 @@ import {
   updateTask,
 } from "../lib/api";
 import posthog from "../lib/posthog";
+import { epicLifecycle, TERMINAL_STATES } from "../lib/epicLifecycle";
 
 /* ─────────────────────────────────────────────────────────────────────────────
    TaskBoard — the full-page task surface, opened from the pinned "Board" tab.
@@ -34,6 +36,12 @@ import posthog from "../lib/posthog";
    doubles as the approval inbox. Two sticky pseudo-entries sit on top:
    "All tasks" and "No epic" (no or dangling epicId). The selection persists
    in localStorage and falls back to All tasks if the stored epic vanished.
+
+   Age-out (TDM-9): epics whose lifecycle (lib/epicLifecycle) is finished
+   (approved + all tasks terminal) or archived (rejected) leave the timeline
+   for a collapsed "Done · N" bucket at the bottom — dimmed entries, still
+   selectable, so history stays browsable. The one exception is the epic you
+   are currently viewing: it holds its timeline slot if it finishes under you.
 
    The main area is ONE kanban (Proposed / Ready / Working / Done /
    Failed+Rejected), always scoped to the sidebar selection. Scoped to an
@@ -79,8 +87,8 @@ const COLUMNS: { key: string; label: string; states: ActionState[]; dot: string 
 // Sidebar scope — which lens the kanban shows: "all" | "none" | an epic id.
 // Persisted so the board reopens where you left it.
 const SCOPE_KEY = "tandem.board.epic";
-
-const TERMINAL_STATES: ActionState[] = ["done", "failed", "rejected"];
+// Whether the sidebar's Done bucket (finished + rejected epics) is expanded.
+const DONE_OPEN_KEY = "tandem.board.epicsDoneOpen";
 
 function taskPayload(a: Action): TaskPayload {
   return (a.payload ?? {}) as TaskPayload;
@@ -306,6 +314,14 @@ export default function TaskBoard({
   });
   // Mobile only — on md+ the sidebar is always visible.
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // Done-bucket expansion (finished + rejected epics) — persisted preference.
+  const [doneOpen, setDoneOpen] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(DONE_OPEN_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
   const [busyId, setBusyId] = useState<string | null>(null);
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
@@ -333,6 +349,17 @@ export default function TaskBoard({
     setSearchInput("");
     setQuery("");
     setFilters(NO_FILTERS);
+  }
+
+  function toggleDoneOpen() {
+    setDoneOpen((v) => {
+      try {
+        localStorage.setItem(DONE_OPEN_KEY, v ? "0" : "1");
+      } catch {
+        /* preference only */
+      }
+      return !v;
+    });
   }
 
   function selectScope(s: string) {
@@ -409,6 +436,35 @@ export default function TaskBoard({
     if (scopedEpic) return tasksByEpic.get(scopedEpic.id) ?? [];
     return tasks;
   }, [effectiveScope, scopedEpic, tasks, epiclessAll, tasksByEpic]);
+
+  // ── Epic age-out (TDM-9) ────────────────────────────────────────────────────
+  // Finished (approved + ≥1 task, all terminal) and rejected epics leave the
+  // timeline and file into a collapsed "Done" bucket at the bottom. No
+  // rug-pull: an epic that finishes WHILE it is the selected scope stays
+  // pinned in its timeline slot for the rest of the session — it files under
+  // Done on the next visit. Pure derived state; pin held via functional update.
+  const [pinnedActiveId, setPinnedActiveId] = useState<string | null>(null);
+  useEffect(() => {
+    const lc = scopedEpic
+      ? epicLifecycle(scopedEpic, tasksByEpic.get(scopedEpic.id) ?? [])
+      : null;
+    setPinnedActiveId((prev) => {
+      if (scopedEpic && lc === "active") return scopedEpic.id; // viewing an active epic — pin it
+      if (scopedEpic && prev === scopedEpic.id) return prev; // it finished under us — hold
+      return null; // navigated away (or no epic scope) — release
+    });
+  }, [scopedEpic, tasksByEpic]);
+
+  const { activeEpics, agedEpics } = useMemo(() => {
+    const act: Action[] = [];
+    const aged: Action[] = [];
+    for (const e of epics) {
+      const lc = epicLifecycle(e, tasksByEpic.get(e.id) ?? []);
+      if (lc === "active" || e.id === pinnedActiveId) act.push(e);
+      else aged.push(e);
+    }
+    return { activeEpics: act, agedEpics: aged };
+  }, [epics, tasksByEpic, pinnedActiveId]);
 
   // One predicate, AND-composed — applied WITHIN the selected scope.
   function taskMatches(t: Action): boolean {
@@ -623,9 +679,12 @@ export default function TaskBoard({
     );
   }
 
-  function renderEpicEntry(e: Action) {
+  // aged: rendered inside the Done bucket — dimmed, lifecycle chip (Done for
+  // finished, Rejected for archived), drained-in annotation where it applies.
+  function renderEpicEntry(e: Action, aged = false) {
     const p = epicPayload(e);
-    const { total, done, working, drain } = epicStats(e);
+    const { list, total, done, working, drain } = epicStats(e);
+    const lifecycle = epicLifecycle(e, list);
     const selected = effectiveScope === e.id;
     return (
       <div
@@ -635,7 +694,7 @@ export default function TaskBoard({
         aria-pressed={selected}
         onClick={() => selectScope(e.id)}
         onKeyDown={entryKeyDown(e.id)}
-        className={entryCls(selected)}
+        className={`${entryCls(selected)}${aged ? " opacity-60 hover:opacity-90" : ""}`}
       >
         <div className="flex items-center gap-1.5">
           <Layers size={12} className="shrink-0 text-ink/45" />
@@ -645,7 +704,7 @@ export default function TaskBoard({
           >
             {p.title || "Untitled epic"}
           </span>
-          <StateChip state={e.state} />
+          <StateChip state={lifecycle === "finished" ? "done" : e.state} />
         </div>
         <ProgressBar done={done} working={working} total={total} className="mt-1.5 h-1.5" />
         <div className="mt-1 flex items-center justify-between font-code text-[10px] text-ink/40">
@@ -663,7 +722,10 @@ export default function TaskBoard({
   // ── Scoped-epic header above the kanban ─────────────────────────────────────
   function renderScopeHeader(e: Action) {
     const p = epicPayload(e);
-    const { total, done, working, drain } = epicStats(e);
+    const { list, total, done, working, drain } = epicStats(e);
+    // Finished epics read as history: Done chip, full emerald bar, prominent
+    // drained-in — no approve-era chrome.
+    const finished = epicLifecycle(e, list) === "finished";
     return (
       <div className="shrink-0 border-b border-ink/5 px-4 py-2.5">
         <div className="flex items-center gap-2">
@@ -675,17 +737,27 @@ export default function TaskBoard({
           >
             {p.title || "Untitled epic"}
           </button>
-          <StateChip state={e.state} />
+          <StateChip state={finished ? "done" : e.state} />
+          {finished && drain && (
+            <span className="shrink-0 text-[12px] font-semibold text-emerald-600 dark:text-emerald-400">
+              {drain}
+            </span>
+          )}
           <span className="ml-auto shrink-0 font-code text-[11px] text-ink/45">
             {done}/{total} done
-            {drain ? ` · ${drain}` : ""}
           </span>
         </div>
         {p.body && (
           <p className="mt-1 line-clamp-2 text-[12px] leading-relaxed text-ink/60">{p.body}</p>
         )}
-        <ProgressBar done={done} working={working} total={total} className="mt-2 h-1.5" />
-        <div className="max-w-xs">{renderApproveReject(e, "Approve epic")}</div>
+        {finished ? (
+          <div className="mt-2 h-1.5 rounded-full bg-emerald-500" />
+        ) : (
+          <>
+            <ProgressBar done={done} working={working} total={total} className="mt-2 h-1.5" />
+            <div className="max-w-xs">{renderApproveReject(e, "Approve epic")}</div>
+          </>
+        )}
       </div>
     );
   }
@@ -821,11 +893,29 @@ export default function TaskBoard({
               <div className="px-3 pb-0.5 pt-2.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-ink/30">
                 Epic timeline
               </div>
-              {epics.map(renderEpicEntry)}
+              {activeEpics.map((e) => renderEpicEntry(e))}
               {epics.length === 0 && (
                 <p className="px-3 py-1.5 text-[11px] leading-relaxed text-ink/35">
                   No epics yet — agents propose them as named batches of tasks.
                 </p>
+              )}
+              {/* Done bucket: finished + rejected epics, collapsed by default.
+                  History stays browsable — entries still scope the kanban. */}
+              {agedEpics.length > 0 && (
+                <div className="mt-2 border-t border-ink/5">
+                  <button
+                    onClick={toggleDoneOpen}
+                    aria-expanded={doneOpen}
+                    className="flex w-full items-center gap-1 px-3 pb-1 pt-2.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-ink/30 transition-colors hover:text-ink/55"
+                  >
+                    <ChevronRight
+                      size={10}
+                      className={`shrink-0 transition-transform ${doneOpen ? "rotate-90" : ""}`}
+                    />
+                    Done · {agedEpics.length}
+                  </button>
+                  {doneOpen && agedEpics.map((e) => renderEpicEntry(e, true))}
+                </div>
               )}
             </div>
           </aside>
