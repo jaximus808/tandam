@@ -2886,6 +2886,41 @@ func (s *supabaseStore) ApproveEpicTasks(ctx context.Context, canvasID, epicID u
 	return len(rows), nil
 }
 
+// ApproveActionsBatch flips every listed action still in 'proposed' to
+// approved in ONE bulk conditional UPDATE, stamping approved_by. The
+// state='proposed' filter makes it retry-safe and race-safe: an id that
+// already moved on simply stops matching. Returns the rows that actually
+// flipped (representation) so the caller can compute skipped ids and chain
+// per-epic follow-up; ONE version bump, only when something changed — the
+// batch-latency rule: never N serial round trips for N approvals.
+func (s *supabaseStore) ApproveActionsBatch(ctx context.Context, canvasID uuid.UUID, ids []uuid.UUID, approvedBy string) ([]*Action, error) {
+	if len(ids) == 0 {
+		return []*Action{}, nil
+	}
+	var rows []dbAction
+	_, err := s.client.From("actions").
+		Update(map[string]any{"state": "approved", "approved_by": approvedBy}, "representation", "").
+		Eq("canvas_id", canvasID.String()).
+		Eq("state", "proposed").
+		In("id", uuidStrings(ids)).
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, err
+	}
+	// Nothing matched → no state change, no version bump, no broadcast needed.
+	if len(rows) == 0 {
+		return []*Action{}, nil
+	}
+	if _, err := s.bumpVersion(ctx, canvasID); err != nil {
+		return nil, err
+	}
+	out := make([]*Action, 0, len(rows))
+	for _, d := range rows {
+		out = append(out, toAction(d))
+	}
+	return out, nil
+}
+
 // GetLinkedEntities resolves a task's payload.linkedIds against roadmap items
 // and notes (the two entity kinds tasks link to). Unknown ids are skipped, not
 // errors — a linked item may have been deleted since the task was written.

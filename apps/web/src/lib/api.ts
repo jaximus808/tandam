@@ -186,6 +186,24 @@ export async function approveAction(code: string, id: string): Promise<void> {
   );
 }
 
+// Bulk human gate: approve many proposed actions in ONE request (single bulk
+// conditional UPDATE + one broadcast server-side). Ids that no longer match
+// (already moved on, or deleted) come back in `skipped` instead of failing the
+// whole batch. Epics in the batch cascade to their proposed tasks server-side
+// under the canvas approval policy, same as the single approve.
+export async function approveBatch(
+  code: string,
+  ids: string[],
+): Promise<{ approved: string[]; skipped: string[] }> {
+  const res = await authedFetch(
+    code,
+    "/api/canvas/actions/approve-batch",
+    { method: "POST", body: { ids, approvedBy: "human" } },
+    "Could not approve tasks",
+  );
+  return (await res.json()) as { approved: string[]; skipped: string[] };
+}
+
 export async function rejectAction(code: string, id: string, reason?: string): Promise<void> {
   await authedFetch(
     code,

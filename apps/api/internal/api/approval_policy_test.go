@@ -117,6 +117,24 @@ func (f *policyFakeStore) ReserveTaskTickets(_ context.Context, _ uuid.UUID, n i
 	return 1, nil
 }
 
+// ApproveActionsBatch mirrors the store semantics: only ids that exist AND are
+// still 'proposed' flip; everything else is silently skipped. Returns the
+// flipped rows so the handler can diff.
+func (f *policyFakeStore) ApproveActionsBatch(_ context.Context, _ uuid.UUID, ids []uuid.UUID, approvedBy string) ([]*store.Action, error) {
+	out := []*store.Action{}
+	for _, id := range ids {
+		a, ok := f.actions[id]
+		if !ok || a.State != "proposed" {
+			continue
+		}
+		a.State = "approved"
+		stamp := approvedBy
+		a.ApprovedBy = &stamp
+		out = append(out, a)
+	}
+	return out, nil
+}
+
 func (f *policyFakeStore) ApproveEpicTasks(_ context.Context, _ uuid.UUID, epicID uuid.UUID, approvedBy string) (int, error) {
 	f.epicCalls++
 	f.epicApprovedID = epicID
@@ -324,6 +342,169 @@ func TestApproveEpicRetryRefiresCascade(t *testing.T) {
 	}
 	if fake.epicCalls != 2 {
 		t.Fatalf("ApproveEpicTasks called %d times across two approves, want 2", fake.epicCalls)
+	}
+}
+
+// ── Bulk approve (POST /api/canvas/actions/approve-batch) ────────────────────
+
+func approveBatchResponse(t *testing.T, w *httptest.ResponseRecorder) (approved, skipped []uuid.UUID) {
+	t.Helper()
+	var resp struct {
+		Approved []uuid.UUID `json:"approved"`
+		Skipped  []uuid.UUID `json:"skipped"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response %q: %v", w.Body.String(), err)
+	}
+	return resp.Approved, resp.Skipped
+}
+
+// The bulk endpoint approves only rows still in 'proposed' and reports every
+// other requested id (already moved on, or missing entirely) as skipped.
+func TestApproveBatchApprovesOnlyProposed(t *testing.T) {
+	canvasID := uuid.New()
+	proposedA := uuid.New()
+	proposedB := uuid.New()
+	alreadyApproved := uuid.New()
+	doneTask := uuid.New()
+	missing := uuid.New()
+	fake := &policyFakeStore{
+		policy: "epic",
+		actions: map[uuid.UUID]*store.Action{
+			proposedA:       {ID: proposedA, Type: "task", State: "proposed"},
+			proposedB:       {ID: proposedB, Type: "task", State: "proposed"},
+			alreadyApproved: {ID: alreadyApproved, Type: "task", State: "approved"},
+			doneTask:        {ID: doneTask, Type: "task", State: "done"},
+		},
+	}
+	h := NewHandler(fake, nil, nil)
+	w := httptest.NewRecorder()
+	h.ApproveActionsBatch(w, canvasRequest(t, "POST", "/api/canvas/actions/approve-batch",
+		map[string]any{"ids": []string{
+			proposedA.String(), proposedB.String(), alreadyApproved.String(), doneTask.String(), missing.String(),
+		}}, canvasID, ""))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", w.Code, w.Body.String())
+	}
+	approved, skipped := approveBatchResponse(t, w)
+	if len(approved) != 2 || approved[0] != proposedA || approved[1] != proposedB {
+		t.Fatalf("approved = %v, want [%s %s]", approved, proposedA, proposedB)
+	}
+	if len(skipped) != 3 {
+		t.Fatalf("skipped = %v, want the 3 non-proposed/missing ids", skipped)
+	}
+	wantSkipped := map[uuid.UUID]bool{alreadyApproved: true, doneTask: true, missing: true}
+	for _, id := range skipped {
+		if !wantSkipped[id] {
+			t.Fatalf("unexpected skipped id %s", id)
+		}
+	}
+	for _, id := range []uuid.UUID{proposedA, proposedB} {
+		got := fake.actions[id]
+		if got.State != "approved" {
+			t.Fatalf("task %s state = %q, want approved", id, got.State)
+		}
+		if got.ApprovedBy == nil || *got.ApprovedBy != "human" {
+			t.Fatalf("task %s approvedBy = %v, want human (the default)", id, got.ApprovedBy)
+		}
+	}
+	if fake.actions[doneTask].State != "done" {
+		t.Fatalf("done task mutated to %q", fake.actions[doneTask].State)
+	}
+	if fake.epicCalls != 0 {
+		t.Fatalf("no epics in batch, but ApproveEpicTasks called %d times", fake.epicCalls)
+	}
+}
+
+// An epic approved via the batch runs the same post-approve cascade as the
+// single-approve path under the 'epic' policy.
+func TestApproveBatchEpicCascadesUnderEpicPolicy(t *testing.T) {
+	canvasID := uuid.New()
+	epicID := uuid.New()
+	taskID := uuid.New()
+	fake := &policyFakeStore{
+		policy: "epic",
+		actions: map[uuid.UUID]*store.Action{
+			epicID: {ID: epicID, Type: "epic", State: "proposed"},
+			taskID: {ID: taskID, Type: "task", State: "proposed"},
+		},
+	}
+	h := NewHandler(fake, nil, nil)
+	w := httptest.NewRecorder()
+	h.ApproveActionsBatch(w, canvasRequest(t, "POST", "/api/canvas/actions/approve-batch",
+		map[string]any{"ids": []string{epicID.String(), taskID.String()}, "approvedBy": "jaxon"}, canvasID, ""))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", w.Code, w.Body.String())
+	}
+	approved, skipped := approveBatchResponse(t, w)
+	if len(approved) != 2 || len(skipped) != 0 {
+		t.Fatalf("approved/skipped = %v / %v, want both ids approved", approved, skipped)
+	}
+	if got := fake.actions[epicID].ApprovedBy; got == nil || *got != "jaxon" {
+		t.Fatalf("epic approvedBy = %v, want jaxon", got)
+	}
+	if fake.epicCalls != 1 {
+		t.Fatalf("ApproveEpicTasks called %d times, want 1", fake.epicCalls)
+	}
+	if fake.epicApprovedID != epicID {
+		t.Fatalf("cascade targeted epic %s, want %s", fake.epicApprovedID, epicID)
+	}
+	if fake.epicApprovedBy != "policy:epic" {
+		t.Fatalf("cascade stamped %q, want policy:epic", fake.epicApprovedBy)
+	}
+}
+
+// Under 'strict' policy the batch approves the epic row itself but must NOT
+// cascade to its tasks — each keeps its individual human gate.
+func TestApproveBatchEpicStrictPolicySkipsCascade(t *testing.T) {
+	canvasID := uuid.New()
+	epicID := uuid.New()
+	fake := &policyFakeStore{
+		policy:  "strict",
+		actions: map[uuid.UUID]*store.Action{epicID: {ID: epicID, Type: "epic", State: "proposed"}},
+	}
+	h := NewHandler(fake, nil, nil)
+	w := httptest.NewRecorder()
+	h.ApproveActionsBatch(w, canvasRequest(t, "POST", "/api/canvas/actions/approve-batch",
+		map[string]any{"ids": []string{epicID.String()}}, canvasID, ""))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", w.Code, w.Body.String())
+	}
+	approved, skipped := approveBatchResponse(t, w)
+	if len(approved) != 1 || approved[0] != epicID || len(skipped) != 0 {
+		t.Fatalf("approved/skipped = %v / %v, want just the epic approved", approved, skipped)
+	}
+	if fake.actions[epicID].State != "approved" {
+		t.Fatalf("epic state = %q, want approved (strict blocks the cascade, not the approve)", fake.actions[epicID].State)
+	}
+	if fake.epicCalls != 0 {
+		t.Fatalf("ApproveEpicTasks called %d times under strict policy, want 0", fake.epicCalls)
+	}
+}
+
+// An empty ids list is a 400, and a duplicate skipped id reports once.
+func TestApproveBatchValidation(t *testing.T) {
+	canvasID := uuid.New()
+	missing := uuid.New()
+	fake := &policyFakeStore{policy: "epic", actions: map[uuid.UUID]*store.Action{}}
+	h := NewHandler(fake, nil, nil)
+
+	w := httptest.NewRecorder()
+	h.ApproveActionsBatch(w, canvasRequest(t, "POST", "/api/canvas/actions/approve-batch",
+		map[string]any{"ids": []string{}}, canvasID, ""))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("empty ids: status = %d, want 400", w.Code)
+	}
+
+	w = httptest.NewRecorder()
+	h.ApproveActionsBatch(w, canvasRequest(t, "POST", "/api/canvas/actions/approve-batch",
+		map[string]any{"ids": []string{missing.String(), missing.String()}}, canvasID, ""))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", w.Code, w.Body.String())
+	}
+	approved, skipped := approveBatchResponse(t, w)
+	if len(approved) != 0 || len(skipped) != 1 || skipped[0] != missing {
+		t.Fatalf("approved/skipped = %v / %v, want one deduped skipped id", approved, skipped)
 	}
 }
 

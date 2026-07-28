@@ -847,6 +847,13 @@ type Store interface {
 	// individual human gate. Returns the number of tasks approved; the canvas
 	// version is bumped only when that count is non-zero.
 	ApproveEpicTasks(ctx context.Context, canvasID, epicID uuid.UUID, approvedBy string) (int, error)
+	// ApproveActionsBatch flips every listed action still in 'proposed' to
+	// approved in ONE bulk conditional UPDATE (id IN ids AND canvas_id AND
+	// state='proposed'), stamping approved_by. Ids that don't match (missing,
+	// wrong canvas, or no longer proposed) are silently skipped — the caller
+	// diffs the returned rows against its input to report them. The canvas
+	// version is bumped once, only when at least one row changed.
+	ApproveActionsBatch(ctx context.Context, canvasID uuid.UUID, ids []uuid.UUID, approvedBy string) ([]*Action, error)
 	GetLinkedEntities(ctx context.Context, canvasID uuid.UUID, ids []uuid.UUID) ([]TaskLink, error)
 	// ReserveTaskTickets atomically reserves n consecutive per-canvas ticket
 	// numbers (reserve_task_tickets RPC, migration 0034) and returns the FIRST
