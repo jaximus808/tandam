@@ -44,9 +44,45 @@ export interface CanvasSession {
   // Human-readable name given at agent_register; preferred over agentId as the
   // claimant identity on task_start so the board shows WHO holds a claim.
   agentName?: string;
-  // Fallback claimant identity minted on first use for sessions that never
-  // called agent_register — see Gateway.claimant().
+  // Fallback claimant identity for sessions that never called agent_register —
+  // see Gateway.claimant(). Minted eagerly at connect/create time so it rides
+  // inside the session handle: the hosted HTTP sidecar builds a FRESH Gateway
+  // per call, and a lazily-minted id would differ between calls, making the
+  // API's claim-ownership guard reject a task_complete for a task this same
+  // logical session claimed via task_start (TDM-1).
   claimantId?: string;
+}
+
+/**
+ * Pure handle codec — the session handle IS the session state on the hosted
+ * transport, so everything identity-related (agentId/agentName/claimantId)
+ * must round-trip through these two functions.
+ */
+export function serializeSession(session: CanvasSession): string {
+  return Buffer.from(JSON.stringify(session)).toString("base64url");
+}
+
+/** Parse a handle produced by serializeSession; throws on garbage. */
+export function parseSession(handle: string): CanvasSession {
+  let parsed: CanvasSession;
+  try {
+    parsed = JSON.parse(Buffer.from(handle, "base64url").toString("utf8"));
+  } catch {
+    throw new Error(
+      "Invalid session handle. Re-run `canvas_connect` (or `canvas_create`) to get a fresh one."
+    );
+  }
+  if (!parsed?.token || !parsed?.canvasId) {
+    throw new Error(
+      "Invalid session handle. Re-run `canvas_connect` (or `canvas_create`) to get a fresh one."
+    );
+  }
+  return parsed;
+}
+
+/** Fallback claimant id for sessions that never agent_register. */
+export function mintClaimantId(): string {
+  return `session-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 export class Gateway {
@@ -118,6 +154,10 @@ export class Gateway {
       canvasId: data.canvasId,
       canvasName: data.canvasName,
       canvasCode: data.canvasCode,
+      // Mint the fallback claimant identity NOW (not lazily in claimant()) so
+      // it is baked into every handle this session hands out — a fresh Gateway
+      // rebuilt from the handle then presents the same identity on every call.
+      claimantId: mintClaimantId(),
     };
 
     process.stderr.write(
@@ -186,25 +226,12 @@ export class Gateway {
    * (JWT included), so adopting it fully restores the binding on a fresh gateway.
    */
   exportSession(): string {
-    return Buffer.from(JSON.stringify(this.getSession())).toString("base64url");
+    return serializeSession(this.getSession());
   }
 
   /** Restore a binding from a handle produced by exportSession. */
   adoptSession(handle: string): void {
-    let parsed: CanvasSession;
-    try {
-      parsed = JSON.parse(Buffer.from(handle, "base64url").toString("utf8"));
-    } catch {
-      throw new Error(
-        "Invalid session handle. Re-run `canvas_connect` (or `canvas_create`) to get a fresh one."
-      );
-    }
-    if (!parsed?.token || !parsed?.canvasId) {
-      throw new Error(
-        "Invalid session handle. Re-run `canvas_connect` (or `canvas_create`) to get a fresh one."
-      );
-    }
-    this.session = parsed;
+    this.session = parseSession(handle);
   }
 
   /** Remember the registered agent identity on the session (set by agent_register). */
@@ -217,18 +244,20 @@ export class Gateway {
 
   /**
    * Stable claimant identity for task_start / task_complete. Prefers the
-   * agent_register name/id; a session that never registered gets a random
-   * per-session id minted once and reused. Never returns undefined — an
-   * anonymous claimant would be stored as the generic "agent", which is
-   * excluded from the API's idempotent-reclaim rule, so a retried task_start
-   * after a timed-out response would be told it lost its OWN claim.
+   * agent_register name/id, then the claimantId minted at connect time (and
+   * carried inside the session handle, so it survives the hosted sidecar's
+   * fresh-Gateway-per-call model). Never returns undefined — an anonymous
+   * claimant would be stored as the generic "agent", which is excluded from
+   * the API's idempotent-reclaim rule, so a retried task_start after a
+   * timed-out response would be told it lost its OWN claim. The lazy mint
+   * remains only as a fallback for handles minted by older gateways.
    */
   claimant(): string {
     const s = this.getSession();
     if (s.agentName) return s.agentName;
     if (s.agentId) return s.agentId;
     if (!s.claimantId) {
-      s.claimantId = `session-${Math.random().toString(36).slice(2, 8)}`;
+      s.claimantId = mintClaimantId();
     }
     return s.claimantId;
   }
