@@ -170,7 +170,15 @@ function TerminalPane({
         </span>
       </div>
       {/* Body: newest lines pinned to the bottom, older ones clip off the top. */}
-      <div className="flex h-40 flex-col justify-end overflow-hidden px-3 pb-2.5 pt-1 font-code text-[12px] leading-[1.55] sm:h-44 sm:text-[12.5px]">
+      <div
+        className="flex h-40 flex-col justify-end overflow-hidden px-3 pb-2.5 pt-1 font-code text-[12px] leading-[1.55] sm:h-44 sm:text-[12.5px]"
+        style={{
+          // Older lines scroll off the TOP of the fixed-height pane; a mask
+          // fades them out instead of chopping glyphs in half mid-row.
+          maskImage: "linear-gradient(to bottom, transparent 0, black 28px)",
+          WebkitMaskImage: "linear-gradient(to bottom, transparent 0, black 28px)",
+        }}
+      >
         {visible.map((l) => {
           const isCmd = l.kind === "cmd";
           const shown =
@@ -229,7 +237,7 @@ function BoardCard({
   return (
     <div
       className={[
-        "rounded-lg border bg-surface p-2",
+        "min-w-0 overflow-hidden rounded-lg border bg-surface p-2",
         animate ? "hero-demo-card-in" : "",
         contested ? "border-amber-400/70 ring-1 ring-amber-400/25" : "border-ink/10",
       ].join(" ")}
@@ -254,9 +262,9 @@ function BoardCard({
         </span>
       )}
       {state === "done" && (
-        <span className="mt-1 inline-flex items-center gap-1 rounded-[4px] border border-emerald-600/20 bg-emerald-500/10 px-1 py-px font-code text-[9.5px] text-emerald-700 dark:text-emerald-300">
+        <span className="mt-1 inline-flex max-w-full items-center gap-1 rounded-[4px] border border-emerald-600/20 bg-emerald-500/10 px-1 py-px font-code text-[9.5px] text-emerald-700 dark:text-emerald-300">
           <GitCommitHorizontal size={9} className="shrink-0" />
-          {task.hash}
+          <span className="truncate">{task.hash}</span>
         </span>
       )}
     </div>
@@ -269,12 +277,14 @@ function BoardPane({ t, animate }: { t: number; animate: boolean }) {
   const working = states.filter((s) => s.state === "working").length;
   const activeSessions = SESSIONS.filter((s) => t >= s.activeAt);
   return (
-    <div className="flex h-full flex-col rounded-lg border border-ink/10 bg-paper p-3 shadow-sm">
+    <div className="flex h-full min-w-0 flex-col overflow-hidden rounded-lg border border-ink/10 bg-paper p-3 shadow-sm">
       {/* Header: board label + agent chips (terracotta = agent, app-wide). */}
-      <div className="flex items-center gap-2">
-        <span className="text-[12px] font-semibold text-ink">Board</span>
-        <span className="font-code text-[10px] text-ink/40">4 tasks · 1 epic</span>
-        <span className="ml-auto flex items-center gap-1">
+      <div className="flex min-w-0 items-center gap-2">
+        <span className="shrink-0 text-[12px] font-semibold text-ink">Board</span>
+        <span className="min-w-0 truncate whitespace-nowrap font-code text-[10px] text-ink/40">
+          4 tasks · 1 epic
+        </span>
+        <span className="ml-auto flex shrink-0 items-center gap-1">
           {activeSessions.map((s) => (
             <span
               key={s.name}
