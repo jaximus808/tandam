@@ -63,13 +63,13 @@ export default function About({ onBack, onOpenMCP, onShowCanvases, onShowSetting
         <div className="mt-6 space-y-4 text-[15px] leading-relaxed text-ink/70 sm:text-base">
           <p>
             I’m a solo builder who makes tools I actually want to use. Tandem is one of
-            them — a place where the work your agent does in a chat actually stays. A real
-            artifact you can open and edit, instead of walls of text you scroll past and lose.
+            them — the shared state layer my own agent sessions coordinate through. A durable
+            task queue they claim from in parallel, instead of a TODO.md they all fight over.
           </p>
           <p>
-            I built it because planning with an agent should feel like sitting at the same
-            table, not narrating at each other. If that resonates, I’d love to hear what you
-            build with it.
+            I built it because running several coding agents at once shouldn’t mean playing
+            traffic controller between them. If you’re running parallel sessions too, I’d love
+            to hear how it holds up.
           </p>
         </div>
 
@@ -90,9 +90,10 @@ export default function About({ onBack, onOpenMCP, onShowCanvases, onShowSetting
               keep the web app and the agent gateway honest with each other.
             </p>
             <p>
-              The design goal is one shared, structured document — notes, roadmaps, sheets,
-              tasks — that both people and agents mutate live, instead of chat transcripts
-              that scroll away. Fittingly, Tandem is planned inside Tandem.
+              The design split is simple: intent lives in the repo, state lives in Tandem.
+              Specs and code stay in git; the churn — task claims, statuses, results — moves
+              into a shared queue every session and every person can see. Fittingly, Tandem
+              is built through its own task queue.
             </p>
           </div>
           <div className="mt-6">

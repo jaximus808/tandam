@@ -63,62 +63,62 @@ interface Scene {
 const SCENES: Scene[] = [
   {
     key: "ops",
-    tab: "Operations",
-    canvasName: "Incident bridge",
-    code: "OPS5K3R7",
+    tab: "Task queue",
+    canvasName: "payments epic",
+    code: "QUEUE5K7",
     mode: "Sheets",
-    phrase: "run operations",
+    phrase: "work the queue",
     heroAgent: "Claude",
-    // heroAgent is the morphing headline word: "{agent} made this." Cycling it
+    // heroAgent is the morphing headline word. Cycling it
     // Claude → ChatGPT → Cursor → Codex SHOWS agent-agnosticism instead of
     // telling it. Any one entry is a single-line edit if a client stops working.
     accent: { solid: "#F43F5E", soft: "rgba(244,63,94,0.10)", line: "rgba(244,63,94,0.24)" },
     editors: [
-      { name: "ops-agent", kind: "agent", at: { top: "30%", left: "53%" }, drift: "a" },
+      { name: "claude-2", kind: "agent", at: { top: "30%", left: "53%" }, drift: "a" },
       { name: "Priya", kind: "human", at: { bottom: "10%", left: "20%" }, drift: "b" },
     ],
     chat: {
-      user: "API 5xx just spiked on edge-eu — spin up an incident board.",
-      building: "triaging the incident",
-      reply: "Done — board's up, alerts triaged, and I kicked off the v2.3.1 rollback.",
+      user: "Point four sessions at the payments epic and work the queue.",
+      building: "claiming the next task",
+      reply: "Claimed webhook retries. The other three sessions took their own tasks — nothing overlapped.",
     },
   },
   {
     key: "build",
-    tab: "Builders",
-    canvasName: "Q3 product build",
-    code: "BUILD8QX",
+    tab: "Epics",
+    canvasName: "Q3 auth rewrite",
+    code: "EPICS8QX",
     mode: "Roadmap",
-    phrase: "ship the build",
+    phrase: "approve once",
     heroAgent: "ChatGPT",
     accent: { solid: "#0EA5E9", soft: "rgba(14,165,233,0.10)", line: "rgba(14,165,233,0.24)" },
     editors: [
-      { name: "Codex", kind: "agent", at: { top: "34%", right: "10%" }, drift: "a" },
+      { name: "codex-2", kind: "agent", at: { top: "34%", right: "10%" }, drift: "a" },
       { name: "Devin", kind: "human", at: { top: "55%", right: "22%" }, drift: "b" },
     ],
     chat: {
-      user: "Turn our Q3 notes into a roadmap I can actually track.",
-      building: "building the roadmap",
-      reply: "Up now — items scoped with status. Realtime cursors is in progress, Charts mode shipped.",
+      user: "Propose the auth rewrite as an epic I can approve in one pass.",
+      building: "drafting the epic",
+      reply: "Five tasks proposed with the spec linked. Approve once and any session can start claiming.",
     },
   },
   {
     key: "life",
-    tab: "Life",
-    canvasName: "Our 2026",
-    code: "YEAR42KP",
+    tab: "Overnight",
+    canvasName: "while you slept",
+    code: "NIGHT42K",
     mode: "Itinerary",
-    phrase: "plan the year",
+    phrase: "trace every task",
     heroAgent: "Cursor",
     accent: { solid: "#F59E0B", soft: "rgba(245,158,11,0.12)", line: "rgba(245,158,11,0.26)" },
     editors: [
-      { name: "Claude", kind: "agent", at: { top: "26%", right: "12%" }, drift: "a" },
+      { name: "claude-1", kind: "agent", at: { top: "26%", right: "12%" }, drift: "a" },
       { name: "Sam", kind: "human", at: { bottom: "14%", right: "16%" }, drift: "b" },
     ],
     chat: {
-      user: "Plan our Japan trip for March.",
-      building: "filling the itinerary",
-      reply: "Laid out the days, held your flights, and dropped hotel options on the map.",
+      user: "What did the sessions ship overnight?",
+      building: "pulling completed tasks",
+      reply: "Four tasks done while you slept — each one links back to the commit that closed it.",
     },
   },
   {
@@ -127,7 +127,7 @@ const SCENES: Scene[] = [
     canvasName: "Vendor scan",
     code: "SCOUT9WZ",
     mode: "Map",
-    phrase: "map the unknown",
+    phrase: "fan out the work",
     heroAgent: "Codex",
     accent: { solid: "#10B981", soft: "rgba(16,185,129,0.10)", line: "rgba(16,185,129,0.24)" },
     editors: [
@@ -135,9 +135,9 @@ const SCENES: Scene[] = [
       { name: "Lee", kind: "human", at: { bottom: "12%", left: "12%" }, drift: "b" },
     ],
     chat: {
-      user: "Scan these three vendors and map them for me.",
+      user: "Fan a session out to scan these vendors while the others code.",
       building: "mapping the vendors",
-      reply: "Mapped all three with pricing notes — Northwind's on the shortlist.",
+      reply: "Mapped all three with pricing notes — the coding sessions never had to stop.",
     },
   },
 ];
@@ -151,22 +151,22 @@ const CANVAS_COUNT_FLOOR = 50;
 const MODE_TABS = ["Map", "Itinerary", "Docs", "Roadmap", "Sheets", "Charts"];
 
 const USE_CASES = [
-  "Incident response",
-  "Sprint planning",
-  "Trip itineraries",
-  "Market research",
-  "Hiring pipelines",
-  "Product roadmaps",
-  "Event logistics",
-  "Fundraising",
-  "Content calendars",
-  "Move planning",
-  "Course syllabi",
-  "Launch checklists",
-  "Household budgets",
-  "Field research",
-  "Wedding planning",
-  "Go-to-market",
+  "Migration epics",
+  "Parallel refactors",
+  "Bug-fix swarms",
+  "Test backlogs",
+  "Release trains",
+  "Research spikes",
+  "Docs overhauls",
+  "Dependency bumps",
+  "Perf hunts",
+  "Security audits",
+  "Feature epics",
+  "Incident follow-ups",
+  "Prototype bake-offs",
+  "i18n passes",
+  "Review queues",
+  "Onboarding checklists",
 ];
 
 function relativeTime(ts: number): string {
@@ -463,26 +463,26 @@ function Pill({ label, accent, tone }: { label: string; accent: Accent; tone: "a
 function OpsBody() {
   const cols: { title: string; cards: { name: string; meta: string; sev: string }[] }[] = [
     {
-      title: "Triage",
+      title: "Queued",
       cards: [
-        { name: "API 5xx spike", meta: "edge-eu · 4m", sev: "#F43F5E" },
-        { name: "Checkout latency", meta: "p95 1.8s", sev: "#F59E0B" },
-        { name: "Webhook backlog", meta: "12k queued", sev: "#F59E0B" },
+        { name: "Rate-limit middleware", meta: "approved · #14", sev: "#F43F5E" },
+        { name: "Audit log events", meta: "approved · #15", sev: "#F59E0B" },
+        { name: "Refund edge cases", meta: "approved · #16", sev: "#F59E0B" },
       ],
     },
     {
-      title: "Mitigating",
+      title: "Claimed",
       cards: [
-        { name: "Rollback v2.3.1", meta: "ops-agent", sev: "#0EA5E9" },
-        { name: "Drain edge-eu", meta: "Priya · now", sev: "#0EA5E9" },
+        { name: "Webhook retries", meta: "claude-2 · now", sev: "#0EA5E9" },
+        { name: "Stripe webhooks", meta: "cursor-1 · 4m", sev: "#0EA5E9" },
       ],
     },
     {
-      title: "Resolved",
+      title: "Done",
       cards: [
-        { name: "Scale workers ×3", meta: "done · 2m", sev: "#10B981" },
-        { name: "Cache flush", meta: "done · 6m", sev: "#10B981" },
-        { name: "Status page", meta: "posted", sev: "#10B981" },
+        { name: "DB migration", meta: "commit 4f2c1", sev: "#10B981" },
+        { name: "OAuth scopes", meta: "commit b7d90", sev: "#10B981" },
+        { name: "Flaky test fix", meta: "commit 21ee4", sev: "#10B981" },
       ],
     },
   ];
@@ -523,11 +523,11 @@ function OpsBody() {
 
 function BuildBody({ accent }: { accent: Accent }) {
   const rows: { name: string; tone: "accent" | "done" | "muted"; label: string; who?: string }[] = [
-    { name: "Auth rewrite", tone: "done", label: "Done" },
-    { name: "Realtime cursors", tone: "accent", label: "In progress", who: "Devin" },
-    { name: "Charts mode", tone: "accent", label: "In progress", who: "Codex" },
-    { name: "Billing webhooks", tone: "muted", label: "Todo" },
-    { name: "Mobile layout", tone: "muted", label: "Todo" },
+    { name: "Session tokens", tone: "done", label: "Done" },
+    { name: "Refresh rotation", tone: "accent", label: "In progress", who: "claude-1" },
+    { name: "OAuth scopes", tone: "accent", label: "In progress", who: "codex-2" },
+    { name: "Rate limiting", tone: "muted", label: "Queued" },
+    { name: "Audit logging", tone: "muted", label: "Queued" },
   ];
   return (
     <div className="flex h-full flex-col gap-2 p-4">
@@ -561,10 +561,10 @@ function BuildBody({ accent }: { accent: Accent }) {
 
 function LifeBody() {
   const items = [
-    { when: "Mar", what: "Apartment tours", note: "3 saved", color: "#0EA5E9" },
-    { when: "Jun", what: "Japan — 2 weeks", note: "flights held", color: "#F59E0B" },
-    { when: "Sep", what: "Grad school starts", note: "deposit paid", color: "#7C3AED" },
-    { when: "Dec", what: "Family reunion", note: "12 going", color: "#10B981" },
+    { when: "1:04", what: "Webhook retries", note: "commit 4f2c1 · claude-1", color: "#0EA5E9" },
+    { when: "2:31", what: "Rate-limit middleware", note: "commit b7d90 · claude-3", color: "#F59E0B" },
+    { when: "4:12", what: "Flaky auth test", note: "commit 21ee4 · codex-1", color: "#7C3AED" },
+    { when: "5:58", what: "Audit log events", note: "commit 9acd7 · cursor-2", color: "#10B981" },
   ];
   return (
     <div className="relative h-full p-4">
@@ -963,58 +963,64 @@ const MODE_DOCS: { kind: string; name: string; color: string; desc: string }[] =
 ];
 
 const STEPS: { title: string; body: string }[] = [
-  { title: "Create a canvas", body: "Name it and you get a short, shareable 8-character code." },
   {
-    title: "Connect your agents",
-    body: "Point any MCP-aware agent at the code — Claude, Codex, Cursor, or your own.",
+    title: "Keep intent in the repo",
+    body: "Your spec, your code, your git history: none of that moves. Tandem only holds the churn — tasks, claims, statuses, results.",
   },
   {
-    title: "Let it build",
-    body: "Your agent works in the chat you're already in — and the result lands here, yours to open and edit.",
+    title: "Connect your sessions",
+    body: "Point any MCP-aware session at the canvas code — Claude Code, Cursor, Codex, or your own orchestrator.",
+  },
+  {
+    title: "Approve once, then watch",
+    body: "An agent proposes the epic as tasks. You approve them in one pass, sessions claim in parallel without colliding, and every completed task reports back with its result.",
   },
 ];
 
 const AUDIENCES: { title: string; blurb: string; tags: string[]; accent: string; tilt: string }[] = [
   {
-    title: "Operations",
+    title: "Claim without colliding",
     blurb:
-      "Stand up an incident bridge, a launch checklist, or a daily ops board. Your agent triages and updates it while you watch.",
-    tags: ["Incidents", "Launches", "Logistics"],
+      "Split an epic across as many Claude Code or Cursor sessions as you like. Each one claims the next open task from the queue, so no two ever pick up the same work.",
+    tags: ["Task queue", "Claiming", "Parallel"],
     accent: "#F43F5E",
     tilt: "lg:-rotate-1",
   },
   {
-    title: "Builders",
+    title: "Approve once, agents flow",
     blurb:
-      "Plan the quarter, split work across coding agents, and watch the roadmap move from todo to done as the work gets done.",
-    tags: ["Roadmaps", "Sprints", "Research"],
+      "Sessions propose tasks; you approve the epic once in the web UI. After that they claim, work, and complete without pinging you at every step.",
+    tags: ["Epics", "Approval", "Autonomy"],
     accent: "#0EA5E9",
     tilt: "lg:rotate-[0.5deg] lg:translate-y-3",
   },
   {
-    title: "Life & plans",
+    title: "Watch it live",
     blurb:
-      "A trip, a move, a wedding, a whole year. Bring the people who matter and an agent to do the legwork.",
-    tags: ["Trips", "Plans", "Budgets"],
+      "The board updates as sessions work: who claimed what, what just finished, and the commit each result points back to.",
+    tags: ["Live board", "Results", "Commits"],
     accent: "#F59E0B",
     tilt: "lg:rotate-1",
   },
 ];
 
-// Answers to the questions people actually type into a search box ("what is an
-// MCP canvas", "shared canvas for AI agents"). This is the page's only block of
-// plain, category-level prose — the rest of the landing speaks in brand voice,
-// which only ever matched people already searching for Tandem by name.
+// Answers to the questions people actually type into a search box ("how do I
+// coordinate parallel Claude Code sessions", "agent task queue"). This is the
+// page's only block of plain, category-level prose — the rest of the landing
+// speaks in brand voice, which only ever matched people already searching for
+// Tandem by name.
 //
 // KEEP IN SYNC with the FAQPage JSON-LD in apps/web/index.html: structured data
 // that doesn't appear on the page is a manual-action risk, so the answers below
 // and the ones in the <head> are the same sentences.
 const FAQS: { q: string; a: React.ReactNode }[] = [
   {
-    q: "What is an MCP canvas?",
+    q: "What is a shared state layer for agent sessions?",
     a: (
       <>
-        An MCP canvas is a shared workspace an AI agent can read and write through the{" "}
+        A place outside any single session where the coordination state lives: which tasks exist,
+        which session claimed which, what's approved, what's done. In Tandem that's a durable task
+        queue every agent session reads and writes over the{" "}
         <a
           href="https://modelcontextprotocol.io"
           target="_blank"
@@ -1023,31 +1029,30 @@ const FAQS: { q: string; a: React.ReactNode }[] = [
         >
           Model Context Protocol
         </a>
-        , while a human edits the same thing live in a browser. Tandem is one: your agent adds pins,
-        events, rows, or notes over MCP and they appear on the canvas instantly, with no
-        copy-pasting out of a chat window.
+        , while you watch the same board live in a browser.
       </>
     ),
   },
   {
-    q: "Which AI agents can connect to a Tandem canvas?",
+    q: "Which AI agents can connect to Tandem?",
     a: (
       <>
-        Any MCP-aware client. Claude Desktop, Claude Code, and claude.ai connect through the hosted
+        Any MCP-aware client. Claude Code, Claude Desktop, and claude.ai connect through the hosted
         connector or the npm package <span className="font-code text-[13px]">@jaximus/tandem-mcp</span>;
-        editors, agent frameworks, and custom orchestrators can spawn the same stdio server. Several
-        agents can work on one canvas at the same time.
+        Cursor, agent frameworks, and custom orchestrators spawn the same stdio server. Many
+        sessions can work the same queue at the same time.
       </>
     ),
   },
   {
-    q: "How is a shared canvas different from a Google Doc?",
+    q: "Why not just keep a TODO.md in the repo?",
     a: (
       <>
-        A doc has no agent and an MCP server has no human. Tandem is both: the AI agent builds the
-        artifact and you edit it in the same place, in real time. It also isn't a single document
-        shape — the canvas becomes a map, a schedule, a roadmap, a sheet, or a doc depending on what
-        you asked for.
+        A markdown file is fine for one session. With several running in parallel it becomes the
+        collision point: sessions clobber each other's edits, claims go stale, and nothing tells
+        you who is doing what right now. Tandem splits it: intent lives in the repo — the spec
+        stays in git — while the churn (claims, statuses, results) moves into a shared queue with
+        per-task state.
       </>
     ),
   },
@@ -1055,9 +1060,9 @@ const FAQS: { q: string; a: React.ReactNode }[] = [
     q: "Do I need an account to use Tandem?",
     a: (
       <>
-        No. Create a canvas, get a short code, and share it — anyone with the code can open and edit
-        it in the browser and any agent can join with the same code. Signing in with Google is only
-        needed if you want to keep canvases in a dashboard or make one private.
+        No. Create a canvas, get a short code, and share it — anyone with the code can open it in
+        the browser and any agent session can join with the same code. Signing in with Google is
+        only needed if you want to keep canvases in a dashboard or make one private.
       </>
     ),
   },
@@ -1177,7 +1182,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
           {/* Left: copy + actions */}
           <div className="min-w-0 max-w-xl lg:pt-4">
             <div className="tandem-rise">
-              <SysLabel>One prompt in · a real artifact out</SysLabel>
+              <SysLabel>One queue · every session · no collisions</SysLabel>
             </div>
 
             {/* mt-12 leaves headroom for the frame's "you" tag above the h1.
@@ -1210,7 +1215,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
                         >
                           {s.heroAgent}
                         </span>{" "}
-                        made this. You keep it.
+                        in parallel. Nothing collides.
                       </span>
                     );
                   })}
@@ -1222,9 +1227,11 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
               className="tandem-rise mt-7 text-[1.05rem] leading-relaxed text-ink/65"
               style={{ animationDelay: "120ms" }}
             >
-              You ask in the chat you're already in. Your agent does the work and leaves it here —
-              a real artifact you can open, edit, and keep, not a chat log you'll never find again.
-              A doc has no agent. An MCP server has no human. Tandem is the one thing that's both.
+              You already run several agent sessions at once. Coordinating them through a TODO.md
+              they all fight over is the part that breaks. Tandem is the shared state layer
+              instead: a durable task queue every session claims from, approval you grant once per
+              epic, and a live board of who's doing what. The spec stays in git; the churn moves
+              here.
             </p>
 
             {/* Primary actions — the create / join forms live in the launcher modal.
@@ -1315,7 +1322,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
       {/* "Becomes anything" marquee */}
       <section className="border-y border-ink/10 bg-surface py-5">
         <div className="mx-auto mb-3 max-w-6xl px-6">
-          <SysLabel>One canvas → anything your agent can build</SysLabel>
+          <SysLabel>One queue → any work you can split across sessions</SysLabel>
         </div>
         <div className="relative flex overflow-hidden [mask-image:linear-gradient(to_right,transparent,black_8%,black_92%,transparent)]">
           <div className="tandem-marquee flex shrink-0 items-center gap-3 pr-3">
@@ -1378,13 +1385,13 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
         <div aria-hidden="true" className="surface-grid-faint absolute inset-0" />
         <div className="relative mx-auto max-w-6xl px-6 py-24">
           <div className="max-w-2xl">
-            <SysLabel>What it becomes</SysLabel>
+            <SysLabel>What it replaces</SysLabel>
             <h2 className="mt-3 font-display text-3xl font-medium tracking-tight text-ink sm:text-4xl">
-              Ask for anything. It shows up here.
+              Stop coordinating agents by hand.
             </h2>
             <p className="mt-3 leading-relaxed text-ink/65">
-              The same canvas reshapes itself around whatever you ask your agent for. A few of the
-              things people build every day:
+              Tandem holds the state your sessions share — the queue, the claims, the results —
+              so you don't have to play traffic controller. What that buys you:
             </p>
           </div>
 
@@ -1452,14 +1459,14 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
         <div aria-hidden="true" className="surface-grid-faint absolute inset-0 opacity-60" />
         <div className="relative mx-auto max-w-6xl px-6 py-24">
           <div className="max-w-2xl">
-            <SysLabel>Whatever the answer needs to be</SysLabel>
+            <SysLabel>The view layer</SysLabel>
             <h2 className="mt-3 font-display text-3xl font-medium tracking-tight text-ink sm:text-4xl">
-              You don't pick a tool. Your agent picks the shape.
+              The queue is the point. The board is how you read it.
             </h2>
             <p className="mt-3 leading-relaxed text-ink/65">
-              You ask for the thing — a trip, an incident board, a launch plan — and your agent
-              builds it in whatever form fits: a map, a schedule, a roadmap, a sheet. Then it's
-              yours to open and edit.
+              Everything your sessions write lands as structured state you can actually read: the
+              epic as a roadmap, results as a sheet, findings as a doc. Same data the agents see,
+              rendered for humans.
             </p>
           </div>
 
@@ -1505,8 +1512,8 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
               </div>
               <div className="px-4 pb-4">
                 <p className="text-xs leading-relaxed text-paper/60">
-                  Speaks MCP — Claude, ChatGPT, Cursor, Codex, or an orchestrator you wrote
-                  yourself. However you already work, the artifact lands here.
+                  Speaks MCP — Claude Code, ChatGPT, Cursor, Codex, or an orchestrator you wrote
+                  yourself. However you run your sessions, they all share the same queue.
                 </p>
                 <button
                   onClick={onOpenMCP}
@@ -1587,11 +1594,11 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
         <div className="mx-auto max-w-3xl px-6 py-24">
           <SysLabel>Questions</SysLabel>
           <h2 className="mt-3 font-display text-3xl font-medium tracking-tight text-ink sm:text-4xl">
-            A shared canvas for humans and AI agents
+            Shared state for humans and agent sessions
           </h2>
           <p className="mt-3 leading-relaxed text-ink/65">
-            Tandem is a real-time canvas your agents edit over MCP while you edit it in the browser.
-            The short version, in plain terms:
+            Tandem is a durable task queue your agent sessions work over MCP while you watch and
+            steer from the browser. The short version, in plain terms:
           </p>
 
           <dl className="mt-12 space-y-9">
@@ -1623,14 +1630,15 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
           <div className="mt-10 inline-block">
             <SelectionFrame tag="everyone" tagKind="human" className="inline-block">
               <h2 className="font-display text-3xl font-medium leading-tight tracking-tight text-ink sm:text-[2.5rem]">
-                Everything your agent makes, in one place that's{" "}
-                <em className="text-agent">actually yours.</em>
+                Every session on the same queue,{" "}
+                <em className="text-agent">every task traced to a commit.</em>
               </h2>
             </SelectionFrame>
           </div>
           <p className="mx-auto mt-8 max-w-xl leading-relaxed text-ink/65">
-            Stop copy-pasting plans out of a chat window. Ask in the chat you're already in, and the
-            artifact your agent builds shows up here — open it, edit it, keep it.
+            Stop coordinating parallel sessions through a markdown file they all fight over. Keep
+            the spec in git, put the queue where every session and every teammate can see it, and
+            watch the work move.
           </p>
           <div className="mt-10 flex flex-wrap items-center justify-center gap-4">
             <button
