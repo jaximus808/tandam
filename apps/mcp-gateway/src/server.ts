@@ -32,6 +32,12 @@ export const DEFAULT_API_URL = "https://tandemcanvas.com";
 // API_URL (e.g. http://tandem:7891).
 export const DEFAULT_WEB_URL = "https://tandemcanvas.com";
 
+// Opt-in per-tool-call wall-time logging: set TANDEM_MCP_TIMING to any value
+// to emit one `[timing] <tool> <ms>ms` line per call. MUST go to stderr —
+// stdout carries the stdio MCP protocol frames. Checked once at module load so
+// the disabled path costs nothing per call.
+const TIMING = !!process.env.TANDEM_MCP_TIMING;
+
 /**
  * Build an MCP Server bound to `gateway`. One Gateway (and therefore one
  * Server) per session — for stdio that's the whole process; for HTTP it's one
@@ -51,6 +57,16 @@ export function createTandemServer(gateway: Gateway, version: string): Server {
     const name = request.params.name.replace(/\./g, "_");
     const a = (request.params.arguments ?? {}) as Record<string, unknown>;
 
+    if (!TIMING) return dispatch(gateway, name, a);
+    const start = performance.now();
+    try {
+      return await dispatch(gateway, name, a);
+    } finally {
+      console.error(`[timing] ${name} ${(performance.now() - start).toFixed(1)}ms`);
+    }
+  });
+
+  async function dispatch(gateway: Gateway, name: string, a: Record<string, unknown>) {
     try {
       const result = await handleTool(gateway, name, a);
 
@@ -78,7 +94,7 @@ export function createTandemServer(gateway: Gateway, version: string): Server {
         isError: true,
       };
     }
-  });
+  }
 
   return server;
 }

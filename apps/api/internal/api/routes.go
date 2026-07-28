@@ -9,6 +9,7 @@ import (
 
 	"github.com/agentcanvas/api/internal/auth"
 	"github.com/agentcanvas/api/internal/maps"
+	"github.com/agentcanvas/api/internal/metrics"
 	"github.com/agentcanvas/api/internal/store"
 	"github.com/agentcanvas/api/internal/ws"
 	"github.com/go-chi/chi/v5"
@@ -16,11 +17,13 @@ import (
 	"github.com/go-chi/cors"
 )
 
-func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier *auth.GoogleVerifier, cookieSecure bool, mapsReg *maps.Registry, webDistPath string, imageDir string, publicBaseURL string) http.Handler {
+func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier *auth.GoogleVerifier, cookieSecure bool, mapsReg *maps.Registry, webDistPath string, imageDir string, publicBaseURL string, metricsEnabled bool) http.Handler {
 	r := chi.NewRouter()
 
+	metricsReg := metrics.NewRegistry()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	r.Use(metricsReg.Middleware) // per-route latency, keyed by chi RoutePattern
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"},
@@ -47,6 +50,10 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 	r.Get("/api/maps", mapsH.List)
 	r.Get("/api/maps/{id}", mapsH.Get)
 	r.Get("/api/stats", h.Stats)
+	if metricsEnabled {
+		// Latency aggregates only (no canvas data) — open by design.
+		r.Get("/api/metrics", metricsReg.Handler)
+	}
 
 	// ── OAuth 2.1 authorization server (hosted MCP connector) ────────────────────
 	// Discovery metadata (RFC 8414 / 9728). Registered with a trailing wildcard

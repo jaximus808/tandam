@@ -30,6 +30,12 @@ type Config struct {
 	// authorization-server metadata URLs. Empty → the OAuth handlers derive it
 	// per-request from the Host / X-Forwarded-Proto headers (fine for local dev).
 	PublicBaseURL string
+
+	// MetricsEnabled registers GET /api/metrics (in-memory per-route latency
+	// aggregates; no canvas data). Defaults to enabled — set
+	// METRICS_ENABLED=false to hide the endpoint. Latencies are recorded either
+	// way; only registration of the read endpoint is gated.
+	MetricsEnabled bool
 }
 
 func Load() (*Config, error) {
@@ -86,5 +92,6 @@ func Load() (*Config, error) {
 		GoogleClientID: os.Getenv("GOOGLE_CLIENT_ID"),
 		CookieSecure:   os.Getenv("COOKIE_SECURE") == "true",
 		PublicBaseURL:  strings.TrimRight(os.Getenv("PUBLIC_BASE_URL"), "/"),
+		MetricsEnabled: os.Getenv("METRICS_ENABLED") != "false",
 	}, nil
 }
