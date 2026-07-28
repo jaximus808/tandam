@@ -381,17 +381,26 @@ func (c *client) claim(id, agentName string, rec *recorder) (claimOutcome, error
 }
 
 // complete finishes a held task: PATCH {state:"done", result, agentName}.
-func (c *client) complete(id, agentName, result string, rec *recorder) error {
+// complete finishes a won task. Returns (completed=false, nil) on the
+// ownership 409 — a DEFINED outcome since the claim guard: the task was
+// released by a human and re-claimed by another worker mid-run. That is not a
+// benchmark failure; the worker just moves on (and drops the win, since the
+// task is no longer ours for reconciliation purposes).
+func (c *client) complete(id, agentName, result string, rec *recorder) (bool, error) {
 	status, data, dur, err := c.do("PATCH", "/api/canvas/actions/"+id,
 		map[string]string{"state": "done", "result": result, "agentName": agentName})
 	if err != nil {
-		return err
+		return false, err
+	}
+	if status == http.StatusConflict {
+		rec.attempt(claimStale)
+		return false, nil
 	}
 	if status != http.StatusOK {
-		return fmt.Errorf("complete %s: status %d: %s", id, status, truncate(data))
+		return false, fmt.Errorf("complete %s: status %d: %s", id, status, truncate(data))
 	}
 	rec.observe(opComplete, dur)
-	return nil
+	return true, nil
 }
 
 // drain is one agent session's loop: list the approved queue, try to claim
@@ -425,9 +434,14 @@ func (c *client) drain(agentName, prefix string, rec *recorder) ([]string, error
 			if outcome != claimWon {
 				continue // move on to the next task in this listing
 			}
-			wins = append(wins, t.ID)
-			if err := c.complete(t.ID, agentName, "loadtest "+agentName, rec); err != nil {
+			done, err := c.complete(t.ID, agentName, "loadtest "+agentName, rec)
+			if err != nil {
 				return wins, fmt.Errorf("%s: %w", agentName, err)
+			}
+			if done {
+				// Only completed wins count for reconciliation — a 409'd
+				// complete means the task was released and re-claimed away.
+				wins = append(wins, t.ID)
 			}
 			break // re-list after a win, like a real session would
 		}

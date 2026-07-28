@@ -88,15 +88,18 @@ func (reg *Registry) Record(method, route string, d time.Duration) {
 
 // Middleware times every request and records it under chi's RoutePattern —
 // resolved AFTER next.ServeHTTP returns, so /api/canvas/actions/{id} is one
-// key rather than one key per UUID. Note: for hijacked connections (/ws) the
-// handler returns when the connection closes, so that route's "latency" is
-// connection lifetime — honest, just not comparable to plain HTTP routes.
+// key rather than one key per UUID. Hijacked connections (/ws) are EXCLUDED:
+// their handler returns at disconnect, so the "latency" would be connection
+// lifetime — hours-long p99s that dominate the count-sorted table and mean
+// nothing next to request/response routes.
 func (reg *Registry) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		next.ServeHTTP(w, r)
 		if rctx := chi.RouteContext(r.Context()); rctx != nil {
-			reg.Record(r.Method, rctx.RoutePattern(), time.Since(start))
+			if pattern := rctx.RoutePattern(); pattern != "/ws" {
+				reg.Record(r.Method, pattern, time.Since(start))
+			}
 		}
 	})
 }

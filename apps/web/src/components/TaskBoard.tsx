@@ -714,7 +714,12 @@ export default function TaskBoard({
               const colTasks = filtering
                 ? visibleTasks.filter((t) => col.states.includes(t.state))
                 : colAll;
-              const slim = colTasks.length === 0;
+              // Proposed EPICS surface in the Proposed column too — approving
+              // an epic is the one-click gate that releases its whole batch,
+              // and it must be findable without knowing about the epic view.
+              const colEpics =
+                col.key === "proposed" ? epics.filter((e) => e.state === "proposed") : [];
+              const slim = colTasks.length === 0 && colEpics.length === 0;
               const showState = col.states.length > 1;
               return (
                 <div
@@ -739,6 +744,23 @@ export default function TaskBoard({
                     <div className="flex-1 rounded-xl border border-dashed border-ink/10" />
                   ) : (
                     <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pb-2 pr-0.5">
+                      {colEpics.map((e) => (
+                        <div
+                          key={e.id}
+                          className="rounded-xl border border-ink/15 bg-ink/[0.03] p-2.5"
+                        >
+                          <div className="mb-1 flex items-center gap-1.5">
+                            <Layers size={12} className="shrink-0 text-ink/45" />
+                            <span className="truncate text-[12px] font-semibold text-ink/80">
+                              {(e.payload as { title?: string })?.title ?? "Untitled epic"}
+                            </span>
+                          </div>
+                          <p className="mb-1.5 text-[10px] uppercase tracking-[0.1em] text-ink/40">
+                            Epic — approving releases every task under it
+                          </p>
+                          {renderApproveReject(e, "Approve epic")}
+                        </div>
+                      ))}
                       {colTasks.map((t) => renderCard(t, showState))}
                     </div>
                   )}

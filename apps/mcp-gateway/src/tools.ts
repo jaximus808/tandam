@@ -724,7 +724,10 @@ export async function handleTool(
         parentAgentId: args.parentAgentId,
       })) as { agentId: string };
       if (res?.agentId) {
-        gateway.setAgentId(res.agentId, args.name ? String(args.name) : undefined);
+        // Mirror the server's default (name falls back to role) so a nameless
+        // registration still claims as "executor", not a raw UUID — the board's
+        // claimant chips and filter read this string.
+        gateway.setAgentId(res.agentId, String(args.name ?? args.role));
       }
       // The registered identity now lives on the session, so re-serialize it
       // into a REFRESHED handle. On the hosted sidecar (fresh Gateway per call)
@@ -901,7 +904,14 @@ export async function handleTool(
       // The claim is atomic server-side: exactly one concurrent task_start wins.
       // A 409 loss is an expected outcome, surfaced as data (not a thrown error)
       // so the model routes to the next task instead of retrying or stalling.
-      const claimant = (args.agentName as string | undefined) ?? gateway.claimant();
+      // Identity: a REGISTERED session always claims under its registered name —
+      // an ad-hoc agentName here would detach the claim from the agent row and
+      // make the executor vanish from the swarm tree mid-task. The override only
+      // applies for sessions that never called agent_register.
+      const session = gateway.getSession();
+      const claimant = session.agentName
+        ? gateway.claimant()
+        : ((args.agentName as string | undefined) ?? gateway.claimant());
       const res = await gateway.patchWithConflict<Record<string, unknown>, { claimedBy?: string }>(
         `/api/canvas/actions/${args.id}`,
         { state: "executing", agentName: claimant }

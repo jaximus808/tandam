@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { X } from "lucide-react";
 import type { CanvasMode } from "../types";
 import { modeTheme } from "../lib/modeTheme";
 import type { AgentEdit, PresentAgent } from "../lib/useAgentActivity";
@@ -30,6 +32,9 @@ const MODE_LABEL: Record<CanvasMode, string> = {
  * without a present parent render flat as before.
  */
 export default function AgentPresence({ agents, edit, reading, onJump }: Props) {
+  // Swarm panel visibility — dismissible (it floats over mode content at z-40,
+  // so it must never be un-closable); the avatar cluster re-opens it.
+  const [swarmOpen, setSwarmOpen] = useState(true);
   if (agents.length === 0) return null;
   const t = edit ? modeTheme(edit.mode) : null;
   // Editing takes precedence over reading — if a cursor is live, show where.
@@ -46,13 +51,58 @@ export default function AgentPresence({ agents, edit, reading, onJump }: Props) 
       children.set(a.parentId, kids);
     }
   }
-  const parents = agents.filter((a) => children.has(a.id));
+  // Roots only: an agent that both HAS a parent and IS a parent (planner →
+  // sub-planner → executors) must render once, nested — not duplicated at the
+  // top level. Rendering recurses through children.
+  const roots = agents.filter(
+    (a) => children.has(a.id) && (!a.parentId || !byId.has(a.parentId)),
+  );
+
+  function renderNode(a: PresentAgent, depth: number): JSX.Element {
+    const kids = children.get(a.id) ?? [];
+    return (
+      <div key={a.id} className={depth === 0 ? "mb-2 last:mb-0" : ""}>
+        <div className="flex min-w-0 items-center gap-1.5">
+          <MiniChip isClaude={a.isClaude} size={depth === 0 ? 5 : 4} />
+          <span
+            className={
+              depth === 0
+                ? "truncate font-code text-[11px] font-medium text-ink"
+                : "shrink-0 font-code text-[10.5px] text-ink/80"
+            }
+          >
+            {a.name}
+          </span>
+          {depth === 0 ? (
+            <span className="shrink-0 rounded-[3px] bg-ink/[0.06] px-1 py-px font-code text-[9px] uppercase tracking-[0.12em] text-ink/45">
+              {a.role ?? "planner"}
+            </span>
+          ) : a.taskLabel ? (
+            <span className="min-w-0 truncate font-code text-[10px] text-agent" title={a.taskLabel}>
+              ⚡ {a.taskLabel}
+            </span>
+          ) : (
+            <span className="font-code text-[10px] text-ink/35">idle</span>
+          )}
+        </div>
+        {kids.length > 0 && (
+          <div className="ml-[9px] mt-1.5 space-y-1.5 border-l border-ink/10 pl-2.5">
+            {kids.map((c) => renderNode(c, depth + 1))}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="relative hidden items-center gap-2 sm:flex">
       {/* Avatar cluster — agents are square terracotta chips, like their tags.
           A scan-line sweeps across them while the agent is reading. */}
-      <div className="flex -space-x-1">
+      <div
+        className={`flex -space-x-1 ${roots.length > 0 ? "cursor-pointer" : ""}`}
+        onClick={roots.length > 0 ? () => setSwarmOpen((o) => !o) : undefined}
+        title={roots.length > 0 ? "Toggle swarm panel" : undefined}
+      >
         {agents.map((a) => (
           <span
             key={a.id}
@@ -71,35 +121,17 @@ export default function AgentPresence({ agents, edit, reading, onJump }: Props) 
       </div>
 
       {/* Swarm tree — visible while any executor is nested under a present
-          orchestrator; clears as executors finish and drop offline. */}
-      {parents.length > 0 && (
+          orchestrator; dismissible, re-opened by clicking the avatar cluster. */}
+      {roots.length > 0 && swarmOpen && (
         <div className="absolute right-0 top-full z-40 mt-2 w-72 rounded-lg border border-ink/10 bg-paper p-2.5 shadow-lg">
-          {parents.map((p) => (
-            <div key={p.id} className="mb-2 last:mb-0">
-              <div className="flex min-w-0 items-center gap-2">
-                <MiniChip isClaude={p.isClaude} size={5} />
-                <span className="truncate font-code text-[11px] font-medium text-ink">{p.name}</span>
-                <span className="shrink-0 rounded-[3px] bg-ink/[0.06] px-1 py-px font-code text-[9px] uppercase tracking-[0.12em] text-ink/45">
-                  {p.role ?? "planner"}
-                </span>
-              </div>
-              <div className="ml-[9px] mt-1.5 space-y-1.5 border-l border-ink/10 pl-2.5">
-                {(children.get(p.id) ?? []).map((c) => (
-                  <div key={c.id} className="flex min-w-0 items-center gap-1.5">
-                    <MiniChip isClaude={c.isClaude} size={4} />
-                    <span className="shrink-0 font-code text-[10.5px] text-ink/80">{c.name}</span>
-                    {c.taskLabel ? (
-                      <span className="min-w-0 truncate font-code text-[10px] text-agent" title={c.taskLabel}>
-                        ⚡ {c.taskLabel}
-                      </span>
-                    ) : (
-                      <span className="font-code text-[10px] text-ink/35">idle</span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
+          <button
+            onClick={() => setSwarmOpen(false)}
+            aria-label="Hide swarm panel"
+            className="absolute right-1.5 top-1.5 rounded p-0.5 text-ink/35 transition-colors hover:bg-ink/5 hover:text-ink/70"
+          >
+            <X size={12} />
+          </button>
+          {roots.map((r) => renderNode(r, 0))}
         </div>
       )}
 

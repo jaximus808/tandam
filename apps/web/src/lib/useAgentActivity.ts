@@ -394,11 +394,20 @@ export function useAgentActivity(
       live.set(a.id, p);
     }
     // An orchestrator may go quiet while its subagents work — keep a stale
-    // parent on the board as long as any live child points at it.
-    for (const child of [...live.values()]) {
-      if (!child.parentId || live.has(child.parentId)) continue;
-      const parent = state?.agents[child.parentId];
-      if (parent && parent.status === "online") live.set(parent.id, present(parent));
+    // parent on the board as long as any live child points at it. Loop to a
+    // fixpoint so a stale GRANDparent is rescued too (a rescued parent can
+    // itself have a stale parent; a single pass over a pre-rescue snapshot
+    // would miss it).
+    for (let rescued = true; rescued; ) {
+      rescued = false;
+      for (const child of [...live.values()]) {
+        if (!child.parentId || live.has(child.parentId)) continue;
+        const parent = state?.agents[child.parentId];
+        if (parent && parent.status === "online") {
+          live.set(parent.id, present(parent));
+          rescued = true;
+        }
+      }
     }
     const list = [...live.values()];
     // No agent has formally registered, but we just saw it read/write — show it.

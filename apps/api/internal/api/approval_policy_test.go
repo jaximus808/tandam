@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/agentcanvas/api/internal/auth"
 	"github.com/agentcanvas/api/internal/store"
@@ -76,6 +78,7 @@ type policyFakeStore struct {
 
 	created []*store.Action
 	// epic batch-approve call record
+	epicMu         sync.Mutex // cascade now runs in a detached goroutine
 	epicApprovedID uuid.UUID
 	epicApprovedBy string
 	epicCalls      int
@@ -112,6 +115,42 @@ func (f *policyFakeStore) UpdateActionState(_ context.Context, _ uuid.UUID, id u
 	return 1, nil
 }
 
+
+// epicCascade reads the cascade record under the lock.
+func (f *policyFakeStore) epicCascade() (int, uuid.UUID, string) {
+	f.epicMu.Lock()
+	defer f.epicMu.Unlock()
+	return f.epicCalls, f.epicApprovedID, f.epicApprovedBy
+}
+
+// waitEpicCalls polls until the detached cascade goroutine has run `want`
+// times (or fails after 2s). For want-zero assertions use settleEpicCalls.
+func waitEpicCalls(t *testing.T, f *policyFakeStore, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		calls, _, _ := f.epicCascade()
+		if calls == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("ApproveEpicTasks called %d times, want %d", calls, want)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// settleEpicCalls gives the (possibly never-spawned) cascade goroutine a beat,
+// then asserts the exact call count — the only way to check a negative.
+func settleEpicCalls(t *testing.T, f *policyFakeStore, want int) {
+	t.Helper()
+	time.Sleep(100 * time.Millisecond)
+	calls, _, _ := f.epicCascade()
+	if calls != want {
+		t.Fatalf("ApproveEpicTasks called %d times, want %d", calls, want)
+	}
+}
+
 func (f *policyFakeStore) ReserveTaskTickets(_ context.Context, _ uuid.UUID, n int) (int, error) {
 	// Tickets are orthogonal to the cascade under test; hand out a fixed range.
 	return 1, nil
@@ -136,6 +175,8 @@ func (f *policyFakeStore) ApproveActionsBatch(_ context.Context, _ uuid.UUID, id
 }
 
 func (f *policyFakeStore) ApproveEpicTasks(_ context.Context, _ uuid.UUID, epicID uuid.UUID, approvedBy string) (int, error) {
+	f.epicMu.Lock()
+	defer f.epicMu.Unlock()
 	f.epicCalls++
 	f.epicApprovedID = epicID
 	f.epicApprovedBy = approvedBy
@@ -275,14 +316,13 @@ func TestApproveEpicBatchApprovesTasks(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, body %s", w.Code, w.Body.String())
 	}
-	if fake.epicCalls != 1 {
-		t.Fatalf("ApproveEpicTasks called %d times, want 1", fake.epicCalls)
+	waitEpicCalls(t, fake, 1)
+	_, gotID, gotBy := fake.epicCascade()
+	if gotID != epicID {
+		t.Fatalf("cascade targeted epic %s, want %s", gotID, epicID)
 	}
-	if fake.epicApprovedID != epicID {
-		t.Fatalf("cascade targeted epic %s, want %s", fake.epicApprovedID, epicID)
-	}
-	if fake.epicApprovedBy != "policy:epic" {
-		t.Fatalf("cascade stamped %q, want policy:epic", fake.epicApprovedBy)
+	if gotBy != "policy:epic" {
+		t.Fatalf("cascade stamped %q, want policy:epic", gotBy)
 	}
 }
 
@@ -301,9 +341,7 @@ func TestApproveTaskDoesNotCascade(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, body %s", w.Code, w.Body.String())
 	}
-	if fake.epicCalls != 0 {
-		t.Fatalf("ApproveEpicTasks called %d times, want 0", fake.epicCalls)
-	}
+	settleEpicCalls(t, fake, 0)
 }
 
 // Under 'strict' policy the epic cascade must NOT fire: approving an epic is
@@ -322,9 +360,7 @@ func TestApproveEpicStrictPolicySkipsCascade(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, body %s", w.Code, w.Body.String())
 	}
-	if fake.epicCalls != 0 {
-		t.Fatalf("ApproveEpicTasks called %d times under strict policy, want 0", fake.epicCalls)
-	}
+	settleEpicCalls(t, fake, 0)
 }
 
 // Re-approving an already-approved epic re-fires the (idempotent) cascade, so a
@@ -346,9 +382,7 @@ func TestApproveEpicRetryRefiresCascade(t *testing.T) {
 			t.Fatalf("approve #%d: status = %d, body %s", i, w.Code, w.Body.String())
 		}
 	}
-	if fake.epicCalls != 2 {
-		t.Fatalf("ApproveEpicTasks called %d times across two approves, want 2", fake.epicCalls)
-	}
+	waitEpicCalls(t, fake, 2)
 }
 
 // ── Bulk approve (POST /api/canvas/actions/approve-batch) ────────────────────
@@ -417,9 +451,7 @@ func TestApproveBatchApprovesOnlyProposed(t *testing.T) {
 	if fake.actions[doneTask].State != "done" {
 		t.Fatalf("done task mutated to %q", fake.actions[doneTask].State)
 	}
-	if fake.epicCalls != 0 {
-		t.Fatalf("no epics in batch, but ApproveEpicTasks called %d times", fake.epicCalls)
-	}
+	settleEpicCalls(t, fake, 0)
 }
 
 // An epic approved via the batch runs the same post-approve cascade as the
@@ -449,14 +481,13 @@ func TestApproveBatchEpicCascadesUnderEpicPolicy(t *testing.T) {
 	if got := fake.actions[epicID].ApprovedBy; got == nil || *got != "jaxon" {
 		t.Fatalf("epic approvedBy = %v, want jaxon", got)
 	}
-	if fake.epicCalls != 1 {
-		t.Fatalf("ApproveEpicTasks called %d times, want 1", fake.epicCalls)
+	waitEpicCalls(t, fake, 1)
+	_, gotID, gotBy := fake.epicCascade()
+	if gotID != epicID {
+		t.Fatalf("cascade targeted epic %s, want %s", gotID, epicID)
 	}
-	if fake.epicApprovedID != epicID {
-		t.Fatalf("cascade targeted epic %s, want %s", fake.epicApprovedID, epicID)
-	}
-	if fake.epicApprovedBy != "policy:epic" {
-		t.Fatalf("cascade stamped %q, want policy:epic", fake.epicApprovedBy)
+	if gotBy != "policy:epic" {
+		t.Fatalf("cascade stamped %q, want policy:epic", gotBy)
 	}
 }
 
@@ -483,9 +514,7 @@ func TestApproveBatchEpicStrictPolicySkipsCascade(t *testing.T) {
 	if fake.actions[epicID].State != "approved" {
 		t.Fatalf("epic state = %q, want approved (strict blocks the cascade, not the approve)", fake.actions[epicID].State)
 	}
-	if fake.epicCalls != 0 {
-		t.Fatalf("ApproveEpicTasks called %d times under strict policy, want 0", fake.epicCalls)
-	}
+	settleEpicCalls(t, fake, 0)
 }
 
 // An empty ids list is a 400, and a duplicate skipped id reports once.

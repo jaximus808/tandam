@@ -39,6 +39,15 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 	if body.Name == "" {
 		body.Name = body.Role
 	}
+	// A parent must be a registered agent on THIS canvas: the DB FK is not
+	// canvas-scoped, so without this check a cross-canvas id would insert fine
+	// and render as a silently-flat child; a nonexistent id would 500 on the FK.
+	if body.ParentAgentID != nil {
+		if _, err := h.store.GetAgent(r.Context(), canvasID, *body.ParentAgentID); err != nil {
+			writeError(w, http.StatusBadRequest, "parentAgentId does not name a registered agent on this canvas")
+			return
+		}
+	}
 	agent := &store.Agent{
 		ID: uuid.New(), Kind: "agent",
 		Name: body.Name, Role: body.Role, Model: body.Model,
@@ -506,30 +515,34 @@ func (h *Handler) ApproveAction(w http.ResponseWriter, r *http.Request) {
 	// approve retry repairs a previously-failed cascade instead of stranding the
 	// batch behind the no-op idempotency path above.
 	if fresh != nil && fresh.Type == "epic" && fresh.State == "approved" {
-		// The response is already written; the cascade is follow-up work. Detach
-		// from the request context like broadcastStateAsync does, then push one
-		// more state broadcast so viewers see the tasks flip.
+		// The response is already written; the cascade is follow-up work. Runs in
+		// a detached goroutine (like broadcastStateAsync) so it neither delays the
+		// return nor lands in the route-latency histogram, then pushes one more
+		// state broadcast so viewers see the tasks flip.
 		ctx := context.WithoutCancel(r.Context())
 		canvasID := CanvasIDFromCtx(ctx)
-		// The batch flow is a property of the 'epic' (and 'auto') policies. Under
-		// 'strict' every agent task keeps its own gate — approving the epic must
-		// not mass-approve its tasks. Unreadable policy fails closed, like the
-		// birth-time cascade.
-		canvas, err := h.store.GetCanvasByID(ctx, canvasID)
-		if err != nil || canvas.ApprovalPolicy == "strict" {
-			if err != nil {
-				log.Printf("approve epic %s: reading approval policy (cascade skipped): %v", fresh.ID, err)
+		epicID := fresh.ID
+		go func() {
+			// The batch flow is a property of the 'epic' (and 'auto') policies.
+			// Under 'strict' every agent task keeps its own gate — approving the
+			// epic must not mass-approve its tasks. Unreadable policy fails
+			// closed, like the birth-time cascade.
+			canvas, err := h.store.GetCanvasByID(ctx, canvasID)
+			if err != nil || canvas.ApprovalPolicy == "strict" {
+				if err != nil {
+					log.Printf("approve epic %s: reading approval policy (cascade skipped): %v", epicID, err)
+				}
+				return
 			}
-			return
-		}
-		n, err := h.store.ApproveEpicTasks(ctx, canvasID, fresh.ID, "policy:epic")
-		if err != nil {
-			log.Printf("approve epic %s: batch-approving its tasks: %v", fresh.ID, err)
-			return
-		}
-		if n > 0 {
-			broadcastStateAsync(ctx, h.store, h.hub, canvasID)
-		}
+			n, err := h.store.ApproveEpicTasks(ctx, canvasID, epicID, "policy:epic")
+			if err != nil {
+				log.Printf("approve epic %s: batch-approving its tasks: %v", epicID, err)
+				return
+			}
+			if n > 0 {
+				broadcastStateAsync(ctx, h.store, h.hub, canvasID)
+			}
+		}()
 	}
 }
 
@@ -586,40 +599,54 @@ func (h *Handler) ApproveActionsBatch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"approved": approved, "skipped": skipped})
 
 	// Post-approve epic cascade — the response is already written; this is
-	// follow-up work, detached from the request context like ApproveAction's.
-	var epics []*store.Action
+	// follow-up work. Runs in a detached goroutine so it neither delays the
+	// handler return nor pollutes the route-latency histogram with work the
+	// client never waited for.
+	var epicIDs []uuid.UUID
 	for _, a := range rows {
 		if a.Type == "epic" {
-			epics = append(epics, a)
+			epicIDs = append(epicIDs, a.ID)
 		}
 	}
-	if len(epics) == 0 {
+	// Cascade repair: a skipped id may be an epic that is ALREADY approved but
+	// whose earlier cascade failed (tasks stranded proposed). Re-firing the
+	// idempotent bulk approve here gives bulk-select the same repair semantics
+	// as single-approve's retry path.
+	for _, id := range skipped {
+		if a, err := h.store.GetAction(r.Context(), canvasID, id); err == nil &&
+			a.Type == "epic" && a.State == "approved" {
+			epicIDs = append(epicIDs, a.ID)
+		}
+	}
+	if len(epicIDs) == 0 {
 		return
 	}
 	ctx := context.WithoutCancel(r.Context())
-	// Policy check mirrors ApproveAction: under 'strict' approving an epic is
-	// bookkeeping — its tasks keep their individual gates. Unreadable policy
-	// fails closed (cascade skipped).
-	canvas, err := h.store.GetCanvasByID(ctx, canvasID)
-	if err != nil || canvas.ApprovalPolicy == "strict" {
-		if err != nil {
-			log.Printf("approve-batch: reading approval policy (epic cascade skipped): %v", err)
+	go func() {
+		// Policy check mirrors ApproveAction: under 'strict' approving an epic is
+		// bookkeeping — its tasks keep their individual gates. Unreadable policy
+		// fails closed (cascade skipped).
+		canvas, err := h.store.GetCanvasByID(ctx, canvasID)
+		if err != nil || canvas.ApprovalPolicy == "strict" {
+			if err != nil {
+				log.Printf("approve-batch: reading approval policy (epic cascade skipped): %v", err)
+			}
+			return
 		}
-		return
-	}
-	total := 0
-	for _, epic := range epics {
-		n, err := h.store.ApproveEpicTasks(ctx, canvasID, epic.ID, "policy:epic")
-		if err != nil {
-			log.Printf("approve-batch epic %s: batch-approving its tasks: %v", epic.ID, err)
-			continue
+		total := 0
+		for _, epicID := range epicIDs {
+			n, err := h.store.ApproveEpicTasks(ctx, canvasID, epicID, "policy:epic")
+			if err != nil {
+				log.Printf("approve-batch epic %s: batch-approving its tasks: %v", epicID, err)
+				continue
+			}
+			total += n
 		}
-		total += n
-	}
-	// One extra broadcast for the whole cascade, only if any task flipped.
-	if total > 0 {
-		broadcastStateAsync(ctx, h.store, h.hub, canvasID)
-	}
+		// One extra broadcast for the whole cascade, only if any task flipped.
+		if total > 0 {
+			broadcastStateAsync(ctx, h.store, h.hub, canvasID)
+		}
+	}()
 }
 
 // POST /api/canvas/actions/{id}/reject  — human gate: proposed → rejected.
@@ -692,10 +719,16 @@ func (h *Handler) UpdateActionState(w http.ResponseWriter, r *http.Request) {
 		}
 		// Liveness heartbeat: completing (or failing) a task proves the agent is
 		// alive — refresh its last_seen_at so the swarm view gets a short grace
-		// window between tasks instead of flickering offline. Best-effort.
-		if err := h.store.TouchAgentLastSeen(r.Context(), canvasID, body.AgentName); err != nil {
-			log.Printf("complete: touching agent last_seen (%s): %v", body.AgentName, err)
-		}
+		// window between tasks instead of flickering offline. Best-effort and
+		// DETACHED: presence must never add a round-trip to the complete path
+		// (the exact latency the loadtest measures).
+		touchCtx := context.WithoutCancel(r.Context())
+		agentName := body.AgentName
+		go func() {
+			if err := h.store.TouchAgentLastSeen(touchCtx, canvasID, agentName); err != nil {
+				log.Printf("complete: touching agent last_seen (%s): %v", agentName, err)
+			}
+		}()
 	}
 	h.transitionAction(w, r, body.State, store.ActionStatePatch{
 		Result: body.Result, Error: body.Error, Payload: body.Payload,
@@ -737,10 +770,14 @@ func (h *Handler) claimAction(w http.ResponseWriter, r *http.Request, agentName 
 	}
 	// Liveness heartbeat: a claim proves the agent is alive — refresh its
 	// last_seen_at so the swarm view's staleness threshold stays honest.
-	// Best-effort; a failed touch must never fail the claim.
-	if err := h.store.TouchAgentLastSeen(r.Context(), canvasID, agentName); err != nil {
-		log.Printf("claim %s: touching agent last_seen (%s): %v", id, agentName, err)
-	}
+	// Best-effort and DETACHED: presence must never add a round-trip to the
+	// claim path (the exact latency the loadtest measures).
+	touchCtx := context.WithoutCancel(r.Context())
+	go func() {
+		if err := h.store.TouchAgentLastSeen(touchCtx, canvasID, agentName); err != nil {
+			log.Printf("claim %s: touching agent last_seen (%s): %v", id, agentName, err)
+		}
+	}()
 	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
 	writeJSON(w, http.StatusOK, map[string]any{"action": action})
 }

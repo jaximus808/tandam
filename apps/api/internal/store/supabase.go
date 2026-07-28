@@ -2562,6 +2562,25 @@ func (s *supabaseStore) RegisterAgent(ctx context.Context, canvasID uuid.UUID, a
 	return s.bumpVersion(ctx, canvasID)
 }
 
+// GetAgent fetches one agent row scoped to a canvas — used to validate
+// parentAgentId on registration (the FK alone is not canvas-scoped, so a
+// cross-canvas parent would pass it and render as a silently-broken tree).
+func (s *supabaseStore) GetAgent(_ context.Context, canvasID, id uuid.UUID) (*Agent, error) {
+	var rows []dbAgent
+	_, err := s.client.From("agents").
+		Select("*", "", false).
+		Eq("id", id.String()).
+		Eq("canvas_id", canvasID.String()).
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("agent %s not found", id)
+	}
+	return toAgent(rows[0]), nil
+}
+
 // TouchAgentLastSeen bumps last_seen_at for the agent the claimant identity
 // names — called on task_start/complete so a working subagent's presence stays
 // fresh without a dedicated heartbeat. Claimant is the registered agent NAME
@@ -2836,6 +2855,9 @@ func (s *supabaseStore) ReleaseAction(ctx context.Context, canvasID, id uuid.UUI
 			"state":      "approved",
 			"claimed_by": nil,
 			"claimed_at": nil,
+			// Symmetric with RequeueAction: a released task goes back to the
+			// queue clean — no stale error from a previous life.
+			"error": nil,
 		}, "representation", "").
 		Eq("id", id.String()).
 		Eq("canvas_id", canvasID.String()).
@@ -2877,6 +2899,10 @@ func (s *supabaseStore) RequeueAction(ctx context.Context, canvasID, id uuid.UUI
 			"claimed_by": nil,
 			"claimed_at": nil,
 			"error":      nil,
+			// The failed attempt's result summary must not survive the requeue —
+			// a not-yet-started task showing a green "Result" (and matching the
+			// has-commit filter) reports work that was rolled back.
+			"result": nil,
 		}, "representation", "").
 		Eq("id", id.String()).
 		Eq("canvas_id", canvasID.String()).

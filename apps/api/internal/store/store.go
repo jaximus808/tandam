@@ -824,6 +824,8 @@ type Store interface {
 
 	// Agents (v1 identity / provenance)
 	RegisterAgent(ctx context.Context, canvasID uuid.UUID, a *Agent) (int, error)
+	// GetAgent fetches one agent scoped to a canvas (parentAgentId validation).
+	GetAgent(ctx context.Context, canvasID, id uuid.UUID) (*Agent, error)
 	// TouchAgentLastSeen bumps last_seen_at (and re-marks online) for the agent a
 	// claimant identity resolves to — the liveness heartbeat behind the swarm
 	// view. Claimant is the task_start/complete identity: the registered agent

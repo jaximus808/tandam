@@ -126,6 +126,10 @@ export default function TasksPanel({
   const [pendingApproved, setPendingApproved] = useState<Set<string>>(new Set());
   const [batchBusy, setBatchBusy] = useState(false);
   const lastPickedRef = useRef<string | null>(null);
+  // Root ref for the keyboard-triage focus guard: bare-key shortcuts must not
+  // fire while the user is interacting with another surface (e.g. the Board's
+  // detail panel, where a focused <button> passes the input-tag check).
+  const panelRef = useRef<HTMLDivElement>(null);
 
   // Every still-proposed task id in display order (epic groups first, then the
   // flat queue) — the universe for select-all, shift-ranges, and j/k movement.
@@ -184,7 +188,17 @@ export default function TasksPanel({
     setPendingApproved((prev) => new Set([...prev, ...batch]));
     setSelected(new Set());
     try {
-      const { approved } = await approveBatch(code, batch);
+      const { approved, skipped } = await approveBatch(code, batch);
+      // Skipped ids never flipped server-side — and an all-skipped batch sends
+      // NO broadcast, so nothing would ever prune them from the overlay. Drop
+      // them now or they render "Ready" forever.
+      if (skipped.length > 0) {
+        setPendingApproved((prev) => {
+          const next = new Set(prev);
+          for (const id of skipped) next.delete(id);
+          return next;
+        });
+      }
       posthog.capture("agent_tasks_batch_approved", {
         canvas_code: code,
         requested: batch.length,
@@ -211,6 +225,17 @@ export default function TasksPanel({
       const el = e.target as HTMLElement | null;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable)) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
+      // Only act when no OTHER surface owns focus: allow body/document focus
+      // (plain browsing) or focus inside this panel; anything else — a button
+      // in the Board's slide-over, a dialog — means bare keys aren't ours.
+      const active = document.activeElement;
+      if (
+        active &&
+        active !== document.body &&
+        active !== document.documentElement &&
+        !panelRef.current?.contains(active)
+      )
+        return;
       if (e.key === "j" || e.key === "k") {
         if (proposedIds.length === 0) return;
         e.preventDefault();
@@ -262,7 +287,17 @@ export default function TasksPanel({
         <div key={t.id} className="rounded-xl border border-ink/20 bg-surface p-2.5">
           <Composer
             targets={targets}
-            initial={{ title: p.title ?? "", body: p.body, linkedIds: p.linkedIds, assignee: p.assignee }}
+            initial={{
+              title: p.title ?? "",
+              body: p.body,
+              linkedIds: p.linkedIds,
+              assignee: p.assignee,
+              // updateTask REPLACES the payload server-side — dropping these
+              // would silently detach the task from its epic / void its
+              // self-flag (the board editor round-trips them identically).
+              epicId: p.epicId,
+              requiresApproval: p.requiresApproval,
+            }}
             submitLabel="Save"
             onCancel={() => setEditingId(null)}
             onSubmit={async (draft) => {
@@ -427,7 +462,7 @@ export default function TasksPanel({
   }
 
   return (
-    <>
+    <div ref={panelRef} className="flex h-full min-h-0 flex-col">
       <div className="flex items-center justify-between border-b border-ink/10 px-3 py-3 pl-4">
         <span className="text-sm font-semibold text-ink">Tasks</span>
         <div className="flex items-center gap-1">
@@ -534,7 +569,7 @@ export default function TasksPanel({
           </button>
         </div>
       )}
-    </>
+    </div>
   );
 }
 
@@ -848,6 +883,9 @@ function Composer({
     setError(null);
     try {
       await onSubmit({
+        // Preserve payload fields this editor doesn't surface (epicId,
+        // requiresApproval, …) — the save REPLACES the payload wholesale.
+        ...initial,
         title: title.trim(),
         body: body.trim() || undefined,
         linkedIds: linked.size > 0 ? [...linked] : undefined,
