@@ -107,16 +107,6 @@ body {
   color: rgb(var(--color-ink));
 }
 
-/* Landing hero mock-map (MorphCanvas ResearchBody): a faux basemap gradient.
-   Theme-aware so the demo canvas previews the real dark worksurface instead of
-   glaring white on the dark page. Light = mint→sky; dark = deep teal→slate. */
-.morph-map {
-  background: linear-gradient(135deg, #ecfdf5, #e0f2fe);
-}
-.dark .morph-map {
-  background: linear-gradient(135deg, #16231f, #14202b);
-}
-
 /* Tailwind Typography (`prose`, used by DocsMode notes + rendered markdown in
    MapMode/ItineraryMode) hardcodes its heading/bold/link/list-marker colors to
    dark grays via its own `--tw-prose-*` variables. Those are more specific than
@@ -253,13 +243,6 @@ body {
 .btn-press:hover { transform: translate(1px, 1px); }
 .btn-press:active { transform: translate(3px, 3px); box-shadow: 0 0 0 0 transparent !important; }
 
-/* Op-feed rows tick in from below, like a tailing log. */
-@keyframes tandem-op-in {
-  from { opacity: 0; transform: translateY(7px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-.tandem-op-in { animation: tandem-op-in 0.4s cubic-bezier(0.22, 1, 0.36, 1) both; }
-
 /* Terminal block-cursor blink. */
 @keyframes tandem-caret {
   0%, 49% { opacity: 1; }
@@ -284,41 +267,15 @@ body {
 .tandem-roam-a { animation: tandem-roam-a 26s ease-in-out infinite; }
 .tandem-roam-b { animation: tandem-roam-b 31s ease-in-out infinite; }
 
-/* A tiny idle bob for a cursor hovering in place — alive, not pasted. */
-@keyframes tandem-hover {
-  0%, 100% { transform: translate(0, 0); }
-  50%      { transform: translate(4px, 3px); }
-}
-.tandem-hover { animation: tandem-hover 3.4s ease-in-out infinite; }
-
-/* Dashed "wire" between agents ⇄ canvas ⇄ humans: marching ants. */
-@keyframes tandem-wire {
-  from { background-position: 0 0; }
-  to   { background-position: 16px 0; }
-}
-.tandem-wire {
-  height: 2px;
-  background-image: repeating-linear-gradient(
-    to right,
-    currentColor 0 7px,
-    transparent 7px 16px
-  );
-  animation: tandem-wire 0.9s linear infinite;
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .tandem-op-in,
   .tandem-caret,
   .tandem-roam-a,
-  .tandem-roam-b,
-  .tandem-hover,
-  .tandem-wire { animation: none; }
+  .tandem-roam-b { animation: none; }
 }
 
 /* ───────────────────────────────────────────────────────────────────────────
-   Landing page (pages/Landing.tsx): on-load reveals, the shape-shifting hero
-   canvas, the use-case marquee, floating cursors, and ambient blobs. Every
-   animation is disabled under prefers-reduced-motion at the bottom.
+   Landing page (pages/Landing.tsx): on-load reveals and the cycling headline
+   word. Both disabled under prefers-reduced-motion at the bottom.
    ─────────────────────────────────────────────────────────────────────────── */
 @keyframes tandem-rise {
   from { opacity: 0; transform: translateY(14px); }
@@ -326,83 +283,16 @@ body {
 }
 .tandem-rise { animation: tandem-rise 0.7s cubic-bezier(0.22, 1, 0.36, 1) both; }
 
-@keyframes tandem-scene-in {
-  from { opacity: 0; transform: translateY(10px) scale(0.985); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
-}
-.tandem-scene-in { animation: tandem-scene-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
-
-/* Each item inside the demo canvas is "added" by the agent one at a time: it
-   rises in and briefly wears the agent-edit halo (a ring in the item's own
-   accent), then settles — the same per-element glow the live canvas shows on an
-   edit (see AgentCursor). Items stagger via inline animation-delay; the ring
-   colour comes from --item-accent set on each element. */
-@keyframes tandem-item-in {
-  0%   { opacity: 0; transform: translateY(7px) scale(0.965); box-shadow: 0 0 0 0 rgba(0, 0, 0, 0); }
-  45%  {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--item-accent, var(--agent-accent, #c75b39)) 26%, transparent),
-      0 6px 18px -6px var(--item-accent, var(--agent-accent, #c75b39));
-  }
-  100% { opacity: 1; transform: translateY(0) scale(1); box-shadow: 0 0 0 0 rgba(0, 0, 0, 0); }
-}
-.tandem-item-in { animation: tandem-item-in 0.85s cubic-bezier(0.22, 1, 0.36, 1) both; }
-
-@media (prefers-reduced-motion: reduce) {
-  .tandem-item-in { animation: none; }
-}
-
-/* The cycling headline word: blurs up into place each time the scene changes. */
+/* The cycling headline word: blurs up into place each time it changes. */
 @keyframes tandem-word-in {
   from { opacity: 0; transform: translateY(0.42em); filter: blur(5px); }
   to   { opacity: 1; transform: translateY(0); filter: blur(0); }
 }
 .tandem-word-in { animation: tandem-word-in 0.55s cubic-bezier(0.22, 1, 0.36, 1) both; }
 
-@keyframes tandem-marquee {
-  from { transform: translateX(0); }
-  to   { transform: translateX(-50%); }
-}
-.tandem-marquee { animation: tandem-marquee 42s linear infinite; }
-.tandem-marquee-rev { animation: tandem-marquee 52s linear infinite reverse; }
-
-@keyframes tandem-drift-a {
-  0%   { transform: translate(0, 0); }
-  50%  { transform: translate(20px, -16px); }
-  100% { transform: translate(0, 0); }
-}
-@keyframes tandem-drift-b {
-  0%   { transform: translate(0, 0); }
-  50%  { transform: translate(-18px, 14px); }
-  100% { transform: translate(0, 0); }
-}
-.tandem-drift-a { animation: tandem-drift-a 7s ease-in-out infinite; }
-.tandem-drift-b { animation: tandem-drift-b 9.5s ease-in-out infinite; }
-
-@keyframes tandem-blob {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  33%      { transform: translate(26px, -20px) scale(1.08); }
-  66%      { transform: translate(-18px, 14px) scale(0.95); }
-}
-.tandem-blob { animation: tandem-blob 18s ease-in-out infinite; }
-
-@keyframes tandem-grid-pan {
-  from { background-position: 0 0; }
-  to   { background-position: 34px 34px; }
-}
-.tandem-grid-pan { animation: tandem-grid-pan 7s linear infinite; }
-
 @media (prefers-reduced-motion: reduce) {
   .tandem-rise,
-  .tandem-scene-in,
-  .tandem-word-in,
-  .tandem-marquee,
-  .tandem-marquee-rev,
-  .tandem-drift-a,
-  .tandem-drift-b,
-  .tandem-blob,
-  .tandem-grid-pan { animation: none; }
+  .tandem-word-in { animation: none; }
 }
 
 /* ───────────────────────────────────────────────────────────────────────────
