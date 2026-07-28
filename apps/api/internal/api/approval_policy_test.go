@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/agentcanvas/api/internal/auth"
@@ -278,5 +279,118 @@ func TestApproveTaskDoesNotCascade(t *testing.T) {
 	}
 	if fake.epicCalls != 0 {
 		t.Fatalf("ApproveEpicTasks called %d times, want 0", fake.epicCalls)
+	}
+}
+
+// Under 'strict' policy the epic cascade must NOT fire: approving an epic is
+// bookkeeping, every task keeps its individual human gate.
+func TestApproveEpicStrictPolicySkipsCascade(t *testing.T) {
+	canvasID := uuid.New()
+	epicID := uuid.New()
+	fake := &policyFakeStore{
+		policy:  "strict",
+		actions: map[uuid.UUID]*store.Action{epicID: {ID: epicID, Type: "epic", State: "proposed"}},
+	}
+	h := NewHandler(fake, nil, nil)
+	w := httptest.NewRecorder()
+	h.ApproveAction(w, canvasRequest(t, "POST", "/api/canvas/actions/"+epicID.String()+"/approve",
+		map[string]any{"approvedBy": "human"}, canvasID, epicID.String()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", w.Code, w.Body.String())
+	}
+	if fake.epicCalls != 0 {
+		t.Fatalf("ApproveEpicTasks called %d times under strict policy, want 0", fake.epicCalls)
+	}
+}
+
+// Re-approving an already-approved epic re-fires the (idempotent) cascade, so a
+// transiently-failed batch approve is repairable by clicking Approve again
+// instead of stranding the tasks in proposed forever.
+func TestApproveEpicRetryRefiresCascade(t *testing.T) {
+	canvasID := uuid.New()
+	epicID := uuid.New()
+	fake := &policyFakeStore{
+		policy:  "epic",
+		actions: map[uuid.UUID]*store.Action{epicID: {ID: epicID, Type: "epic", State: "proposed"}},
+	}
+	h := NewHandler(fake, nil, nil)
+	for i := 1; i <= 2; i++ {
+		w := httptest.NewRecorder()
+		h.ApproveAction(w, canvasRequest(t, "POST", "/api/canvas/actions/"+epicID.String()+"/approve",
+			map[string]any{"approvedBy": "human"}, canvasID, epicID.String()))
+		if w.Code != http.StatusOK {
+			t.Fatalf("approve #%d: status = %d, body %s", i, w.Code, w.Body.String())
+		}
+	}
+	if fake.epicCalls != 2 {
+		t.Fatalf("ApproveEpicTasks called %d times across two approves, want 2", fake.epicCalls)
+	}
+}
+
+// A terminal transition (done/failed) from a NAMED agent that does not hold the
+// claim is rejected 409 — the claim buys exclusivity at finish, not just start.
+func TestCompleteRespectsClaim(t *testing.T) {
+	canvasID := uuid.New()
+	taskID := uuid.New()
+	holder := "session-A"
+	fake := &policyFakeStore{
+		policy: "epic",
+		actions: map[uuid.UUID]*store.Action{
+			taskID: {ID: taskID, Type: "task", State: "executing", ClaimedBy: &holder},
+		},
+	}
+	h := NewHandler(fake, nil, nil)
+
+	w := httptest.NewRecorder()
+	h.UpdateActionState(w, canvasRequest(t, "PATCH", "/api/canvas/actions/"+taskID.String(),
+		map[string]any{"state": "done", "result": "stolen", "agentName": "session-B"}, canvasID, taskID.String()))
+	if w.Code != http.StatusConflict {
+		t.Fatalf("rival complete: status = %d, want 409 (body %s)", w.Code, w.Body.String())
+	}
+	if fake.actions[taskID].State != "executing" {
+		t.Fatalf("rival complete mutated state to %q", fake.actions[taskID].State)
+	}
+
+	w = httptest.NewRecorder()
+	h.UpdateActionState(w, canvasRequest(t, "PATCH", "/api/canvas/actions/"+taskID.String(),
+		map[string]any{"state": "done", "result": "mine", "agentName": "session-A"}, canvasID, taskID.String()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("holder complete: status = %d, body %s", w.Code, w.Body.String())
+	}
+	if fake.actions[taskID].State != "done" {
+		t.Fatalf("holder complete left state %q, want done", fake.actions[taskID].State)
+	}
+}
+
+// epicId is canonicalized at creation (the cascade and gateway filter match on
+// stored text); malformed ids are rejected instead of silently orphaning the task.
+func TestEpicIdCanonicalizedOnCreate(t *testing.T) {
+	canvasID := uuid.New()
+	epicID := uuid.New()
+	fake := &policyFakeStore{policy: "strict", actions: map[uuid.UUID]*store.Action{}}
+	h := NewHandler(fake, nil, nil)
+
+	w := httptest.NewRecorder()
+	upper := strings.ToUpper(epicID.String())
+	h.ProposeAction(w, canvasRequest(t, "POST", "/api/canvas/actions",
+		taskBody(map[string]any{"title": "t", "epicId": upper}), canvasID, ""))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body %s", w.Code, w.Body.String())
+	}
+	var p struct {
+		EpicID string `json:"epicId"`
+	}
+	if err := json.Unmarshal(fake.created[0].Payload, &p); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if p.EpicID != epicID.String() {
+		t.Fatalf("stored epicId = %q, want canonical %q", p.EpicID, epicID.String())
+	}
+
+	w = httptest.NewRecorder()
+	h.ProposeAction(w, canvasRequest(t, "POST", "/api/canvas/actions",
+		taskBody(map[string]any{"title": "t", "epicId": "not-a-uuid"}), canvasID, ""))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("malformed epicId: status = %d, want 400", w.Code)
 	}
 }

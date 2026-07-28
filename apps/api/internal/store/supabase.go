@@ -2750,6 +2750,7 @@ func (s *supabaseStore) ClaimAction(ctx context.Context, canvasID, id uuid.UUID,
 		Eq("id", id.String()).
 		Eq("canvas_id", canvasID.String()).
 		Eq("state", "approved").
+		Eq("type", "task").
 		ExecuteTo(&rows)
 	if err != nil {
 		return nil, 0, err
@@ -2765,6 +2766,12 @@ func (s *supabaseStore) ClaimAction(ctx context.Context, canvasID, id uuid.UUID,
 	existing, gerr := s.GetAction(ctx, canvasID, id)
 	if gerr != nil {
 		return nil, 0, ErrActionNotFound
+	}
+	// Only tasks are claimable. An epic claimed via a raw update_state would
+	// leave 'approved' and permanently brick its cascade (approve can't reach
+	// 'executing'), so refuse by type before any state-based reasoning.
+	if existing.Type != "task" {
+		return nil, 0, fmt.Errorf("%w: only tasks can be claimed (this is a %q)", ErrIllegalActionState, existing.Type)
 	}
 	if existing.State == "executing" {
 		holder := ""
@@ -2798,6 +2805,7 @@ func (s *supabaseStore) ReleaseAction(ctx context.Context, canvasID, id uuid.UUI
 		Eq("id", id.String()).
 		Eq("canvas_id", canvasID.String()).
 		Eq("state", "executing").
+		Eq("type", "task").
 		ExecuteTo(&rows)
 	if err != nil {
 		return nil, 0, err
@@ -2812,6 +2820,9 @@ func (s *supabaseStore) ReleaseAction(ctx context.Context, canvasID, id uuid.UUI
 	existing, gerr := s.GetAction(ctx, canvasID, id)
 	if gerr != nil {
 		return nil, 0, ErrActionNotFound
+	}
+	if existing.Type != "task" {
+		return nil, 0, fmt.Errorf("%w: only tasks can be released (this is a %q)", ErrIllegalActionState, existing.Type)
 	}
 	if existing.State == "approved" {
 		return existing, 0, nil // already back in the queue — idempotent retry
@@ -2849,16 +2860,30 @@ func (s *supabaseStore) DeleteAction(ctx context.Context, canvasID, id uuid.UUID
 // with the policy provenance ('policy:epic'). Called when a human approves the
 // epic itself — the one-time gate that lets its tasks flow.
 func (s *supabaseStore) ApproveEpicTasks(ctx context.Context, canvasID, epicID uuid.UUID, approvedBy string) (int, error) {
-	err := s.exec(s.client.From("actions").
-		Update(map[string]any{"state": "approved", "approved_by": approvedBy}, "minimal", "").
+	// requiresApproval:true is the agent's self-flag for work that deviates from
+	// the approved plan — those tasks keep their individual human gate even when
+	// their epic is approved. The .is.null arm keeps tasks that never set the
+	// field (a plain not-eq would drop JSON-null rows from the update).
+	var rows []dbAction
+	_, err := s.client.From("actions").
+		Update(map[string]any{"state": "approved", "approved_by": approvedBy}, "representation", "").
 		Eq("canvas_id", canvasID.String()).
 		Eq("type", "task").
 		Eq("state", "proposed").
-		Eq("payload->>epicId", epicID.String()))
+		Eq("payload->>epicId", epicID.String()).
+		Or("payload->>requiresApproval.is.null,payload->>requiresApproval.neq.true", "").
+		ExecuteTo(&rows)
 	if err != nil {
 		return 0, err
 	}
-	return s.bumpVersion(ctx, canvasID)
+	// Nothing matched → no state change, no version bump, no broadcast needed.
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	if _, err := s.bumpVersion(ctx, canvasID); err != nil {
+		return len(rows), err
+	}
+	return len(rows), nil
 }
 
 // GetLinkedEntities resolves a task's payload.linkedIds against roadmap items

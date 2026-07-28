@@ -83,6 +83,22 @@ func canonicalizeTaskPayload(raw json.RawMessage) (json.RawMessage, error) {
 	default:
 		return nil, fmt.Errorf("assignee must be 'agent' or 'human'")
 	}
+	// Canonicalize epicId: the epic cascade (ApproveEpicTasks) and the gateway's
+	// epicId filter match on the STORED text, so a non-canonical UUID spelling
+	// (uppercase, braces) would make the task invisible to both. Parse and
+	// re-store the canonical form; reject garbage outright.
+	if raw, present := p["epicId"]; present {
+		s, _ := raw.(string)
+		if s == "" {
+			delete(p, "epicId")
+		} else {
+			id, err := uuid.Parse(s)
+			if err != nil {
+				return nil, fmt.Errorf("epicId must be a valid epic action id")
+			}
+			p["epicId"] = id.String()
+		}
+	}
 	return json.Marshal(p)
 }
 
@@ -475,18 +491,36 @@ func (h *Handler) ApproveAction(w http.ResponseWriter, r *http.Request) {
 	if approvedBy == "" {
 		approvedBy = "human"
 	}
-	fresh, ok := h.transitionAction(w, r, "approved", store.ActionStatePatch{ApprovedBy: &approvedBy})
-	if ok && fresh.Type == "epic" {
+	fresh, _ := h.transitionAction(w, r, "approved", store.ActionStatePatch{ApprovedBy: &approvedBy})
+	// Cascade whenever the epic IS approved, not only on the first transition:
+	// ApproveEpicTasks is an idempotent bulk UPDATE, so re-running it on an
+	// approve retry repairs a previously-failed cascade instead of stranding the
+	// batch behind the no-op idempotency path above.
+	if fresh != nil && fresh.Type == "epic" && fresh.State == "approved" {
 		// The response is already written; the cascade is follow-up work. Detach
 		// from the request context like broadcastStateAsync does, then push one
 		// more state broadcast so viewers see the tasks flip.
 		ctx := context.WithoutCancel(r.Context())
 		canvasID := CanvasIDFromCtx(ctx)
-		if _, err := h.store.ApproveEpicTasks(ctx, canvasID, fresh.ID, "policy:epic"); err != nil {
+		// The batch flow is a property of the 'epic' (and 'auto') policies. Under
+		// 'strict' every agent task keeps its own gate — approving the epic must
+		// not mass-approve its tasks. Unreadable policy fails closed, like the
+		// birth-time cascade.
+		canvas, err := h.store.GetCanvasByID(ctx, canvasID)
+		if err != nil || canvas.ApprovalPolicy == "strict" {
+			if err != nil {
+				log.Printf("approve epic %s: reading approval policy (cascade skipped): %v", fresh.ID, err)
+			}
+			return
+		}
+		n, err := h.store.ApproveEpicTasks(ctx, canvasID, fresh.ID, "policy:epic")
+		if err != nil {
 			log.Printf("approve epic %s: batch-approving its tasks: %v", fresh.ID, err)
 			return
 		}
-		broadcastStateAsync(ctx, h.store, h.hub, canvasID)
+		if n > 0 {
+			broadcastStateAsync(ctx, h.store, h.hub, canvasID)
+		}
 	}
 }
 
@@ -537,6 +571,27 @@ func (h *Handler) UpdateActionState(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusBadRequest, "state must be 'executing', 'done', or 'failed'")
 		return
+	}
+	// Terminal transitions respect the claim: a task another NAMED agent holds
+	// cannot be completed out from under it (the atomic claim would otherwise
+	// buy exclusivity at start and nothing at finish). The generic "agent"
+	// holder is exempt, mirroring ClaimAction's idempotency rule; a caller
+	// sending no identity (the web surface) is not blocked.
+	if body.AgentName != "" {
+		canvasID := CanvasIDFromCtx(r.Context())
+		if id, perr := uuid.Parse(chi.URLParam(r, "id")); perr == nil {
+			if current, gerr := h.store.GetAction(r.Context(), canvasID, id); gerr == nil &&
+				current.State == "executing" && current.ClaimedBy != nil {
+				holder := *current.ClaimedBy
+				if holder != "" && holder != "agent" && holder != body.AgentName {
+					writeJSON(w, http.StatusConflict, map[string]string{
+						"error":     "claimed_by_other",
+						"claimedBy": holder,
+					})
+					return
+				}
+			}
+		}
 	}
 	h.transitionAction(w, r, body.State, store.ActionStatePatch{
 		Result: body.Result, Error: body.Error, Payload: body.Payload,

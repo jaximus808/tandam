@@ -743,10 +743,28 @@ export async function handleTool(
     case "canvas_action_read":
       return gateway.get(`/api/canvas/actions/${args.id}`);
 
-    case "canvas_action_approve":
+    case "canvas_action_approve": {
+      // Epic approval is the human gate the whole policy cascade hangs on: one
+      // approved epic unlocks every task under it. An agent must never pull
+      // that lever itself — refuse here at the MCP surface (the API cannot
+      // distinguish callers; the gateway is the agent-facing door).
+      const { action } = (await gateway.get(`/api/canvas/actions/${args.id}`)) as {
+        action: { type?: string };
+      };
+      if (action?.type === "epic") {
+        return {
+          approved: false,
+          error: "epic_requires_human_approval",
+          message:
+            "Epics are approved by a human in the web Tasks panel — approving one " +
+            "batch-approves every task under it, which is exactly the gate agents " +
+            "must not open themselves. Ask the human to approve it on the board.",
+        };
+      }
       return gateway.post(`/api/canvas/actions/${args.id}/approve`, {
         approvedBy: gateway.getSession().agentId,
       });
+    }
 
     case "canvas_action_reject":
       return gateway.post(`/api/canvas/actions/${args.id}/reject`, {
@@ -869,12 +887,10 @@ export async function handleTool(
       // The claim is atomic server-side: exactly one concurrent task_start wins.
       // A 409 loss is an expected outcome, surfaced as data (not a thrown error)
       // so the model routes to the next task instead of retrying or stalling.
-      const session = gateway.getSession();
-      const claimant =
-        (args.agentName as string | undefined) ?? session.agentName ?? session.agentId;
+      const claimant = (args.agentName as string | undefined) ?? gateway.claimant();
       const res = await gateway.patchWithConflict<Record<string, unknown>, { claimedBy?: string }>(
         `/api/canvas/actions/${args.id}`,
-        { state: "executing", ...(claimant ? { agentName: claimant } : {}) }
+        { state: "executing", agentName: claimant }
       );
       if (res.conflict) {
         const claimedBy = res.conflict.claimedBy || "another agent";
@@ -886,26 +902,43 @@ export async function handleTool(
             `Do NOT work on it. Call canvas_task_list with state "approved" and pick the next task.`,
         };
       }
-      return res.data;
+      return { claimed: true, ...res.data };
     }
 
     case "canvas_task_complete": {
+      const claimant = gateway.claimant();
       const { action } = (await gateway.get(`/api/canvas/actions/${args.id}`)) as {
-        action: { state: string };
+        action: { state: string; claimedBy?: string };
       };
       if (action.state === "approved") {
-        const s = gateway.getSession();
-        const claimant = s.agentName ?? s.agentId;
         await gateway.patch(`/api/canvas/actions/${args.id}`, {
           state: "executing",
-          ...(claimant ? { agentName: claimant } : {}),
+          agentName: claimant,
         });
       }
-      return gateway.patch(`/api/canvas/actions/${args.id}`, {
-        state: args.status ?? "done",
-        result: args.result,
-        error: args.error,
-      });
+      // Send our identity on the terminal PATCH too — the API rejects completing
+      // a task a different named agent still holds, closing the "finish someone
+      // else's claimed work" hole that the atomic claim alone doesn't cover.
+      const res = await gateway.patchWithConflict<Record<string, unknown>, { claimedBy?: string }>(
+        `/api/canvas/actions/${args.id}`,
+        {
+          state: args.status ?? "done",
+          result: args.result,
+          error: args.error,
+          agentName: claimant,
+        }
+      );
+      if (res.conflict) {
+        const claimedBy = res.conflict.claimedBy || "another agent";
+        return {
+          completed: false,
+          claimedBy,
+          message:
+            `This task is claimed by "${claimedBy}" — it is not yours to complete. ` +
+            `If that session is dead, a human can release the task from the web Tasks panel.`,
+        };
+      }
+      return res.data;
     }
 
     default:
@@ -2850,9 +2883,9 @@ const RAW_TOOLS = [
       "already claimed it you get { claimed: false, claimedBy } back — do not work " +
       "on that task; call canvas_task_list (state 'approved') and pick the next one. " +
       "The claimant name (agentName, or your agent_register identity) shows on the board. " +
-      "The returned action carries the task's `ticketId` (e.g. 'TDM-142') — include " +
-      "that ticket ID in any commit messages for this work so the commits trace back " +
-      "to the task.",
+      "Success returns { claimed: true, action } — action.ticketId (e.g. 'TDM-142') is " +
+      "the task's ticket; include it in any commit messages for this work so the " +
+      "commits trace back to the task.",
     inputSchema: {
       type: "object" as const,
       properties: {

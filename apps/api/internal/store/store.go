@@ -843,7 +843,9 @@ type Store interface {
 	// ApproveEpicTasks batch-approves every currently-proposed task under an epic
 	// (actions rows with type='task', state='proposed', payload epicId = epicID)
 	// in ONE bulk UPDATE, stamping approved_by (the 'policy:epic' provenance).
-	// Returns the new canvas version.
+	// Tasks self-flagged requiresApproval:true are skipped — they keep their
+	// individual human gate. Returns the number of tasks approved; the canvas
+	// version is bumped only when that count is non-zero.
 	ApproveEpicTasks(ctx context.Context, canvasID, epicID uuid.UUID, approvedBy string) (int, error)
 	GetLinkedEntities(ctx context.Context, canvasID uuid.UUID, ids []uuid.UUID) ([]TaskLink, error)
 	// ReserveTaskTickets atomically reserves n consecutive per-canvas ticket

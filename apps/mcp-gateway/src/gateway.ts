@@ -44,6 +44,9 @@ export interface CanvasSession {
   // Human-readable name given at agent_register; preferred over agentId as the
   // claimant identity on task_start so the board shows WHO holds a claim.
   agentName?: string;
+  // Fallback claimant identity minted on first use for sessions that never
+  // called agent_register — see Gateway.claimant().
+  claimantId?: string;
 }
 
 export class Gateway {
@@ -210,6 +213,24 @@ export class Gateway {
       this.session.agentId = agentId;
       if (name) this.session.agentName = name;
     }
+  }
+
+  /**
+   * Stable claimant identity for task_start / task_complete. Prefers the
+   * agent_register name/id; a session that never registered gets a random
+   * per-session id minted once and reused. Never returns undefined — an
+   * anonymous claimant would be stored as the generic "agent", which is
+   * excluded from the API's idempotent-reclaim rule, so a retried task_start
+   * after a timed-out response would be told it lost its OWN claim.
+   */
+  claimant(): string {
+    const s = this.getSession();
+    if (s.agentName) return s.agentName;
+    if (s.agentId) return s.agentId;
+    if (!s.claimantId) {
+      s.claimantId = `session-${Math.random().toString(36).slice(2, 8)}`;
+    }
+    return s.claimantId;
   }
 
   getSession(): CanvasSession {
