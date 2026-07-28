@@ -29,10 +29,17 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Bot, Check, Link2, Plus } from "lucide-react";
-import type { Action, CanvasState, RoadmapItem, RoadmapStatus, TaskPayload } from "../types";
+import { Bot, Check, Layers, Link2, Plus } from "lucide-react";
+import type {
+  Action,
+  CanvasState,
+  EpicPayload,
+  RoadmapItem,
+  RoadmapStatus,
+  TaskPayload,
+} from "../types";
 import { sendOp } from "../lib/ws";
-import { createTask } from "../lib/api";
+import { createEpic, createTask } from "../lib/api";
 import EmptyState from "../components/EmptyState";
 import { modeTheme } from "../lib/modeTheme";
 
@@ -56,15 +63,38 @@ interface LinkedTask {
   state: string;
 }
 
+// An epic (action of type "epic") linked to a roadmap item — the link lives on
+// the EPIC side, in its payload.linkedIds (the only epic↔item convention; items
+// carry no back-reference). Projected down to what the TDM-10 chip renders:
+// identity, gate state, and n/m-done progress over the tasks filed under it
+// (task payload.epicId).
+interface LinkedEpic {
+  id: string;
+  title: string;
+  state: string;
+  done: number;
+  total: number;
+}
+
+// TaskBoard's epic-scope handoff (TDM-13): the Board reads this key on mount to
+// open its kanban scoped to a single epic. Chip-click writes it, then flips to
+// the Board pseudo-tab.
+const BOARD_EPIC_SCOPE_KEY = "tandem.board.epic";
+
 // Shared down the tree so any roadmap row can offer "create agent task from this"
-// without threading code/readOnly/handlers through every layer. openCreateTask
-// pops the dialog at the RoadmapMode root; linkedTasks maps a roadmap item id to
-// the tasks already pointing at it.
+// without threading code/readOnly/handlers through every layer. openCreateTask /
+// openCreateEpic pop their dialogs at the RoadmapMode root; linkedTasks and
+// linkedEpics map a roadmap item id to the tasks / epics already pointing at it.
 interface RoadmapTaskCtx {
   code: string;
   readOnly: boolean;
   linkedTasks: Map<string, LinkedTask[]>;
+  linkedEpics: Map<string, LinkedEpic[]>;
   openCreateTask: (item: RoadmapItem) => void;
+  openCreateEpic: (item: RoadmapItem) => void;
+  // Jump to the Board pseudo-tab scoped to one epic. Absent when the host
+  // didn't wire the jump (chips then render non-clickable).
+  openBoardForEpic?: (epicId: string) => void;
 }
 
 const RoadmapTaskContext = createContext<RoadmapTaskCtx | null>(null);
@@ -75,6 +105,13 @@ function hasOpenTask(linked: LinkedTask[]): boolean {
   return linked.some(
     (t) => t.state === "proposed" || t.state === "approved" || t.state === "executing",
   );
+}
+
+// An epic still "occupies" its item while it can gate work — proposed or
+// approved (epics only ever move proposed → approved | rejected). A rejected
+// epic frees the item so a fresh one can be authored.
+function hasLiveEpic(linked: LinkedEpic[]): boolean {
+  return linked.some((e) => e.state === "proposed" || e.state === "approved");
 }
 
 // In-app replacement for window.prompt when naming a phase — the native browser
@@ -167,9 +204,12 @@ interface Props {
   state: CanvasState;
   code: string;
   readOnly: boolean;
+  // Open the Board pseudo-tab (App-level). When provided, epic chips become
+  // clickable and jump to the Board scoped to that epic.
+  onOpenBoard?: () => void;
 }
 
-export default function RoadmapMode({ state, code, readOnly }: Props) {
+export default function RoadmapMode({ state, code, readOnly, onOpenBoard }: Props) {
   const items = state.roadmapItems;
 
   // Which roadmap items already have tasks pointing at them (via task
@@ -189,12 +229,63 @@ export default function RoadmapMode({ state, code, readOnly }: Props) {
     return map;
   }, [state.actions]);
 
-  // The item a "create agent task" dialog is currently open for (null = closed).
+  // Which epics point at which roadmap items (TDM-10). Derived from the epic
+  // side — an epic links an item by carrying its id in payload.linkedIds. Each
+  // entry carries live n/m-done progress over the tasks filed under the epic.
+  const linkedEpics = useMemo(() => {
+    const actions = Object.values(state.actions ?? {}) as Action[];
+    // Per-epic task progress: total tasks pointing at it, and how many are done.
+    const progress = new Map<string, { done: number; total: number }>();
+    for (const a of actions) {
+      if (a.type !== "task") continue;
+      const eid = (a.payload as TaskPayload).epicId;
+      if (!eid) continue;
+      const p = progress.get(eid) ?? { done: 0, total: 0 };
+      p.total += 1;
+      if (a.state === "done") p.done += 1;
+      progress.set(eid, p);
+    }
+    const map = new Map<string, LinkedEpic[]>();
+    const epics = actions
+      .filter((a) => a.type === "epic")
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    for (const e of epics) {
+      const p = e.payload as EpicPayload;
+      const prog = progress.get(e.id) ?? { done: 0, total: 0 };
+      for (const rid of p.linkedIds ?? []) {
+        const arr = map.get(rid) ?? [];
+        arr.push({ id: e.id, title: p.title || "Untitled epic", state: e.state, ...prog });
+        map.set(rid, arr);
+      }
+    }
+    return map;
+  }, [state.actions]);
+
+  // The item a "create agent task" / "create epic" dialog is currently open
+  // for (null = closed).
   const [taskFor, setTaskFor] = useState<RoadmapItem | null>(null);
+  const [epicFor, setEpicFor] = useState<RoadmapItem | null>(null);
 
   const taskCtx = useMemo<RoadmapTaskCtx>(
-    () => ({ code, readOnly, linkedTasks, openCreateTask: setTaskFor }),
-    [code, readOnly, linkedTasks],
+    () => ({
+      code,
+      readOnly,
+      linkedTasks,
+      linkedEpics,
+      openCreateTask: setTaskFor,
+      openCreateEpic: setEpicFor,
+      openBoardForEpic: onOpenBoard
+        ? (epicId: string) => {
+            try {
+              localStorage.setItem(BOARD_EPIC_SCOPE_KEY, epicId);
+            } catch {
+              /* preference only — the Board still opens, just unscoped */
+            }
+            onOpenBoard();
+          }
+        : undefined,
+    }),
+    [code, readOnly, linkedTasks, linkedEpics, onOpenBoard],
   );
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -516,6 +607,9 @@ export default function RoadmapMode({ state, code, readOnly }: Props) {
     </div>
     {taskFor && (
       <CreateTaskDialog item={taskFor} code={code} onClose={() => setTaskFor(null)} />
+    )}
+    {epicFor && (
+      <CreateEpicDialog item={epicFor} code={code} onClose={() => setEpicFor(null)} />
     )}
     </RoadmapTaskContext.Provider>
   );
@@ -1203,43 +1297,167 @@ function AgentTaskToggle({ item, size = "sm" }: { item: RoadmapItem; size?: "sm"
 }
 
 // The agent affordances on a roadmap row: the mark-as-agent chip, plus — the
-// moment an item is marked agent — a "create agent task from this" button. The
-// button is the whole point of the feature: marking agent is cheap intent that
-// surfaces the promote action; nothing is forced. Once an open task links the
-// item the button flips to a "✓ Task" marker so you don't double-author.
+// moment an item is marked agent — a "create agent task from this" button and
+// its sibling "create epic from this" (TDM-11). The buttons are the whole point
+// of the feature: marking agent is cheap intent that surfaces the promote
+// actions; nothing is forced. Once an open task links the item the task button
+// flips to a "✓ Task" marker; once a live epic links it the epic button yields
+// to the TDM-10 chip. Epic chips themselves render on ANY linked item (they're
+// read-only status, not an agent affordance).
 function AgentControls({ item, size = "sm" }: { item: RoadmapItem; size?: "sm" | "xs" }) {
   const ctx = useContext(RoadmapTaskContext);
   const isAgent = item.assignee === "agent";
   const linked = ctx?.linkedTasks.get(item.id) ?? [];
   const tasked = hasOpenTask(linked);
+  const epics = ctx?.linkedEpics.get(item.id) ?? [];
+  const epicked = hasLiveEpic(epics);
   const icon = size === "xs" ? 10 : 11;
 
   return (
-    <span className="flex shrink-0 items-center gap-1">
+    <span className="flex min-w-0 shrink-0 items-center gap-1">
+      <EpicChips epics={epics} size={size} onOpen={ctx?.openBoardForEpic} />
       <AgentTaskToggle item={item} size={size} />
       {isAgent && ctx && !ctx.readOnly && (
-        tasked ? (
-          <span
-            className="inline-flex shrink-0 items-center gap-1 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600"
-            title={`${linked.length} agent task${linked.length > 1 ? "s" : ""} linked — open the Tasks panel to see ${linked.length > 1 ? "them" : "it"}`}
-          >
-            <Check size={icon} />
-            Task
-          </span>
-        ) : (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              ctx.openCreateTask(item);
-            }}
-            className="inline-flex shrink-0 items-center gap-1 rounded border border-dashed border-sky-300 px-1.5 py-0.5 text-[10px] font-medium text-sky-600 transition-colors hover:bg-sky-500/10 hover:text-sky-700"
-            title="Create an agent task from this item — born ready, no approval needed"
-          >
-            <Plus size={icon} />
-            Task
-          </button>
-        )
+        <>
+          {tasked ? (
+            <span
+              className="inline-flex shrink-0 items-center gap-1 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600"
+              title={`${linked.length} agent task${linked.length > 1 ? "s" : ""} linked — open the Tasks panel to see ${linked.length > 1 ? "them" : "it"}`}
+            >
+              <Check size={icon} />
+              Task
+            </span>
+          ) : (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                ctx.openCreateTask(item);
+              }}
+              className="inline-flex shrink-0 items-center gap-1 rounded border border-dashed border-sky-300 px-1.5 py-0.5 text-[10px] font-medium text-sky-600 transition-colors hover:bg-sky-500/10 hover:text-sky-700"
+              title="Create an agent task from this item — born ready, no approval needed"
+            >
+              <Plus size={icon} />
+              Task
+            </button>
+          )}
+          {!epicked && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                ctx.openCreateEpic(item);
+              }}
+              className="inline-flex shrink-0 items-center gap-1 rounded border border-dashed border-violet-300 px-1.5 py-0.5 text-[10px] font-medium text-violet-600 transition-colors hover:bg-violet-500/10 hover:text-violet-700 dark:border-violet-400/40 dark:text-violet-400"
+              title="Create an epic from this item — born approved, agent tasks filed under it flow straight to the queue"
+            >
+              <Layers size={icon} />
+              Epic
+            </button>
+          )}
+        </>
       )}
+    </span>
+  );
+}
+
+// ── Epic chips (TDM-10, read-only) ───────────────────────────────────────────
+// Compact status of the epics linked to a roadmap item. At most two stack
+// inline; the rest collapse into a "+n" count. Clicking a chip jumps to the
+// Board scoped to that epic when the host wired the jump.
+function EpicChips({
+  epics,
+  size = "sm",
+  onOpen,
+}: {
+  epics: LinkedEpic[];
+  size?: "sm" | "xs";
+  onOpen?: (epicId: string) => void;
+}) {
+  if (epics.length === 0) return null;
+  const shown = epics.slice(0, 2);
+  const extra = epics.length - shown.length;
+  return (
+    <span className="flex min-w-0 shrink items-center gap-1">
+      {shown.map((e) => (
+        <EpicChip key={e.id} epic={e} size={size} onOpen={onOpen} />
+      ))}
+      {extra > 0 && (
+        <span
+          className="shrink-0 text-[9px] font-medium text-ink/40"
+          title={`${extra} more epic${extra > 1 ? "s" : ""} linked to this item`}
+        >
+          +{extra}
+        </span>
+      )}
+    </span>
+  );
+}
+
+// Gate-state tag shown on a chip while the epic is NOT approved yet. Approved
+// is the steady state, so it stays untagged; anything else is worth a flag.
+const EPIC_STATE_TAG: Record<string, string> = {
+  proposed: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+  rejected: "bg-rose-500/15 text-rose-600 dark:text-rose-400",
+};
+
+// One epic chip: Layers glyph + truncated title + mini n/m-done progress bar.
+// Ink/surface tokens carry the base colors, so dark mode needs no special case.
+function EpicChip({
+  epic,
+  size,
+  onOpen,
+}: {
+  epic: LinkedEpic;
+  size: "sm" | "xs";
+  onOpen?: (epicId: string) => void;
+}) {
+  const pct = epic.total > 0 ? Math.round((epic.done / epic.total) * 100) : 0;
+  const base = `inline-flex min-w-0 items-center gap-1 rounded-[4px] border border-ink/10 bg-ink/[0.04] font-medium text-ink/60 ${
+    size === "xs" ? "px-1 py-px text-[9px]" : "px-1.5 py-0.5 text-[10px]"
+  }`;
+  const body = (
+    <>
+      <Layers size={size === "xs" ? 9 : 10} className="shrink-0 text-ink/45" />
+      <span className={`min-w-0 truncate ${size === "xs" ? "max-w-[5rem]" : "max-w-[7rem]"}`}>
+        {epic.title}
+      </span>
+      <span
+        aria-hidden
+        className="h-[3px] w-7 shrink-0 overflow-hidden rounded-full bg-ink/10"
+      >
+        <span className="block h-full bg-green-400 transition-all" style={{ width: `${pct}%` }} />
+      </span>
+      <span className="shrink-0 tabular-nums text-ink/45">
+        {epic.done}/{epic.total}
+      </span>
+      {epic.state !== "approved" && (
+        <span
+          className={`shrink-0 rounded-[3px] px-1 text-[8px] font-semibold uppercase tracking-[0.06em] ${
+            EPIC_STATE_TAG[epic.state] ?? EPIC_STATE_TAG.proposed
+          }`}
+        >
+          {epic.state}
+        </span>
+      )}
+    </>
+  );
+  const info = `${epic.title} — ${epic.done}/${epic.total} task${epic.total === 1 ? "" : "s"} done`;
+  if (onOpen) {
+    return (
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onOpen(epic.id);
+        }}
+        className={`${base} transition-colors hover:border-ink/25 hover:bg-ink/[0.08]`}
+        title={`${info} · open the Board scoped to this epic`}
+      >
+        {body}
+      </button>
+    );
+  }
+  return (
+    <span className={base} title={info}>
+      {body}
     </span>
   );
 }
@@ -1332,6 +1550,104 @@ function CreateTaskDialog({
             style={{ backgroundColor: ACCENT.solid }}
           >
             {saving ? "Creating…" : "Create task"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// TDM-11: the pre-filled "create epic from this" dialog — the sibling of
+// CreateTaskDialog, popped from the same AgentControls. Seeds title/body from
+// the roadmap item and auto-links it via the epic's payload.linkedIds. Being
+// human-authored it's born approved — the author IS the gate, same rule the
+// human task flow applies — so under the default "epic" approval policy, agent
+// tasks filed under it flow straight to the queue. State comes back over WS,
+// so linkedEpics recomputes and the item shows its TDM-10 chip on its own.
+function CreateEpicDialog({
+  item,
+  code,
+  onClose,
+}: {
+  item: RoadmapItem;
+  code: string;
+  onClose: () => void;
+}) {
+  const [title, setTitle] = useState(item.title || "");
+  const [body, setBody] = useState(item.body ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit() {
+    if (!title.trim() || saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await createEpic(code, {
+        title: title.trim(),
+        body: body.trim() || undefined,
+        linkedIds: [item.id],
+      });
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not create epic");
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[2000] flex items-start justify-center pt-[16vh]"
+      role="dialog"
+      aria-modal="true"
+    >
+      <div className="absolute inset-0 bg-ink/25 backdrop-blur-[1px]" onClick={onClose} />
+      <div className="relative w-[440px] max-w-[92vw] rounded-2xl border border-ink/10 bg-surface p-4 shadow-[4px_6px_0_rgba(17,17,17,0.08)]">
+        <div className="flex items-center gap-2">
+          <Layers size={15} style={{ color: ACCENT.solid }} />
+          <h3 className="text-sm font-semibold text-ink">Create epic from this</h3>
+        </div>
+        <p className="mt-1 text-[11px] leading-snug text-ink/45">
+          Born approved — agent tasks filed under this epic flow straight to the queue. Linked back
+          to this roadmap item.
+        </p>
+        <input
+          autoFocus
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") submit();
+            if (e.key === "Escape") onClose();
+          }}
+          placeholder="Name the batch of work"
+          className="mt-2.5 w-full rounded-lg border border-ink/15 bg-surface px-2.5 py-1.5 text-sm text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
+        />
+        <textarea
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+          placeholder="Scope: what belongs in this batch, what done looks like (optional)"
+          rows={4}
+          className="mt-2 w-full resize-none rounded-lg border border-ink/15 bg-surface px-2.5 py-1.5 text-[13px] text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
+        />
+        <div className="mt-2 inline-flex max-w-full items-center gap-1 rounded-[4px] border border-ink/10 bg-ink/[0.03] px-1.5 py-0.5 text-[10px] text-ink/50">
+          <Link2 size={10} className="shrink-0" />
+          <span className="truncate">Linked to “{item.title || "this item"}”</span>
+        </div>
+        {error && <p className="mt-2 text-[11px] text-rose-600">{error}</p>}
+        <div className="mt-3 flex justify-end gap-1.5">
+          <button
+            onClick={onClose}
+            className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm font-medium text-ink/60 hover:border-ink/30"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={submit}
+            disabled={!title.trim() || saving}
+            className="rounded-lg px-3.5 py-1.5 text-sm font-semibold text-white transition-opacity disabled:opacity-40"
+            style={{ backgroundColor: ACCENT.solid }}
+          >
+            {saving ? "Creating…" : "Create epic"}
           </button>
         </div>
       </div>
