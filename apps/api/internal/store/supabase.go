@@ -586,11 +586,28 @@ func toPendingEdit(d dbPendingEdit) *PendingEdit {
 
 // ── Store ─────────────────────────────────────────────────────────────────────
 
+// DefaultClaimTTL is how long an 'executing' task claim is honored before it
+// is considered stuck and becomes atomically claimable by the next claimer
+// (lazy expiry, evaluated inside ClaimAction — there is NO background sweeper).
+// Mirrors config's CLAIM_TTL_MINUTES default; override via WithClaimTTL.
+const DefaultClaimTTL = 15 * time.Minute
+
 type supabaseStore struct {
 	client *supa.Client
+	// claimTTL: see DefaultClaimTTL. 0 disables claim expiry entirely.
+	claimTTL time.Duration
 }
 
-func NewSupabase(projectURL, apiKey string) (Store, error) {
+// SupabaseOption customizes NewSupabase.
+type SupabaseOption func(*supabaseStore)
+
+// WithClaimTTL sets how long an executing claim is honored before a new
+// claimer may take it over. 0 disables takeover.
+func WithClaimTTL(d time.Duration) SupabaseOption {
+	return func(s *supabaseStore) { s.claimTTL = d }
+}
+
+func NewSupabase(projectURL, apiKey string, opts ...SupabaseOption) (Store, error) {
 	// postgrest-go builds no HTTP client of its own — its transport delegates to
 	// http.DefaultTransport, whose MaxIdleConnsPerHost is Go's default of 2. Every
 	// DB call in this process is an HTTPS round-trip to the one Supabase host, and
@@ -608,7 +625,11 @@ func NewSupabase(projectURL, apiKey string) (Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("supabase client: %w", err)
 	}
-	return &supabaseStore{client: client}, nil
+	s := &supabaseStore{client: client, claimTTL: DefaultClaimTTL}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s, nil
 }
 
 func (s *supabaseStore) Close() {}
@@ -2793,13 +2814,25 @@ func (s *supabaseStore) UpdateActionState(ctx context.Context, canvasID, id uuid
 // can't both win (the old flow validated in Go then updated unconditionally).
 // On no-match we re-read the action to report WHY (not found / already claimed
 // / wrong state), mirroring ClaimCanvas.
+//
+// Stuck-claim TTL (TDM-7, lazy expiry — no sweeper): a claim expires claimTTL
+// after claimed_at. If the re-read shows an EXPIRED executing claim, we run a
+// SECOND conditional UPDATE (… WHERE state='executing' AND claimed_at <
+// cutoff) rather than a read-then-write, so a dead session's claim is taken
+// over atomically and stops wedging the queue. Two racing takeovers produce
+// exactly one winner: the first takeover to land rewrites claimed_at to now,
+// so when the loser's UPDATE reaches the row its `claimed_at < now-TTL`
+// predicate no longer matches (the race window is seconds; the TTL is
+// minutes, so the winner's fresh stamp can never itself read as expired to a
+// concurrent racer). The loser falls through to a 409 naming the NEW holder.
 func (s *supabaseStore) ClaimAction(ctx context.Context, canvasID, id uuid.UUID, claimedBy string) (*Action, int, error) {
+	now := time.Now().UTC()
 	var rows []dbAction
 	_, err := s.client.From("actions").
 		Update(map[string]any{
 			"state":      "executing",
 			"claimed_by": claimedBy,
-			"claimed_at": time.Now().UTC().Format(time.RFC3339Nano),
+			"claimed_at": now.Format(time.RFC3339Nano),
 		}, "representation", "").
 		Eq("id", id.String()).
 		Eq("canvas_id", canvasID.String()).
@@ -2839,9 +2872,68 @@ func (s *supabaseStore) ClaimAction(ctx context.Context, canvasID, id uuid.UUID,
 		if holder != "" && holder != "agent" && holder == claimedBy {
 			return existing, 0, nil
 		}
+		// Expired claim → atomic takeover. The Go-side expiry check is only an
+		// optimization gate (skip the extra UPDATE on the common non-expired
+		// 409); the SQL predicate inside takeOverExpiredClaim is the real
+		// guard. (A per-canvas TTL override would be read here, from canvas
+		// settings; for now the TTL is process-wide.)
+		if s.claimTTL > 0 && existing.ClaimedAt != nil && now.Sub(*existing.ClaimedAt) >= s.claimTTL {
+			a, v, ok, terr := s.takeOverExpiredClaim(ctx, canvasID, id, claimedBy, now)
+			if terr != nil {
+				return nil, 0, terr
+			}
+			if ok {
+				return a, v, nil
+			}
+		}
 		return nil, 0, &AlreadyClaimedError{ClaimedBy: holder}
 	}
 	return nil, 0, fmt.Errorf("%w: cannot claim task in state %q", ErrIllegalActionState, existing.State)
+}
+
+// takeOverExpiredClaim attempts the TDM-7 takeover UPDATE (caller has already
+// established the claim looks expired). ok=false with a nil error means "no
+// takeover happened" and the caller should report the ordinary claim
+// conflict; a lost takeover race instead returns *AlreadyClaimedError naming
+// the NEW holder from a re-read.
+func (s *supabaseStore) takeOverExpiredClaim(ctx context.Context, canvasID, id uuid.UUID, claimedBy string, now time.Time) (*Action, int, bool, error) {
+	cutoff := now.Add(-s.claimTTL)
+	var rows []dbAction
+	// Atomic conditional UPDATE, NOT read-then-write: `claimed_at < cutoff` is
+	// evaluated by Postgres under the row lock, so of two racing takeovers the
+	// second sees the first's fresh claimed_at (≈now, far above cutoff) and
+	// matches 0 rows — exactly one winner. Takeover stamps fresh
+	// claimed_by/claimed_at so the new claim gets a full TTL of its own.
+	_, err := s.client.From("actions").
+		Update(map[string]any{
+			"state":      "executing",
+			"claimed_by": claimedBy,
+			"claimed_at": time.Now().UTC().Format(time.RFC3339Nano),
+		}, "representation", "").
+		Eq("id", id.String()).
+		Eq("canvas_id", canvasID.String()).
+		Eq("state", "executing").
+		Eq("type", "task").
+		Lt("claimed_at", cutoff.Format(time.RFC3339Nano)).
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	if len(rows) == 1 {
+		v, verr := s.bumpVersion(ctx, canvasID)
+		if verr != nil {
+			return nil, 0, false, verr
+		}
+		return toAction(rows[0]), v, true, nil
+	}
+	// 0 rows: either the claim wasn't actually expired (claimed_at within TTL,
+	// or NULL — pre-migration rows) or a rival takeover restamped it first.
+	// Re-read so the conflict the caller reports names the CURRENT holder.
+	fresh, gerr := s.GetAction(ctx, canvasID, id)
+	if gerr == nil && fresh.State == "executing" && fresh.ClaimedBy != nil {
+		return nil, 0, false, &AlreadyClaimedError{ClaimedBy: *fresh.ClaimedBy}
+	}
+	return nil, 0, false, nil
 }
 
 // ReleaseAction frees a stuck claim (executing → approved, claim columns
