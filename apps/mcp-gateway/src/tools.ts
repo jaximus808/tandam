@@ -2633,7 +2633,8 @@ const RAW_TOOLS = [
       "Identify this agent to the canvas on connect. Returns an agentId that is " +
       "recorded as the author (provenance) of actions this session proposes, plus " +
       "an UPDATED `session` handle carrying this identity — pass that handle (not " +
-      "the connect-time one) on all later calls. " +
+      "the connect-time one) on all later calls. Re-registering a name refreshes " +
+      "the SAME agent (same agentId) rather than creating a duplicate. " +
       "Multi-agent swarms: an orchestrator registers as role 'planner' and threads " +
       "its returned agentId into each subagent's spawn prompt; each subagent then " +
       "registers role 'executor' with parentAgentId = that id, so the board shows " +

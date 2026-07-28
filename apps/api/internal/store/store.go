@@ -823,15 +823,27 @@ type Store interface {
 	SubmitForm(ctx context.Context, canvasID uuid.UUID, batch Batch, submissionID string) (int, error)
 
 	// Agents (v1 identity / provenance)
+	// RegisterAgent UPSERTs on the (canvas_id, name) identity (unique since
+	// migration 0036): first registration inserts; re-registering the same name
+	// refreshes role/model/parent_agent_id/status/last_seen_at on the existing
+	// row and KEEPS its id. On return a.ID is the surviving row's real id.
 	RegisterAgent(ctx context.Context, canvasID uuid.UUID, a *Agent) (int, error)
 	// GetAgent fetches one agent scoped to a canvas (parentAgentId validation).
 	GetAgent(ctx context.Context, canvasID, id uuid.UUID) (*Agent, error)
 	// TouchAgentLastSeen bumps last_seen_at (and re-marks online) for the agent a
 	// claimant identity resolves to — the liveness heartbeat behind the swarm
 	// view. Claimant is the task_start/complete identity: the registered agent
-	// NAME (preferred) or agent id. Best-effort; no version bump (presence-only —
-	// the fresh timestamp rides the caller's own state broadcast).
+	// NAME (preferred) or agent id; since 0036 a name matches at most one row.
+	// Best-effort; no version bump (presence-only — the fresh timestamp rides
+	// the caller's own state broadcast).
 	TouchAgentLastSeen(ctx context.Context, canvasID uuid.UUID, claimant string) error
+	// TouchOrCreateAgent is the claim-path heartbeat: touch the claimant's row,
+	// and when a NAME claimant has none, create a minimal executor registration
+	// via the same (canvas_id, name) upsert as RegisterAgent — a session that
+	// claims a task without ever calling agent_register still appears in
+	// presence/swarm views. Skips ""/"agent"; id claimants are touched only.
+	// Best-effort, called detached — never on the claim's critical path.
+	TouchOrCreateAgent(ctx context.Context, canvasID uuid.UUID, claimant string) error
 
 	// Actions (v1 execution primitive)
 	CreateAction(ctx context.Context, canvasID uuid.UUID, a *Action) (int, error)

@@ -19,7 +19,9 @@ import (
 // POST /api/canvas/agents  — an agent identifies itself on connect. An
 // orchestrator's subagents pass parentAgentId (the orchestrator's registered
 // agent id) so the swarm view can group them structurally; absent → unparented,
-// flat display, exactly as before.
+// flat display, exactly as before. Re-registering a name is idempotent (TDM-8):
+// the store upserts on (canvas_id, name), so the SAME agentId comes back with
+// its fields refreshed — never a duplicate row.
 func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 	canvasID := CanvasIDFromCtx(r.Context())
 	var body struct {
@@ -48,8 +50,12 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// No pre-generated id: RegisterAgent is an upsert on (canvas_id, name) and
+	// fills agent.ID with the SURVIVING row's id — the existing one on a
+	// re-register, a DB-generated one on first insert — so the response below
+	// always names the row that actually holds this identity.
 	agent := &store.Agent{
-		ID: uuid.New(), Kind: "agent",
+		Kind: "agent",
 		Name: body.Name, Role: body.Role, Model: body.Model,
 		ParentAgentID: body.ParentAgentID,
 	}
@@ -719,13 +725,15 @@ func (h *Handler) UpdateActionState(w http.ResponseWriter, r *http.Request) {
 		}
 		// Liveness heartbeat: completing (or failing) a task proves the agent is
 		// alive — refresh its last_seen_at so the swarm view gets a short grace
-		// window between tasks instead of flickering offline. Best-effort and
+		// window between tasks instead of flickering offline. Touch-or-create: a
+		// session that worked a task without ever calling agent_register gets a
+		// minimal executor row, so it still shows in presence. Best-effort and
 		// DETACHED: presence must never add a round-trip to the complete path
 		// (the exact latency the loadtest measures).
 		touchCtx := context.WithoutCancel(r.Context())
 		agentName := body.AgentName
 		go func() {
-			if err := h.store.TouchAgentLastSeen(touchCtx, canvasID, agentName); err != nil {
+			if err := h.store.TouchOrCreateAgent(touchCtx, canvasID, agentName); err != nil {
 				log.Printf("complete: touching agent last_seen (%s): %v", agentName, err)
 			}
 		}()
@@ -770,11 +778,16 @@ func (h *Handler) claimAction(w http.ResponseWriter, r *http.Request, agentName 
 	}
 	// Liveness heartbeat: a claim proves the agent is alive — refresh its
 	// last_seen_at so the swarm view's staleness threshold stays honest.
-	// Best-effort and DETACHED: presence must never add a round-trip to the
-	// claim path (the exact latency the loadtest measures).
+	// Touch-or-create ("when an agent takes a task it should still be
+	// connected"): a claimant that never called agent_register gets a minimal
+	// executor row on this canvas, so any session that takes a task appears in
+	// presence/swarm views labelled with its task (the web side already matches
+	// claimedBy → agent name). Best-effort and DETACHED: presence must never
+	// add a round-trip to the claim path (the exact latency the loadtest
+	// measures).
 	touchCtx := context.WithoutCancel(r.Context())
 	go func() {
-		if err := h.store.TouchAgentLastSeen(touchCtx, canvasID, agentName); err != nil {
+		if err := h.store.TouchOrCreateAgent(touchCtx, canvasID, agentName); err != nil {
 			log.Printf("claim %s: touching agent last_seen (%s): %v", id, agentName, err)
 		}
 	}()

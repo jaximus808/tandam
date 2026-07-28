@@ -21,13 +21,47 @@ type agentFakeStore struct {
 	registered []*store.Agent
 	agents     map[uuid.UUID]*store.Agent // pre-seeded rows for GetAgent
 	actions    map[uuid.UUID]*store.Action
-	touchMu    sync.Mutex
-	touched    []string // claimant identities passed to TouchAgentLastSeen
+	touchMu    sync.Mutex // guards touched AND registered (claim goroutines write both)
+	touched    []string   // claimant identities passed to TouchOrCreateAgent
 }
 
+// RegisterAgent models the store's (canvas_id, name) UPSERT: an existing name
+// keeps its id and gets its fields refreshed in place; a new name gets a
+// DB-style generated id. Mirrors the real contract — a.ID carries the
+// surviving row's id on return.
 func (f *agentFakeStore) RegisterAgent(_ context.Context, _ uuid.UUID, a *store.Agent) (int, error) {
+	f.touchMu.Lock()
+	defer f.touchMu.Unlock()
+	for _, existing := range f.registered {
+		if existing.Name == a.Name {
+			a.ID = existing.ID
+			*existing = *a
+			return 1, nil
+		}
+	}
+	a.ID = uuid.New()
 	f.registered = append(f.registered, a)
 	return 1, nil
+}
+
+// agentNamed returns the registered agent with the given name, mutex-guarded —
+// the detached claim goroutines mutate registered concurrently with test
+// assertions.
+func (f *agentFakeStore) agentNamed(name string) *store.Agent {
+	f.touchMu.Lock()
+	defer f.touchMu.Unlock()
+	for _, a := range f.registered {
+		if a.Name == name {
+			return a
+		}
+	}
+	return nil
+}
+
+func (f *agentFakeStore) registeredCount() int {
+	f.touchMu.Lock()
+	defer f.touchMu.Unlock()
+	return len(f.registered)
 }
 
 // GetAgent resolves against previously-registered agents plus any pre-seeded
@@ -44,10 +78,32 @@ func (f *agentFakeStore) GetAgent(_ context.Context, _ uuid.UUID, id uuid.UUID) 
 	return nil, fmt.Errorf("agent %s not found", id)
 }
 
-func (f *agentFakeStore) TouchAgentLastSeen(_ context.Context, _ uuid.UUID, claimant string) error {
+// TouchOrCreateAgent records the claimant and models the claim path's
+// touch-or-create: a NAME claimant with no registered row gets a minimal
+// executor registration (the founder-request behavior under test); a known
+// name is only refreshed. ""/"agent" and id claimants create nothing, like
+// the real store.
+func (f *agentFakeStore) TouchOrCreateAgent(_ context.Context, _ uuid.UUID, claimant string) error {
 	f.touchMu.Lock()
 	defer f.touchMu.Unlock()
 	f.touched = append(f.touched, claimant)
+	if claimant == "" || claimant == "agent" {
+		return nil
+	}
+	if _, err := uuid.Parse(claimant); err == nil {
+		return nil
+	}
+	for _, a := range f.registered {
+		if a.Name == claimant {
+			a.Status = "online"
+			a.LastSeenAt = time.Now().UTC()
+			return nil
+		}
+	}
+	f.registered = append(f.registered, &store.Agent{
+		ID: uuid.New(), Kind: "agent", Name: claimant, Role: "executor",
+		Status: "online", LastSeenAt: time.Now().UTC(),
+	})
 	return nil
 }
 
@@ -225,5 +281,126 @@ func TestClaimAndCompleteTouchAgentLiveness(t *testing.T) {
 	}
 	if got := fake.waitTouched(t, 2); got[1] != "executor-1" {
 		t.Fatalf("after complete, touched = %v, want [executor-1 executor-1]", got)
+	}
+}
+
+// registerResponse registers via the handler and returns the response agentId.
+func registerResponse(t *testing.T, h *Handler, canvasID uuid.UUID, body map[string]any) string {
+	t.Helper()
+	w := httptest.NewRecorder()
+	h.RegisterAgent(w, canvasRequest(t, "POST", "/api/canvas/agents", body, canvasID, ""))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("register status = %d, body %s", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal register response: %v", err)
+	}
+	if resp["agentId"] == "" {
+		t.Fatalf("register response missing agentId: %v", resp)
+	}
+	return resp["agentId"]
+}
+
+// TDM-8: re-registering the same name is an UPSERT — the SAME agentId comes
+// back (no ghost row) and role/model are refreshed on the existing row.
+func TestReRegisterSameNameKeepsAgentID(t *testing.T) {
+	canvasID := uuid.New()
+	fake := &agentFakeStore{}
+	h := NewHandler(fake, nil, nil)
+
+	first := registerResponse(t, h, canvasID,
+		map[string]any{"name": "executor-1", "role": "executor", "model": "claude-opus-4-8"})
+	second := registerResponse(t, h, canvasID,
+		map[string]any{"name": "executor-1", "role": "planner", "model": "claude-fable-5"})
+
+	if second != first {
+		t.Fatalf("re-register minted a new agentId: %q then %q", first, second)
+	}
+	if n := fake.registeredCount(); n != 1 {
+		t.Fatalf("registered rows = %d, want 1 (upsert, not insert)", n)
+	}
+	got := fake.agentNamed("executor-1")
+	if got == nil {
+		t.Fatalf("agent row missing after re-register")
+	}
+	if got.Role != "planner" || got.Model == nil || *got.Model != "claude-fable-5" {
+		t.Fatalf("re-register did not refresh fields: role=%q model=%v", got.Role, got.Model)
+	}
+}
+
+// Different names stay distinct agents — uniqueness is per (canvas, name),
+// not per canvas.
+func TestRegisterDistinctNamesDistinctIDs(t *testing.T) {
+	canvasID := uuid.New()
+	fake := &agentFakeStore{}
+	h := NewHandler(fake, nil, nil)
+
+	a := registerResponse(t, h, canvasID, map[string]any{"name": "executor-1", "role": "executor"})
+	b := registerResponse(t, h, canvasID, map[string]any{"name": "executor-2", "role": "executor"})
+	if a == b {
+		t.Fatalf("distinct names shared an agentId: %q", a)
+	}
+	if n := fake.registeredCount(); n != 2 {
+		t.Fatalf("registered rows = %d, want 2", n)
+	}
+}
+
+// Founder request ("when an agent takes a task it should still be connected"):
+// a successful claim by a session that never called agent_register creates a
+// minimal executor presence row, so the claimant shows in the swarm view
+// labelled with its task.
+func TestClaimByUnregisteredClaimantCreatesPresence(t *testing.T) {
+	canvasID := uuid.New()
+	taskID := uuid.New()
+	fake := &agentFakeStore{actions: map[uuid.UUID]*store.Action{
+		taskID: {ID: taskID, Type: "task", State: "approved",
+			Payload: json.RawMessage(`{"title":"t"}`)},
+	}}
+	h := NewHandler(fake, nil, nil)
+
+	w := httptest.NewRecorder()
+	h.UpdateActionState(w, canvasRequest(t, "PATCH", "/api/canvas/actions/"+taskID.String(),
+		map[string]any{"state": "executing", "agentName": "drive-by-session"}, canvasID, taskID.String()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("claim status = %d, body %s", w.Code, w.Body.String())
+	}
+	fake.waitTouched(t, 1)
+	created := fake.agentNamed("drive-by-session")
+	if created == nil {
+		t.Fatalf("claim by unregistered claimant did not create a presence row")
+	}
+	if created.Role != "executor" || created.Status != "online" {
+		t.Fatalf("created presence row = role %q status %q, want executor/online",
+			created.Role, created.Status)
+	}
+}
+
+// A claim by an already-registered claimant only refreshes the existing row —
+// same id, no duplicate.
+func TestClaimByRegisteredClaimantOnlyRefreshes(t *testing.T) {
+	canvasID := uuid.New()
+	taskID := uuid.New()
+	fake := &agentFakeStore{actions: map[uuid.UUID]*store.Action{
+		taskID: {ID: taskID, Type: "task", State: "approved",
+			Payload: json.RawMessage(`{"title":"t"}`)},
+	}}
+	h := NewHandler(fake, nil, nil)
+
+	originalID := registerResponse(t, h, canvasID,
+		map[string]any{"name": "executor-1", "role": "executor"})
+
+	w := httptest.NewRecorder()
+	h.UpdateActionState(w, canvasRequest(t, "PATCH", "/api/canvas/actions/"+taskID.String(),
+		map[string]any{"state": "executing", "agentName": "executor-1"}, canvasID, taskID.String()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("claim status = %d, body %s", w.Code, w.Body.String())
+	}
+	fake.waitTouched(t, 1)
+	if n := fake.registeredCount(); n != 1 {
+		t.Fatalf("registered rows = %d, want 1 (claim must not duplicate a registered agent)", n)
+	}
+	if got := fake.agentNamed("executor-1"); got == nil || got.ID.String() != originalID {
+		t.Fatalf("claim re-keyed the registered agent: got %v, want id %s", got, originalID)
 	}
 }
