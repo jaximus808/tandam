@@ -85,10 +85,10 @@ interface DemoTask {
 
 // Task titles come from the demo SPEC.md sections (docs/demo-script.md).
 const TASKS: DemoTask[] = [
-  { id: "TDM-7", title: "Ticket prefix enforcement", claimant: "session-A", hash: "a3f8c21", workAt: 1_700, doneAt: 7_500 },
-  { id: "TDM-8", title: "Queue ordering: oldest-first", claimant: "session-B", hash: "9d41e07", workAt: 5_900, doneAt: 11_600 },
-  { id: "TDM-9", title: "Stale-claim visibility", claimant: "session-A", hash: "c76d1b4", workAt: 9_500, doneAt: 15_100 },
-  { id: "TDM-10", title: "Unit-test the queue sort", claimant: "session-B", hash: "5b2fa9c", workAt: 13_500, doneAt: 17_000 },
+  { id: "TDM-7", title: "Prefix check", claimant: "session-A", hash: "a3f8c21", workAt: 1_700, doneAt: 7_500 },
+  { id: "TDM-8", title: "Queue ordering", claimant: "session-B", hash: "9d41e07", workAt: 5_900, doneAt: 11_600 },
+  { id: "TDM-9", title: "Stale claims", claimant: "session-A", hash: "c76d1b4", workAt: 9_500, doneAt: 15_100 },
+  { id: "TDM-10", title: "Queue sort tests", claimant: "session-B", hash: "5b2fa9c", workAt: 13_500, doneAt: 17_000 },
 ];
 
 // Agent chips in the board header appear when each session first acts.
@@ -410,7 +410,7 @@ export default function HeroBoardDemo() {
       `}</style>
       <div
         aria-hidden="true"
-        className="grid gap-3 md:grid-cols-2"
+        className="grid gap-3 md:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]"
         style={{ opacity: animate ? loopOpacity(t) : 1 }}
       >
         {/* Left: the two parallel sessions. */}
