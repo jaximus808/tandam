@@ -15,10 +15,10 @@
 
 import type { ReactNode } from "react";
 
-/** Monospace chip for a real MCP tool name. */
+/** Monospace chip for a real MCP tool name (machine text — mono is earned). */
 function ToolChip({ name }: { name: string }) {
   return (
-    <span className="rounded-[3px] border border-ink/10 bg-surface px-1.5 py-0.5 font-code text-[10.5px] font-medium text-agent">
+    <span className="rounded border border-ink/10 bg-surface px-1.5 py-0.5 font-code text-[10.5px] font-medium text-ink/70">
       {name}
     </span>
   );
@@ -72,10 +72,10 @@ export default function HowItWorksSection() {
   return (
     <section className="mx-auto max-w-6xl px-6 py-24">
       <div className="max-w-2xl">
-        <span className="font-code text-[11px] uppercase tracking-[0.22em] text-ink/40">
+        <span className="text-xs font-medium uppercase tracking-wide text-ink/50">
           The loop
         </span>
-        <h2 className="mt-3 font-display text-3xl font-medium tracking-tight text-ink sm:text-4xl">
+        <h2 className="mt-3 text-2xl font-semibold tracking-tight text-ink sm:text-[2rem]">
           Spec in git. Queue in Tandem.
         </h2>
         <p className="mt-3 leading-relaxed text-ink/65">
@@ -94,11 +94,11 @@ export default function HowItWorksSection() {
                 className="absolute bottom-0 left-[17px] top-10 w-px bg-ink/10 sm:left-[19px]"
               />
             )}
-            <span className="z-10 grid h-9 w-9 shrink-0 place-items-center rounded-md border-[1.5px] border-ink bg-surface font-code text-[12px] font-medium text-ink shadow-[3px_3px_0_rgba(28,25,23,0.12)] sm:h-10 sm:w-10">
+            <span className="z-10 grid h-9 w-9 shrink-0 place-items-center rounded-md border border-ink/15 bg-surface font-code text-[12px] font-medium text-ink/70 sm:h-10 sm:w-10">
               0{i + 1}
             </span>
             <div className="min-w-0 pt-1">
-              <h3 className="font-display text-xl font-medium text-ink">{step.title}</h3>
+              <h3 className="text-xl font-semibold tracking-tight text-ink">{step.title}</h3>
               <p className="mt-1.5 text-sm leading-relaxed text-ink/65">{step.body}</p>
               {step.tools && (
                 <div className="mt-2.5 flex flex-wrap gap-1.5">

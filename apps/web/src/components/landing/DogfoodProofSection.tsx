@@ -61,10 +61,7 @@ function CommitIcon({ className = "" }: { className?: string }) {
 
 function DoneChip() {
   return (
-    <span
-      className="shrink-0 rounded-[4px] px-1.5 py-px text-[10px] font-semibold uppercase tracking-[0.08em]"
-      style={{ backgroundColor: "#10B9811A", color: "#047857" }}
-    >
+    <span className="shrink-0 rounded bg-emerald-500/10 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide text-emerald-600 dark:text-emerald-400">
       Done
     </span>
   );
@@ -73,15 +70,14 @@ function DoneChip() {
 export default function DogfoodProofSection() {
   return (
     <section className="relative overflow-hidden border-y border-ink/10 bg-surface">
-      <div aria-hidden="true" className="surface-grid-faint absolute inset-0 opacity-60" />
       <div className="relative mx-auto max-w-6xl px-6 py-24">
         <div className="grid items-center gap-12 lg:grid-cols-[1.05fr_1fr]">
           {/* Left: the claim + the CTA that proves it */}
           <div className="max-w-xl">
-            <span className="font-code text-[11px] uppercase tracking-[0.22em] text-ink/40">
-              Dogfooding · canvas TEGLQFXR
+            <span className="text-xs font-medium uppercase tracking-wide text-ink/50">
+              Dogfooding · canvas <span className="font-code text-[11px] normal-case">TEGLQFXR</span>
             </span>
-            <h2 className="mt-3 font-display text-3xl font-medium tracking-tight text-ink sm:text-4xl">
+            <h2 className="mt-3 text-2xl font-semibold tracking-tight text-ink sm:text-[2rem]">
               Built on its own queue.
             </h2>
             <p className="mt-4 leading-relaxed text-ink/65">
@@ -94,25 +90,25 @@ export default function DogfoodProofSection() {
                 href={LIVE_BOARD_URL}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="btn-press inline-flex items-center gap-2 rounded-md bg-ink px-6 py-3 font-medium text-paper shadow-[4px_4px_0_#0D6E66]"
+                className="inline-flex min-h-9 items-center gap-2 rounded-md bg-accent px-5 py-2 text-[13px] font-medium text-white transition-[filter] hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
               >
                 Watch the live board — the real roadmap, real agents, right now
                 <ArrowIcon className="h-4 w-4 shrink-0" />
               </a>
             </div>
-            <p className="mt-4 font-code text-[11px] text-ink/40">
+            <p className="mt-4 text-xs text-ink/50">
               public canvas · no sign-up to look around
             </p>
           </div>
 
           {/* Right: a static vignette of the board's Done column */}
           <div className="min-w-0">
-            <div className="overflow-hidden rounded-lg border-[1.5px] border-ink bg-surface shadow-[8px_8px_0_rgba(28,25,23,0.10)]">
+            <div className="overflow-hidden rounded-lg border border-ink/10 bg-surface shadow-sm">
               <div className="flex items-center gap-2.5 border-b border-ink/10 bg-paper px-3.5 py-2">
-                <span className="truncate font-display text-[13px] font-medium text-ink">
+                <span className="truncate text-[13px] font-medium text-ink">
                   tandem planning
                 </span>
-                <span className="rounded-[3px] border border-ink/10 px-1.5 py-px font-code text-[9.5px] tracking-[0.14em] text-ink/40">
+                <span className="rounded border border-ink/10 px-1.5 py-px font-code text-[9.5px] text-ink/45">
                   TEGLQFXR
                 </span>
                 <span className="ml-auto flex items-center gap-1.5 font-code text-[10px] text-ink/45">
@@ -122,7 +118,7 @@ export default function DogfoodProofSection() {
               </div>
               <div className="flex flex-col gap-2 p-3">
                 {DONE_ROWS.map((row) => (
-                  <div key={row.ticket} className="rounded-xl border border-ink/10 bg-surface p-2.5">
+                  <div key={row.ticket} className="rounded-lg border border-ink/10 bg-surface p-2.5">
                     <div className="flex items-start justify-between gap-2">
                       <span className="min-w-0 text-[13px] font-semibold leading-snug text-ink/55">
                         <span className="mr-1.5 font-code text-[10px] font-medium tracking-tight text-ink/40">
@@ -145,7 +141,7 @@ export default function DogfoodProofSection() {
                 ))}
               </div>
             </div>
-            <p className="mt-3 text-center font-code text-[10px] text-ink/35">
+            <p className="mt-3 text-center text-[11px] text-ink/40">
               a vignette of the board — the live one is a click away
             </p>
           </div>

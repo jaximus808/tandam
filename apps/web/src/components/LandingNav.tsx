@@ -69,11 +69,25 @@ export default function LandingNav({
     };
   }, []);
 
+  // Solid paper chrome; the hairline only appears once the page scrolls under
+  // the nav (canon: no translucency or blur effects).
+  const [scrolled, setScrolled] = useState(() => typeof window !== "undefined" && window.scrollY > 4);
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 4);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
   const howItWorksHref = samePageAnchors ? "#how-it-works" : "/#how-it-works";
   const quickstartHref = samePageAnchors ? "#quickstart" : "/#quickstart";
 
   return (
-    <header className="sticky top-0 z-40 border-b border-ink/10 bg-paper/85 backdrop-blur">
+    <header
+      className={`sticky top-0 z-40 border-b bg-paper transition-colors duration-150 ${
+        scrolled ? "border-ink/10" : "border-transparent"
+      }`}
+    >
       <div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-6">
         <button
           onClick={onHome}
@@ -82,7 +96,7 @@ export default function LandingNav({
         >
           <TandemLogo size={32} />
           <span>Tandem</span>
-          <span className="ml-1 hidden items-center gap-1.5 rounded-[3px] border border-ink/10 px-1.5 py-0.5 font-code text-[9px] uppercase tracking-[0.14em] text-ink/40 md:inline-flex">
+          <span className="ml-1 hidden items-center gap-1.5 rounded border border-ink/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-ink/45 md:inline-flex">
             <span className="relative flex h-1 w-1">
               <span className="tandem-ping absolute inline-flex h-full w-full rounded-full bg-agent opacity-70" />
               <span className="relative inline-flex h-1 w-1 rounded-full bg-agent" />
@@ -122,7 +136,7 @@ export default function LandingNav({
           {user && (
             <button
               onClick={onShowCanvases}
-              className="inline-flex items-center gap-1.5 rounded-md border-[1.5px] border-ink bg-surface px-3 py-1.5 font-medium text-ink shadow-[2px_2px_0_rgba(28,25,23,0.15)] transition-transform hover:-translate-y-px"
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-ink/15 bg-surface px-3 text-[13px] font-medium text-ink transition-colors hover:border-ink/25"
             >
               Dashboard
               <ArrowIcon className="h-3.5 w-3.5" />

@@ -155,10 +155,9 @@ function TerminalPane({
   return (
     <div
       className={[
-        "overflow-hidden rounded-xl border bg-[#101014] transition-shadow duration-500",
-        glow
-          ? "border-amber-400/60 shadow-[0_0_0_1px_rgba(251,191,36,0.35),0_0_28px_rgba(251,191,36,0.28)]"
-          : "border-white/10 shadow-lg shadow-black/20",
+        // Money-shot highlight = 1px amber border + subtle ring only (no bloom).
+        "overflow-hidden rounded-lg border bg-[#101014] transition-colors duration-500",
+        glow ? "border-amber-400/60 ring-1 ring-amber-400/25" : "border-white/10 shadow-sm",
       ].join(" ")}
     >
       {/* Title bar: traffic lights + session name. */}
@@ -184,7 +183,7 @@ function TerminalPane({
           const isTypingLine = typing && l === last;
           return (
             <div key={l.start} className={`whitespace-pre-wrap break-words ${LINE_CLS[l.kind]}`}>
-              {isCmd && <span className="text-teal-400">❯ </span>}
+              {isCmd && <span className="text-indigo-400">❯ </span>}
               {shown}
               {isTypingLine && animate && (
                 <span className="text-zinc-300">▍</span>
@@ -195,7 +194,7 @@ function TerminalPane({
         {/* Idle prompt with a blinking cursor whenever nothing is typing. */}
         {!typing && (
           <div className="whitespace-pre text-zinc-100">
-            <span className="text-teal-400">❯ </span>
+            <span className="text-indigo-400">❯ </span>
             <span className={animate ? "hero-demo-blink text-zinc-300" : "text-zinc-300"}>▍</span>
           </div>
         )}
@@ -232,9 +231,7 @@ function BoardCard({
       className={[
         "rounded-lg border bg-surface p-2",
         animate ? "hero-demo-card-in" : "",
-        contested
-          ? "border-amber-400/70 shadow-[0_0_10px_rgba(251,191,36,0.35)]"
-          : "border-ink/10",
+        contested ? "border-amber-400/70 ring-1 ring-amber-400/25" : "border-ink/10",
       ].join(" ")}
     >
       <div className="min-w-0">
@@ -272,7 +269,7 @@ function BoardPane({ t, animate }: { t: number; animate: boolean }) {
   const working = states.filter((s) => s.state === "working").length;
   const activeSessions = SESSIONS.filter((s) => t >= s.activeAt);
   return (
-    <div className="flex h-full flex-col rounded-xl border border-ink/10 bg-paper p-3 shadow-lg shadow-ink/5">
+    <div className="flex h-full flex-col rounded-lg border border-ink/10 bg-paper p-3 shadow-sm">
       {/* Header: board label + agent chips (terracotta = agent, app-wide). */}
       <div className="flex items-center gap-2">
         <span className="text-[12px] font-semibold text-ink">Board</span>

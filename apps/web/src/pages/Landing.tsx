@@ -35,20 +35,14 @@ interface Props {
 
    The section components live in components/landing/ and are self-contained;
    this file owns only the hero copy, the connective tissue, and the page state
-   (auth, launcher, recents). Humans are ink; agents are terracotta.
+   (auth, launcher, recents). Styling follows /DESIGN.md ("Precision Canon"):
+   Inter everywhere, one indigo accent, hairline borders, no decoration.
    ───────────────────────────────────────────────────────────────────────────── */
-
-const AGENT = "#C75B39";
 
 // The cycling headline word. Rotating Claude → ChatGPT → Cursor → Codex SHOWS
 // agent-agnosticism instead of telling it. Any one entry is a single-line edit
-// if a client stops working.
-const HERO_AGENTS: { name: string; solid: string; soft: string; line: string }[] = [
-  { name: "Claude", solid: "#F43F5E", soft: "rgba(244,63,94,0.10)", line: "rgba(244,63,94,0.24)" },
-  { name: "ChatGPT", solid: "#0EA5E9", soft: "rgba(14,165,233,0.10)", line: "rgba(14,165,233,0.24)" },
-  { name: "Cursor", solid: "#F59E0B", soft: "rgba(245,158,11,0.12)", line: "rgba(245,158,11,0.26)" },
-  { name: "Codex", solid: "#10B981", soft: "rgba(16,185,129,0.10)", line: "rgba(16,185,129,0.24)" },
-];
+// if a client stops working. Rendered as plain accent-colored text — no box.
+const HERO_AGENTS: string[] = ["Claude", "ChatGPT", "Cursor", "Codex"];
 
 const HERO_WORD_MS = 4200;
 
@@ -143,110 +137,10 @@ function Icon({ name, className = "" }: { name: string; className?: string }) {
   }
 }
 
-/* ── worksurface vocabulary: pointers, tags, frames, system labels ──────────── */
-
-function PointerGlyph({ color }: { color: string }) {
-  // display:block so it never picks up the line-height of big surrounding
-  // type (inside the h1 an inline svg sits in a ~60px line box).
+/** Canon section eyebrow — 12px Inter 500 uppercase tracking-wide ink/50. */
+function Eyebrow({ children, className = "" }: { children: React.ReactNode; className?: string }) {
   return (
-    <svg width="18" height="20" viewBox="0 0 20 22" className="block" aria-hidden="true">
-      <path
-        d="M2 1.5l13.5 6.2-5.6 1.6-2 5.7z"
-        fill={color}
-        className="stroke-paper"
-        strokeWidth="1.4"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-/** A multiplayer name tag — square corners, mono, agent vs human colour. */
-function NameTag({ name, kind, color }: { name: string; kind: "human" | "agent"; color?: string }) {
-  // Default human tag mirrors the real canvas "you" chip (bg-ink/text-paper) so
-  // it inverts with the theme; an explicit color (or the agent terracotta) is a
-  // fixed colored bg that keeps white text in both themes.
-  const inkText = !color && kind === "human";
-  const bg = color ?? (kind === "agent" ? AGENT : "rgb(var(--color-ink))");
-  return (
-    <span
-      className="inline-flex items-center gap-1 rounded-[3px] px-1.5 py-0.5 font-code text-[10px] font-medium leading-none"
-      style={{ backgroundColor: bg, color: inkText ? "rgb(var(--color-paper))" : "#fff" }}
-    >
-      {kind === "agent" && <Icon name="spark" className="h-2.5 w-2.5" />}
-      {name}
-    </span>
-  );
-}
-
-/** A cursor that wanders a section of the page — the site itself is multiplayer. */
-function RoamingCursor({
-  name,
-  kind,
-  roam,
-  className = "",
-  style,
-}: {
-  name: string;
-  kind: "human" | "agent";
-  roam: "a" | "b";
-  className?: string;
-  style?: React.CSSProperties;
-}) {
-  const color = kind === "agent" ? AGENT : "rgb(var(--color-ink))";
-  return (
-    <div
-      aria-hidden="true"
-      className={`pointer-events-none absolute z-20 hidden xl:block ${className}`}
-      style={style}
-    >
-      <div className={roam === "a" ? "tandem-roam-a" : "tandem-roam-b"}>
-        <PointerGlyph color={color} />
-        <div className="ml-3 mt-0.5">
-          <NameTag name={name} kind={kind} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/** Selection frame: wraps content in a "selected object" rectangle w/ handles. */
-function SelectionFrame({
-  children,
-  tag,
-  tagKind = "human",
-  className = "",
-  color = "rgb(var(--color-ink))",
-}: {
-  children: React.ReactNode;
-  tag?: string;
-  tagKind?: "human" | "agent";
-  className?: string;
-  color?: string;
-}) {
-  // The frame sits at -16px x / -12px y around the content; handles are 7px
-  // squares centred on each frame corner.
-  return (
-    <div className={`relative ${className}`} style={{ color }}>
-      <span aria-hidden="true" className="pointer-events-none absolute -inset-x-4 -inset-y-3 border-[1.5px] border-current opacity-25" />
-      <span aria-hidden="true" className="sel-handle" style={{ top: -15, left: -19 }} />
-      <span aria-hidden="true" className="sel-handle" style={{ top: -15, right: -19 }} />
-      <span aria-hidden="true" className="sel-handle" style={{ bottom: -15, left: -19 }} />
-      <span aria-hidden="true" className="sel-handle" style={{ bottom: -15, right: -19 }} />
-      {tag && (
-        <span className="pointer-events-none absolute -left-4 -top-3 -translate-y-[calc(100%+5px)]">
-          <NameTag name={tag} kind={tagKind} />
-        </span>
-      )}
-      <div className="text-ink">{children}</div>
-    </div>
-  );
-}
-
-/** Tiny mono system label — coordinates, section ids, telemetry. */
-function SysLabel({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return (
-    <span className={`font-code text-[11px] uppercase tracking-[0.22em] text-ink/40 ${className}`}>
+    <span className={`text-xs font-medium uppercase tracking-wide text-ink/50 ${className}`}>
       {children}
     </span>
   );
@@ -275,7 +169,7 @@ const FAQS: { q: string; a: React.ReactNode }[] = [
           href="https://modelcontextprotocol.io"
           target="_blank"
           rel="noopener noreferrer"
-          className="text-agent underline underline-offset-2 hover:text-ink"
+          className="text-accent underline underline-offset-2 hover:text-ink"
         >
           Model Context Protocol
         </a>
@@ -391,11 +285,10 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
   }
 
   return (
-    // The page follows the global theme (light/dark). What stays pinned with
-    // `theme-light`: the intentionally-dark bands (bg-ink text-paper, and the
-    // terminal blocks inside the landing sections) that would otherwise INVERT
-    // to light in dark mode.
-    <div className="min-h-screen overflow-x-clip scroll-smooth bg-paper font-brand text-ink [text-rendering:optimizeLegibility] antialiased">
+    // The page follows the global theme (light/dark) end to end. The dark bands
+    // (sign-up slab, terminal mocks in the sections) use explicit dark grounds
+    // so they read identically in both themes — no light-lock anywhere.
+    <div className="min-h-screen overflow-x-clip scroll-smooth bg-paper font-sans text-ink [text-rendering:optimizeLegibility] antialiased">
       {/* Nav — shared across Landing / MCP / About via LandingNav. */}
       <LandingNav
         onHome={() => window.scrollTo({ top: 0, behavior: "smooth" })}
@@ -410,69 +303,42 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
 
       {/* Hero — copy left, the two-terminals-one-queue demo right */}
       <section className="relative overflow-hidden">
-        <div
-          aria-hidden="true"
-          className="surface-grid absolute inset-0"
-          style={{
-            maskImage: "radial-gradient(120% 90% at 50% 0%, black 55%, transparent 100%)",
-            WebkitMaskImage: "radial-gradient(120% 90% at 50% 0%, black 55%, transparent 100%)",
-          }}
-        />
-        {/* viewport telemetry in the corners */}
-        <span aria-hidden="true" className="absolute left-4 top-3 hidden font-code text-[10px] text-ink/25 lg:block">
-          + 0,0
-        </span>
-        <span aria-hidden="true" className="absolute right-4 top-3 hidden font-code text-[10px] text-ink/25 lg:block">
-          zoom 100% +
-        </span>
-
         <div className="relative mx-auto grid max-w-6xl items-center gap-14 px-6 pb-20 pt-16 lg:grid-cols-[1fr_1.05fr] lg:gap-10 lg:pb-24 lg:pt-20">
           {/* Left: copy + actions */}
           <div className="min-w-0 max-w-xl lg:pt-4">
             <div className="tandem-rise">
-              <SysLabel>One queue · every session · no collisions</SysLabel>
+              <Eyebrow>One queue · every session · no collisions</Eyebrow>
             </div>
 
-            {/* mt-12 leaves headroom for the frame's "you" tag above the h1.
-                z-10: tandem-rise's lingering transform makes this and the demo
-                column stacking contexts; without it the hero cursor paints
-                behind the demo when it overhangs the column gap. */}
-            <div className="tandem-rise relative z-10 mt-12" style={{ animationDelay: "60ms" }}>
+            <div className="tandem-rise mt-5" style={{ animationDelay: "60ms" }}>
               {/* All four headline variants render stacked in one grid cell, the
                   inactive ones invisible — so this block is always as tall as
                   the tallest phrase and the page below never shifts when the
                   cycling word changes line count. */}
-              <SelectionFrame tag="you" className="inline-block">
-                <h1 className="grid font-display text-[2.3rem] font-medium leading-[1.08] tracking-tight text-ink sm:text-[3.5rem] sm:leading-[1.06]">
-                  {HERO_AGENTS.map((a, i) => {
-                    const active = i === wordIdx;
-                    return (
+              <h1 className="grid text-[2.75rem] font-semibold leading-[1.08] tracking-tight text-ink sm:text-[3.5rem] sm:leading-[1.06]">
+                {HERO_AGENTS.map((name, i) => {
+                  const active = i === wordIdx;
+                  return (
+                    <span
+                      key={name}
+                      aria-hidden={!active}
+                      className={`col-start-1 row-start-1 block ${active ? "" : "invisible"}`}
+                    >
                       <span
-                        key={a.name}
-                        aria-hidden={!active}
-                        className={`col-start-1 row-start-1 block ${active ? "" : "invisible"}`}
+                        key={active ? `${name}-on` : name}
+                        className={`inline-block text-accent ${active ? "tandem-word-in" : ""}`}
                       >
-                        <span
-                          key={active ? `${a.name}-on` : a.name}
-                          className={`inline-block px-1 italic ${active ? "tandem-word-in" : ""}`}
-                          style={{
-                            color: a.solid,
-                            backgroundColor: a.soft,
-                            boxShadow: `inset 0 0 0 1.5px ${a.line}`,
-                          }}
-                        >
-                          {a.name}
-                        </span>{" "}
-                        in parallel. Nothing collides.
-                      </span>
-                    );
-                  })}
-                </h1>
-              </SelectionFrame>
+                        {name}
+                      </span>{" "}
+                      in parallel. Nothing collides.
+                    </span>
+                  );
+                })}
+              </h1>
             </div>
 
             <p
-              className="tandem-rise mt-7 text-[1.05rem] leading-relaxed text-ink/65"
+              className="tandem-rise mt-6 text-base leading-relaxed text-ink/65"
               style={{ animationDelay: "120ms" }}
             >
               A shared task queue for parallel agent sessions. Every session claims its own work,
@@ -484,21 +350,21 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
                 Signed in, the primary path is the dashboard (like Supabase's
                 "start your project"); signed out, it's straight to create. */}
             <div
-              className="tandem-rise mt-9 flex flex-wrap items-center gap-4"
+              className="tandem-rise mt-8 flex flex-wrap items-center gap-3"
               style={{ animationDelay: "180ms" }}
             >
               {user ? (
                 <>
                   <button
                     onClick={onShowCanvases}
-                    className="btn-press inline-flex items-center justify-center gap-2 rounded-md bg-ink px-6 py-3 font-medium text-paper shadow-[4px_4px_0_#0D6E66]"
+                    className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-accent px-5 text-[13px] font-medium text-white transition-[filter] hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
                   >
                     Go to your dashboard
                     <Icon name="arrow" className="h-4 w-4" />
                   </button>
                   <button
                     onClick={() => setLauncher("create")}
-                    className="btn-press rounded-md border-[1.5px] border-ink bg-surface px-6 py-3 font-medium text-ink shadow-[4px_4px_0_rgba(28,25,23,0.15)]"
+                    className="inline-flex h-9 items-center justify-center rounded-md border border-ink/15 bg-surface px-5 text-[13px] font-medium text-ink transition-colors hover:border-ink/25"
                   >
                     Create a canvas
                   </button>
@@ -507,14 +373,14 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
                 <>
                   <button
                     onClick={() => setLauncher("create")}
-                    className="btn-press inline-flex items-center justify-center gap-2 rounded-md bg-ink px-6 py-3 font-medium text-paper shadow-[4px_4px_0_#0D6E66]"
+                    className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-accent px-5 text-[13px] font-medium text-white transition-[filter] hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
                   >
                     Create a canvas
                     <Icon name="arrow" className="h-4 w-4" />
                   </button>
                   <button
                     onClick={() => setLauncher("join")}
-                    className="btn-press rounded-md border-[1.5px] border-ink bg-surface px-6 py-3 font-medium text-ink shadow-[4px_4px_0_rgba(28,25,23,0.15)]"
+                    className="inline-flex h-9 items-center justify-center rounded-md border border-ink/15 bg-surface px-5 text-[13px] font-medium text-ink transition-colors hover:border-ink/25"
                   >
                     Join with a code
                   </button>
@@ -523,7 +389,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
             </div>
 
             <div
-              className="tandem-rise mt-6 flex flex-wrap items-center gap-x-4 gap-y-2 font-code text-[11px] text-ink/40"
+              className="tandem-rise mt-5 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-ink/50"
               style={{ animationDelay: "220ms" }}
             >
               {/* anchor, not a button — the hero link to /mcp is the strongest
@@ -531,7 +397,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
               <a
                 href="/mcp"
                 onClick={spaLink(onOpenMCP)}
-                className="inline-flex items-center gap-1.5 text-[13.5px] font-semibold text-agent transition-colors hover:text-ink"
+                className="inline-flex items-center gap-1.5 text-[13px] font-medium text-accent transition-[filter] hover:brightness-90"
               >
                 <Icon name="spark" className="h-3.5 w-3.5" />
                 connect an AI agent →
@@ -571,9 +437,9 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
         <section className="mx-auto max-w-6xl px-6 py-10">
           <div className="max-w-md">
             <h2 className="mb-2">
-              <SysLabel>Jump back in</SysLabel>
+              <Eyebrow>Jump back in</Eyebrow>
             </h2>
-            <ul className="overflow-hidden rounded-md border border-ink/15 bg-surface">
+            <ul className="overflow-hidden rounded-lg border border-ink/10 bg-surface">
               {recents.map((r, i) => (
                 <li
                   key={r.code}
@@ -587,9 +453,9 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
                   >
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-sm font-medium text-ink">{r.name}</div>
-                      <div className="font-code text-[10px] text-ink/35">{relativeTime(r.lastOpenedAt)}</div>
+                      <div className="text-[11px] text-ink/40">{relativeTime(r.lastOpenedAt)}</div>
                     </div>
-                    <span className="font-code text-[11px] tracking-[0.14em] text-ink/35">{r.code}</span>
+                    <span className="font-code text-[11px] text-ink/40">{r.code}</span>
                   </button>
                   <button
                     onClick={() => handleForgetRecent(r.code)}
@@ -627,10 +493,10 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
 
       {/* The board is a full workspace — one modest mention, not a section of
           demos. The queue is the story; this is the "and there's more" aside. */}
-      <section id="modes" className="mx-auto max-w-6xl px-6 py-20">
+      <section id="modes" className="mx-auto max-w-6xl px-6 py-24">
         <div className="max-w-2xl">
-          <SysLabel>Beyond the queue</SysLabel>
-          <h2 className="mt-3 font-display text-2xl font-medium tracking-tight text-ink">
+          <Eyebrow>Beyond the queue</Eyebrow>
+          <h2 className="mt-3 text-2xl font-semibold tracking-tight text-ink">
             The board is a full workspace.
           </h2>
           <p className="mt-3 leading-relaxed text-ink/65">
@@ -642,7 +508,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
             {MODE_NAMES.map((m) => (
               <span
                 key={m}
-                className="rounded-[3px] border border-ink/10 bg-surface px-2 py-0.5 font-code text-[10.5px] font-medium text-ink/50"
+                className="rounded border border-ink/10 bg-surface px-2 py-0.5 text-[11px] font-medium text-ink/60"
               >
                 {m.toLowerCase()}
               </span>
@@ -652,57 +518,49 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
       </section>
 
       {/* Sign-up pitch — only for visitors who aren't already signed in.
-          A full-bleed dark band (rather than a black card floating on the paper)
-          so the transition reads as an intentional section, not a naked hard edge. */}
+          A full-bleed dark band on an explicit dark ground so it reads the same
+          in both themes; white/10 hairlines give it a seam against dark paper. */}
       {showSignUp && (
-        <section className="theme-light relative overflow-hidden bg-ink text-paper">
-          {/* Warm glow + hairline so the flat slab has depth and the top edge
-              eases in instead of hard-cutting from paper to black. */}
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-0"
-            style={{ background: "radial-gradient(120% 90% at 12% 0%, rgba(199,91,57,0.12), transparent 55%)" }}
-          />
-          <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-px bg-paper/10" />
+        <section className="relative overflow-hidden border-y border-white/10 bg-[#0A0A0B] text-zinc-200">
           <div className="relative mx-auto max-w-6xl px-6 py-24 sm:px-12">
             <div className="grid items-center gap-10 lg:grid-cols-[1fr_1.1fr]">
               <div>
-                <span className="font-code text-[11px] uppercase tracking-[0.22em] text-agent">
+                <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
                   Free account
                 </span>
-                <h2 className="mt-3 font-display text-3xl font-medium tracking-tight sm:text-4xl">
+                <h2 className="mt-3 text-2xl font-semibold tracking-tight text-zinc-100 sm:text-[2rem]">
                   Start free. Sign up to unlock more.
                 </h2>
-                <p className="mt-4 leading-relaxed text-paper/65">
+                <p className="mt-4 leading-relaxed text-zinc-400">
                   Anyone can spin up a canvas and share the code. Create a free account to keep
                   your canvases, get to them from any device, and copy any shared canvas to make it
                   your own.
                 </p>
-                <div className="mt-8 flex flex-wrap items-center gap-4">
+                <div className="mt-8 flex flex-wrap items-center gap-3">
                   <button
                     onClick={() => setSignInOpen(true)}
-                    className="btn-press inline-flex items-center gap-2 rounded-md bg-paper px-6 py-3 font-medium text-ink shadow-[4px_4px_0_#0D6E66]"
+                    className="inline-flex h-9 items-center justify-center rounded-md bg-accent px-5 text-[13px] font-medium text-white transition-[filter] hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0A0A0B]"
                   >
                     Create your free account
                   </button>
                   <button
                     onClick={() => setLauncher("create")}
-                    className="rounded-md border border-paper/25 px-6 py-3 font-medium text-paper transition-colors hover:bg-paper/10"
+                    className="inline-flex h-9 items-center justify-center rounded-md border border-white/15 px-5 text-[13px] font-medium text-zinc-200 transition-colors hover:bg-white/5"
                   >
                     Try it without signing up
                   </button>
                 </div>
               </div>
 
-              <div className="divide-y divide-paper/10 rounded-md border border-paper/15">
+              <div className="divide-y divide-white/10 rounded-lg border border-white/10">
                 {ACCOUNT_PERKS.map((perk) => (
                   <div key={perk.title} className="flex gap-4 p-5">
-                    <div className="grid h-9 w-9 shrink-0 place-items-center rounded-[5px] border border-agent/40 bg-agent/15 text-[#E89277]">
+                    <div className="grid h-9 w-9 shrink-0 place-items-center rounded-md border border-white/10 bg-white/5 text-indigo-400">
                       <Icon name={perk.icon} className="h-[18px] w-[18px]" />
                     </div>
                     <div>
-                      <h3 className="text-sm font-semibold text-paper">{perk.title}</h3>
-                      <p className="mt-1 text-xs leading-relaxed text-paper/55">{perk.desc}</p>
+                      <h3 className="text-sm font-semibold text-zinc-100">{perk.title}</h3>
+                      <p className="mt-1 text-xs leading-relaxed text-zinc-400">{perk.desc}</p>
                     </div>
                   </div>
                 ))}
@@ -716,8 +574,8 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
           Mirrored by the FAQPage JSON-LD in index.html; edit both together. */}
       <section id="faq" className="border-t border-ink/10">
         <div className="mx-auto max-w-3xl px-6 py-24">
-          <SysLabel>Questions</SysLabel>
-          <h2 className="mt-3 font-display text-3xl font-medium tracking-tight text-ink sm:text-4xl">
+          <Eyebrow>Questions</Eyebrow>
+          <h2 className="mt-3 text-2xl font-semibold tracking-tight text-ink sm:text-[2rem]">
             Shared state for humans and agent sessions
           </h2>
           <p className="mt-3 leading-relaxed text-ink/65">
@@ -728,7 +586,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
           <dl className="mt-12 space-y-9">
             {FAQS.map((f) => (
               <div key={f.q} className="border-t border-ink/10 pt-6">
-                <dt className="font-display text-lg font-medium text-ink">{f.q}</dt>
+                <dt className="text-base font-semibold tracking-tight text-ink">{f.q}</dt>
                 <dd className="mt-2 leading-relaxed text-ink/65">{f.a}</dd>
               </div>
             ))}
@@ -738,36 +596,21 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
 
       {/* Manifesto / closing CTA — back on the open surface */}
       <section className="relative overflow-hidden">
-        <div
-          aria-hidden="true"
-          className="surface-grid absolute inset-0"
-          style={{
-            maskImage: "radial-gradient(100% 100% at 50% 100%, black 40%, transparent 95%)",
-            WebkitMaskImage: "radial-gradient(100% 100% at 50% 100%, black 40%, transparent 95%)",
-          }}
-        />
-        {/* kept to the far margins so their roam radius never reaches the copy */}
-        <RoamingCursor name="scout-agent" kind="agent" roam="b" style={{ bottom: "14%", left: "3%" }} />
-        <RoamingCursor name="Priya" kind="human" roam="a" style={{ top: "12%", right: "3%" }} />
         <div className="relative mx-auto max-w-3xl px-6 py-28 text-center">
           <TandemLogo size={44} />
-          <div className="mt-10 inline-block">
-            <SelectionFrame tag="everyone" tagKind="human" className="inline-block">
-              <h2 className="font-display text-3xl font-medium leading-tight tracking-tight text-ink sm:text-[2.5rem]">
-                Every session on the same queue,{" "}
-                <em className="text-agent">every task traced to a commit.</em>
-              </h2>
-            </SelectionFrame>
-          </div>
-          <p className="mx-auto mt-8 max-w-xl leading-relaxed text-ink/65">
+          <h2 className="mt-8 text-2xl font-semibold leading-tight tracking-tight text-ink sm:text-[2rem]">
+            Every session on the same queue,{" "}
+            <em className="not-italic text-accent">every task traced to a commit.</em>
+          </h2>
+          <p className="mx-auto mt-6 max-w-xl leading-relaxed text-ink/65">
             Stop coordinating parallel sessions through a markdown file they all fight over. Keep
             the spec in git, put the queue where every session and every teammate can see it, and
             watch the work move.
           </p>
-          <div className="mt-10 flex flex-wrap items-center justify-center gap-4">
+          <div className="mt-9 flex flex-wrap items-center justify-center gap-3">
             <button
               onClick={() => setLauncher("create")}
-              className="btn-press inline-flex items-center gap-2 rounded-md bg-ink px-6 py-3 font-medium text-paper shadow-[4px_4px_0_#0D6E66]"
+              className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-accent px-5 text-[13px] font-medium text-white transition-[filter] hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
             >
               Start a canvas
               <Icon name="arrow" className="h-4 w-4" />
@@ -775,7 +618,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
             <a
               href="/mcp"
               onClick={spaLink(onOpenMCP)}
-              className="btn-press rounded-md border-[1.5px] border-ink bg-surface px-6 py-3 font-medium text-ink shadow-[4px_4px_0_rgba(28,25,23,0.15)]"
+              className="inline-flex h-9 items-center justify-center rounded-md border border-ink/15 bg-surface px-5 text-[13px] font-medium text-ink transition-colors hover:border-ink/25"
             >
               Connect an agent
             </a>
@@ -785,7 +628,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
 
       {/* Footer */}
       <footer className="border-t border-ink/10 bg-surface">
-        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-6 py-8 font-code text-[11px] text-ink/40 sm:flex-row">
+        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-6 py-8 text-xs text-ink/45 sm:flex-row">
           <div className="flex items-center gap-2">
             <TandemLogo size={18} animate={false} />
             <span>Tandem — you and your agents, in tandem.</span>
@@ -799,7 +642,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
               About
             </a>
             <p>
-              made with <span className="text-agent">♥</span> by{" "}
+              made with <span>♥</span> by{" "}
               <a
                 href="https://www.jaxonp.com/"
                 target="_blank"

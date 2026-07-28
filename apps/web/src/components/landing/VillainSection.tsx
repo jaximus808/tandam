@@ -7,46 +7,39 @@
  *   <VillainSection />
  *
  * Self-contained, no props, no external state. Renders a full-bleed band
- * (`bg-surface` + `border-y border-ink/10`, like the Modes section), so place it
- * between plain-paper sections. Static illustration by design — the hero owns
- * the big animation; the only motion here is the blinking caret (reduced-motion
- * safe via the global `.tandem-caret` rule in index.css).
+ * (`bg-surface` + `border-y border-ink/10`), so place it between plain-paper
+ * sections. Static illustration by design — the hero owns the big animation;
+ * the only motion here is the blinking caret (reduced-motion safe via the
+ * global `.tandem-caret` rule in index.css).
+ *
+ * Terminals sit on an explicit dark ground (#101014 + white/10 hairline) so
+ * they read identically in both themes — no light-lock.
  */
 
-const AGENT = "#C75B39";
-
-/** One dark mini terminal. `theme-light` pins its ink/paper vars to light-mode
- *  values so the block stays dark in both themes (same pattern as the
- *  bring-your-own-agent card on the landing page). */
+/** One dark mini terminal. Explicit dark ground, theme-independent. */
 function SessionTerminal({ name, delayCaret }: { name: string; delayCaret?: boolean }) {
   return (
-    <div className="theme-light flex flex-col overflow-hidden rounded-md border-[1.5px] border-ink bg-ink text-paper shadow-[5px_5px_0_rgba(28,25,23,0.15)]">
-      <div className="flex items-center gap-2 border-b border-paper/10 px-4 py-2.5">
-        <span className="h-2 w-2 rounded-full bg-paper/20" />
-        <span className="h-2 w-2 rounded-full bg-paper/20" />
-        <span className="font-code text-[10px] text-paper/45">{name}</span>
+    <div className="flex flex-col overflow-hidden rounded-lg border border-white/10 bg-[#101014] text-zinc-200 shadow-sm">
+      <div className="flex items-center gap-2 border-b border-white/[0.06] px-4 py-2.5">
+        <span className="h-2 w-2 rounded-full bg-white/15" />
+        <span className="h-2 w-2 rounded-full bg-white/15" />
+        <span className="font-code text-[10px] text-zinc-500">{name}</span>
       </div>
       <div className="flex-1 px-4 py-3 font-code text-[11.5px] leading-relaxed">
-        <div className="text-paper/55">
-          <span style={{ color: AGENT }}>$</span> claude "pick the next task from TODO.md"
+        <div className="text-zinc-400">
+          <span className="text-indigo-400">$</span> claude "pick the next task from TODO.md"
         </div>
-        <div className="mt-1 text-paper/45">Reading TODO.md…</div>
-        <div className="mt-1 text-paper/90">
-          Working on: <span className="font-medium" style={{ color: "#E89277" }}>3. Add rate limiting</span>
+        <div className="mt-1 text-zinc-500">Reading TODO.md…</div>
+        <div className="mt-1 text-zinc-100">
+          Working on: <span className="font-medium">3. Add rate limiting</span>
           {!delayCaret && (
-            <span
-              className="tandem-caret ml-1 inline-block h-3 w-[7px] translate-y-[2px]"
-              style={{ backgroundColor: AGENT }}
-            />
+            <span className="tandem-caret ml-1 inline-block h-3 w-[7px] translate-y-[2px] bg-zinc-400" />
           )}
         </div>
         {delayCaret && (
-          <div className="mt-1 text-paper/45">
+          <div className="mt-1 text-zinc-500">
             Editing TODO.md…
-            <span
-              className="tandem-caret ml-1 inline-block h-3 w-[7px] translate-y-[2px]"
-              style={{ backgroundColor: AGENT }}
-            />
+            <span className="tandem-caret ml-1 inline-block h-3 w-[7px] translate-y-[2px] bg-zinc-400" />
           </div>
         )}
       </div>
@@ -59,15 +52,15 @@ function SessionTerminal({ name, delayCaret }: { name: string; delayCaret?: bool
 function MangledDiff() {
   const line = "block whitespace-pre px-4 leading-relaxed";
   return (
-    <div className="theme-light overflow-hidden rounded-md border-[1.5px] border-ink bg-ink text-paper shadow-[5px_5px_0_rgba(199,91,57,0.5)]">
-      <div className="flex items-center gap-2 border-b border-paper/10 px-4 py-2.5">
-        <span className="h-2 w-2 rounded-full bg-paper/20" />
-        <span className="h-2 w-2 rounded-full bg-paper/20" />
-        <span className="font-code text-[10px] text-paper/45">git diff TODO.md — after both finish</span>
+    <div className="overflow-hidden rounded-lg border border-white/10 bg-[#101014] text-zinc-200 shadow-sm">
+      <div className="flex items-center gap-2 border-b border-white/[0.06] px-4 py-2.5">
+        <span className="h-2 w-2 rounded-full bg-white/15" />
+        <span className="h-2 w-2 rounded-full bg-white/15" />
+        <span className="font-code text-[10px] text-zinc-500">git diff TODO.md — after both finish</span>
       </div>
       <div className="overflow-x-auto py-3 font-code text-[11.5px]">
-        <span className={`${line} text-paper/40`}>@@ -1,6 +1,10 @@</span>
-        <span className={`${line} text-paper/60`}> # TODO</span>
+        <span className={`${line} text-zinc-500`}>@@ -1,6 +1,10 @@</span>
+        <span className={`${line} text-zinc-400`}> # TODO</span>
         <span className={`${line} bg-rose-500/15 text-rose-300`}>-- [ ] 3. Add rate limiting</span>
         <span className={`${line} bg-amber-400/15 text-amber-300`}>{"+<<<<<<< session-A"}</span>
         <span className={`${line} bg-emerald-500/15 text-emerald-300`}>
@@ -78,8 +71,8 @@ function MangledDiff() {
           +- [x] 3. Add rate limiting — done, see limiter.ts
         </span>
         <span className={`${line} bg-amber-400/15 text-amber-300`}>{"+>>>>>>> session-B"}</span>
-        <span className={`${line} text-paper/60`}> - [ ] 4. Fix flaky reconnect test</span>
-        <span className={`${line} text-paper/60`}> - [ ] 5. Update quickstart docs</span>
+        <span className={`${line} text-zinc-400`}> - [ ] 4. Fix flaky reconnect test</span>
+        <span className={`${line} text-zinc-400`}> - [ ] 5. Update quickstart docs</span>
       </div>
     </div>
   );
@@ -88,13 +81,12 @@ function MangledDiff() {
 export default function VillainSection() {
   return (
     <section className="relative overflow-hidden border-y border-ink/10 bg-surface">
-      <div aria-hidden="true" className="surface-grid-faint absolute inset-0 opacity-60" />
       <div className="relative mx-auto max-w-6xl px-6 py-24">
         <div className="max-w-2xl">
-          <span className="font-code text-[11px] uppercase tracking-[0.22em] text-ink/40">
+          <span className="text-xs font-medium uppercase tracking-wide text-ink/50">
             The failure mode
           </span>
-          <h2 className="mt-3 font-display text-3xl font-medium tracking-tight text-ink sm:text-4xl">
+          <h2 className="mt-3 text-2xl font-semibold tracking-tight text-ink sm:text-[2rem]">
             Your agents are fighting over a markdown file.
           </h2>
           <p className="mt-3 leading-relaxed text-ink/65">
@@ -113,7 +105,7 @@ export default function VillainSection() {
           </div>
         </div>
 
-        <p className="mt-6 text-center font-display text-lg italic text-ink/50">
+        <p className="mt-6 text-center text-base italic text-ink/50">
           every parallel-session setup, eventually.
         </p>
       </div>
