@@ -1,9 +1,10 @@
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import posthog from "../lib/posthog";
 import { Bot, Check, ChevronDown, ChevronsLeft, ChevronUp, Layers, Link2, Pencil, Plus, RotateCcw, Trash2, User, X } from "lucide-react";
 import type { Action, CanvasState, EpicPayload, TaskPayload } from "../types";
 import {
   approveAction,
+  approveBatch,
   createTask,
   deleteTask,
   rejectAction,
@@ -115,6 +116,133 @@ export default function TasksPanel({
   const targets = useMemo(() => linkTargets(state), [state]);
   const targetLabel = useMemo(() => new Map(targets.map((t) => [t.id, t.label])), [targets]);
 
+  // ── Bulk selection + keyboard triage ───────────────────────────────────────
+  // selected drives the sticky "Approve N" bar (ONE approve-batch call, not N
+  // approves); focusedId is the j/k keyboard cursor; pendingApproved is the
+  // optimistic overlay — cards we've told the server to approve render as
+  // Ready immediately, and the WS broadcast (or the error path) settles them.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [focusedId, setFocusedId] = useState<string | null>(null);
+  const [pendingApproved, setPendingApproved] = useState<Set<string>>(new Set());
+  const [batchBusy, setBatchBusy] = useState(false);
+  const lastPickedRef = useRef<string | null>(null);
+
+  // Every still-proposed task id in display order (epic groups first, then the
+  // flat queue) — the universe for select-all, shift-ranges, and j/k movement.
+  const proposedIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const e of epics) {
+      for (const t of tasksByEpic.get(e.id) ?? []) if (t.state === "proposed") ids.push(t.id);
+    }
+    for (const t of tasks) {
+      const eid = taskPayload(t).epicId;
+      if ((!eid || !epicIds.has(eid)) && t.state === "proposed") ids.push(t.id);
+    }
+    return ids;
+  }, [tasks, epics, tasksByEpic, epicIds]);
+
+  // A card that left 'proposed' (WS confirmed the approve, or it was rejected/
+  // deleted elsewhere) drops out of selection and the optimistic overlay, so
+  // neither set accumulates stale ids.
+  useEffect(() => {
+    const live = new Set(proposedIds);
+    const prune = (prev: Set<string>) => {
+      const next = new Set([...prev].filter((id) => live.has(id)));
+      return next.size === prev.size ? prev : next;
+    };
+    setSelected(prune);
+    setPendingApproved(prune);
+  }, [proposedIds]);
+
+  function toggleSelect(id: string, shiftKey: boolean) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      const anchor = lastPickedRef.current;
+      // Shift extends from the last picked card through this one (Gmail-style).
+      if (shiftKey && anchor && anchor !== id) {
+        const a = proposedIds.indexOf(anchor);
+        const b = proposedIds.indexOf(id);
+        if (a !== -1 && b !== -1) {
+          for (let i = Math.min(a, b); i <= Math.max(a, b); i++) next.add(proposedIds[i]);
+          return next;
+        }
+      }
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+    lastPickedRef.current = id;
+    setFocusedId(id);
+  }
+
+  async function approveMany(ids: string[]) {
+    const batch = ids.filter((id) => !pendingApproved.has(id));
+    if (batch.length === 0 || batchBusy || readOnly) return;
+    setBatchBusy(true);
+    setError(null);
+    // Optimistic: flip the cards to Ready now; revert on failure.
+    setPendingApproved((prev) => new Set([...prev, ...batch]));
+    setSelected(new Set());
+    try {
+      const { approved } = await approveBatch(code, batch);
+      posthog.capture("agent_tasks_batch_approved", {
+        canvas_code: code,
+        requested: batch.length,
+        approved: approved.length,
+      });
+    } catch (err) {
+      setPendingApproved((prev) => {
+        const next = new Set(prev);
+        for (const id of batch) next.delete(id);
+        return next;
+      });
+      setError(err instanceof Error ? err.message : "Could not approve tasks");
+    } finally {
+      setBatchBusy(false);
+    }
+  }
+
+  // Keyboard triage: j/k move the focus cursor through proposed cards, x
+  // toggles selection, a approves the selection (or just the focused card).
+  // No deps array on purpose — re-binding each render keeps the closures fresh.
+  useEffect(() => {
+    if (readOnly) return;
+    function onKey(e: KeyboardEvent) {
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable)) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === "j" || e.key === "k") {
+        if (proposedIds.length === 0) return;
+        e.preventDefault();
+        const idx = focusedId ? proposedIds.indexOf(focusedId) : -1;
+        const next = e.key === "j" ? Math.min(idx + 1, proposedIds.length - 1) : Math.max(idx - 1, 0);
+        setFocusedId(proposedIds[next]);
+      } else if (e.key === "x") {
+        if (!focusedId || !proposedIds.includes(focusedId)) return;
+        e.preventDefault();
+        toggleSelect(focusedId, e.shiftKey);
+      } else if (e.key === "a") {
+        const ids =
+          selected.size > 0
+            ? [...selected]
+            : focusedId && proposedIds.includes(focusedId)
+              ? [focusedId]
+              : [];
+        if (ids.length === 0) return;
+        e.preventDefault();
+        void approveMany(ids);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  // Keep the keyboard cursor visible as j/k walk past the fold.
+  useEffect(() => {
+    if (!focusedId) return;
+    document.querySelector(`[data-task-id="${focusedId}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [focusedId]);
+
   async function run(id: string, fn: () => Promise<void>) {
     setBusyId(id);
     setError(null);
@@ -145,12 +273,20 @@ export default function TasksPanel({
         </div>
       );
     }
-    const editable = !readOnly && (t.state === "proposed" || t.state === "approved");
+    // Optimistic overlay: a card in a fired batch renders as Ready immediately;
+    // the WS broadcast makes it real (or the approveMany error path reverts).
+    const view: Action = pendingApproved.has(t.id) && t.state === "proposed" ? { ...t, state: "approved" } : t;
+    const editable = !readOnly && (view.state === "proposed" || view.state === "approved");
+    const selectable = !readOnly && view.state === "proposed";
     return (
       <TaskCard
         key={t.id}
-        task={t}
+        task={view}
         labelFor={targetLabel}
+        selectable={selectable}
+        selected={selectable && selected.has(t.id)}
+        focused={focusedId === t.id}
+        onToggleSelect={selectable ? (shiftKey) => toggleSelect(t.id, shiftKey) : undefined}
         onEdit={editable ? () => setEditingId(t.id) : undefined}
         onDelete={!readOnly ? () => setDeletingId(t.id) : undefined}
       >
@@ -165,7 +301,7 @@ export default function TasksPanel({
               })
             }
           />
-        ) : t.state === "proposed" && !readOnly ? (
+        ) : view.state === "proposed" && !readOnly ? (
           rejectingId === t.id ? (
             <RejectForm
               busy={busyId === t.id}
@@ -198,7 +334,7 @@ export default function TasksPanel({
               </button>
             </div>
           )
-        ) : t.state === "executing" && !readOnly ? (
+        ) : view.state === "executing" && !readOnly ? (
           // Stuck-claim escape hatch: an executing task whose agent session
           // died goes back to the queue with its claim cleared. Human-only —
           // agents have no tool for this endpoint.
@@ -333,6 +469,25 @@ export default function TasksPanel({
           </div>
         )}
 
+        {/* Bulk triage entry point: with several proposed cards, select them all
+            and approve in one shot. Keyboard: j/k move, x select, a approve. */}
+        {!readOnly && proposedIds.length > 1 && (
+          <div className="mb-2 flex items-center justify-between rounded-lg border border-ink/10 bg-ink/[0.03] px-2.5 py-1.5">
+            <span className="text-[11px] text-ink/50" title="Keyboard: j/k move focus · x select · a approve">
+              {proposedIds.length} awaiting approval
+            </span>
+            <button
+              onClick={() => {
+                setSelected(new Set(proposedIds));
+                lastPickedRef.current = proposedIds[proposedIds.length - 1] ?? null;
+              }}
+              className="text-[11px] font-semibold text-ink/60 transition-colors hover:text-ink"
+            >
+              Select all proposed
+            </button>
+          </div>
+        )}
+
         {tasks.length === 0 && epics.length === 0 && !composing && (
           <p className="px-1 py-2 text-[12px] leading-relaxed text-ink/45">
             No tasks yet. Write one here for an agent session to pick up, or ask your agent to
@@ -359,6 +514,26 @@ export default function TasksPanel({
           {renderTask}
         </Section>
       </div>
+
+      {/* Sticky batch bar: ONE approve-batch request for the whole selection. */}
+      {!readOnly && selected.size > 0 && (
+        <div className="sticky bottom-0 flex items-center gap-1.5 border-t border-ink/10 bg-surface p-2.5">
+          <button
+            onClick={() => void approveMany([...selected])}
+            disabled={batchBusy}
+            title="Approve every selected task in one batch (keyboard: a)"
+            className="flex flex-1 items-center justify-center gap-1 rounded-lg bg-ink px-2 py-1.5 text-xs font-semibold text-paper transition-opacity disabled:opacity-40"
+          >
+            <Check size={13} /> {batchBusy ? "Approving…" : `Approve ${selected.size}`}
+          </button>
+          <button
+            onClick={() => setSelected(new Set())}
+            className="rounded-lg border border-ink/15 px-2.5 py-1.5 text-xs font-medium text-ink/60 transition-colors hover:border-ink/30"
+          >
+            Clear
+          </button>
+        </div>
+      )}
     </>
   );
 }
@@ -443,12 +618,20 @@ function TaskBody({ body }: { body: string }) {
 function TaskCard({
   task,
   labelFor,
+  selectable,
+  selected,
+  focused,
+  onToggleSelect,
   onEdit,
   onDelete,
   children,
 }: {
   task: Action;
   labelFor: Map<string, string>;
+  selectable?: boolean;
+  selected?: boolean;
+  focused?: boolean;
+  onToggleSelect?: (shiftKey: boolean) => void;
   onEdit?: () => void;
   onDelete?: () => void;
   children?: React.ReactNode;
@@ -458,15 +641,37 @@ function TaskCard({
   const terminal = task.state === "done" || task.state === "failed" || task.state === "rejected";
 
   return (
-    <div className="group/task rounded-xl border border-ink/10 bg-surface p-2.5">
+    <div
+      data-task-id={task.id}
+      className={[
+        "group/task rounded-xl border bg-surface p-2.5",
+        selected ? "border-ink/45" : "border-ink/10",
+        focused ? "ring-2 ring-ink/20" : "",
+      ].join(" ")}
+    >
       <div className="flex items-start justify-between gap-2">
-        <span className={`text-[13px] font-semibold leading-snug ${terminal ? "text-ink/55" : "text-ink"}`}>
-          {task.ticketId && (
-            <span className="mr-1.5 font-mono text-[10px] font-medium tracking-tight text-ink/40">
-              {task.ticketId}
-            </span>
+        <span className="flex min-w-0 items-start gap-1.5">
+          {selectable && onToggleSelect && (
+            <button
+              onClick={(e) => onToggleSelect(e.shiftKey)}
+              title={selected ? "Remove from selection" : "Select for batch approval (shift-click selects a range)"}
+              className="mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border"
+              style={{
+                backgroundColor: selected ? "#111111" : "transparent",
+                borderColor: selected ? "#111111" : "rgba(17,17,17,0.25)",
+              }}
+            >
+              {selected && <Check size={10} color="#fff" />}
+            </button>
           )}
-          {p.title || "Untitled task"}
+          <span className={`text-[13px] font-semibold leading-snug ${terminal ? "text-ink/55" : "text-ink"}`}>
+            {task.ticketId && (
+              <span className="mr-1.5 font-mono text-[10px] font-medium tracking-tight text-ink/40">
+                {task.ticketId}
+              </span>
+            )}
+            {p.title || "Untitled task"}
+          </span>
         </span>
         <span className="flex shrink-0 items-center gap-1">
           {onEdit && (

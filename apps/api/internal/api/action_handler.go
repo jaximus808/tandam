@@ -524,6 +524,95 @@ func (h *Handler) ApproveAction(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// POST /api/canvas/actions/approve-batch  — bulk human gate: flip every listed
+// action still in 'proposed' to approved in ONE conditional UPDATE + ONE
+// version bump + ONE broadcast (never N serial round trips — the batch-latency
+// lesson). Ids that don't match (missing, or no longer proposed) come back in
+// `skipped` instead of failing the batch, so a stale panel retry is harmless.
+// Any EPIC that became approved here gets the same post-approve cascade as the
+// single-approve path: under the 'epic'/'auto' policies its proposed tasks are
+// batch-approved (ApproveEpicTasks, which itself skips requiresApproval:true);
+// under 'strict' every task keeps its own gate.
+func (h *Handler) ApproveActionsBatch(w http.ResponseWriter, r *http.Request) {
+	canvasID := CanvasIDFromCtx(r.Context())
+	var body struct {
+		IDs        []uuid.UUID `json:"ids"`
+		ApprovedBy string      `json:"approvedBy"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(body.IDs) == 0 {
+		writeError(w, http.StatusBadRequest, "ids: at least one action id is required")
+		return
+	}
+	if body.ApprovedBy == "" {
+		body.ApprovedBy = "human"
+	}
+	rows, err := h.store.ApproveActionsBatch(r.Context(), canvasID, body.IDs, body.ApprovedBy)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	approvedSet := make(map[uuid.UUID]bool, len(rows))
+	approved := make([]uuid.UUID, 0, len(rows))
+	for _, a := range rows {
+		approvedSet[a.ID] = true
+		approved = append(approved, a.ID)
+	}
+	// skipped = requested ids that didn't flip (not found or not proposed),
+	// deduped so a repeated id doesn't report twice.
+	skipped := make([]uuid.UUID, 0)
+	seen := make(map[uuid.UUID]bool, len(body.IDs))
+	for _, id := range body.IDs {
+		if !approvedSet[id] && !seen[id] {
+			seen[id] = true
+			skipped = append(skipped, id)
+		}
+	}
+	if len(approved) > 0 {
+		broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"approved": approved, "skipped": skipped})
+
+	// Post-approve epic cascade — the response is already written; this is
+	// follow-up work, detached from the request context like ApproveAction's.
+	var epics []*store.Action
+	for _, a := range rows {
+		if a.Type == "epic" {
+			epics = append(epics, a)
+		}
+	}
+	if len(epics) == 0 {
+		return
+	}
+	ctx := context.WithoutCancel(r.Context())
+	// Policy check mirrors ApproveAction: under 'strict' approving an epic is
+	// bookkeeping — its tasks keep their individual gates. Unreadable policy
+	// fails closed (cascade skipped).
+	canvas, err := h.store.GetCanvasByID(ctx, canvasID)
+	if err != nil || canvas.ApprovalPolicy == "strict" {
+		if err != nil {
+			log.Printf("approve-batch: reading approval policy (epic cascade skipped): %v", err)
+		}
+		return
+	}
+	total := 0
+	for _, epic := range epics {
+		n, err := h.store.ApproveEpicTasks(ctx, canvasID, epic.ID, "policy:epic")
+		if err != nil {
+			log.Printf("approve-batch epic %s: batch-approving its tasks: %v", epic.ID, err)
+			continue
+		}
+		total += n
+	}
+	// One extra broadcast for the whole cascade, only if any task flipped.
+	if total > 0 {
+		broadcastStateAsync(ctx, h.store, h.hub, canvasID)
+	}
+}
+
 // POST /api/canvas/actions/{id}/reject  — human gate: proposed → rejected.
 func (h *Handler) RejectAction(w http.ResponseWriter, r *http.Request) {
 	var body struct {

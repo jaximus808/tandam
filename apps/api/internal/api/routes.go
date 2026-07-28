@@ -234,6 +234,7 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 			r.Post("/api/canvas/actions", h.ProposeAction)
 			r.Post("/api/canvas/actions/batch", h.ProposeActionsBatch)
 			r.Post("/api/canvas/actions/batch-delete", h.DeleteActionsBatch)
+			r.Post("/api/canvas/actions/approve-batch", h.ApproveActionsBatch)
 			r.Post("/api/canvas/actions/{id}/approve", h.ApproveAction)
 			r.Post("/api/canvas/actions/{id}/reject", h.RejectAction)
 			// Stuck-claim release (executing → approved). Human-only by surface:
