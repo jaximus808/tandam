@@ -475,11 +475,9 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
               className="tandem-rise mt-7 text-[1.05rem] leading-relaxed text-ink/65"
               style={{ animationDelay: "120ms" }}
             >
-              You already run several agent sessions at once. Coordinating them through a TODO.md
-              they all fight over is the part that breaks. Tandem is the shared state layer
-              instead: a durable task queue every session claims from, approval you grant once per
-              epic, and a live board of who's doing what. The spec stays in git; the churn moves
-              here.
+              A shared task queue for parallel agent sessions. Every session claims its own work,
+              you approve once per epic, and a live board shows who's doing what. The spec stays
+              in git — the churn moves here.
             </p>
 
             {/* Primary actions — the create / join forms live in the launcher modal.

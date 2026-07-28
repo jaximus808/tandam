@@ -40,12 +40,12 @@ interface TermLine {
 // Terminal A — session-A. Wins the contested claim.
 const LINES_A: TermLine[] = [
   { start: 500, kind: "cmd", text: "canvas_task_start TDM-7", dur: 900 },
-  { start: 1_600, kind: "ok", text: '{ claimed: true, ticketId: "TDM-7" }' },
+  { start: 1_600, kind: "ok", text: '{ claimed: true }  # TDM-7' },
   { start: 2_100, kind: "dim", text: "→ working: ticket prefix check" },
   { start: 6_200, kind: "cmd", text: "canvas_task_complete TDM-7", dur: 900 },
   { start: 7_400, kind: "ok", text: "✓ done · TDM-7: prefix check · a3f8c21" },
   { start: 8_300, kind: "cmd", text: "canvas_task_start TDM-9", dur: 900 },
-  { start: 9_400, kind: "ok", text: '{ claimed: true, ticketId: "TDM-9" }' },
+  { start: 9_400, kind: "ok", text: '{ claimed: true }  # TDM-9' },
   { start: 13_900, kind: "cmd", text: "canvas_task_complete TDM-9", dur: 950 },
   { start: 15_000, kind: "ok", text: "✓ done · TDM-9: claim age · c76d1b4" },
   { start: 17_600, kind: "dim", text: "queue empty — 4/4 done" },
@@ -56,14 +56,15 @@ const LINES_A: TermLine[] = [
 // tools.ts → `already claimed by "session-A"`).
 const LINES_B: TermLine[] = [
   { start: 1_200, kind: "cmd", text: "canvas_task_start TDM-7", dur: 900 },
-  { start: 2_700, kind: "warn", text: 'claimed: false — already claimed by "session-A"' },
+  { start: 2_700, kind: "warn", text: "claimed: false" },
+  { start: 2_750, kind: "warn", text: '→ already claimed by "session-A"' },
   { start: 3_800, kind: "dim", text: "→ claiming TDM-8 instead" },
   { start: 4_700, kind: "cmd", text: "canvas_task_start TDM-8", dur: 900 },
-  { start: 5_800, kind: "ok", text: '{ claimed: true, ticketId: "TDM-8" }' },
+  { start: 5_800, kind: "ok", text: '{ claimed: true }  # TDM-8' },
   { start: 10_300, kind: "cmd", text: "canvas_task_complete TDM-8", dur: 950 },
   { start: 11_500, kind: "ok", text: "✓ done · TDM-8: queue sort · 9d41e07" },
   { start: 12_300, kind: "cmd", text: "canvas_task_start TDM-10", dur: 950 },
-  { start: 13_400, kind: "ok", text: '{ claimed: true, ticketId: "TDM-10" }' },
+  { start: 13_400, kind: "ok", text: '{ claimed: true }  # TDM-10' },
   { start: 15_700, kind: "cmd", text: "canvas_task_complete TDM-10", dur: 950 },
   { start: 16_900, kind: "ok", text: "✓ done · TDM-10: sort tests · 5b2fa9c" },
 ];
@@ -182,7 +183,7 @@ function TerminalPane({
               : l.text;
           const isTypingLine = typing && l === last;
           return (
-            <div key={l.start} className={`whitespace-pre ${LINE_CLS[l.kind]}`}>
+            <div key={l.start} className={`whitespace-pre-wrap break-words ${LINE_CLS[l.kind]}`}>
               {isCmd && <span className="text-teal-400">❯ </span>}
               {shown}
               {isTypingLine && animate && (
@@ -236,14 +237,15 @@ function BoardCard({
           : "border-ink/10",
       ].join(" ")}
     >
-      <div className="flex items-baseline gap-1.5">
-        <span className="shrink-0 font-code text-[9.5px] font-medium tracking-tight text-ink/40">
+      <div className="min-w-0">
+        <span className="block font-code text-[9.5px] font-medium tracking-tight text-ink/40">
           {task.id}
         </span>
         <span
-          className={`min-w-0 truncate text-[11.5px] font-semibold leading-snug ${
+          className={`mt-0.5 block text-[11px] font-semibold leading-snug ${
             state === "done" ? "text-ink/50" : "text-ink"
           }`}
+          style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}
         >
           {task.title}
         </span>
@@ -279,7 +281,7 @@ function BoardPane({ t, animate }: { t: number; animate: boolean }) {
           {activeSessions.map((s) => (
             <span
               key={s.name}
-              className="hero-demo-card-in inline-flex items-center gap-1 rounded-[4px] border border-agent/25 bg-agent/10 px-1.5 py-px font-code text-[9.5px] font-medium text-agent"
+              className="hero-demo-card-in inline-flex items-center gap-1 whitespace-nowrap rounded-[4px] border border-agent/25 bg-agent/10 px-1.5 py-px font-code text-[9.5px] font-medium text-agent"
             >
               <span className="h-1.5 w-1.5 rounded-[2px] bg-agent" />
               {s.name}
