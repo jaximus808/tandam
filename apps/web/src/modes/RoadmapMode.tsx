@@ -41,9 +41,6 @@ import type {
 import { sendOp } from "../lib/ws";
 import { createEpic, createTask } from "../lib/api";
 import EmptyState from "../components/EmptyState";
-import { modeTheme } from "../lib/modeTheme";
-
-const ACCENT = modeTheme("roadmap");
 
 const INDENT_PX = 20;
 
@@ -142,8 +139,8 @@ function PhaseNameDialog({
   }
   return (
     <div className="fixed inset-0 z-[2000] flex items-start justify-center pt-[18vh]" role="dialog" aria-modal="true">
-      <div className="absolute inset-0 bg-ink/25 backdrop-blur-[1px]" onClick={onClose} />
-      <div className="relative w-[340px] max-w-[92vw] rounded-2xl border border-ink/10 bg-surface p-4 shadow-[4px_6px_0_rgba(17,17,17,0.08)]">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+      <div className="relative w-[340px] max-w-[92vw] rounded-[10px] border border-ink/10 bg-surface p-4 shadow-lg">
         <h3 className="text-sm font-semibold text-ink">{title}</h3>
         <input
           autoFocus
@@ -154,21 +151,20 @@ function PhaseNameDialog({
             if (e.key === "Escape") onClose();
           }}
           placeholder="e.g. Now, Next, Later, v1, v2"
-          className="mt-2.5 w-full rounded-lg border border-ink/15 bg-surface px-2.5 py-1.5 text-sm text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
+          className="mt-2.5 w-full rounded-md border border-ink/15 bg-surface px-2.5 py-1.5 text-sm text-ink outline-none placeholder:text-ink/30 focus:border-accent/60 focus:ring-2 focus:ring-accent/20"
         />
         {hint && <p className="mt-1.5 text-[11px] leading-snug text-ink/40">{hint}</p>}
         <div className="mt-3 flex justify-end gap-1.5">
           <button
             onClick={onClose}
-            className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm font-medium text-ink/60 hover:border-ink/30"
+            className="rounded-md border border-ink/15 bg-surface px-3 py-1.5 text-sm font-medium text-ink/60 hover:bg-ink/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           >
             Cancel
           </button>
           <button
             onClick={submit}
             disabled={!canSubmit}
-            className="rounded-lg px-3.5 py-1.5 text-sm font-semibold text-white transition-opacity disabled:opacity-40"
-            style={{ backgroundColor: ACCENT.solid }}
+            className="rounded-md bg-accent px-3.5 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40"
           >
             {submitLabel}
           </button>
@@ -490,14 +486,13 @@ export default function RoadmapMode({ state, code, readOnly, onOpenBoardForEpic 
       <div className="shrink-0 max-w-5xl mx-auto w-full px-4 pt-6 pb-3 sm:px-6">
         <div className="flex items-center justify-between gap-2 mb-3">
           <div className="flex min-w-0 items-center gap-2 sm:gap-3">
-            <h1 className="font-display text-xl font-medium tracking-tight text-ink">Roadmap</h1>
+            <h1 className="text-xl font-semibold tracking-tight text-ink">Roadmap</h1>
             <ViewToggle view={view} onChange={setView} />
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
             <button
               onClick={() => setAddPhaseOpen(true)}
-              className="whitespace-nowrap text-sm px-3 py-1.5 rounded-lg font-medium border transition-colors"
-              style={{ color: ACCENT.hover, borderColor: ACCENT.line, backgroundColor: ACCENT.soft }}
+              className="whitespace-nowrap rounded-md border border-ink/15 bg-surface px-3 py-1.5 text-sm font-medium text-ink/70 transition-colors hover:bg-ink/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
               title="Create a new phase (e.g. Now, Next, Later, v1, v2)"
             >
               + Phase
@@ -513,15 +508,14 @@ export default function RoadmapMode({ state, code, readOnly, onOpenBoardForEpic 
             )}
             <button
               onClick={handleAddRoot}
-              className="whitespace-nowrap text-sm px-3.5 py-1.5 rounded-lg text-white font-medium shadow-sm transition-opacity hover:opacity-90"
-              style={{ backgroundColor: ACCENT.solid }}
+              className="whitespace-nowrap rounded-md bg-accent px-3.5 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
             >
               + New item
             </button>
           </div>
         </div>
 
-        <div className="flex items-center flex-wrap gap-x-4 gap-y-1 px-2 py-1.5 text-xs text-ink/55 bg-ink/10 rounded-md border border-ink/15">
+        <div className="flex items-center flex-wrap gap-x-4 gap-y-1 px-2 py-1.5 text-xs text-ink/55 bg-ink/5 rounded-md border border-ink/10">
           <span className="font-medium text-ink/60">Legend:</span>
           {STATUS_CYCLE.map((s) => (
             <span key={s} className="inline-flex items-center gap-1.5">
@@ -628,15 +622,14 @@ function ViewToggle({
   onChange: (v: "list" | "board") => void;
 }) {
   return (
-    <div className="inline-flex rounded-lg border border-ink/20 overflow-hidden text-xs font-medium">
+    <div className="inline-flex rounded-md border border-ink/15 overflow-hidden text-xs font-medium">
       {(["board", "list"] as const).map((v) => (
         <button
           key={v}
           onClick={() => onChange(v)}
-          className={`px-2.5 py-1 capitalize transition-colors ${
-            view === v ? "text-white" : "bg-surface text-ink/60 hover:bg-ink/5"
+          className={`px-2.5 py-1 capitalize transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${
+            view === v ? "bg-accent text-white" : "bg-surface text-ink/60 hover:bg-ink/5"
           }`}
-          style={view === v ? { backgroundColor: ACCENT.solid } : undefined}
         >
           {v}
         </button>
@@ -846,7 +839,7 @@ function Row({
             }
           }}
           placeholder="Untitled item"
-          className="flex-1 text-sm text-ink bg-transparent focus:outline-none border-b border-blue-300"
+          className="flex-1 text-sm text-ink bg-transparent focus:outline-none border-b border-accent/40"
         />
       ) : (
         <span
@@ -866,10 +859,9 @@ function Row({
           onClick={() => setPhaseOpen(true)}
           className={`shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded transition-colors ${
             item.stage?.trim()
-              ? ""
+              ? "bg-accent/10 text-accent"
               : "opacity-0 group-hover:opacity-100 border border-dashed border-ink/20 text-ink/40 hover:text-ink/70"
           }`}
-          style={item.stage?.trim() ? { backgroundColor: ACCENT.soft, color: ACCENT.hover } : undefined}
           title="Set the phase for this goal"
         >
           {item.stage?.trim() ? item.stage : "+ phase"}
@@ -889,14 +881,14 @@ function Row({
       <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
         <button
           onClick={onAddChild}
-          className="text-xs text-ink/55 hover:text-blue-600 px-1.5 py-0.5 rounded hover:bg-blue-500/10"
+          className="text-xs text-ink/55 hover:text-accent px-1.5 py-0.5 rounded hover:bg-accent/10"
           title="Add child item"
         >
           + child
         </button>
         <button
           onClick={handleDelete}
-          className="text-ink/40 hover:text-red-600 px-1.5 py-0.5 rounded hover:bg-red-500/10"
+          className="text-ink/40 hover:text-rose-600 dark:hover:text-rose-400 px-1.5 py-0.5 rounded hover:bg-rose-500/10"
           title="Delete item"
         >
           <svg width="12" height="12" viewBox="0 0 12 12">
@@ -915,11 +907,13 @@ function Row({
 // horizontal axis is used by the (few) top-level goals while tasks stack down.
 // A second view over the same roadmap items — no schema change.
 
+// Status fills stay inside the closed semantic hue set (working violet,
+// done emerald, failed/blocked rose) — no hues outside it.
 const STATUS_ACCENT: Record<RoadmapStatus, string> = {
   todo: "bg-ink/20",
-  in_progress: "bg-blue-400",
-  done: "bg-green-400",
-  blocked: "bg-red-400",
+  in_progress: "bg-violet-500",
+  done: "bg-emerald-500",
+  blocked: "bg-rose-500",
 };
 
 function childIndex(items: Record<string, RoadmapItem>): Map<string | null, RoadmapItem[]> {
@@ -999,18 +993,16 @@ function RoadmapBoard({ items }: { items: Record<string, RoadmapItem> }) {
           <section key={g.stage ?? "__none__"}>
             <div className="flex items-center gap-2 mb-2">
               <h2
-                className="text-xs font-semibold uppercase tracking-wider"
-                style={{ color: g.stage ? ACCENT.solid : "rgb(var(--color-ink) / 0.4)" }}
+                className={`text-xs font-medium uppercase tracking-wide ${
+                  g.stage ? "text-ink/60" : "text-ink/40"
+                }`}
               >
                 {g.stage ?? "No stage"}
               </h2>
               <span className="text-[11px] text-ink/40">
                 {g.roots.length} {g.roots.length === 1 ? "goal" : "goals"}
               </span>
-              <span
-                className="flex-1 h-px"
-                style={{ backgroundColor: g.stage ? ACCENT.line : "rgb(var(--color-ink) / 0.12)" }}
-              />
+              <span className="flex-1 h-px bg-ink/10" />
             </div>
             <div className="tandem-scroll flex gap-4 overflow-x-auto pb-1 items-start">
               {g.roots.map((root) => (
@@ -1053,8 +1045,11 @@ function StageSelect({ item, stages }: { item: RoadmapItem; stages: string[] }) 
         value={current}
         onChange={onChange}
         title="Phase / stage for this goal"
-        className="max-w-full text-[11px] rounded border border-ink/15 bg-ink/5 px-1.5 py-0.5 text-ink/60 hover:border-ink/20 focus:outline-none"
-        style={current ? { color: ACCENT.hover, borderColor: ACCENT.line } : undefined}
+        className={`max-w-full text-[11px] rounded border px-1.5 py-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+          current
+            ? "border-accent/30 bg-accent/5 text-accent"
+            : "border-ink/15 bg-ink/5 text-ink/60 hover:border-ink/20"
+        }`}
       >
         <option value="">No stage</option>
         {options.map((s) => (
@@ -1121,7 +1116,7 @@ function RoadmapColumn({
   return (
     <div
       data-agent-target={root.id}
-      className={`w-72 shrink-0 flex flex-col rounded-xl border border-ink/15 bg-surface shadow-sm overflow-hidden ${
+      className={`w-72 shrink-0 flex flex-col rounded-lg border border-ink/10 bg-surface shadow-sm overflow-hidden ${
         compact ? "max-h-[26rem]" : "max-h-full"
       }`}
     >
@@ -1142,7 +1137,7 @@ function RoadmapColumn({
               onClick={deleteGoal}
               title="Delete goal"
               aria-label="Delete goal"
-              className="opacity-0 group-hover:opacity-100 text-ink/30 hover:text-red-600 transition-opacity"
+              className="opacity-0 group-hover:opacity-100 text-ink/30 hover:text-rose-600 dark:hover:text-rose-400 transition-opacity"
             >
               <svg width="12" height="12" viewBox="0 0 12 12">
                 <path d="M3 3 L 9 9 M 9 3 L 3 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
@@ -1214,7 +1209,7 @@ function BoardRow({
           onClick={addChild}
           title="Add sub-item"
           aria-label="Add sub-item"
-          className="rounded px-1 text-xs text-ink/40 hover:bg-blue-500/10 hover:text-blue-600"
+          className="rounded px-1 text-xs text-ink/40 hover:bg-accent/10 hover:text-accent"
         >
           +
         </button>
@@ -1222,7 +1217,7 @@ function BoardRow({
           onClick={del}
           title="Delete item"
           aria-label="Delete item"
-          className="rounded px-0.5 text-ink/40 hover:bg-red-500/10 hover:text-red-600"
+          className="rounded px-0.5 text-ink/40 hover:bg-rose-500/10 hover:text-rose-600 dark:hover:text-rose-400"
         >
           <svg width="11" height="11" viewBox="0 0 12 12">
             <path d="M3 3 L 9 9 M 9 3 L 3 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
@@ -1244,7 +1239,7 @@ function ProgressBar({ done, total }: { done: number; total: number }) {
         <span className="tabular-nums">{pct}%</span>
       </div>
       <div className="h-1 rounded-full bg-ink/10 overflow-hidden">
-        <div className="h-full bg-green-400 transition-all" style={{ width: `${pct}%` }} />
+        <div className="h-full bg-emerald-500 transition-all" style={{ width: `${pct}%` }} />
       </div>
     </div>
   );
@@ -1288,7 +1283,7 @@ function AgentTaskToggle({ item, size = "sm" }: { item: RoadmapItem; size?: "sm"
       onClick={toggle}
       className={`shrink-0 inline-flex items-center gap-1 font-medium rounded transition-colors ${pad} ${
         isAgent
-          ? "bg-sky-500/10 text-sky-600"
+          ? "bg-sky-500/10 text-sky-600 dark:text-sky-400"
           : "opacity-0 group-hover:opacity-100 border border-dashed border-ink/20 text-ink/40 hover:text-ink/70"
       }`}
       title={isAgent ? "Agent task — click to unmark" : "Mark as an agent task"}
@@ -1324,7 +1319,7 @@ function AgentControls({ item, size = "sm" }: { item: RoadmapItem; size?: "sm" |
         <>
           {tasked ? (
             <span
-              className="inline-flex shrink-0 items-center gap-1 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600"
+              className="inline-flex shrink-0 items-center gap-1 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400"
               title={`${linked.length} agent task${linked.length > 1 ? "s" : ""} linked — open the Tasks panel to see ${linked.length > 1 ? "them" : "it"}`}
             >
               <Check size={icon} />
@@ -1336,7 +1331,7 @@ function AgentControls({ item, size = "sm" }: { item: RoadmapItem; size?: "sm" |
                 e.stopPropagation();
                 ctx.openCreateTask(item);
               }}
-              className="inline-flex shrink-0 items-center gap-1 rounded border border-dashed border-sky-300 px-1.5 py-0.5 text-[10px] font-medium text-sky-600 transition-colors hover:bg-sky-500/10 hover:text-sky-700"
+              className="inline-flex shrink-0 items-center gap-1 rounded border border-dashed border-sky-600/40 px-1.5 py-0.5 text-[10px] font-medium text-sky-600 transition-colors hover:bg-sky-500/10 dark:border-sky-400/40 dark:text-sky-400"
               title="Create an agent task from this item — born ready, no approval needed"
             >
               <Plus size={icon} />
@@ -1398,8 +1393,8 @@ function EpicChips({
 // Gate-state tag shown on a chip while the epic is NOT approved yet. Approved
 // is the steady state, so it stays untagged; anything else is worth a flag.
 const EPIC_STATE_TAG: Record<string, string> = {
-  proposed: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
-  rejected: "bg-rose-500/15 text-rose-600 dark:text-rose-400",
+  proposed: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+  rejected: "bg-rose-500/10 text-rose-600 dark:text-rose-400",
 };
 
 // One epic chip: Layers glyph + truncated title + mini n/m-done progress bar.
@@ -1427,19 +1422,19 @@ function EpicChip({
         aria-hidden
         className="h-[3px] w-7 shrink-0 overflow-hidden rounded-full bg-ink/10"
       >
-        <span className="block h-full bg-green-400 transition-all" style={{ width: `${pct}%` }} />
+        <span className="block h-full bg-emerald-500 transition-all" style={{ width: `${pct}%` }} />
       </span>
       <span className="shrink-0 tabular-nums text-ink/45">
         {epic.done}/{epic.total}
       </span>
       {epic.finished ? (
-        <span className="shrink-0 rounded-[3px] bg-emerald-500/15 px-1 text-[8px] font-semibold uppercase tracking-[0.06em] text-emerald-700 dark:text-emerald-400">
+        <span className="shrink-0 rounded-[3px] bg-emerald-500/10 px-1 text-[8px] font-medium uppercase tracking-wide text-emerald-600 dark:text-emerald-400">
           done
         </span>
       ) : (
         epic.state !== "approved" && (
           <span
-            className={`shrink-0 rounded-[3px] px-1 text-[8px] font-semibold uppercase tracking-[0.06em] ${
+            className={`shrink-0 rounded-[3px] px-1 text-[8px] font-medium uppercase tracking-wide ${
               EPIC_STATE_TAG[epic.state] ?? EPIC_STATE_TAG.proposed
             }`}
           >
@@ -1513,10 +1508,10 @@ function CreateTaskDialog({
       role="dialog"
       aria-modal="true"
     >
-      <div className="absolute inset-0 bg-ink/25 backdrop-blur-[1px]" onClick={onClose} />
-      <div className="relative w-[440px] max-w-[92vw] rounded-2xl border border-ink/10 bg-surface p-4 shadow-[4px_6px_0_rgba(17,17,17,0.08)]">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+      <div className="relative w-[440px] max-w-[92vw] rounded-[10px] border border-ink/10 bg-surface p-4 shadow-lg">
         <div className="flex items-center gap-2">
-          <Bot size={15} style={{ color: ACCENT.solid }} />
+          <Bot size={15} className="text-accent" />
           <h3 className="text-sm font-semibold text-ink">Create agent task</h3>
         </div>
         <p className="mt-1 text-[11px] leading-snug text-ink/45">
@@ -1531,14 +1526,14 @@ function CreateTaskDialog({
             if (e.key === "Escape") onClose();
           }}
           placeholder="What should the agent do?"
-          className="mt-2.5 w-full rounded-lg border border-ink/15 bg-surface px-2.5 py-1.5 text-sm text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
+          className="mt-2.5 w-full rounded-md border border-ink/15 bg-surface px-2.5 py-1.5 text-sm text-ink outline-none placeholder:text-ink/30 focus:border-accent/60 focus:ring-2 focus:ring-accent/20"
         />
         <textarea
           value={body}
           onChange={(e) => setBody(e.target.value)}
           placeholder="Brief: what, why, acceptance criteria (optional)"
           rows={4}
-          className="mt-2 w-full resize-none rounded-lg border border-ink/15 bg-surface px-2.5 py-1.5 text-[13px] text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
+          className="mt-2 w-full resize-none rounded-md border border-ink/15 bg-surface px-2.5 py-1.5 text-[13px] text-ink outline-none placeholder:text-ink/30 focus:border-accent/60 focus:ring-2 focus:ring-accent/20"
         />
         <div className="mt-2 inline-flex max-w-full items-center gap-1 rounded-[4px] border border-ink/10 bg-ink/[0.03] px-1.5 py-0.5 text-[10px] text-ink/50">
           <Link2 size={10} className="shrink-0" />
@@ -1548,15 +1543,14 @@ function CreateTaskDialog({
         <div className="mt-3 flex justify-end gap-1.5">
           <button
             onClick={onClose}
-            className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm font-medium text-ink/60 hover:border-ink/30"
+            className="rounded-md border border-ink/15 bg-surface px-3 py-1.5 text-sm font-medium text-ink/60 hover:bg-ink/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           >
             Cancel
           </button>
           <button
             onClick={submit}
             disabled={!title.trim() || saving}
-            className="rounded-lg px-3.5 py-1.5 text-sm font-semibold text-white transition-opacity disabled:opacity-40"
-            style={{ backgroundColor: ACCENT.solid }}
+            className="rounded-md bg-accent px-3.5 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40"
           >
             {saving ? "Creating…" : "Create task"}
           </button>
@@ -1610,10 +1604,10 @@ function CreateEpicDialog({
       role="dialog"
       aria-modal="true"
     >
-      <div className="absolute inset-0 bg-ink/25 backdrop-blur-[1px]" onClick={onClose} />
-      <div className="relative w-[440px] max-w-[92vw] rounded-2xl border border-ink/10 bg-surface p-4 shadow-[4px_6px_0_rgba(17,17,17,0.08)]">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+      <div className="relative w-[440px] max-w-[92vw] rounded-[10px] border border-ink/10 bg-surface p-4 shadow-lg">
         <div className="flex items-center gap-2">
-          <Layers size={15} style={{ color: ACCENT.solid }} />
+          <Layers size={15} className="text-accent" />
           <h3 className="text-sm font-semibold text-ink">Create epic from this</h3>
         </div>
         <p className="mt-1 text-[11px] leading-snug text-ink/45">
@@ -1629,14 +1623,14 @@ function CreateEpicDialog({
             if (e.key === "Escape") onClose();
           }}
           placeholder="Name the batch of work"
-          className="mt-2.5 w-full rounded-lg border border-ink/15 bg-surface px-2.5 py-1.5 text-sm text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
+          className="mt-2.5 w-full rounded-md border border-ink/15 bg-surface px-2.5 py-1.5 text-sm text-ink outline-none placeholder:text-ink/30 focus:border-accent/60 focus:ring-2 focus:ring-accent/20"
         />
         <textarea
           value={body}
           onChange={(e) => setBody(e.target.value)}
           placeholder="Scope: what belongs in this batch, what done looks like (optional)"
           rows={4}
-          className="mt-2 w-full resize-none rounded-lg border border-ink/15 bg-surface px-2.5 py-1.5 text-[13px] text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
+          className="mt-2 w-full resize-none rounded-md border border-ink/15 bg-surface px-2.5 py-1.5 text-[13px] text-ink outline-none placeholder:text-ink/30 focus:border-accent/60 focus:ring-2 focus:ring-accent/20"
         />
         <div className="mt-2 inline-flex max-w-full items-center gap-1 rounded-[4px] border border-ink/10 bg-ink/[0.03] px-1.5 py-0.5 text-[10px] text-ink/50">
           <Link2 size={10} className="shrink-0" />
@@ -1646,15 +1640,14 @@ function CreateEpicDialog({
         <div className="mt-3 flex justify-end gap-1.5">
           <button
             onClick={onClose}
-            className="rounded-lg border border-ink/15 px-3 py-1.5 text-sm font-medium text-ink/60 hover:border-ink/30"
+            className="rounded-md border border-ink/15 bg-surface px-3 py-1.5 text-sm font-medium text-ink/60 hover:bg-ink/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           >
             Cancel
           </button>
           <button
             onClick={submit}
             disabled={!title.trim() || saving}
-            className="rounded-lg px-3.5 py-1.5 text-sm font-semibold text-white transition-opacity disabled:opacity-40"
-            style={{ backgroundColor: ACCENT.solid }}
+            className="rounded-md bg-accent px-3.5 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40"
           >
             {saving ? "Creating…" : "Create epic"}
           </button>
@@ -1806,7 +1799,7 @@ function SectionHeader({
 }) {
   const [renameOpen, setRenameOpen] = useState(false);
   return (
-    <div className="group/hdr sticky top-0 z-[1] -mx-1 mb-0.5 mt-3 flex items-center gap-2 bg-paper/95 px-1 py-1 backdrop-blur first:mt-0">
+    <div className="group/hdr sticky top-0 z-[1] -mx-1 mb-0.5 mt-3 flex items-center gap-2 bg-paper px-1 py-1 first:mt-0">
       {renameOpen && stage !== null && onRename && (
         <PhaseNameDialog
           title="Rename phase"
@@ -1822,8 +1815,9 @@ function SectionHeader({
       <button
         onClick={() => setRenameOpen(true)}
         disabled={!onRename}
-        className={`text-xs font-semibold uppercase tracking-wider ${onRename ? "hover:underline" : "cursor-default"}`}
-        style={{ color: stage ? ACCENT.solid : "rgb(var(--color-ink) / 0.4)" }}
+        className={`text-xs font-medium uppercase tracking-wide ${
+          stage ? "text-ink/60" : "text-ink/40"
+        } ${onRename ? "hover:underline" : "cursor-default"}`}
         title={onRename ? "Rename phase" : undefined}
       >
         {stage ?? "No phase"}
@@ -1831,10 +1825,7 @@ function SectionHeader({
       <span className="text-[11px] text-ink/40">
         {count} {count === 1 ? "goal" : "goals"}
       </span>
-      <span
-        className="h-px flex-1"
-        style={{ backgroundColor: stage ? ACCENT.line : "rgb(var(--color-ink) / 0.12)" }}
-      />
+      <span className="h-px flex-1 bg-ink/10" />
       <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover/hdr:opacity-100">
         <button
           onClick={onAddGoal}
@@ -1917,20 +1908,20 @@ function StatusIcon({ status }: { status: RoadmapStatus }) {
     case "todo":
       return (
         <svg width="16" height="16" viewBox="0 0 16 16" aria-label="Todo">
-          <circle cx="8" cy="8" r="6" fill="none" stroke="#9ca3af" strokeWidth="1.5" />
+          <circle cx="8" cy="8" r="6" fill="none" stroke="#A1A1AA" strokeWidth="1.5" />
         </svg>
       );
     case "in_progress":
       return (
         <svg width="16" height="16" viewBox="0 0 16 16" aria-label="In progress">
-          <circle cx="8" cy="8" r="6" fill="none" stroke="#3b82f6" strokeWidth="1.5" />
-          <path d="M 8 2 A 6 6 0 0 1 8 14 Z" fill="#3b82f6" />
+          <circle cx="8" cy="8" r="6" fill="none" stroke="#8B5CF6" strokeWidth="1.5" />
+          <path d="M 8 2 A 6 6 0 0 1 8 14 Z" fill="#8B5CF6" />
         </svg>
       );
     case "done":
       return (
         <svg width="16" height="16" viewBox="0 0 16 16" aria-label="Done">
-          <circle cx="8" cy="8" r="7" fill="#22c55e" />
+          <circle cx="8" cy="8" r="7" fill="#10B981" />
           <path
             d="M 4.5 8 L 7 10.4 L 11.5 5.6"
             fill="none"
@@ -1944,7 +1935,7 @@ function StatusIcon({ status }: { status: RoadmapStatus }) {
     case "blocked":
       return (
         <svg width="16" height="16" viewBox="0 0 16 16" aria-label="Blocked">
-          <circle cx="8" cy="8" r="7" fill="#ef4444" />
+          <circle cx="8" cy="8" r="7" fill="#F43F5E" />
           <path
             d="M 5.5 5.5 L 10.5 10.5 M 10.5 5.5 L 5.5 10.5"
             stroke="white"

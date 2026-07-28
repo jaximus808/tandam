@@ -26,7 +26,6 @@ import { imageUrl } from "../lib/api";
 import { sendOp } from "../lib/ws";
 import { htmlToMarkdown } from "../lib/paste";
 import EmptyState from "../components/EmptyState";
-import { modeTheme } from "../lib/modeTheme";
 import { noteTitle, sortNotes } from "../lib/docOutline";
 
 interface Props {
@@ -42,8 +41,6 @@ const MIN_NOTES_FOR_OUTLINE = 2;
 // How long a jumped-to note stays ringed. Long enough to catch the eye after the
 // smooth scroll settles, short enough not to linger as decoration.
 const HIGHLIGHT_MS = 1400;
-
-const ACCENT = modeTheme("docs");
 
 const MARKDOWN_PLUGINS = [remarkGfm];
 
@@ -157,11 +154,10 @@ export default function DocsMode({ canvasId, state, readOnly }: Props) {
 
         <div className="mx-auto w-full min-w-0 max-w-3xl">
           <div className="flex items-center justify-between mb-4">
-            <h1 className="font-display text-xl font-medium tracking-tight text-ink">Docs</h1>
+            <h1 className="text-xl font-semibold tracking-tight text-ink">Docs</h1>
             <button
               onClick={handleAddNote}
-              className="text-sm px-3.5 py-1.5 rounded-lg text-white font-medium shadow-sm transition-opacity hover:opacity-90"
-              style={{ backgroundColor: ACCENT.solid }}
+              className="rounded-md bg-accent px-3.5 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
             >
               + New note
             </button>
@@ -236,7 +232,7 @@ function Outline({
   return (
     <aside className="hidden w-52 shrink-0 lg:block">
       <div className="sticky top-6">
-        <div className="mb-2 px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink/40">
+        <div className="mb-2 px-2 text-xs font-medium uppercase tracking-wide text-ink/50">
           Outline · {notes.length}
         </div>
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
@@ -290,20 +286,20 @@ function OutlineRow({
       onClick={() => onJump(note.id)}
       title={title}
       className={[
-        "group/row flex cursor-pointer items-center gap-1 rounded-lg py-1.5 pl-1 pr-1 text-[13px] transition-colors",
-        isActive ? "font-medium text-ink" : "text-ink/60 hover:bg-ink/[0.04]",
+        "group/row flex cursor-pointer items-center gap-1 rounded-md py-1.5 pl-1 pr-1 text-[13px] transition-colors",
+        isActive ? "bg-accent/10 font-medium text-ink" : "text-ink/60 hover:bg-ink/[0.04]",
       ].join(" ")}
       style={{
         transform: CSS.Transform.toString(transform),
         transition,
         opacity: isDragging ? 0.4 : 1,
-        backgroundColor: isActive ? ACCENT.soft : undefined,
       }}
     >
       {!readOnly && <OutlineDragHandle attributes={attributes} listeners={listeners} />}
       <span
-        className="h-1.5 w-1.5 shrink-0 rounded-full transition-colors"
-        style={{ backgroundColor: isActive ? ACCENT.solid : "transparent" }}
+        className={`h-1.5 w-1.5 shrink-0 rounded-full transition-colors ${
+          isActive ? "bg-accent" : "bg-transparent"
+        }`}
       />
       <span className="min-w-0 flex-1 truncate">{title}</span>
 
@@ -484,9 +480,10 @@ function NoteCard({
       data-agent-target={note.id}
       className={[
         "group bg-surface rounded-lg border transition-all",
-        highlighted ? "border-transparent" : "border-ink/15 hover:border-ink/20",
+        highlighted
+          ? "border-transparent ring-2 ring-accent"
+          : "border-ink/10 hover:border-ink/20",
       ].join(" ")}
-      style={highlighted ? { boxShadow: `0 0 0 2px ${ACCENT.solid}` } : undefined}
     >
       <div className="flex items-center justify-between px-4 pt-3">
         {parent ? (
@@ -500,7 +497,7 @@ function NoteCard({
         )}
         <button
           onClick={handleDelete}
-          className="text-xs text-ink/40 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
+          className="text-xs text-ink/40 hover:text-rose-600 dark:hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity"
           title="Delete note"
         >
           ✕

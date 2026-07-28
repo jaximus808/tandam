@@ -81,7 +81,7 @@ export default function CanvasLauncher({ initialMode, onJoin, onClose, onOpenMCP
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[2000] flex items-center justify-center bg-ink/40 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/40 p-4"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -90,12 +90,12 @@ export default function CanvasLauncher({ initialMode, onJoin, onClose, onOpenMCP
         role="dialog"
         aria-modal="true"
         aria-labelledby="launcher-title"
-        className="w-full max-w-md overflow-hidden rounded-lg border-[1.5px] border-ink bg-surface font-brand shadow-[8px_8px_0_rgba(28,25,23,0.35)]"
+        className="w-full max-w-md overflow-hidden rounded-[10px] border border-ink/10 bg-surface shadow-lg"
       >
         {/* header */}
         <div className="flex items-center gap-2 border-b border-ink/10 bg-paper px-6 py-4">
           <TandemLogo size={28} animate={false} />
-          <span id="launcher-title" className="font-display text-lg font-medium tracking-tight text-ink">
+          <span id="launcher-title" className="text-lg font-semibold tracking-tight text-ink">
             Open a canvas
           </span>
           <button
@@ -110,7 +110,7 @@ export default function CanvasLauncher({ initialMode, onJoin, onClose, onOpenMCP
         <div className="space-y-5 p-6">
           {/* Create */}
           <form onSubmit={handleCreate} className="space-y-2">
-            <label className="font-code text-[10.5px] font-medium uppercase tracking-[0.18em] text-ink/45">
+            <label className="text-xs font-medium uppercase tracking-wide text-ink/50">
               Start something new
             </label>
             <input
@@ -121,18 +121,18 @@ export default function CanvasLauncher({ initialMode, onJoin, onClose, onOpenMCP
                 setError("");
               }}
               placeholder="Name a canvas — anything at all"
-              className="w-full rounded-md border border-ink/20 bg-surface px-4 py-3 text-sm focus:border-ink focus:outline-none focus:ring-1 focus:ring-ink"
+              className="w-full rounded-md border border-ink/15 bg-surface px-4 py-3 text-sm focus:border-accent/60 focus:outline-none focus:ring-2 focus:ring-accent/20"
             />
             <button
               type="submit"
               disabled={creating}
-              className="btn-press w-full rounded-md bg-ink px-5 py-3 font-medium text-paper shadow-[3px_3px_0_#0D6E66] disabled:opacity-50"
+              className="w-full rounded-md bg-accent px-5 py-3 text-sm font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50"
             >
               {creating ? "Creating…" : "Create canvas →"}
             </button>
           </form>
 
-          <div className="flex items-center gap-3 font-code text-[10px] font-medium uppercase tracking-[0.22em] text-ink/30">
+          <div className="flex items-center gap-3 text-[10px] font-medium uppercase tracking-wide text-ink/30">
             <span className="h-px flex-1 bg-ink/10" />
             or
             <span className="h-px flex-1 bg-ink/10" />
@@ -140,7 +140,7 @@ export default function CanvasLauncher({ initialMode, onJoin, onClose, onOpenMCP
 
           {/* Join */}
           <form onSubmit={handleJoin} className="space-y-2">
-            <label className="font-code text-[10.5px] font-medium uppercase tracking-[0.18em] text-ink/45">
+            <label className="text-xs font-medium uppercase tracking-wide text-ink/50">
               Join with a code
             </label>
             <div className="flex gap-2">
@@ -153,24 +153,24 @@ export default function CanvasLauncher({ initialMode, onJoin, onClose, onOpenMCP
                 }}
                 placeholder="TOKYO7X3K"
                 maxLength={8}
-                className="flex-1 rounded-md border border-ink/20 bg-surface px-4 py-3 font-code text-sm uppercase tracking-[0.2em] focus:border-ink focus:outline-none focus:ring-1 focus:ring-ink"
+                className="flex-1 rounded-md border border-ink/15 bg-surface px-4 py-3 font-code text-sm uppercase tracking-widest focus:border-accent/60 focus:outline-none focus:ring-2 focus:ring-accent/20"
               />
               <button
                 type="submit"
-                className="btn-press shrink-0 rounded-md border-[1.5px] border-ink bg-surface px-5 py-3 font-medium text-ink shadow-[3px_3px_0_rgba(28,25,23,0.15)]"
+                className="shrink-0 rounded-md border border-ink/15 bg-surface px-5 py-3 text-sm font-medium text-ink transition-colors hover:bg-ink/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
               >
                 Open
               </button>
             </div>
           </form>
 
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && <p className="text-sm text-rose-600 dark:text-rose-400">{error}</p>}
 
           <button
             onClick={onOpenMCP}
-            className="flex w-full items-center justify-center gap-1.5 rounded-md border border-brand/30 bg-brand/10 px-4 py-2.5 font-code text-[11.5px] font-medium text-brand transition-colors hover:bg-brand/15"
+            className="flex w-full items-center justify-center gap-1.5 rounded-md border border-accent/30 bg-accent/10 px-4 py-2.5 text-[12px] font-medium text-accent transition-colors hover:bg-accent/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           >
-            connecting an AI agent instead? see the guide →
+            Connecting an AI agent instead? See the guide →
           </button>
         </div>
       </div>

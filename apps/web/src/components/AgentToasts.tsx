@@ -1,4 +1,3 @@
-import { modeTheme } from "../lib/modeTheme";
 import { actionPhrase } from "../lib/agentPhrase";
 import type { Notification } from "../lib/useAgentNotifications";
 
@@ -9,9 +8,9 @@ interface Props {
 
 /**
  * Live op-feed popups: a stack of cards in the bottom-right that announce what
- * an agent just did ("Claude created a doc") and fade themselves out. Styled as
- * worksurface objects — hard terracotta offset shadow, mono action label, an
- * accent timer bar that drains in the mode's colour.
+ * an agent just did ("Claude created a doc") and fade themselves out. Agent
+ * attribution carries the terracotta agent token; everything else is quiet
+ * surface + hairline.
  */
 export default function AgentToasts({ toasts, onDismiss }: Props) {
   if (toasts.length === 0) return null;
@@ -25,10 +24,9 @@ export default function AgentToasts({ toasts, onDismiss }: Props) {
 }
 
 function Toast({ t, onDismiss }: { t: Notification; onDismiss: (id: number) => void }) {
-  const accent = modeTheme(t.mode).solid;
   return (
     <div
-      className="tandem-toast-in pointer-events-auto relative overflow-hidden rounded-[7px] border border-ink/10 bg-surface/95 backdrop-blur shadow-[3px_3px_0_#C75B39]"
+      className="tandem-toast-in pointer-events-auto relative overflow-hidden rounded-lg border border-ink/10 bg-surface shadow-lg"
       role="status"
     >
       <button
@@ -38,8 +36,9 @@ function Toast({ t, onDismiss }: { t: Notification; onDismiss: (id: number) => v
       >
         {/* Agent mark — terracotta for Claude, ink for any other agent. */}
         <span
-          className="grid h-7 w-7 shrink-0 place-items-center rounded-[6px]"
-          style={{ background: t.isClaude ? "#C75B39" : "#1C1917" }}
+          className={`grid h-7 w-7 shrink-0 place-items-center rounded-md ${
+            t.isClaude ? "bg-agent" : "bg-ink"
+          }`}
         >
           <Sparkle />
         </span>
@@ -49,8 +48,8 @@ function Toast({ t, onDismiss }: { t: Notification; onDismiss: (id: number) => v
             <span className="font-semibold">{t.agentName}</span>{" "}
             <span className="text-ink/65">{actionPhrase(t.op, t.kind, t.count)}</span>
           </span>
-          <span className="mt-0.5 flex items-center gap-1.5 font-code text-[10px] uppercase tracking-[0.13em] text-ink/35">
-            <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: accent }} />
+          <span className="mt-0.5 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-ink/35">
+            <span className="h-1.5 w-1.5 rounded-full bg-agent" />
             {t.kind}
           </span>
         </span>
@@ -59,8 +58,7 @@ function Toast({ t, onDismiss }: { t: Notification; onDismiss: (id: number) => v
       {/* Drain bar — visually counts down the toast's life. */}
       <span
         aria-hidden="true"
-        className="tandem-toast-bar absolute bottom-0 left-0 h-[2px]"
-        style={{ backgroundColor: accent }}
+        className="tandem-toast-bar absolute bottom-0 left-0 h-[2px] bg-agent"
       />
     </div>
   );

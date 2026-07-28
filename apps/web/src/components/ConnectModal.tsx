@@ -92,10 +92,10 @@ function Icon({ name, className = "" }: { name: string; className?: string }) {
   }
 }
 
-/** Mono system label — matches SysLabel on the landing surface. */
+/** Section eyebrow — 12px Inter 500 uppercase, per the design canon. */
 function Kicker({ children }: { children: React.ReactNode }) {
   return (
-    <span className="font-code text-[10px] uppercase tracking-[0.22em] text-ink/40">
+    <span className="text-xs font-medium uppercase tracking-wide text-ink/50">
       {children}
     </span>
   );
@@ -117,15 +117,15 @@ function CopyField({
     <div
       className={[
         "flex items-center gap-2 rounded-md border bg-surface py-1.5 pl-3 pr-1.5",
-        accent ? "border-brand/35" : "border-ink/15",
+        accent ? "border-accent/35" : "border-ink/15",
       ].join(" ")}
     >
       <span className="min-w-0 flex-1 break-all font-code text-[12.5px] text-ink">{value}</span>
       <button
         onClick={onCopy}
         className={[
-          "btn-press inline-flex shrink-0 items-center gap-1 rounded-[5px] px-2.5 py-1.5 font-code text-[11px] font-medium text-paper",
-          accent ? "bg-brand" : "bg-ink",
+          "inline-flex shrink-0 items-center gap-1 rounded-[5px] px-2.5 py-1.5 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
+          accent ? "bg-accent text-white hover:bg-accent/90" : "bg-ink text-paper hover:bg-ink/80",
         ].join(" ")}
       >
         <Icon name={copied ? "check" : "copy"} className="h-3 w-3" />
@@ -194,16 +194,16 @@ export default function ConnectModal({ code, version, agents, onClose, onSwitchC
 
   function tabPill(active: boolean) {
     return [
-      "rounded-md border px-2.5 py-1 font-code text-[11px] font-medium transition-colors",
+      "rounded-md border px-2.5 py-1 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
       active
-        ? "border-ink bg-ink text-paper"
+        ? "border-accent bg-accent text-white"
         : "border-ink/15 bg-surface text-ink/50 hover:border-ink/35 hover:text-ink",
     ].join(" ");
   }
 
   return (
     <div
-      className="fixed inset-0 z-[2000] flex items-center justify-center bg-ink/40 p-4 font-brand backdrop-blur-sm"
+      className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/40 p-4"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -214,23 +214,23 @@ export default function ConnectModal({ code, version, agents, onClose, onSwitchC
         role="dialog"
         aria-modal="true"
         aria-labelledby="connect-title"
-        className="relative flex max-h-[88vh] w-full max-w-md flex-col overflow-hidden rounded-lg border-[1.5px] border-ink bg-surface text-ink shadow-[10px_10px_0_rgba(28,25,23,0.12)] outline-none"
+        className="relative flex max-h-[88vh] w-full max-w-md flex-col overflow-hidden rounded-[10px] border border-ink/10 bg-surface text-ink shadow-lg outline-none"
       >
         <div className="overflow-y-auto px-5 pb-5 pt-5">
           {/* ── Header ─────────────────────────────────────────────────────── */}
           <Kicker>Connect · this canvas</Kicker>
-          <h2 id="connect-title" className="mt-1 font-display text-xl font-medium tracking-tight">
+          <h2 id="connect-title" className="mt-1 text-xl font-semibold tracking-tight">
             {connected ? "Your agent is in." : "Bring an agent onto this canvas"}
           </h2>
 
           {connected ? (
             <>
               {/* ── Confirmation strip — shown only once an agent has joined ── */}
-              <div className="mt-3 flex items-center gap-2.5 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2">
+              <div className="mt-3 flex items-center gap-2.5 rounded-md border border-emerald-600/25 bg-emerald-500/10 px-3 py-2">
                 <span className="grid h-4 w-4 shrink-0 place-items-center rounded-full bg-emerald-500 text-white">
                   <Icon name="check" className="h-2.5 w-2.5" />
                 </span>
-                <span className="font-code text-[11.5px] font-medium text-emerald-700">
+                <span className="text-[11.5px] font-medium text-emerald-600 dark:text-emerald-400">
                   {connectedAgent?.name ?? "An agent"} joined this canvas
                 </span>
               </div>
@@ -243,9 +243,9 @@ export default function ConnectModal({ code, version, agents, onClose, onSwitchC
             <>
               {/* ── Primary: tell the agent to join ──────────────────────── */}
               <div className="mt-4">
-                <div className="flex items-center gap-1.5 text-brand">
+                <div className="flex items-center gap-1.5 text-accent">
                   <Icon name="spark" className="h-3.5 w-3.5" />
-                  <span className="font-code text-[11px] font-medium uppercase tracking-[0.12em]">
+                  <span className="text-xs font-medium uppercase tracking-wide">
                     Paste into your agent's chat
                   </span>
                 </div>
@@ -257,7 +257,7 @@ export default function ConnectModal({ code, version, agents, onClose, onSwitchC
                     accent
                   />
                 </div>
-                <p className="mt-2 font-code text-[10.5px] leading-relaxed text-ink/45">
+                <p className="mt-2 text-[11px] leading-relaxed text-ink/45">
                   Your agent calls canvas.connect with the code and starts editing in seconds.
                 </p>
               </div>
@@ -276,7 +276,7 @@ export default function ConnectModal({ code, version, agents, onClose, onSwitchC
                   <span className="text-[12.5px] font-medium text-ink/75">
                     First time? Add Tandem to your agent
                   </span>
-                  <span className="ml-auto font-code text-[10px] uppercase tracking-[0.14em] text-ink/35">
+                  <span className="ml-auto text-[10px] font-medium uppercase tracking-wide text-ink/35">
                     one-time
                   </span>
                 </button>
@@ -320,7 +320,7 @@ export default function ConnectModal({ code, version, agents, onClose, onSwitchC
                           </pre>
                           <button
                             onClick={() => copy(config, "config")}
-                            className="btn-press absolute right-2 top-2 inline-flex items-center gap-1 rounded-[5px] bg-surface/15 px-2 py-1 font-code text-[10.5px] font-medium text-paper hover:bg-surface/25"
+                            className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-[5px] bg-surface/15 px-2 py-1 text-[10.5px] font-medium text-paper transition-colors hover:bg-surface/25"
                           >
                             <Icon name={copied === "config" ? "check" : "copy"} className="h-3 w-3" />
                             {copied === "config" ? "Copied" : "Copy"}
@@ -333,7 +333,7 @@ export default function ConnectModal({ code, version, agents, onClose, onSwitchC
                       href="/mcp"
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="mt-2.5 inline-flex items-center gap-1.5 font-code text-[11px] font-medium text-brand transition-colors hover:text-ink"
+                      className="mt-2.5 inline-flex items-center gap-1.5 text-[11px] font-medium text-accent transition-colors hover:text-ink"
                     >
                       Full setup guide — every client
                       <Icon name="external" className="h-3 w-3" />
@@ -350,7 +350,7 @@ export default function ConnectModal({ code, version, agents, onClose, onSwitchC
           {connected ? (
             <button
               onClick={done}
-              className="btn-press inline-flex w-full items-center justify-center gap-2 rounded-md bg-ink px-6 py-2.5 font-medium text-paper shadow-[4px_4px_0_#0D6E66]"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-accent px-6 py-2.5 text-[13px] font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
             >
               Start working
               <Icon name="arrow" className="h-4 w-4" />
@@ -359,7 +359,7 @@ export default function ConnectModal({ code, version, agents, onClose, onSwitchC
             <div className="flex items-center gap-3">
               <button
                 onClick={done}
-                className="btn-press flex-1 rounded-md border-[1.5px] border-ink bg-surface py-2.5 font-medium text-ink shadow-[3px_3px_0_rgba(28,25,23,0.15)]"
+                className="flex-1 rounded-md border border-ink/15 bg-surface py-2.5 text-[13px] font-medium text-ink transition-colors hover:bg-ink/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
               >
                 Done
               </button>
@@ -368,7 +368,7 @@ export default function ConnectModal({ code, version, agents, onClose, onSwitchC
               </button>
             </div>
           )}
-          <div className="mt-3 flex items-center justify-between font-code text-[10.5px] text-ink/35">
+          <div className="mt-3 flex items-center justify-between text-[11px] text-ink/35">
             <button onClick={onSwitchCanvas} className="transition-colors hover:text-ink/60">
               ← Switch canvas
             </button>

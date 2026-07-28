@@ -21,7 +21,7 @@ type Role = "read" | "write";
 
 function Kicker({ children }: { children: React.ReactNode }) {
   return (
-    <span className="font-code text-[10px] uppercase tracking-[0.22em] text-ink/40">{children}</span>
+    <span className="text-xs font-medium uppercase tracking-wide text-ink/50">{children}</span>
   );
 }
 
@@ -45,8 +45,8 @@ function Segmented<T extends string>({
           disabled={disabled}
           onClick={() => onChange(o.value)}
           className={[
-            "rounded-[5px] px-3 py-1 text-[12px] font-medium transition-colors disabled:opacity-50",
-            value === o.value ? "bg-ink text-paper" : "text-ink/55 hover:text-ink",
+            "rounded-[5px] px-3 py-1 text-[12px] font-medium transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
+            value === o.value ? "bg-accent text-white" : "text-ink/55 hover:text-ink",
           ].join(" ")}
         >
           {o.label}
@@ -165,7 +165,7 @@ export default function ShareDialog({ code, canvas, onClose }: Props) {
 
   return (
     <div
-      className="fixed inset-0 z-[2000] flex items-center justify-center bg-ink/40 p-4 font-brand backdrop-blur-sm"
+      className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/40 p-4"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -176,11 +176,11 @@ export default function ShareDialog({ code, canvas, onClose }: Props) {
         role="dialog"
         aria-modal="true"
         aria-labelledby="share-title"
-        className="relative flex max-h-[88vh] w-full max-w-md flex-col overflow-hidden rounded-lg border-[1.5px] border-ink bg-surface text-ink shadow-[10px_10px_0_rgba(28,25,23,0.12)] outline-none"
+        className="relative flex max-h-[88vh] w-full max-w-md flex-col overflow-hidden rounded-[10px] border border-ink/10 bg-surface text-ink shadow-lg outline-none"
       >
         <div className="overflow-y-auto px-5 pb-5 pt-5">
           <Kicker>Share · {code}</Kicker>
-          <h2 id="share-title" className="mt-1 font-display text-xl font-medium tracking-tight">
+          <h2 id="share-title" className="mt-1 text-xl font-semibold tracking-tight">
             Who can open this canvas
           </h2>
 
@@ -220,7 +220,7 @@ export default function ShareDialog({ code, canvas, onClose }: Props) {
                 />
               </div>
             )}
-            {postureError && <p className="mt-2 text-[12px] text-red-600">{postureError}</p>}
+            {postureError && <p className="mt-2 text-[12px] text-rose-600 dark:text-rose-400">{postureError}</p>}
           </div>
 
           {/* ── Agent task approval policy (migration 0033) ────────────────── */}
@@ -247,7 +247,7 @@ export default function ShareDialog({ code, canvas, onClose }: Props) {
                 ]}
               />
             </div>
-            {policyError && <p className="mt-2 text-[12px] text-red-600">{policyError}</p>}
+            {policyError && <p className="mt-2 text-[12px] text-rose-600 dark:text-rose-400">{policyError}</p>}
           </div>
 
           {/* ── Share with specific people ─────────────────────────────────── */}
@@ -259,7 +259,7 @@ export default function ShareDialog({ code, canvas, onClose }: Props) {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="name@email.com"
-                className="min-w-0 flex-1 rounded-md border border-ink/20 bg-surface px-3 py-1.5 text-[13px] text-ink outline-none focus:border-ink/50"
+                className="min-w-0 flex-1 rounded-md border border-ink/15 bg-surface px-3 py-1.5 text-[13px] text-ink outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/20"
               />
               <Segmented<Role>
                 value={inviteRole}
@@ -272,12 +272,12 @@ export default function ShareDialog({ code, canvas, onClose }: Props) {
               <button
                 type="submit"
                 disabled={inviting || !email.trim()}
-                className="btn-press shrink-0 rounded-md bg-ink px-3 py-1.5 text-[12.5px] font-medium text-paper disabled:opacity-50"
+                className="shrink-0 rounded-md bg-accent px-3 py-1.5 text-[12.5px] font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50"
               >
                 {inviting ? "…" : "Add"}
               </button>
             </form>
-            {shareError && <p className="mt-2 text-[12px] text-red-600">{shareError}</p>}
+            {shareError && <p className="mt-2 text-[12px] text-rose-600 dark:text-rose-400">{shareError}</p>}
 
             <ul className="mt-3 space-y-1.5">
               {/* Owner — always first, can't be removed. */}
@@ -313,7 +313,7 @@ export default function ShareDialog({ code, canvas, onClose }: Props) {
                     </span>
                     <button
                       onClick={() => revoke(m.userId)}
-                      className="rounded px-1.5 py-0.5 text-[11px] text-ink/40 transition-colors hover:bg-ink/5 hover:text-red-600"
+                      className="rounded px-1.5 py-0.5 text-[11px] text-ink/40 transition-colors hover:bg-ink/5 hover:text-rose-600 dark:hover:text-rose-400"
                       title="Remove access"
                     >
                       Remove
@@ -328,7 +328,7 @@ export default function ShareDialog({ code, canvas, onClose }: Props) {
         <div className="border-t border-ink/10 px-5 py-3.5">
           <button
             onClick={onClose}
-            className="btn-press w-full rounded-md border-[1.5px] border-ink bg-surface py-2.5 font-medium text-ink shadow-[3px_3px_0_rgba(28,25,23,0.15)]"
+            className="w-full rounded-md border border-ink/15 bg-surface py-2.5 text-[13px] font-medium text-ink transition-colors hover:bg-ink/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           >
             Done
           </button>

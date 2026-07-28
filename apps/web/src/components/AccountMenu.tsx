@@ -138,7 +138,7 @@ export default function AccountMenu({
       <>
         <button
           onClick={() => setSignInOpen(true)}
-          className="px-3 py-1.5 rounded-lg text-sm font-medium border border-ink/20 text-ink/70 hover:bg-ink/5 transition-colors shrink-0"
+          className="px-3 py-1.5 rounded-md text-sm font-medium border border-ink/15 bg-surface text-ink/70 hover:bg-ink/5 transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
         >
           Sign in
         </button>
@@ -162,7 +162,7 @@ export default function AccountMenu({
     <div ref={wrapRef} className="relative shrink-0">
       <button
         onClick={() => setMenuOpen((o) => !o)}
-        className="relative flex h-8 w-8 items-center justify-center rounded-full overflow-hidden bg-blue-600 text-white text-sm font-semibold hover:ring-2 hover:ring-blue-300 transition"
+        className="relative flex h-8 w-8 items-center justify-center rounded-full overflow-hidden bg-accent text-white text-sm font-semibold transition hover:ring-2 hover:ring-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
         title={unread > 0 ? `${unread} new notification${unread === 1 ? "" : "s"}` : user.email}
         aria-haspopup="menu"
         aria-expanded={menuOpen}
@@ -179,7 +179,7 @@ export default function AccountMenu({
         )}
         {/* Unread badge — the notification signal now lives on the avatar. */}
         {unread > 0 && (
-          <span className="absolute -right-0.5 -top-0.5 flex min-w-[16px] items-center justify-center rounded-full border-2 border-paper bg-[#C75B39] px-1 text-[9px] font-bold leading-[14px] text-white">
+          <span className="absolute -right-0.5 -top-0.5 flex min-w-[16px] items-center justify-center rounded-full border-2 border-paper bg-agent px-1 text-[9px] font-bold leading-[14px] text-white">
             {unread > 9 ? "9+" : unread}
           </span>
         )}
@@ -187,7 +187,7 @@ export default function AccountMenu({
       {menuOpen && (
         <div
           role="menu"
-          className="absolute right-0 mt-1.5 z-50 w-72 overflow-hidden rounded-xl border border-ink/15 bg-surface shadow-xl shadow-ink/10"
+          className="absolute right-0 mt-1.5 z-50 w-72 overflow-hidden rounded-lg border border-ink/10 bg-surface shadow-lg"
         >
           {panel === "menu" ? (
             <>
@@ -206,7 +206,7 @@ export default function AccountMenu({
                   <Inbox className="h-4 w-4 text-ink/45" aria-hidden="true" />
                   <span>Inbox</span>
                   {unread > 0 && (
-                    <span className="ml-auto flex min-w-[18px] items-center justify-center rounded-full bg-[#C75B39] px-1.5 text-[10px] font-semibold leading-[18px] text-white">
+                    <span className="ml-auto flex min-w-[18px] items-center justify-center rounded-full bg-agent px-1.5 text-[10px] font-semibold leading-[18px] text-white">
                       {unread > 9 ? "9+" : unread}
                     </span>
                   )}
@@ -239,7 +239,7 @@ export default function AccountMenu({
               </div>
               {/* Theme — Light / System / Dark, switchable without leaving the menu. */}
               <div className="border-t border-ink/10 px-3 py-2.5">
-                <div className="mb-1.5 text-[11px] font-medium uppercase tracking-[0.08em] text-ink/40">
+                <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-ink/50">
                   Theme
                 </div>
                 <ThemeToggle fullWidth alwaysLabel />
@@ -264,7 +264,7 @@ export default function AccountMenu({
                 >
                   <ChevronLeft className="h-4 w-4" />
                 </button>
-                <span className="font-display text-sm font-medium text-ink">Inbox</span>
+                <span className="text-sm font-semibold text-ink">Inbox</span>
               </div>
               {notes.length === 0 ? (
                 <div className="px-4 py-8 text-center text-[13px] text-ink/45">
@@ -282,11 +282,11 @@ export default function AccountMenu({
                         disabled={!n.canvasCode || !onOpenCanvas}
                         className={[
                           "flex w-full items-start gap-2.5 px-3 py-3 text-left transition-colors hover:bg-ink/5 disabled:cursor-default disabled:hover:bg-transparent",
-                          n.read ? "" : "bg-[#C75B39]/[0.04]",
+                          n.read ? "" : "bg-agent/[0.04]",
                         ].join(" ")}
                       >
                         {!n.read && (
-                          <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#C75B39]" />
+                          <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-agent" />
                         )}
                         <span className={n.read ? "min-w-0 pl-4" : "min-w-0"}>
                           <span className="block text-[13px] leading-snug text-ink/80">
