@@ -197,6 +197,8 @@ export interface Action {
   result?: string;           // execution outcome summary
   error?: string;            // failure detail
   linkedPinIds: EntityId[];  // pins this action references
+  ticket?: number;           // per-canvas sequential task number (type "task" only)
+  ticketId?: string;         // display form, "TDM-<n>" — built server-side from `ticket`
   createdAt: string;
   updatedAt: string;
 }

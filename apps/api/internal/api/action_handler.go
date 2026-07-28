@@ -131,6 +131,8 @@ func (h *Handler) ProposeAction(w http.ResponseWriter, r *http.Request) {
 	if body.State == "approved" {
 		action.ApprovedBy = &body.ProposedBy
 	}
+	// Tasks get a per-canvas sequential ticket ("TDM-<n>", see ticket.go).
+	h.assignTicketsBestEffort(r.Context(), canvasID, action)
 	if _, err := h.store.CreateAction(r.Context(), canvasID, action); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -202,6 +204,8 @@ func (h *Handler) ProposeActionsBatch(w http.ResponseWriter, r *http.Request) {
 		}
 		actions = append(actions, action)
 	}
+	// Tasks in the batch get consecutive tickets from ONE reservation call.
+	h.assignTicketsBestEffort(r.Context(), canvasID, actions...)
 	if _, err := h.store.CreateActions(r.Context(), canvasID, actions); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

@@ -215,6 +215,7 @@ type dbAction struct {
 	Result       *string         `json:"result"`
 	Error        *string         `json:"error"`
 	LinkedPinIDs json.RawMessage `json:"linked_pin_ids"`
+	Ticket       *int            `json:"ticket"`
 	CreatedAt    string          `json:"created_at"`
 	UpdatedAt    string          `json:"updated_at"`
 }
@@ -510,6 +511,7 @@ func toAction(d dbAction) *Action {
 		ClaimedBy: d.ClaimedBy,
 		Result: d.Result, Error: d.Error,
 		LinkedPinIDs: []uuid.UUID{},
+		Ticket:       d.Ticket,
 		CreatedAt:    parseTime(d.CreatedAt), UpdatedAt: parseTime(d.UpdatedAt),
 	}
 	if d.ClaimedAt != nil && *d.ClaimedAt != "" {
@@ -2553,7 +2555,7 @@ func actionRow(canvasID uuid.UUID, a *Action, now time.Time) (map[string]any, er
 	if a.ApprovedBy != nil {
 		approvedBy = *a.ApprovedBy
 	}
-	return map[string]any{
+	row := map[string]any{
 		"id": a.ID.String(), "canvas_id": canvasID.String(),
 		"type": a.Type, "state": a.State,
 		"payload":        json.RawMessage(a.Payload),
@@ -2561,7 +2563,37 @@ func actionRow(canvasID uuid.UUID, a *Action, now time.Time) (map[string]any, er
 		"approved_by":    approvedBy,
 		"linked_pin_ids": json.RawMessage(linkedJSON),
 		"updated_at":     now.Format(time.RFC3339),
-	}, nil
+	}
+	// The ticket key is added only when a ticket was actually reserved, so an
+	// API deployed ahead of migration 0034 (which adds the column) still inserts
+	// cleanly — reservation fails soft first, leaving Ticket nil. The bulk path
+	// backfills the key on mixed batches to keep key sets identical (PGRST102).
+	if a.Ticket != nil {
+		row["ticket"] = *a.Ticket
+	}
+	return row, nil
+}
+
+// ReserveTaskTickets atomically reserves n consecutive per-canvas ticket
+// numbers via the reserve_task_tickets RPC (migration 0034) and returns the
+// first of the range. The RPC is a single UPDATE on the canvas row, so
+// concurrent callers can never receive overlapping ranges.
+func (s *supabaseStore) ReserveTaskTickets(_ context.Context, canvasID uuid.UUID, n int) (int, error) {
+	result := s.client.Rpc("reserve_task_tickets", "", map[string]any{
+		"canvas_id": canvasID.String(),
+		"n":         n,
+	})
+	if result == "" {
+		return 0, fmt.Errorf("reserveTaskTickets: empty response — verify migration 0034 is applied")
+	}
+	if isRpcError(result) {
+		return 0, fmt.Errorf("reserveTaskTickets RPC error: %s", result)
+	}
+	var first int
+	if err := json.Unmarshal([]byte(result), &first); err != nil {
+		return 0, fmt.Errorf("reserveTaskTickets parse: %w (response: %s)", err, result)
+	}
+	return first, nil
 }
 
 func (s *supabaseStore) CreateAction(ctx context.Context, canvasID uuid.UUID, a *Action) (int, error) {
@@ -2587,12 +2619,25 @@ func (s *supabaseStore) CreateActions(ctx context.Context, canvasID uuid.UUID, a
 		return 0, nil
 	}
 	now := time.Now().UTC()
+	// PGRST102: every row in a bulk INSERT must share an identical key set, so
+	// when any action carries a ticket (tasks in a mixed batch), the ticket key
+	// is backfilled as NULL on the rows that don't.
+	anyTicket := false
+	for _, a := range actions {
+		if a.Ticket != nil {
+			anyTicket = true
+			break
+		}
+	}
 	rows := make([]map[string]any, 0, len(actions))
 	for _, a := range actions {
 		a.CreatedAt, a.UpdatedAt = now, now
 		row, err := actionRow(canvasID, a, now)
 		if err != nil {
 			return 0, err
+		}
+		if anyTicket && a.Ticket == nil {
+			row["ticket"] = nil
 		}
 		rows = append(rows, row)
 	}
