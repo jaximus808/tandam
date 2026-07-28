@@ -40,6 +40,7 @@ import NotificationBell from "./components/NotificationBell";
 import AgentToasts from "./components/AgentToasts";
 import QuickLog from "./components/QuickLog";
 import TasksPanel from "./components/TasksPanel";
+import TaskBoard from "./components/TaskBoard";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { useAgentActivity } from "./lib/useAgentActivity";
 import { useAgentNotifications } from "./lib/useAgentNotifications";
@@ -49,7 +50,7 @@ import { recordRecent } from "./lib/recentCanvases";
 import { loadTabState, saveTabState } from "./lib/tabState";
 import { loadSidebarState, saveSidebarState } from "./lib/sidebarState";
 import { MOCK_ENABLED, mockCanvas } from "./lib/mockFixture";
-import { modeTheme } from "./lib/modeTheme";
+import { BOARD_THEME, modeTheme } from "./lib/modeTheme";
 import posthog from "./lib/posthog";
 
 // A canvas is a bag of named documents (migration 0024). Each document renders
@@ -276,6 +277,14 @@ export default function App() {
   // re-constructing Leaflet, re-parsing markdown, and losing useMemo caches.
   const [visitedModes, setVisitedModes] = useState<Set<CanvasMode>>(new Set());
 
+  // The pinned Board pseudo-tab (full-page task board). Client-side only — NOT
+  // a document type: no server row, never broadcast, purely local navigation.
+  // When open it takes over the content area; selecting any document tab (or
+  // opening one from the explorer) hands the surface back. `boardVisited`
+  // mirrors visitedModes' keep-alive so toggling away keeps scroll positions.
+  const [boardOpen, setBoardOpen] = useState(false);
+  const [boardVisited, setBoardVisited] = useState(false);
+
   // ── Document tabs (migration 0024) ──────────────────────────────────────────
   // A canvas is a bag of named documents; the tab strip shows the OPEN ones.
   // Which docs are open, their order, and which one is focused are LOCAL to this
@@ -356,6 +365,9 @@ export default function App() {
     });
     if (activateNextNewDocRef.current && newIds.length > 0) {
       activateNextNewDocRef.current = false;
+      // Creating a document is an explicit "show me that" — it wins over the
+      // Board pseudo-tab if that's what's currently covering the surface.
+      setBoardOpen(false);
       setActiveDocId(newIds[newIds.length - 1]);
     }
   }, [documents, closedDocIds, canvasState]);
@@ -501,6 +513,8 @@ export default function App() {
     setSelectedPinId(null);
     setSelectedEventId(null);
     setVisitedModes(new Set());
+    setBoardOpen(false);
+    setBoardVisited(false);
     setActiveDocId(null);
     setFollowDocId(null);
     setOpenDocIds([]);
@@ -983,8 +997,19 @@ export default function App() {
   // first open document of that type.
   const setMode = (mode: CanvasMode) => {
     const d = openDocs.find((o) => DOC_TYPE_TO_MODE[o.type] === mode);
-    if (d) setActiveDocId(d.id);
+    if (d) {
+      setBoardOpen(false);
+      setActiveDocId(d.id);
+    }
   };
+
+  // Open the pinned Board pseudo-tab — takes over the content area without
+  // touching the document tab state, so closing it lands you exactly where
+  // you were.
+  function openBoard() {
+    setBoardOpen(true);
+    setBoardVisited(true);
+  }
 
   // Following is armed even before any agent shows up — distinguish "an agent is
   // here" from "on, waiting for one" so the button reads as live, not dead.
@@ -993,10 +1018,11 @@ export default function App() {
   const inWelcome = !hasTabs;
   // Toggling off pins the view to the current tab; on resumes following.
   const toggleFollow = () => setActiveDocId(following ? effectiveDocId : null);
-  const theme = modeTheme(effectiveMode);
+  const theme = boardOpen ? BOARD_THEME : modeTheme(effectiveMode);
 
   // ── Document tab actions ────────────────────────────────────────────────────
   function selectDoc(id: string) {
+    setBoardOpen(false);
     setActiveDocId(id);
   }
   // Close = hide locally + remember it's closed so the sync won't reopen it.
@@ -1037,6 +1063,7 @@ export default function App() {
       return next;
     });
     setOpenDocIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+    setBoardOpen(false);
     setActiveDocId(id);
   }
   // Explorer → delete a document for everyone. The doc (and its child entities,
@@ -1316,10 +1343,12 @@ export default function App() {
         <div className="relative z-[75] flex items-center px-3 py-1 bg-paper/70 backdrop-blur border-b border-ink/5 shrink-0 sm:px-4">
           <DocumentTabs
             docs={openDocs}
-            activeDocId={effectiveDocId}
+            activeDocId={boardOpen ? null : effectiveDocId}
             onSelect={selectDoc}
             onClose={closeDoc}
             onCreate={createDocument}
+            boardActive={boardOpen}
+            onSelectBoard={openBoard}
             readOnly={canvas.yourRole === "read"}
           />
         </div>
@@ -1338,9 +1367,22 @@ export default function App() {
             annotation pills stay light (a light map framed by dark chrome),
             while its toolbar, sidebar, and popups follow the theme. */}
         <div className="relative flex flex-1 min-h-0 bg-paper text-ink">
-        <ErrorBoundary resetKey={`${canvas.id}:${effectiveMode}`}>
+        <ErrorBoundary resetKey={`${canvas.id}:${boardOpen ? "board" : effectiveMode}`}>
+        {/* The Board pseudo-tab's full-page view. Mounted on first open, then
+            kept alive and toggled with CSS like the modes below. It renders
+            from the same canvas-state props as every other view, so WS pushes
+            (claims, completions) move cards live — no polling. */}
+        {(boardOpen || boardVisited) && (
+          <div className={boardOpen ? "relative isolate flex flex-1 min-h-0 min-w-0" : "hidden"}>
+            <TaskBoard
+              code={canvas.code}
+              state={canvasState}
+              readOnly={canvas.yourRole === "read"}
+            />
+          </div>
+        )}
         {(["welcome", "map", "itinerary", "docs", "roadmap", "sheets", "charts"] as CanvasMode[]).map((m) => {
-          const active = effectiveMode === m;
+          const active = !boardOpen && effectiveMode === m;
           // Lazy-mount: only render a mode after the user has visited it at
           // least once. After that, keep it mounted and hide with CSS.
           if (!active && !visitedModes.has(m)) return null;

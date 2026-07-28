@@ -68,3 +68,14 @@ export const MODE_THEME: Record<CanvasMode, ModeTheme> = {
 export function modeTheme(mode: CanvasMode | undefined): ModeTheme {
   return MODE_THEME[mode ?? "welcome"] ?? MODE_THEME.welcome;
 }
+
+/* The Board pseudo-tab (the client-side task board — NOT a document type)
+   carries the brand teal, so it reads as product chrome rather than another
+   document accent. Driven by the --color-brand channel, so it lifts
+   automatically in dark mode like the rest of the brand colour. */
+export const BOARD_THEME: ModeTheme = {
+  solid: "rgb(var(--color-brand))",
+  soft: "rgb(var(--color-brand) / 0.10)",
+  line: "rgb(var(--color-brand) / 0.24)",
+  hover: "rgb(var(--color-brand))",
+};
