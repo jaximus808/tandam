@@ -111,6 +111,11 @@ func (f *policyFakeStore) UpdateActionState(_ context.Context, _ uuid.UUID, id u
 	return 1, nil
 }
 
+func (f *policyFakeStore) ReserveTaskTickets(_ context.Context, _ uuid.UUID, n int) (int, error) {
+	// Tickets are orthogonal to the cascade under test; hand out a fixed range.
+	return 1, nil
+}
+
 func (f *policyFakeStore) ApproveEpicTasks(_ context.Context, _ uuid.UUID, epicID uuid.UUID, approvedBy string) (int, error) {
 	f.epicCalls++
 	f.epicApprovedID = epicID
