@@ -141,12 +141,14 @@ function TerminalPane({
   t,
   glow,
   animate,
+  contentOpacity,
 }: {
   name: string;
   lines: TermLine[];
   t: number;
   glow: boolean;
   animate: boolean;
+  contentOpacity: number;
 }) {
   const visible = lines.filter((l) => t >= l.start);
   const last = visible[visible.length - 1];
@@ -177,6 +179,7 @@ function TerminalPane({
           // fades them out instead of chopping glyphs in half mid-row.
           maskImage: "linear-gradient(to bottom, transparent 0, black 28px)",
           WebkitMaskImage: "linear-gradient(to bottom, transparent 0, black 28px)",
+          opacity: contentOpacity,
         }}
       >
         {visible.map((l) => {
@@ -271,7 +274,15 @@ function BoardCard({
   );
 }
 
-function BoardPane({ t, animate }: { t: number; animate: boolean }) {
+function BoardPane({
+  t,
+  animate,
+  contentOpacity,
+}: {
+  t: number;
+  animate: boolean;
+  contentOpacity: number;
+}) {
   const states = TASKS.map((task) => ({ task, state: taskStateAt(task, t) }));
   const done = states.filter((s) => s.state === "done").length;
   const working = states.filter((s) => s.state === "working").length;
@@ -284,7 +295,7 @@ function BoardPane({ t, animate }: { t: number; animate: boolean }) {
         <span className="shrink-0 whitespace-nowrap font-code text-[10px] text-ink/40">
           4 tasks · 1 epic
         </span>
-        <span className="ml-auto flex shrink-0 items-center gap-1">
+        <span className="ml-auto flex shrink-0 items-center gap-1" style={{ opacity: contentOpacity }}>
           {activeSessions.map((s) => (
             <span
               key={s.name}
@@ -297,7 +308,7 @@ function BoardPane({ t, animate }: { t: number; animate: boolean }) {
         </span>
       </div>
       {/* Epic progress: emerald done, pulsing violet in flight. */}
-      <div className="mt-2">
+      <div className="mt-2" style={{ opacity: contentOpacity }}>
         <div className="flex items-center gap-1.5">
           <Layers size={11} className="shrink-0 text-ink/45" />
           <span className="min-w-0 truncate text-[11px] font-medium text-ink/70">
@@ -340,7 +351,8 @@ function BoardPane({ t, animate }: { t: number; animate: boolean }) {
                   {cards.length}
                 </span>
               </div>
-              <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-hidden rounded-lg border border-dashed border-ink/[0.07] p-1">
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-dashed border-ink/[0.07] p-1">
+                <div className="flex flex-col gap-1.5" style={{ opacity: contentOpacity }}>
                 {cards.map(({ task, state }) => (
                   <BoardCard
                     // Keyed on state so a column move re-mounts the card and
@@ -354,6 +366,7 @@ function BoardPane({ t, animate }: { t: number; animate: boolean }) {
                     animate={animate}
                   />
                 ))}
+                </div>
               </div>
             </div>
           );
@@ -388,6 +401,10 @@ export default function HeroBoardDemo() {
 
   const animate = !reduced;
   const glowB = animate && t >= MONEY_GLOW[0] && t < MONEY_GLOW[1];
+  // Loop reset: only the CONTENT (terminal lines, board cards) fades for the
+  // wrap — the pane frames and headers stay put, so the reset reads as
+  // "terminals clear, board resets", never "the UI vanished".
+  const contentOpacity = animate ? loopOpacity(t) : 1;
 
   return (
     <div
@@ -411,21 +428,28 @@ export default function HeroBoardDemo() {
       <div
         aria-hidden="true"
         className="grid gap-3 md:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]"
-        style={{ opacity: animate ? loopOpacity(t) : 1 }}
       >
         {/* Left: the two parallel sessions. */}
         <div className="flex min-w-0 flex-col gap-3">
-          <TerminalPane name="session-A" lines={LINES_A} t={t} glow={false} animate={animate} />
-          <TerminalPane name="session-B" lines={LINES_B} t={t} glow={glowB} animate={animate} />
+          <TerminalPane name="session-A" lines={LINES_A} t={t} glow={false} animate={animate} contentOpacity={contentOpacity} />
+          <TerminalPane name="session-B" lines={LINES_B} t={t} glow={glowB} animate={animate} contentOpacity={contentOpacity} />
         </div>
         {/* Right: the shared board, moving live. Hidden below sm — three fixed
             kanban columns collapse to ~90px slivers on a phone, so narrow
             viewports keep just the terminals (the claim-rejection story still
             plays in full there). */}
         <div className="hidden min-w-0 sm:block">
-          <BoardPane t={t} animate={animate} />
+          <BoardPane t={t} animate={animate} contentOpacity={contentOpacity} />
         </div>
       </div>
+      {/* The scale claim, worded to what the tests actually enforce: claiming
+          is one atomic conditional UPDATE, so concurrency doesn't change the
+          outcome — exactly one winner, at any fleet size. */}
+      <p className="mt-3 text-xs leading-relaxed text-ink/50">
+        Claims are one atomic update in the database — race two sessions or two hundred,{" "}
+        <span className="font-medium text-ink/70">exactly one wins</span>. Zero double-claims,
+        enforced in tests.
+      </p>
     </div>
   );
 }
