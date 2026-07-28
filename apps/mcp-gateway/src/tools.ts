@@ -759,6 +759,18 @@ export async function handleTool(
         payload: args.payload,
       });
 
+    // ── Epics (actions of type "epic": a batch of tasks approved as one) ───────
+    case "canvas_epic_add":
+      return gateway.post("/api/canvas/actions", {
+        type: "epic",
+        payload: {
+          title: args.title,
+          body: args.body,
+          linkedIds: args.linkedIds,
+        },
+        proposedBy: gateway.getSession().agentId,
+      });
+
     // ── Tasks (actions of type "task": the agent work queue) ───────────────────
     case "canvas_task_add":
       return gateway.post("/api/canvas/actions", {
@@ -768,6 +780,8 @@ export async function handleTool(
           body: args.body,
           linkedIds: args.linkedIds,
           assignee: args.assignee ?? "agent",
+          ...(args.epicId ? { epicId: args.epicId } : {}),
+          ...(args.requiresApproval ? { requiresApproval: true } : {}),
         },
         proposedBy: gateway.getSession().agentId,
       });
@@ -781,6 +795,8 @@ export async function handleTool(
             body: t.body,
             linkedIds: t.linkedIds,
             assignee: t.assignee ?? "agent",
+            ...(t.epicId ? { epicId: t.epicId } : {}),
+            ...(t.requiresApproval ? { requiresApproval: true } : {}),
           },
           proposedBy: gateway.getSession().agentId,
         })),
@@ -795,22 +811,37 @@ export async function handleTool(
         actions: Array<{
           id: string;
           state: string;
-          payload?: { title?: string; assignee?: string };
+          payload?: { title?: string; assignee?: string; epicId?: string };
           proposedBy: string;
           result?: string;
           createdAt: string;
         }>;
       };
       // Compact projection: no bodies, no linkedIds. canvas_task_get has the rest.
-      const tasks = (res.actions ?? []).map((a) => ({
+      let tasks = (res.actions ?? []).map((a) => ({
         id: a.id,
         title: a.payload?.title ?? "",
         state: a.state,
         assignee: a.payload?.assignee ?? "agent",
         proposedBy: a.proposedBy,
+        ...(a.payload?.epicId ? { epicId: a.payload.epicId } : {}),
         ...(a.result ? { result: a.result } : {}),
         createdAt: a.createdAt,
-      }));
+      })) as Array<Record<string, unknown> & { state: string; epicId?: string }>;
+      if (args.epicId) {
+        tasks = tasks.filter((t) => t.epicId === args.epicId);
+      }
+      // Hydrate each task's epic state (one extra read, only when epics are in
+      // play) so the queue shows which tasks sit under a still-proposed epic.
+      if (tasks.some((t) => t.epicId)) {
+        const epicsRes = (await gateway.get("/api/canvas/actions?type=epic")) as {
+          actions: Array<{ id: string; state: string }>;
+        };
+        const epicState = new Map((epicsRes.actions ?? []).map((e) => [e.id, e.state]));
+        tasks = tasks.map((t) =>
+          t.epicId && epicState.has(t.epicId) ? { ...t, epicState: epicState.get(t.epicId) } : t,
+        );
+      }
       // Contextual fan-out nudge: only when there's a real batch of ready work.
       // Subagents are a HARNESS capability (e.g. Claude Code's Agent tool), not
       // something this server can start — so this just tells the agent it may
@@ -2612,12 +2643,41 @@ const RAW_TOOLS = [
     },
   },
   {
+    name: "canvas_epic_add",
+    description:
+      "Create an EPIC — a named batch of related tasks approved as ONE unit. The flow: " +
+      "propose the epic (it enters state 'proposed'), the human approves it ONCE in the " +
+      "web UI, and from then on tasks you add with epicId under it are born approved " +
+      "(under the canvas's default 'epic' approval policy) instead of each awaiting its " +
+      "own approval. Tasks added while the epic is still proposed land proposed and are " +
+      "batch-approved the moment the human approves the epic. Prefer one epic per " +
+      "coherent chunk of work (a feature, a refactor) over many free-floating tasks.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        title: { type: "string", description: "Short name for the batch, e.g. 'Dark mode rollout'." },
+        body: { type: "string", description: "What this batch achieves; scope and intent." },
+        linkedIds: {
+          type: "array",
+          items: { type: "string" },
+          description: "Roadmap item / note ids carrying the detailed context.",
+        },
+      },
+      required: ["title"],
+    },
+  },
+  {
     name: "canvas_task_add",
     description:
       "Add a task to the canvas work queue for a future agent session to implement. " +
       "Enters state 'proposed'; a human approves it in the web UI before any session " +
-      "picks it up. Keep `body` a concise brief — heavy context belongs in roadmap " +
-      "items / notes referenced via linkedIds, which canvas_task_get hydrates later.",
+      "picks it up — UNLESS the canvas approval policy auto-approves it: under the " +
+      "default 'epic' policy, pass epicId of an already-APPROVED epic and the task is " +
+      "born approved (propose the epic with canvas_epic_add, the human approves once, " +
+      "then its tasks flow). Set requiresApproval:true to force the human gate anyway " +
+      "(do this when a task deviates from the approved plan). Keep `body` a concise " +
+      "brief — heavy context belongs in roadmap items / notes referenced via linkedIds, " +
+      "which canvas_task_get hydrates later.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -2635,6 +2695,18 @@ const RAW_TOOLS = [
             "Who the task is FOR. 'agent' (default) = an agent session executes it; " +
             "'human' = the human's own todo, invisible to the agent queue.",
         },
+        epicId: {
+          type: "string",
+          description:
+            "Id of the epic (canvas_epic_add) this task belongs to. Under the 'epic' " +
+            "approval policy, an approved epic auto-approves its new tasks.",
+        },
+        requiresApproval: {
+          type: "boolean",
+          description:
+            "Self-flag: force this task to await human approval regardless of the " +
+            "canvas approval policy (use when deviating from the approved plan).",
+        },
       },
       required: ["title"],
     },
@@ -2647,8 +2719,10 @@ const RAW_TOOLS = [
       "proposing a whole plan (e.g. breaking a project into 8 tasks): the whole array " +
       "persists via a single write and fires one live update, instead of one round trip " +
       "per task. Each task takes the SAME fields as canvas_task_add (title, body, " +
-      "linkedIds, assignee) and enters state 'proposed' — a human approves each in the " +
-      "web UI before any session picks it up.",
+      "linkedIds, assignee, epicId, requiresApproval) and enters state 'proposed' — a " +
+      "human approves each in the web UI before any session picks it up, unless the " +
+      "canvas approval policy auto-approves it (e.g. tasks under an already-approved " +
+      "epic; see canvas_epic_add).",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -2672,6 +2746,18 @@ const RAW_TOOLS = [
                   "Who the task is FOR. 'agent' (default) = an agent session executes it; " +
                   "'human' = the human's own todo, invisible to the agent queue.",
               },
+              epicId: {
+                type: "string",
+                description:
+                  "Id of the epic (canvas_epic_add) this task belongs to. Under the " +
+                  "'epic' approval policy, an approved epic auto-approves its new tasks.",
+              },
+              requiresApproval: {
+                type: "boolean",
+                description:
+                  "Self-flag: force this task to await human approval regardless of " +
+                  "the canvas approval policy.",
+              },
             },
             required: ["title"],
           },
@@ -2684,10 +2770,12 @@ const RAW_TOOLS = [
     name: "canvas_task_list",
     description:
       "List AGENT tasks as a compact queue: {id, title, state, assignee, proposedBy, " +
-      "result?, createdAt} — no bodies or linked context. START HERE when looking for " +
-      "work instead of canvas_state_read; then canvas_task_get exactly the task you'll " +
-      "work on. state='approved' = ready to pick up. Human todos are excluded by " +
-      "default; pass assignee='human' or 'any' to see them.",
+      "epicId?, epicState?, result?, createdAt} — no bodies or linked context. START " +
+      "HERE when looking for work instead of canvas_state_read; then canvas_task_get " +
+      "exactly the task you'll work on. state='approved' = ready to pick up (a task " +
+      "whose epicState is still 'proposed' is waiting on its epic's approval). Pass " +
+      "epicId to see just one epic's tasks. Human todos are excluded by default; pass " +
+      "assignee='human' or 'any' to see them.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -2700,14 +2788,19 @@ const RAW_TOOLS = [
           enum: ["agent", "human", "any"],
           description: "Default 'agent' — the queue meant for agent sessions.",
         },
+        epicId: {
+          type: "string",
+          description: "Only tasks belonging to this epic.",
+        },
       },
     },
   },
   {
     name: "canvas_task_get",
     description:
-      "Read one task by id with its linked context hydrated: returns { action, linked } " +
-      "where linked[] contains the referenced roadmap items / notes (title, body, status). " +
+      "Read one task by id with its linked context hydrated: returns { action, linked, " +
+      "epic? } where linked[] contains the referenced roadmap items / notes (title, " +
+      "body, status) and epic (when the task belongs to one) carries {id, title, state}. " +
       "Everything a session needs to start work — no full state pull required.",
     inputSchema: {
       type: "object" as const,

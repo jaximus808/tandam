@@ -94,7 +94,9 @@ type dbCanvas struct {
 	ClaimToken   *string         `json:"claim_token"`
 	Visibility   string          `json:"visibility"`
 	PublicRole   string          `json:"public_role"`
-	EnabledModes json.RawMessage `json:"enabled_modes"`
+	// approval_policy (migration 0033); empty until the migration is applied.
+	ApprovalPolicy string          `json:"approval_policy"`
+	EnabledModes   json.RawMessage `json:"enabled_modes"`
 	Version      int             `json:"version"`
 	CreatedAt    string          `json:"created_at"`
 	UpdatedAt    string          `json:"updated_at"`
@@ -349,7 +351,8 @@ func toCanvas(d dbCanvas) *Canvas {
 	}
 	return &Canvas{ID: id, Code: d.Code, Name: d.Name, Mode: d.Mode,
 		EnabledModes: parseEnabledModes(d.EnabledModes), MapID: d.MapID, OwnerUserID: owner,
-		Visibility: d.Visibility, PublicRole: d.PublicRole, Version: d.Version,
+		Visibility: d.Visibility, PublicRole: d.PublicRole,
+		ApprovalPolicy: d.ApprovalPolicy, Version: d.Version,
 		CreatedAt: parseTime(d.CreatedAt), UpdatedAt: parseTime(d.UpdatedAt)}
 }
 
@@ -977,6 +980,17 @@ func (s *supabaseStore) SetCanvasVisibility(ctx context.Context, canvasID uuid.U
 		return 0, err
 	}
 	// Bump version so connected boards re-fetch state and pick up the new posture.
+	return s.bumpVersion(ctx, canvasID)
+}
+
+func (s *supabaseStore) SetCanvasApprovalPolicy(ctx context.Context, canvasID uuid.UUID, policy string) (int, error) {
+	err := s.exec(s.client.From("canvases").
+		Update(map[string]string{"approval_policy": policy}, "minimal", "").
+		Eq("id", canvasID.String()))
+	if err != nil {
+		return 0, err
+	}
+	// Bump version so connected boards re-fetch state and pick up the new policy.
 	return s.bumpVersion(ctx, canvasID)
 }
 
@@ -2686,6 +2700,23 @@ func (s *supabaseStore) DeleteAction(ctx context.Context, canvasID, id uuid.UUID
 		Delete("minimal", "").
 		Eq("id", id.String()).
 		Eq("canvas_id", canvasID.String()))
+	if err != nil {
+		return 0, err
+	}
+	return s.bumpVersion(ctx, canvasID)
+}
+
+// ApproveEpicTasks flips every currently-proposed task under an epic to
+// approved in ONE bulk UPDATE (payload->>epicId match), stamping approved_by
+// with the policy provenance ('policy:epic'). Called when a human approves the
+// epic itself — the one-time gate that lets its tasks flow.
+func (s *supabaseStore) ApproveEpicTasks(ctx context.Context, canvasID, epicID uuid.UUID, approvedBy string) (int, error) {
+	err := s.exec(s.client.From("actions").
+		Update(map[string]any{"state": "approved", "approved_by": approvedBy}, "minimal", "").
+		Eq("canvas_id", canvasID.String()).
+		Eq("type", "task").
+		Eq("state", "proposed").
+		Eq("payload->>epicId", epicID.String()))
 	if err != nil {
 		return 0, err
 	}

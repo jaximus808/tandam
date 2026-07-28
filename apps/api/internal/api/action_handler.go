@@ -1,8 +1,10 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -83,6 +85,95 @@ func canonicalizeTaskPayload(raw json.RawMessage) (json.RawMessage, error) {
 	return json.Marshal(p)
 }
 
+// canonicalizeEpicPayload validates an epic payload: title is required. An epic
+// is a batch of related work ({title, body, linkedIds[]}); tasks reference it
+// via their payload epicId. Unknown fields pass through untouched.
+func canonicalizeEpicPayload(raw json.RawMessage) (json.RawMessage, error) {
+	var p map[string]any
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, fmt.Errorf("epic payload must be an object")
+	}
+	title, _ := p["title"].(string)
+	if title == "" {
+		return nil, fmt.Errorf("epic payload requires a non-empty title")
+	}
+	return json.Marshal(p)
+}
+
+// taskPolicyFields are the payload fields the approval-policy cascade reads.
+type taskPolicyFields struct {
+	EpicID           string `json:"epicId"`
+	RequiresApproval bool   `json:"requiresApproval"`
+}
+
+// policyApproval decides whether an agent-proposed task is born approved under
+// the canvas approval policy (migration 0033). Returns the approved_by
+// provenance stamp ("policy:auto" / "policy:epic"), or "" when the task must
+// land proposed. epicApproved reports whether an id names an APPROVED epic.
+//   - requiresApproval:true in the payload always lands proposed (the agent
+//     self-flags deviations), regardless of policy.
+//   - 'strict': every agent task lands proposed.
+//   - 'auto':   every agent task is born approved.
+//   - 'epic' (default, incl. legacy empty): approved iff the task carries an
+//     epicId naming an approved epic; no epic / proposed epic → proposed.
+func policyApproval(policy string, payload json.RawMessage, epicApproved func(uuid.UUID) bool) string {
+	var f taskPolicyFields
+	_ = json.Unmarshal(payload, &f)
+	if f.RequiresApproval {
+		return ""
+	}
+	switch policy {
+	case "strict":
+		return ""
+	case "auto":
+		return "policy:auto"
+	default: // 'epic' — also the fallback for legacy rows with no policy yet
+		id, err := uuid.Parse(f.EpicID)
+		if err != nil {
+			return ""
+		}
+		if epicApproved(id) {
+			return "policy:epic"
+		}
+		return ""
+	}
+}
+
+// policyResolver applies policyApproval for a request, lazily loading the
+// canvas policy and epic states at most once each (the batch path may resolve
+// many tasks). Store failures fail CLOSED — the task lands proposed.
+type policyResolver struct {
+	h        *Handler
+	ctx      context.Context
+	canvasID uuid.UUID
+	policy   *string
+	epics    map[uuid.UUID]bool
+}
+
+func (pr *policyResolver) stamp(payload json.RawMessage) string {
+	if pr.policy == nil {
+		policy := ""
+		if canvas, err := pr.h.store.GetCanvasByID(pr.ctx, pr.canvasID); err == nil {
+			policy = canvas.ApprovalPolicy
+		} else {
+			policy = "strict" // can't read the policy → keep the human gate
+		}
+		pr.policy = &policy
+	}
+	return policyApproval(*pr.policy, payload, func(epicID uuid.UUID) bool {
+		if pr.epics == nil {
+			pr.epics = map[uuid.UUID]bool{}
+		}
+		approved, seen := pr.epics[epicID]
+		if !seen {
+			epic, err := pr.h.store.GetAction(pr.ctx, pr.canvasID, epicID)
+			approved = err == nil && epic.Type == "epic" && epic.State == "approved"
+			pr.epics[epicID] = approved
+		}
+		return approved
+	})
+}
+
 // POST /api/canvas/actions  — planner proposes an action. Humans may pass
 // state "approved" to skip the gate (the gate exists for agent-proposed work).
 func (h *Handler) ProposeAction(w http.ResponseWriter, r *http.Request) {
@@ -120,6 +211,14 @@ func (h *Handler) ProposeAction(w http.ResponseWriter, r *http.Request) {
 		}
 		body.Payload = canonical
 	}
+	if body.Type == "epic" {
+		canonical, err := canonicalizeEpicPayload(body.Payload)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		body.Payload = canonical
+	}
 	action := &store.Action{
 		ID: uuid.New(), Kind: "action",
 		Type: body.Type, State: body.State,
@@ -129,6 +228,15 @@ func (h *Handler) ProposeAction(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.State == "approved" {
 		action.ApprovedBy = &body.ProposedBy
+	}
+	// Approval-policy cascade (server-side, never in the gateway): an
+	// agent-proposed task may be born approved under the canvas policy.
+	if action.Type == "task" && action.State == "proposed" {
+		pr := &policyResolver{h: h, ctx: r.Context(), canvasID: canvasID}
+		if stamp := pr.stamp(action.Payload); stamp != "" {
+			action.State = "approved"
+			action.ApprovedBy = &stamp
+		}
 	}
 	if _, err := h.store.CreateAction(r.Context(), canvasID, action); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -164,6 +272,9 @@ func (h *Handler) ProposeActionsBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "actions: at least one action is required")
 		return
 	}
+	// One resolver for the whole batch — the canvas policy and each epic's state
+	// load at most once no matter how many tasks reference them.
+	pr := &policyResolver{h: h, ctx: r.Context(), canvasID: canvasID}
 	actions := make([]*store.Action, 0, len(body.Actions))
 	for i := range body.Actions {
 		item := body.Actions[i]
@@ -189,6 +300,14 @@ func (h *Handler) ProposeActionsBatch(w http.ResponseWriter, r *http.Request) {
 			}
 			item.Payload = canonical
 		}
+		if item.Type == "epic" {
+			canonical, err := canonicalizeEpicPayload(item.Payload)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			item.Payload = canonical
+		}
 		action := &store.Action{
 			ID: uuid.New(), Kind: "action",
 			Type: item.Type, State: item.State,
@@ -198,6 +317,15 @@ func (h *Handler) ProposeActionsBatch(w http.ResponseWriter, r *http.Request) {
 		}
 		if item.State == "approved" {
 			action.ApprovedBy = &item.ProposedBy
+		}
+		// Approval-policy cascade — same rule as ProposeAction. NOTE: an epic
+		// proposed in this same batch is not yet approved, so its tasks land
+		// proposed and flow when the human approves the epic.
+		if action.Type == "task" && action.State == "proposed" {
+			if stamp := pr.stamp(action.Payload); stamp != "" {
+				action.State = "approved"
+				action.ApprovedBy = &stamp
+			}
 		}
 		actions = append(actions, action)
 	}
@@ -244,6 +372,7 @@ func (h *Handler) ReadAction(w http.ResponseWriter, r *http.Request) {
 	if action.Type == "task" {
 		var p struct {
 			LinkedIDs []uuid.UUID `json:"linkedIds"`
+			EpicID    string      `json:"epicId"`
 		}
 		_ = json.Unmarshal(action.Payload, &p)
 		linked, err := h.store.GetLinkedEntities(r.Context(), canvasID, p.LinkedIDs)
@@ -252,24 +381,39 @@ func (h *Handler) ReadAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		resp["linked"] = linked
+		// Hydrate the epic (title + state) so a session sees the batch this task
+		// belongs to without another read. Best effort — a dangling epicId is
+		// simply omitted.
+		if epicID, err := uuid.Parse(p.EpicID); err == nil {
+			if epic, err := h.store.GetAction(r.Context(), canvasID, epicID); err == nil && epic.Type == "epic" {
+				var ep struct {
+					Title string `json:"title"`
+				}
+				_ = json.Unmarshal(epic.Payload, &ep)
+				resp["epic"] = map[string]any{"id": epic.ID, "title": ep.Title, "state": epic.State}
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
 // transitionAction loads the action, checks the proposed→to move is legal,
-// applies the patch, and returns the fresh action. Shared by approve / reject /
-// update_state so the state-machine guard lives in exactly one place.
-func (h *Handler) transitionAction(w http.ResponseWriter, r *http.Request, to string, patch store.ActionStatePatch) {
+// applies the patch, and writes the fresh action to the response. Shared by
+// approve / reject / update_state so the state-machine guard lives in exactly
+// one place. Returns the fresh action and whether the transition landed (false
+// on error AND on the idempotent already-there no-op), so a caller can chain
+// follow-up work — e.g. approving an epic cascades to its tasks.
+func (h *Handler) transitionAction(w http.ResponseWriter, r *http.Request, to string, patch store.ActionStatePatch) (*store.Action, bool) {
 	canvasID := CanvasIDFromCtx(r.Context())
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid id")
-		return
+		return nil, false
 	}
 	current, err := h.store.GetAction(r.Context(), canvasID, id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
-		return
+		return nil, false
 	}
 	// Idempotency: a client whose request timed out while the server was still
 	// finishing (see broadcastStateAsync) may retry a transition that already
@@ -278,16 +422,16 @@ func (h *Handler) transitionAction(w http.ResponseWriter, r *http.Request, to st
 	// the (missed) first response.
 	if current.State == to {
 		writeJSON(w, http.StatusOK, map[string]any{"action": current})
-		return
+		return current, false
 	}
 	if !canTransition(current.State, to) {
 		writeError(w, http.StatusBadRequest, "illegal transition: "+current.State+" → "+to)
-		return
+		return nil, false
 	}
 	patch.State = to
 	if _, err := h.store.UpdateActionState(r.Context(), canvasID, id, patch); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+		return nil, false
 	}
 	// The transition is persisted — respond now and fan the new state out to WS
 	// viewers asynchronously so a slow full-canvas broadcast can't stall (and time
@@ -310,9 +454,13 @@ func (h *Handler) transitionAction(w http.ResponseWriter, r *http.Request, to st
 	fresh.UpdatedAt = time.Now().UTC()
 	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
 	writeJSON(w, http.StatusOK, map[string]any{"action": &fresh})
+	return &fresh, true
 }
 
 // POST /api/canvas/actions/{id}/approve  — human gate: proposed → approved.
+// Approving an EPIC also batch-approves its currently-proposed tasks (payload
+// epicId = the epic's id) with the 'policy:epic' provenance stamp — the
+// one-time gate that lets the whole batch flow.
 func (h *Handler) ApproveAction(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		ApprovedBy string `json:"approvedBy"`
@@ -322,7 +470,19 @@ func (h *Handler) ApproveAction(w http.ResponseWriter, r *http.Request) {
 	if approvedBy == "" {
 		approvedBy = "human"
 	}
-	h.transitionAction(w, r, "approved", store.ActionStatePatch{ApprovedBy: &approvedBy})
+	fresh, ok := h.transitionAction(w, r, "approved", store.ActionStatePatch{ApprovedBy: &approvedBy})
+	if ok && fresh.Type == "epic" {
+		// The response is already written; the cascade is follow-up work. Detach
+		// from the request context like broadcastStateAsync does, then push one
+		// more state broadcast so viewers see the tasks flip.
+		ctx := context.WithoutCancel(r.Context())
+		canvasID := CanvasIDFromCtx(ctx)
+		if _, err := h.store.ApproveEpicTasks(ctx, canvasID, fresh.ID, "policy:epic"); err != nil {
+			log.Printf("approve epic %s: batch-approving its tasks: %v", fresh.ID, err)
+			return
+		}
+		broadcastStateAsync(ctx, h.store, h.hub, canvasID)
+	}
 }
 
 // POST /api/canvas/actions/{id}/reject  — human gate: proposed → rejected.
@@ -401,6 +561,14 @@ func (h *Handler) updateActionPayload(w http.ResponseWriter, r *http.Request, pa
 	}
 	if current.Type == "task" {
 		canonical, err := canonicalizeTaskPayload(payload)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		payload = canonical
+	}
+	if current.Type == "epic" {
+		canonical, err := canonicalizeEpicPayload(payload)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return

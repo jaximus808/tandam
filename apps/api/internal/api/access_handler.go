@@ -70,6 +70,39 @@ func (h *Handler) SetCanvasVisibility(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"visibility": body.Visibility, "publicRole": body.PublicRole})
 }
 
+// PATCH /api/canvases/{code}/approval-policy — body { approvalPolicy }.
+// Owner-only, like the other canvas settings. Sets how much human gating
+// agent-proposed tasks get ('strict' | 'epic' | 'auto', migration 0033); the
+// cascade itself is enforced in the action create/approve handlers. Reading the
+// policy needs no dedicated endpoint — it rides on the canvas meta (GET
+// /api/canvases/{code} and every WS state push).
+func (h *Handler) SetCanvasApprovalPolicy(w http.ResponseWriter, r *http.Request) {
+	canvas, ok := h.requireCanvasOwner(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		ApprovalPolicy string `json:"approvalPolicy"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	switch body.ApprovalPolicy {
+	case "strict", "epic", "auto":
+	default:
+		writeError(w, http.StatusBadRequest, "approvalPolicy must be 'strict', 'epic', or 'auto'")
+		return
+	}
+	if _, err := h.store.SetCanvasApprovalPolicy(r.Context(), canvas.ID, body.ApprovalPolicy); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// Push fresh state so connected boards pick up the new policy live.
+	broadcastState(r.Context(), h.store, h.hub, canvas.ID)
+	writeJSON(w, http.StatusOK, map[string]string{"approvalPolicy": body.ApprovalPolicy})
+}
+
 // maxCanvasNameLen caps a canvas name. Names are short human labels rendered in
 // the header and dashboard cards; 120 chars is plenty and keeps a pasted essay
 // out of the title slot.

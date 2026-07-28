@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import type { CanvasMeta } from "../types";
+import type { ApprovalPolicy, CanvasMeta } from "../types";
 import posthog from "../lib/posthog";
 import {
   addCanvasAccess,
   listCanvasAccess,
   removeCanvasAccess,
+  setCanvasApprovalPolicy,
   setCanvasVisibility,
   type CanvasAccessEntry,
 } from "../lib/api";
@@ -63,6 +64,12 @@ export default function ShareDialog({ code, canvas, onClose }: Props) {
   const [savingPosture, setSavingPosture] = useState(false);
   const [postureError, setPostureError] = useState<string | null>(null);
 
+  const [approvalPolicy, setApprovalPolicy] = useState<ApprovalPolicy>(
+    canvas.approvalPolicy ?? "epic",
+  );
+  const [savingPolicy, setSavingPolicy] = useState(false);
+  const [policyError, setPolicyError] = useState<string | null>(null);
+
   const [access, setAccess] = useState<CanvasAccessEntry[] | null>(null);
   const [email, setEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<Role>("read");
@@ -105,6 +112,23 @@ export default function ShareDialog({ code, canvas, onClose }: Props) {
       setPostureError(err instanceof Error ? err.message : "Could not save");
     } finally {
       setSavingPosture(false);
+    }
+  }
+
+  // Persist an approval-policy change, optimistically reflecting it.
+  async function persistPolicy(next: ApprovalPolicy) {
+    setSavingPolicy(true);
+    setPolicyError(null);
+    const prev = approvalPolicy;
+    setApprovalPolicy(next);
+    try {
+      await setCanvasApprovalPolicy(code, next);
+      posthog.capture("canvas_approval_policy_changed", { canvas_code: code, approval_policy: next });
+    } catch (err) {
+      setApprovalPolicy(prev);
+      setPolicyError(err instanceof Error ? err.message : "Could not save");
+    } finally {
+      setSavingPolicy(false);
     }
   }
 
@@ -197,6 +221,33 @@ export default function ShareDialog({ code, canvas, onClose }: Props) {
               </div>
             )}
             {postureError && <p className="mt-2 text-[12px] text-red-600">{postureError}</p>}
+          </div>
+
+          {/* ── Agent task approval policy (migration 0033) ────────────────── */}
+          <div className="mt-4 rounded-md border border-ink/15 bg-paper p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[13px] font-medium text-ink">Agent task approval</p>
+                <p className="mt-0.5 text-[12px] leading-relaxed text-ink/55">
+                  {approvalPolicy === "strict"
+                    ? "Every agent-proposed task waits for your approval."
+                    : approvalPolicy === "auto"
+                      ? "Agent tasks are ready immediately — no approval gate."
+                      : "Approve an epic once; its tasks flow without per-task approval."}
+                </p>
+              </div>
+              <Segmented<ApprovalPolicy>
+                value={approvalPolicy}
+                disabled={savingPolicy}
+                onChange={(p) => persistPolicy(p)}
+                options={[
+                  { value: "strict", label: "Strict" },
+                  { value: "epic", label: "Epic" },
+                  { value: "auto", label: "Auto" },
+                ]}
+              />
+            </div>
+            {policyError && <p className="mt-2 text-[12px] text-red-600">{policyError}</p>}
           </div>
 
           {/* ── Share with specific people ─────────────────────────────────── */}
