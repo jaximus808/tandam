@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { X, Plus } from "lucide-react";
 import type { Document, DocumentType } from "../types";
 import { sendOp } from "../lib/ws";
-import { modeTheme } from "../lib/modeTheme";
+import { BOARD_THEME, modeTheme } from "../lib/modeTheme";
 import { DOC_TYPE_TO_MODE, DOC_TYPE_LABEL, CREATABLE_DOC_TYPES } from "../lib/docTypes";
 
 interface Props {
@@ -14,6 +14,10 @@ interface Props {
   onClose: (id: string) => void;
   /** Create a new document of this type and open it. */
   onCreate: (type: DocumentType) => void;
+  /** The pinned client-side Board pseudo-tab (full-page task board). It is NOT
+      a document — always present, never closable, purely local navigation. */
+  boardActive: boolean;
+  onSelectBoard: () => void;
   readOnly: boolean;
 }
 
@@ -27,6 +31,8 @@ export default function DocumentTabs({
   onSelect,
   onClose,
   onCreate,
+  boardActive,
+  onSelectBoard,
   readOnly,
 }: Props) {
   const [addOpen, setAddOpen] = useState(false);
@@ -68,6 +74,27 @@ export default function DocumentTabs({
 
   return (
     <div className="flex items-center gap-0.5 min-w-0">
+      {/* Pinned Board pseudo-tab — outside the scrollable doc-tab list so it's
+          always reachable, styled like a tab but in the brand teal (it's product
+          chrome, not a document). */}
+      <button
+        onClick={onSelectBoard}
+        className={[
+          "flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-sm font-medium shrink-0 transition-colors",
+          boardActive ? "" : "text-ink/55 hover:bg-ink/5 hover:text-ink/80",
+        ].join(" ")}
+        style={boardActive ? { backgroundColor: BOARD_THEME.soft, color: BOARD_THEME.solid } : undefined}
+        title="Task board — every task and epic on this canvas"
+        aria-pressed={boardActive}
+      >
+        <span
+          className="h-2 w-2 rounded-full shrink-0"
+          style={{ backgroundColor: BOARD_THEME.solid }}
+        />
+        Board
+      </button>
+      <span aria-hidden="true" className="mx-1 h-4 w-px shrink-0 bg-ink/10" />
+
       {/* Only the tab list scrolls. The "+" and its menu live OUTSIDE this
           overflow container — a dropdown rendered inside an `overflow-x-auto`
           box gets clipped vertically (overflow-y computes to auto too), which
