@@ -270,6 +270,22 @@ export async function setCanvasVisibility(
   if (!res.ok) throw await apiError(res, "Could not update visibility");
 }
 
+// Set the canvas approval policy for agent-proposed tasks (owner-only,
+// migration 0033): 'strict' = every agent task awaits approval; 'epic'
+// (default) = approving an epic lets its tasks flow; 'auto' = no gate.
+export async function setCanvasApprovalPolicy(
+  code: string,
+  approvalPolicy: "strict" | "epic" | "auto",
+): Promise<void> {
+  const res = await fetch(`/api/canvases/${code}/approval-policy`, {
+    method: "PATCH",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ approvalPolicy }),
+  });
+  if (!res.ok) throw await apiError(res, "Could not update approval policy");
+}
+
 // Rename a canvas (owner-only). The backend broadcasts fresh state over WS, so
 // connected boards pick up the new name live; the caller updates optimistically.
 export async function setCanvasName(code: string, name: string): Promise<void> {

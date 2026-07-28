@@ -4,8 +4,14 @@ export type RoadmapStatus = "todo" | "in_progress" | "done" | "blocked";
 export type TravelMode = "flight" | "train" | "drive";
 export type SheetColumnType = "text" | "number" | "date" | "checkbox";
 export type ChartType = "bar" | "line" | "area" | "pie";
-// v1 (Tandem × ANDR) execution primitive.
-export type ActionType = "navigate" | "task";
+// v1 (Tandem × ANDR) execution primitive. "epic" = a batch of related tasks
+// approved as one unit (lifecycle proposed → approved only; never executed —
+// progress is derived from its tasks).
+export type ActionType = "navigate" | "task" | "epic";
+// How much human gating agent-proposed tasks get on a canvas (migration 0033):
+// 'strict' = every agent task lands proposed; 'epic' (default) = tasks under an
+// APPROVED epic are born approved; 'auto' = every agent task born approved.
+export type ApprovalPolicy = "strict" | "epic" | "auto";
 export type ActionState =
   | "proposed"
   | "approved"
@@ -29,6 +35,7 @@ export interface CanvasMeta {
   ownerUserId?: string; // set when a logged-in user owns the canvas; absent = anonymous
   visibility?: "public" | "private"; // access posture (migration 0021); absent treated as public
   publicRole?: "read" | "write";     // when public, what the code grants
+  approvalPolicy?: ApprovalPolicy;   // agent-task gating (migration 0033); absent treated as "epic"
   yourRole?: "write" | "read" | "none"; // requester's resolved role; set per-connection on the state push
   version: number;
   createdAt: string; // ISO timestamp (Go API returns strings)
@@ -182,6 +189,22 @@ export interface TaskPayload {
   body?: string;
   linkedIds?: EntityId[];
   assignee?: "agent" | "human";
+  // The epic (Action of type "epic") this task belongs to. Under the "epic"
+  // approval policy, a task created under an APPROVED epic is born approved
+  // (approved_by = "policy:epic").
+  epicId?: EntityId;
+  // Agent self-flag: true forces this task to land 'proposed' regardless of
+  // the canvas approval policy (use it when deviating from the approved plan).
+  requiresApproval?: boolean;
+}
+
+// Payload for `type: "epic"` — a named batch of related tasks approved as one
+// unit. Tasks point back via their payload epicId. Epics only ever move
+// proposed → approved (or rejected); they are never claimed/executed.
+export interface EpicPayload {
+  title: string;
+  body?: string;
+  linkedIds?: EntityId[];
 }
 
 export interface Action {
@@ -189,7 +212,7 @@ export interface Action {
   kind: "action";
   type: ActionType;
   state: ActionState;
-  payload: NavigatePayload | TaskPayload;
+  payload: NavigatePayload | TaskPayload | EpicPayload;
   proposedBy: string;        // agent id (provenance)
   approvedBy?: string;       // human/agent id that approved
   claimedBy?: string;        // agent holding the executing claim (task_start)

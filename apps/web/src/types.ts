@@ -22,6 +22,8 @@ export type {
   ActionState,
   NavigatePayload,
   TaskPayload,
+  EpicPayload,
+  ApprovalPolicy,
   Agent,
   AgentRole,
   AgentStatus,

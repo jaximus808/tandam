@@ -1,7 +1,7 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import posthog from "../lib/posthog";
-import { Bot, Check, ChevronDown, ChevronsLeft, ChevronUp, Link2, Pencil, Plus, RotateCcw, Trash2, User, X } from "lucide-react";
-import type { Action, CanvasState, TaskPayload } from "../types";
+import { Bot, Check, ChevronDown, ChevronsLeft, ChevronUp, Layers, Link2, Pencil, Plus, RotateCcw, Trash2, User, X } from "lucide-react";
+import type { Action, CanvasState, EpicPayload, TaskPayload } from "../types";
 import {
   approveAction,
   createTask,
@@ -84,9 +84,33 @@ export default function TasksPanel({
     [state.actions],
   );
 
-  const queue = tasks.filter((t) => t.state === "proposed" || t.state === "approved");
-  const active = tasks.filter((t) => t.state === "executing");
-  const finished = tasks.filter((t) => t.state === "done" || t.state === "failed" || t.state === "rejected");
+  // Epics: batches of tasks approved as one unit. Tasks referencing an epic
+  // (payload.epicId) render grouped under it; the rest keep the flat sections.
+  const epics = useMemo(
+    () =>
+      Object.values(state.actions ?? {})
+        .filter((a) => a.type === "epic")
+        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)),
+    [state.actions],
+  );
+  const tasksByEpic = useMemo(() => {
+    const m = new Map<string, Action[]>();
+    for (const t of tasks) {
+      const eid = taskPayload(t).epicId;
+      if (eid) m.set(eid, [...(m.get(eid) ?? []), t]);
+    }
+    return m;
+  }, [tasks]);
+  const epicIds = useMemo(() => new Set(epics.map((e) => e.id)), [epics]);
+  // Tasks with no epic (or a dangling epicId) flow through the classic sections.
+  const ungrouped = tasks.filter((t) => {
+    const eid = taskPayload(t).epicId;
+    return !eid || !epicIds.has(eid);
+  });
+
+  const queue = ungrouped.filter((t) => t.state === "proposed" || t.state === "approved");
+  const active = ungrouped.filter((t) => t.state === "executing");
+  const finished = ungrouped.filter((t) => t.state === "done" || t.state === "failed" || t.state === "rejected");
 
   const targets = useMemo(() => linkTargets(state), [state]);
   const targetLabel = useMemo(() => new Map(targets.map((t) => [t.id, t.label])), [targets]);
@@ -191,6 +215,81 @@ export default function TasksPanel({
     );
   }
 
+  // An epic group: header (title + state + one-shot approval) above its tasks.
+  // Approving the epic server-side batch-approves its proposed tasks, so the
+  // whole batch flips to Ready on the next state push.
+  function renderEpicGroup(epic: Action) {
+    const p = (epic.payload ?? {}) as EpicPayload;
+    const chip = STATE_CHIP[epic.state] ?? STATE_CHIP.proposed;
+    const children = tasksByEpic.get(epic.id) ?? [];
+    const done = children.filter((t) => t.state === "done").length;
+    return (
+      <div key={epic.id} className="mb-3">
+        <div className="mb-1.5 flex items-center gap-1.5 px-1">
+          <Layers size={12} className="shrink-0 text-ink/40" />
+          <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-ink/75" title={p.body || p.title}>
+            {p.title || "Untitled epic"}
+          </span>
+          {children.length > 0 && (
+            <span className="shrink-0 text-[10px] text-ink/35">
+              {done}/{children.length}
+            </span>
+          )}
+          <span
+            className="shrink-0 rounded-[4px] px-1.5 py-px text-[10px] font-semibold uppercase tracking-[0.08em]"
+            style={{ backgroundColor: chip.bg, color: chip.fg }}
+          >
+            {chip.label}
+          </span>
+        </div>
+        {epic.state === "proposed" && !readOnly && (
+          <div className="mb-1.5 px-1">
+            {rejectingId === epic.id ? (
+              <RejectForm
+                busy={busyId === epic.id}
+                onCancel={() => setRejectingId(null)}
+                onConfirm={(reason) =>
+                  void run(epic.id, async () => {
+                    await rejectAction(code, epic.id, reason || undefined);
+                    setRejectingId(null);
+                  })
+                }
+              />
+            ) : (
+              <div className="flex gap-1.5">
+                <button
+                  onClick={() =>
+                    void run(epic.id, async () => {
+                      await approveAction(code, epic.id);
+                      posthog.capture("epic_approved", { canvas_code: code, epic_title: p.title });
+                    })
+                  }
+                  disabled={busyId === epic.id}
+                  title="Approves the epic and every proposed task under it"
+                  className="flex flex-1 items-center justify-center gap-1 rounded-lg bg-ink px-2 py-1.5 text-xs font-semibold text-paper transition-opacity disabled:opacity-40"
+                >
+                  <Check size={13} /> Approve epic
+                </button>
+                <button
+                  onClick={() => setRejectingId(epic.id)}
+                  disabled={busyId === epic.id}
+                  className="flex flex-1 items-center justify-center gap-1 rounded-lg border border-ink/15 px-2 py-1.5 text-xs font-medium text-ink/60 transition-colors hover:border-ink/30 disabled:opacity-40"
+                >
+                  <X size={13} /> Reject
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+        {children.length > 0 ? (
+          <div className="flex flex-col gap-1.5">{children.map(renderTask)}</div>
+        ) : (
+          <p className="px-1 text-[11px] text-ink/35">No tasks under this epic yet.</p>
+        )}
+      </div>
+    );
+  }
+
   return (
     <>
       <div className="flex items-center justify-between border-b border-ink/10 px-3 py-3 pl-4">
@@ -234,11 +333,20 @@ export default function TasksPanel({
           </div>
         )}
 
-        {tasks.length === 0 && !composing && (
+        {tasks.length === 0 && epics.length === 0 && !composing && (
           <p className="px-1 py-2 text-[12px] leading-relaxed text-ink/45">
             No tasks yet. Write one here for an agent session to pick up, or ask your agent to
             draft some for your approval.
           </p>
+        )}
+
+        {epics.length > 0 && (
+          <div className="mb-3">
+            <div className="mb-1.5 px-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink/35">
+              Epics · {epics.length}
+            </div>
+            {epics.map(renderEpicGroup)}
+          </div>
         )}
 
         <Section title="Queue" tasks={queue}>

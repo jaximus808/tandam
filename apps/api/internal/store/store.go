@@ -73,6 +73,10 @@ type Canvas struct {
 	Visibility string    `json:"visibility,omitempty"`
 	PublicRole string    `json:"publicRole,omitempty"`
 	YourRole   string    `json:"yourRole,omitempty"`
+	// ApprovalPolicy ('strict'|'epic'|'auto', migration 0033) sets how much human
+	// gating agent-proposed tasks get. Empty (legacy row) is treated as 'epic',
+	// the DB default. Enforced in the action create/approve handlers.
+	ApprovalPolicy string `json:"approvalPolicy,omitempty"`
 	Version    int       `json:"version"`
 	CreatedAt  time.Time `json:"createdAt"`
 	UpdatedAt  time.Time `json:"updatedAt"`
@@ -703,6 +707,9 @@ type Store interface {
 	ResolveCanvasRole(ctx context.Context, canvas *Canvas, userID *uuid.UUID) (string, error)
 	SetCanvasVisibility(ctx context.Context, canvasID uuid.UUID, visibility, publicRole string) (int, error)
 	SetCanvasName(ctx context.Context, canvasID uuid.UUID, name string) (int, error)
+	// SetCanvasApprovalPolicy sets the canvas approval policy
+	// ('strict'|'epic'|'auto', migration 0033). Validation is the caller's job.
+	SetCanvasApprovalPolicy(ctx context.Context, canvasID uuid.UUID, policy string) (int, error)
 	ListCanvasAccess(ctx context.Context, canvasID uuid.UUID) ([]*CanvasAccess, error)
 	UpsertCanvasAccess(ctx context.Context, canvasID, userID uuid.UUID, role string) error
 	DeleteCanvasAccess(ctx context.Context, canvasID, userID uuid.UUID) error
@@ -833,6 +840,11 @@ type Store interface {
 	ReleaseAction(ctx context.Context, canvasID, id uuid.UUID) (*Action, int, error)
 	UpdateActionPayload(ctx context.Context, canvasID, id uuid.UUID, payload json.RawMessage) (int, error)
 	DeleteAction(ctx context.Context, canvasID, id uuid.UUID) (int, error)
+	// ApproveEpicTasks batch-approves every currently-proposed task under an epic
+	// (actions rows with type='task', state='proposed', payload epicId = epicID)
+	// in ONE bulk UPDATE, stamping approved_by (the 'policy:epic' provenance).
+	// Returns the new canvas version.
+	ApproveEpicTasks(ctx context.Context, canvasID, epicID uuid.UUID, approvedBy string) (int, error)
 	GetLinkedEntities(ctx context.Context, canvasID uuid.UUID, ids []uuid.UUID) ([]TaskLink, error)
 	// ReserveTaskTickets atomically reserves n consecutive per-canvas ticket
 	// numbers (reserve_task_tickets RPC, migration 0034) and returns the FIRST
