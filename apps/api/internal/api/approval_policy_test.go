@@ -188,9 +188,9 @@ func (f *policyFakeStore) GetCanvasState(_ context.Context, _ uuid.UUID) (*store
 	return nil, nil, nil, fmt.Errorf("no state in tests")
 }
 
-// TouchAgentLastSeen is the best-effort liveness heartbeat on claim/complete —
+// TouchOrCreateAgent is the best-effort liveness heartbeat on claim/complete —
 // irrelevant to the policy cascade under test.
-func (f *policyFakeStore) TouchAgentLastSeen(_ context.Context, _ uuid.UUID, _ string) error {
+func (f *policyFakeStore) TouchOrCreateAgent(_ context.Context, _ uuid.UUID, _ string) error {
 	return nil
 }
 

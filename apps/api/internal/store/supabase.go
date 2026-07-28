@@ -2539,27 +2539,79 @@ func (s *supabaseStore) ReorderRoadmapItems(ctx context.Context, canvasID uuid.U
 
 // ── Agents (v1 identity / provenance) ─────────────────────────────────────────
 
+// RegisterAgent UPSERTs on the (canvas_id, name) identity (unique since
+// migration 0036): a first registration inserts, re-registering the same name
+// refreshes role/model/parent_agent_id/status/last_seen_at on the EXISTING row
+// — the id never changes, so parent links and provenance stamps keep pointing
+// at the same agent instead of a fresh ghost. On return, a carries the
+// surviving row's REAL id (plus fresh status/last_seen_at) — that id is what
+// the handler must answer with. One PostgREST round-trip (the upsert returns
+// the representation) plus the version bump — same count as the old blind
+// INSERT.
 func (s *supabaseStore) RegisterAgent(ctx context.Context, canvasID uuid.UUID, a *Agent) (int, error) {
+	saved, err := s.upsertAgentByName(canvasID, a)
+	if err != nil {
+		return 0, err
+	}
+	*a = *saved
+	return s.bumpVersion(ctx, canvasID)
+}
+
+// upsertAgentByName is the single agent write path, shared by RegisterAgent and
+// the claim path's TouchOrCreateAgent so both resolve to one mechanism. It
+// POSTs with on_conflict=(canvas_id,name) + Prefer: resolution=merge-duplicates,
+// which PostgREST turns into INSERT ... ON CONFLICT (canvas_id, name) DO UPDATE
+// over exactly the payload's keys. The payload deliberately omits "id": a fresh
+// insert takes the column default (gen_random_uuid()), a conflict leaves the
+// existing id untouched — re-registering can never re-key an agent out from
+// under its children or provenance. return=representation hands the surviving
+// row (real id included) back in the same round-trip, so no select-after.
+//
+// Pre-0036 degrade: until UNIQUE (canvas_id, name) exists, Postgres rejects the
+// ON CONFLICT inference with 42P10 ("there is no unique or exclusion constraint
+// matching the ON CONFLICT specification"); postgrest-go v0.0.11 surfaces that
+// as "(42P10) ..." in the error string. We match on the code and fall back to
+// the old plain INSERT, so an API deployed ahead of the manually-applied
+// migration keeps registering agents — that window can mint duplicates exactly
+// as before, and 0036's dedupe collapses them when it lands.
+func (s *supabaseStore) upsertAgentByName(canvasID uuid.UUID, a *Agent) (*Agent, error) {
 	now := time.Now().UTC()
-	a.LastSeenAt = now
-	a.Status = "online"
+	// model / parent_agent_id are ALWAYS present (nil when unset) so a
+	// re-registration refreshes them — omitting the keys would leave a stale
+	// model or parent from an earlier registration in place on conflict. This
+	// requires 0035's parent_agent_id column, which necessarily predates 0036.
 	row := map[string]any{
-		"id": a.ID.String(), "canvas_id": canvasID.String(),
-		"name": a.Name, "role": a.Role, "status": "online",
-		"last_seen_at": now.Format(time.RFC3339),
+		"canvas_id":       canvasID.String(),
+		"name":            a.Name,
+		"role":            a.Role,
+		"status":          "online",
+		"last_seen_at":    now.Format(time.RFC3339),
+		"model":           nil,
+		"parent_agent_id": nil,
 	}
 	if a.Model != nil {
 		row["model"] = *a.Model
 	}
-	// Key added only when set, so an API deployed ahead of migration 0035 (which
-	// adds the column) still inserts unparented registrations cleanly.
 	if a.ParentAgentID != nil {
 		row["parent_agent_id"] = a.ParentAgentID.String()
 	}
-	if err := s.exec(s.client.From("agents").Insert(row, false, "", "minimal", "")); err != nil {
-		return 0, err
+	var rows []dbAgent
+	_, err := s.client.From("agents").
+		Upsert(row, "canvas_id,name", "representation", "").
+		ExecuteTo(&rows)
+	if err != nil && strings.Contains(err.Error(), "42P10") {
+		rows = rows[:0]
+		_, err = s.client.From("agents").
+			Insert(row, false, "", "representation", "").
+			ExecuteTo(&rows)
 	}
-	return s.bumpVersion(ctx, canvasID)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("agent upsert returned no row for %q", a.Name)
+	}
+	return toAgent(rows[0]), nil
 }
 
 // GetAgent fetches one agent row scoped to a canvas — used to validate
@@ -2582,11 +2634,13 @@ func (s *supabaseStore) GetAgent(_ context.Context, canvasID, id uuid.UUID) (*Ag
 }
 
 // TouchAgentLastSeen bumps last_seen_at for the agent the claimant identity
-// names — called on task_start/complete so a working subagent's presence stays
-// fresh without a dedicated heartbeat. Claimant is the registered agent NAME
-// (the gateway's preferred claimant) or an agent id; the generic "agent"
-// fallback names nobody and is skipped. Presence-only: no version bump — the
-// fresh timestamp rides the caller's own state broadcast.
+// names — the liveness heartbeat behind the swarm view. Claimant is the
+// registered agent NAME (the gateway's preferred claimant) or an agent id; the
+// generic "agent" fallback names nobody and is skipped. Since migration 0036
+// (canvas_id, name) is unique, so a name claimant now hits AT MOST ONE row —
+// before the constraint it bumped every duplicate of the name at once, keeping
+// ghost executors looking alive. Presence-only: no version bump — the fresh
+// timestamp rides the caller's own state broadcast.
 func (s *supabaseStore) TouchAgentLastSeen(_ context.Context, canvasID uuid.UUID, claimant string) error {
 	if claimant == "" || claimant == "agent" {
 		return nil
@@ -2602,6 +2656,46 @@ func (s *supabaseStore) TouchAgentLastSeen(_ context.Context, canvasID uuid.UUID
 		}, "minimal", "").
 		Eq("canvas_id", canvasID.String()).
 		Eq(col, claimant))
+}
+
+// TouchOrCreateAgent is the claim-path presence refresh (task_start and the
+// named terminal transitions): touch the claimant's row, and when a NAME
+// claimant has no row — a session that claimed work without ever calling
+// agent_register — create a minimal executor row via the same (canvas_id, name)
+// upsert RegisterAgent uses, so any session that takes a task still shows up in
+// presence/swarm views (the web side matches claimedBy → agent name). The
+// generic "agent" identity names nobody and is skipped; an id claimant is only
+// touched (an id was minted by a real registration — if that row is gone there
+// is no name to recreate it under). Round-trips: the touch is one (its
+// representation return doubles as the existence probe); the create adds one
+// more, only on the first unregistered claim. Best-effort by contract — called
+// detached, never on the claim's critical path — and race-safe: two concurrent
+// first claims by the same name collapse onto one row under 0036's constraint.
+// No version bump; a created row reaches viewers on the next state broadcast.
+func (s *supabaseStore) TouchOrCreateAgent(ctx context.Context, canvasID uuid.UUID, claimant string) error {
+	if claimant == "" || claimant == "agent" {
+		return nil
+	}
+	if _, err := uuid.Parse(claimant); err == nil {
+		return s.TouchAgentLastSeen(ctx, canvasID, claimant)
+	}
+	var rows []dbAgent
+	_, err := s.client.From("agents").
+		Update(map[string]any{
+			"last_seen_at": time.Now().UTC().Format(time.RFC3339),
+			"status":       "online",
+		}, "representation", "").
+		Eq("canvas_id", canvasID.String()).
+		Eq("name", claimant).
+		ExecuteTo(&rows)
+	if err != nil {
+		return err
+	}
+	if len(rows) > 0 {
+		return nil
+	}
+	_, err = s.upsertAgentByName(canvasID, &Agent{Name: claimant, Role: "executor"})
+	return err
 }
 
 // ── Actions (v1 execution primitive) ──────────────────────────────────────────
