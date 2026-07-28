@@ -299,10 +299,17 @@ export default function TaskBoard({
   code,
   state,
   readOnly,
+  focusTaskId,
+  onFocusHandled,
 }: {
   code: string;
   state: CanvasState;
   readOnly: boolean;
+  // TDM-14 one-shot focus handoff (from the header agent presence): when a
+  // task id arrives, scope to its epic, scroll its card into view, open its
+  // detail — then hand the token back via onFocusHandled.
+  focusTaskId?: string | null;
+  onFocusHandled?: () => void;
 }) {
   // Sidebar scope — raw as stored; validated against the live epic set below.
   const [scope, setScope] = useState<string>(() => {
@@ -524,6 +531,34 @@ export default function TaskBoard({
     if (detailId && !detail) setDetailId(null);
   }, [detailId, detail]);
 
+  // TDM-14: consume the one-shot focus handoff from the header agent presence.
+  // Scope the board to the task's epic (or "No epic" for epicless tasks, unless
+  // the All-tasks lens already shows it), open its detail slide-over, and scroll
+  // its card into view — then hand the token back so normal browsing resumes.
+  // If the task left `executing` meanwhile, this still opens it wherever it now
+  // sits; a task that vanished entirely just clears the handoff.
+  useEffect(() => {
+    if (!focusTaskId) return;
+    const t = (state.actions ?? {})[focusTaskId];
+    if (t) {
+      const eid = taskPayload(t).epicId;
+      if (eid && epicIds.has(eid)) selectScope(eid);
+      else if (effectiveScope !== "all") selectScope("none");
+      setDetailId(focusTaskId);
+      // The card renders into the (possibly new) scope on the next paint —
+      // scroll once the DOM has settled. Deliberately not cleaned up: the
+      // handoff reset below re-runs this effect immediately, and a cleanup
+      // would cancel the scroll before it fires.
+      setTimeout(() => {
+        document
+          .querySelector(`[data-task-id="${CSS.escape(focusTaskId)}"]`)
+          ?.scrollIntoView({ block: "center", behavior: "smooth" });
+      }, 80);
+    }
+    onFocusHandled?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusTaskId]);
+
   // Keyboard: "/" focuses search; Escape closes the detail panel first, then
   // clears the filters. Bound per-render so the closures stay fresh.
   useEffect(() => {
@@ -575,6 +610,7 @@ export default function TaskBoard({
     return (
       <div
         key={t.id}
+        data-task-id={t.id}
         onClick={() => setDetailId(t.id)}
         className="cursor-pointer rounded-xl border border-ink/10 bg-surface p-2.5 transition-colors hover:border-ink/25"
       >

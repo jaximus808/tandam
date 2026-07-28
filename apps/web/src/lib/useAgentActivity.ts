@@ -55,6 +55,13 @@ export interface PresentAgent {
   // "TDM-7 Make claiming atomic" — the executing task whose claimedBy matches
   // this agent's name (or id). Absent when the agent holds no claim.
   taskLabel?: string;
+  // The claimed task itself, for click-through ("following them = seeing their
+  // task"): action id, display ticket ("TDM-7"), its epic (if any), and when
+  // the claim was taken (the header mini-chip follows the newest claimant).
+  taskId?: string;
+  taskTicket?: string;
+  taskEpicId?: string;
+  taskClaimedAt?: string;
 }
 
 // ── Swarm liveness ───────────────────────────────────────────────────────────
@@ -365,23 +372,38 @@ export function useAgentActivity(
   const agents = useMemo<PresentAgent[]>(() => {
     const all = state ? Object.values(state.agents) : [];
     // Task attribution: claimant identity (task_start stamps the registered
-    // agent NAME, id as fallback) → "TDM-7 <title>" label of the executing task.
-    const claims = new Map<string, string>();
+    // agent NAME, id as fallback) → the executing task it holds: display label
+    // ("TDM-7 <title>") plus the id/ticket/epic the click-through needs.
+    type Claim = { id: string; label: string; ticketId?: string; epicId?: string; claimedAt?: string };
+    const claims = new Map<string, Claim>();
     for (const act of Object.values(state?.actions ?? {})) {
       if (act.type !== "task" || act.state !== "executing" || !act.claimedBy) continue;
-      const title = (act.payload as { title?: string }).title ?? "";
-      claims.set(act.claimedBy, [act.ticketId, title].filter(Boolean).join(" ") || "a task");
+      const p = act.payload as { title?: string; epicId?: string };
+      claims.set(act.claimedBy, {
+        id: act.id,
+        label: [act.ticketId, p.title].filter(Boolean).join(" ") || "a task",
+        ticketId: act.ticketId,
+        epicId: p.epicId,
+        claimedAt: act.claimedAt,
+      });
     }
     const claudey = (a: { name?: string; model?: string }) =>
       /claude/i.test(a.model ?? "") || /claude/i.test(a.name ?? "");
-    const present = (a: (typeof all)[number]): PresentAgent => ({
-      id: a.id,
-      name: a.name || "Agent",
-      isClaude: claudey(a),
-      role: a.role,
-      parentId: a.parentAgentId,
-      taskLabel: claims.get(a.name) ?? claims.get(a.id),
-    });
+    const present = (a: (typeof all)[number]): PresentAgent => {
+      const claim = claims.get(a.name) ?? claims.get(a.id);
+      return {
+        id: a.id,
+        name: a.name || "Agent",
+        isClaude: claudey(a),
+        role: a.role,
+        parentId: a.parentAgentId,
+        taskLabel: claim?.label,
+        taskId: claim?.id,
+        taskTicket: claim?.ticketId,
+        taskEpicId: claim?.epicId,
+        taskClaimedAt: claim?.claimedAt,
+      };
+    };
     const live = new Map<string, PresentAgent>();
     for (const a of all) {
       if (a.status !== "online") continue;
