@@ -340,6 +340,11 @@ function TaskCard({
     <div className="group/task rounded-xl border border-ink/10 bg-surface p-2.5">
       <div className="flex items-start justify-between gap-2">
         <span className={`text-[13px] font-semibold leading-snug ${terminal ? "text-ink/55" : "text-ink"}`}>
+          {task.ticketId && (
+            <span className="mr-1.5 font-mono text-[10px] font-medium tracking-tight text-ink/40">
+              {task.ticketId}
+            </span>
+          )}
           {p.title || "Untitled task"}
         </span>
         <span className="flex shrink-0 items-center gap-1">

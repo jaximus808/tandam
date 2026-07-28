@@ -798,12 +798,14 @@ export async function handleTool(
           payload?: { title?: string; assignee?: string };
           proposedBy: string;
           result?: string;
+          ticketId?: string;
           createdAt: string;
         }>;
       };
       // Compact projection: no bodies, no linkedIds. canvas_task_get has the rest.
       const tasks = (res.actions ?? []).map((a) => ({
         id: a.id,
+        ...(a.ticketId ? { ticketId: a.ticketId } : {}),
         title: a.payload?.title ?? "",
         state: a.state,
         assignee: a.payload?.assignee ?? "agent",
@@ -2617,7 +2619,9 @@ const RAW_TOOLS = [
       "Add a task to the canvas work queue for a future agent session to implement. " +
       "Enters state 'proposed'; a human approves it in the web UI before any session " +
       "picks it up. Keep `body` a concise brief — heavy context belongs in roadmap " +
-      "items / notes referenced via linkedIds, which canvas_task_get hydrates later.",
+      "items / notes referenced via linkedIds, which canvas_task_get hydrates later. " +
+      "The created task gets a per-canvas ticket ID (e.g. 'TDM-142'), returned as " +
+      "`ticketId` — the short handle for referring to the task in commits and chat.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -2683,8 +2687,8 @@ const RAW_TOOLS = [
   {
     name: "canvas_task_list",
     description:
-      "List AGENT tasks as a compact queue: {id, title, state, assignee, proposedBy, " +
-      "result?, createdAt} — no bodies or linked context. START HERE when looking for " +
+      "List AGENT tasks as a compact queue: {id, ticketId?, title, state, assignee, " +
+      "proposedBy, result?, createdAt} — no bodies or linked context. START HERE when looking for " +
       "work instead of canvas_state_read; then canvas_task_get exactly the task you'll " +
       "work on. state='approved' = ready to pick up. Human todos are excluded by " +
       "default; pass assignee='human' or 'any' to see them.",
@@ -2719,7 +2723,9 @@ const RAW_TOOLS = [
     name: "canvas_task_start",
     description:
       "Claim an approved task before working on it (approved → executing) so other " +
-      "sessions listing the queue skip it.",
+      "sessions listing the queue skip it. The returned action carries the task's " +
+      "`ticketId` (e.g. 'TDM-142') — include that ticket ID in any commit messages " +
+      "for this work so the commits trace back to the task.",
     inputSchema: {
       type: "object" as const,
       properties: { id: { type: "string" } },
@@ -2731,12 +2737,13 @@ const RAW_TOOLS = [
     description:
       "Finish a task with a result summary. Marks it 'done' (or 'failed' via status) — " +
       "auto-claims first if you skipped canvas_task_start. `result` should be a short " +
-      "human-readable summary of what was done; it shows in the web Tasks panel.",
+      "human-readable summary of what was done, INCLUDING the commit hash(es) of the " +
+      "work when commits were made; it shows in the web Tasks panel.",
     inputSchema: {
       type: "object" as const,
       properties: {
         id: { type: "string" },
-        result: { type: "string", description: "What was done / where (e.g. commit, PR, file)." },
+        result: { type: "string", description: "What was done / where — include the commit hash(es), PR, or files touched." },
         status: { type: "string", enum: ["done", "failed"] },
         error: { type: "string", description: "Failure detail when status='failed'." },
       },

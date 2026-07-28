@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -306,8 +307,27 @@ type Action struct {
 	Result       *string         `json:"result,omitempty"`
 	Error        *string         `json:"error,omitempty"`
 	LinkedPinIDs []uuid.UUID     `json:"linkedPinIds"`
-	CreatedAt    time.Time       `json:"createdAt"`
-	UpdatedAt    time.Time       `json:"updatedAt"`
+	// Ticket is the per-canvas sequential task number (type "task" only; nil
+	// for other action types). Only the integer is stored — the "TDM-<n>"
+	// display form is added at serialization time (see MarshalJSON).
+	Ticket    *int      `json:"ticket,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// MarshalJSON adds the ticket's display form ("TDM-<n>", as ticketId) to every
+// serialization of an Action — REST responses and WS state broadcasts alike —
+// while the DB stores only the integer.
+func (a *Action) MarshalJSON() ([]byte, error) {
+	type actionAlias Action // alias sheds the method, avoiding recursion
+	out := struct {
+		*actionAlias
+		TicketID string `json:"ticketId,omitempty"`
+	}{actionAlias: (*actionAlias)(a)}
+	if a.Ticket != nil {
+		out.TicketID = fmt.Sprintf("TDM-%d", *a.Ticket)
+	}
+	return json.Marshal(out)
 }
 
 // TaskLink is a linked entity resolved from a task action's payload.linkedIds —
@@ -779,6 +799,11 @@ type Store interface {
 	UpdateActionPayload(ctx context.Context, canvasID, id uuid.UUID, payload json.RawMessage) (int, error)
 	DeleteAction(ctx context.Context, canvasID, id uuid.UUID) (int, error)
 	GetLinkedEntities(ctx context.Context, canvasID uuid.UUID, ids []uuid.UUID) ([]TaskLink, error)
+	// ReserveTaskTickets atomically reserves n consecutive per-canvas ticket
+	// numbers (reserve_task_tickets RPC, migration 0034) and returns the FIRST
+	// of the range. Race-safe under concurrent task creation: the increment is
+	// a single UPDATE on the canvas row.
+	ReserveTaskTickets(ctx context.Context, canvasID uuid.UUID, n int) (int, error)
 
 	// Users
 	UpsertUserByGoogleSub(ctx context.Context, u *User) (*User, error)
