@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import {
   Bot,
   Check,
   GitCommitHorizontal,
   Layers,
   Link2,
+  PanelLeft,
   Pencil,
   RotateCcw,
   Search,
@@ -25,15 +26,25 @@ import posthog from "../lib/posthog";
 /* ─────────────────────────────────────────────────────────────────────────────
    TaskBoard — the full-page task surface, opened from the pinned "Board" tab.
 
-   Two projections of the same Action rows (type "task" / "epic"):
-     · By state — a kanban: Proposed / Ready / Working / Done / Failed+Rejected.
-     · By epic  — swimlanes per epic with an n/m-done progress bar (the "watch
-       the project move forward" view), epicless tasks in a final lane.
+   Epics are the NAVIGATION LENS, not items on the board. A left sidebar lists
+   the epic timeline in creation order (oldest first — it reads as the
+   project's sequence): state chip, n/m-done mini progress bar, an elapsed
+   "drained in Xm" annotation once an approved epic's tasks all reach a
+   terminal state, and inline Approve / Reject on proposed epics — the sidebar
+   doubles as the approval inbox. Two sticky pseudo-entries sit on top:
+   "All tasks" and "No epic" (no or dangling epicId). The selection persists
+   in localStorage and falls back to All tasks if the stored epic vanished.
 
-   A compact filter bar (search + state / epic / claimant / assignee / commit
-   chips, AND-composed) sits over both projections, so the Done/Failed history
+   The main area is ONE kanban (Proposed / Ready / Working / Done /
+   Failed+Rejected), always scoped to the sidebar selection. Scoped to an
+   epic, a compact header shows the epic's title / clamped body / progress /
+   Approve-Reject, and cards drop the (now redundant) epic chip; in All-tasks
+   scope the chip stays and clicking it jumps the sidebar to that epic.
+
+   A compact filter bar (search + state / claimant / assignee / commit chips,
+   AND-composed) applies within the selected scope, so the Done/Failed history
    is genuinely browsable. "/" focuses search; Escape closes the detail panel,
-   then clears filters. Nothing about filters is persisted.
+   then clears filters. Filters are not persisted; the scope is.
 
    Everything renders from the same version-gated canvas-state props as every
    other view, so claims/completions move cards live over WS — no polling, no
@@ -65,9 +76,11 @@ const COLUMNS: { key: string; label: string; states: ActionState[]; dot: string 
   { key: "closed",   label: "Failed / Rejected", states: ["failed", "rejected"], dot: "#F43F5E" },
 ];
 
-// Which board projection is showing — a viewer preference, remembered globally.
-const VIEW_KEY = "tandem.board.view";
-type BoardView = "state" | "epic";
+// Sidebar scope — which lens the kanban shows: "all" | "none" | an epic id.
+// Persisted so the board reopens where you left it.
+const SCOPE_KEY = "tandem.board.epic";
+
+const TERMINAL_STATES: ActionState[] = ["done", "failed", "rejected"];
 
 function taskPayload(a: Action): TaskPayload {
   return (a.payload ?? {}) as TaskPayload;
@@ -111,6 +124,64 @@ function ageOf(iso: string): string {
 function fullDate(iso: string): string {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
+}
+
+// Human duration for the epic elapsed annotation ("22m", "1h 4m", "3d 2h").
+function elapsedLabel(ms: number): string {
+  const m = Math.floor(ms / 60_000);
+  if (m < 1) return "<1m";
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) {
+    const rm = m % 60;
+    return rm ? `${h}h ${rm}m` : `${h}h`;
+  }
+  const d = Math.floor(h / 24);
+  const rh = h % 24;
+  return rh ? `${d}d ${rh}h` : `${d}d`;
+}
+
+// "drained in 22m" — how long an epic took to empty once approved. Epics only
+// move proposed → approved and are never claimed or executed, so an approved
+// epic's updatedAt IS its approval timestamp; the end is the newest updatedAt
+// among its tasks (the moment each hit its terminal state). Only shown when
+// every task is terminal and the span is trustworthy (positive, parseable).
+function epicDrain(epic: Action, epicTasks: Action[]): string | null {
+  if (epic.state !== "approved" || epicTasks.length === 0) return null;
+  if (!epicTasks.every((t) => TERMINAL_STATES.includes(t.state))) return null;
+  const start = new Date(epic.updatedAt).getTime();
+  const end = Math.max(...epicTasks.map((t) => new Date(t.updatedAt).getTime()));
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+  return `drained in ${elapsedLabel(end - start)}`;
+}
+
+// Segmented progress: done in emerald, in-flight in pulsing violet, on an ink
+// track — the at-a-glance "is this moving?" signal, shared by the sidebar
+// entries and the scoped-epic header.
+function ProgressBar({
+  done,
+  working,
+  total,
+  className = "",
+}: {
+  done: number;
+  working: number;
+  total: number;
+  className?: string;
+}) {
+  return (
+    <div className={`flex overflow-hidden rounded-full bg-ink/[0.08] ${className}`}>
+      {total > 0 && done > 0 && (
+        <div className="h-full bg-emerald-500" style={{ width: `${(done / total) * 100}%` }} />
+      )}
+      {total > 0 && working > 0 && (
+        <div
+          className="h-full animate-pulse bg-violet-500/80"
+          style={{ width: `${(working / total) * 100}%` }}
+        />
+      )}
+    </div>
+  );
 }
 
 function StateChip({ state, className = "" }: { state: string; className?: string }) {
@@ -201,7 +272,6 @@ function ApproveRejectControls({
 
 type Filters = {
   state: "all" | ActionState;
-  epic: "all" | "none" | string; // "none" = epicless, otherwise an epic id
   claimant: "all" | string;
   assignee: "all" | "agent" | "human";
   hasCommit: boolean;
@@ -209,7 +279,6 @@ type Filters = {
 
 const NO_FILTERS: Filters = {
   state: "all",
-  epic: "all",
   claimant: "all",
   assignee: "all",
   hasCommit: false,
@@ -227,13 +296,16 @@ export default function TaskBoard({
   state: CanvasState;
   readOnly: boolean;
 }) {
-  const [view, setView] = useState<BoardView>(() => {
+  // Sidebar scope — raw as stored; validated against the live epic set below.
+  const [scope, setScope] = useState<string>(() => {
     try {
-      return localStorage.getItem(VIEW_KEY) === "epic" ? "epic" : "state";
+      return localStorage.getItem(SCOPE_KEY) ?? "all";
     } catch {
-      return "state";
+      return "all";
     }
   });
+  // Mobile only — on md+ the sidebar is always visible.
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
@@ -253,7 +325,6 @@ export default function TaskBoard({
   const filtering =
     query !== "" ||
     filters.state !== "all" ||
-    filters.epic !== "all" ||
     filters.claimant !== "all" ||
     filters.assignee !== "all" ||
     filters.hasCommit;
@@ -264,10 +335,11 @@ export default function TaskBoard({
     setFilters(NO_FILTERS);
   }
 
-  function switchView(v: BoardView) {
-    setView(v);
+  function selectScope(s: string) {
+    setScope(s);
+    setSidebarOpen(false); // mobile: picking a scope dismisses the drawer
     try {
-      localStorage.setItem(VIEW_KEY, v);
+      localStorage.setItem(SCOPE_KEY, s);
     } catch {
       /* preference only */
     }
@@ -280,11 +352,13 @@ export default function TaskBoard({
         .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)),
     [state.actions],
   );
+  // Creation order, OLDEST first — the sidebar timeline reads as the
+  // project's sequence, top to bottom.
   const epics = useMemo(
     () =>
       Object.values(state.actions ?? {})
         .filter((a) => a.type === "epic")
-        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)),
+        .sort((a, b) => (a.createdAt > b.createdAt ? 1 : -1)),
     [state.actions],
   );
   const epicIds = useMemo(() => new Set(epics.map((e) => e.id)), [epics]);
@@ -300,7 +374,43 @@ export default function TaskBoard({
     return [...s].sort();
   }, [tasks]);
 
-  // One predicate, AND-composed — the same filter feeds both projections.
+  // Every task grouped under its (valid) epic — unfiltered, feeds the sidebar
+  // progress bars and the scoped kanban alike.
+  const tasksByEpic = useMemo(() => {
+    const m = new Map<string, Action[]>();
+    for (const t of tasks) {
+      const eid = taskPayload(t).epicId;
+      if (eid && epicIds.has(eid)) m.set(eid, [...(m.get(eid) ?? []), t]);
+    }
+    return m;
+  }, [tasks, epicIds]);
+  // No epic, or a dangling epicId — the "No epic" scope.
+  const epiclessAll = useMemo(
+    () =>
+      tasks.filter((t) => {
+        const eid = taskPayload(t).epicId;
+        return !eid || !epicIds.has(eid);
+      }),
+    [tasks, epicIds],
+  );
+
+  // The stored scope may point at an epic that no longer exists — fall back to
+  // All tasks. Derived (not an effect) so a state push that still holds the
+  // epic recovers the selection instead of clobbering it.
+  const effectiveScope =
+    scope === "all" || scope === "none" || epicIds.has(scope) ? scope : "all";
+  const scopedEpic =
+    effectiveScope !== "all" && effectiveScope !== "none"
+      ? epics.find((e) => e.id === effectiveScope)
+      : undefined;
+
+  const scopedTasks = useMemo(() => {
+    if (effectiveScope === "none") return epiclessAll;
+    if (scopedEpic) return tasksByEpic.get(scopedEpic.id) ?? [];
+    return tasks;
+  }, [effectiveScope, scopedEpic, tasks, epiclessAll, tasksByEpic]);
+
+  // One predicate, AND-composed — applied WITHIN the selected scope.
   function taskMatches(t: Action): boolean {
     const p = taskPayload(t);
     if (query) {
@@ -308,11 +418,6 @@ export default function TaskBoard({
       if (!hay.includes(query)) return false;
     }
     if (filters.state !== "all" && t.state !== filters.state) return false;
-    if (filters.epic === "none") {
-      if (p.epicId && epicIds.has(p.epicId)) return false;
-    } else if (filters.epic !== "all" && p.epicId !== filters.epic) {
-      return false;
-    }
     if (filters.claimant !== "all" && t.claimedBy !== filters.claimant) return false;
     if (filters.assignee !== "all" && (p.assignee ?? "agent") !== filters.assignee) return false;
     if (filters.hasCommit && extractCommits(t.result).length === 0) return false;
@@ -320,27 +425,9 @@ export default function TaskBoard({
   }
 
   const visibleTasks = useMemo(
-    () => (filtering ? tasks.filter(taskMatches) : tasks),
+    () => (filtering ? scopedTasks.filter(taskMatches) : scopedTasks),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [tasks, filtering, query, filters, epicIds],
-  );
-
-  const tasksByEpic = useMemo(() => {
-    const m = new Map<string, Action[]>();
-    for (const t of visibleTasks) {
-      const eid = taskPayload(t).epicId;
-      if (eid && epicIds.has(eid)) m.set(eid, [...(m.get(eid) ?? []), t]);
-    }
-    return m;
-  }, [visibleTasks, epicIds]);
-  // No epic, or a dangling epicId — these flow into the final "No epic" lane.
-  const epicless = useMemo(
-    () =>
-      visibleTasks.filter((t) => {
-        const eid = taskPayload(t).epicId;
-        return !eid || !epicIds.has(eid);
-      }),
-    [visibleTasks, epicIds],
+    [scopedTasks, filtering, query, filters],
   );
 
   async function run(id: string, fn: () => Promise<void>) {
@@ -422,10 +509,13 @@ export default function TaskBoard({
   }
 
   // ── Kanban card ─────────────────────────────────────────────────────────────
-  function renderCard(t: Action, showState: boolean) {
+  // withEpicChip: only the All-tasks scope shows the epic chip (clicking it
+  // jumps the sidebar to that epic); inside an epic scope it's redundant.
+  function renderCard(t: Action, showState: boolean, withEpicChip: boolean) {
     const p = taskPayload(t);
     const terminal = t.state === "done" || t.state === "failed" || t.state === "rejected";
-    const epicTitle = p.epicId ? epicTitleById.get(p.epicId) : undefined;
+    const epicId = p.epicId;
+    const epicTitle = withEpicChip && epicId ? epicTitleById.get(epicId) : undefined;
     return (
       <div
         key={t.id}
@@ -453,11 +543,18 @@ export default function TaskBoard({
           </div>
         )}
         <div className="mt-1.5 flex items-center gap-1.5">
-          {epicTitle && (
-            <span className="inline-flex min-w-0 items-center gap-1 rounded-[4px] border border-ink/10 bg-ink/[0.03] px-1.5 py-px text-[10px] text-ink/50">
+          {epicTitle && epicId && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                selectScope(epicId);
+              }}
+              title={`Scope the board to "${epicTitle}"`}
+              className="inline-flex min-w-0 items-center gap-1 rounded-[4px] border border-ink/10 bg-ink/[0.03] px-1.5 py-px text-[10px] text-ink/50 transition-colors hover:border-ink/30 hover:text-ink/75"
+            >
               <Layers size={9} className="shrink-0" />
               <span className="max-w-[9rem] truncate">{epicTitle}</span>
-            </span>
+            </button>
           )}
           {p.assignee === "human" && (
             <User size={11} className="shrink-0 text-ink/40" aria-label="Your own todo" />
@@ -474,127 +571,149 @@ export default function TaskBoard({
     );
   }
 
-  // ── Epic-view compact row ───────────────────────────────────────────────────
-  function renderRow(t: Action) {
-    const p = taskPayload(t);
-    const terminal = t.state === "done" || t.state === "failed" || t.state === "rejected";
+  // ── Sidebar: epic timeline entries ──────────────────────────────────────────
+  // Deliberately a different shape from task cards — full-width rows with a
+  // left selection accent, a Layers icon, and no ticket badge. Epics are the
+  // lens, not the work.
+
+  function epicStats(e: Action) {
+    const list = tasksByEpic.get(e.id) ?? [];
+    return {
+      list,
+      total: list.length,
+      done: list.filter((t) => t.state === "done").length,
+      working: list.filter((t) => t.state === "executing").length,
+      drain: epicDrain(e, list),
+    };
+  }
+
+  const entryCls = (selected: boolean) =>
+    [
+      "cursor-pointer border-l-2 px-3 py-2 transition-colors",
+      selected ? "border-ink bg-ink/[0.05]" : "border-transparent hover:bg-ink/[0.03]",
+    ].join(" ");
+
+  function entryKeyDown(s: string) {
+    return (ev: ReactKeyboardEvent) => {
+      if (ev.key === "Enter" || ev.key === " ") {
+        ev.preventDefault();
+        selectScope(s);
+      }
+    };
+  }
+
+  function renderPseudoEntry(key: "all" | "none", label: string, count: number) {
+    const selected = effectiveScope === key;
     return (
       <div
-        key={t.id}
-        onClick={() => setDetailId(t.id)}
-        className="cursor-pointer rounded-lg border border-ink/10 bg-surface px-2.5 py-1.5 transition-colors hover:border-ink/25"
+        role="button"
+        tabIndex={0}
+        aria-pressed={selected}
+        onClick={() => selectScope(key)}
+        onKeyDown={entryKeyDown(key)}
+        className={`flex items-center gap-1.5 ${entryCls(selected)}`}
       >
-        <div className="flex items-center gap-2">
-          {t.ticketId && (
-            <span className="shrink-0 font-code text-[10px] font-medium tracking-tight text-ink/40">
-              {t.ticketId}
-            </span>
-          )}
-          <span
-            className={`min-w-0 flex-1 truncate text-[12.5px] font-medium ${terminal ? "text-ink/50" : "text-ink/85"}`}
-          >
-            {p.title || "Untitled task"}
-          </span>
-          {t.state === "executing" && t.claimedBy && (
-            <ClaimantChip name={t.claimedBy} className="max-w-[10rem]" />
-          )}
-          <StateChip state={t.state} />
-          <span
-            className="hidden shrink-0 font-code text-[10px] text-ink/30 sm:inline"
-            title={fullDate(t.createdAt)}
-          >
-            {ageOf(t.createdAt)}
-          </span>
-        </div>
-        {renderApproveReject(t)}
+        <span
+          className={`min-w-0 flex-1 truncate text-[12.5px] font-semibold ${selected ? "text-ink" : "text-ink/70"}`}
+        >
+          {label}
+        </span>
+        <span className="shrink-0 font-code text-[10px] text-ink/40">{count}</span>
       </div>
     );
   }
 
-  // ── Epic swimlane (the progress bar is the anchor) ──────────────────────────
-  function renderLane(epic: Action | null, laneTasks: Action[]) {
-    // A lane with nothing matching the filter vanishes — filtered epic view
-    // shows only the epics that still hold matching work.
-    if (filtering && laneTasks.length === 0) return null;
-    const total = laneTasks.length;
-    const done = laneTasks.filter((t) => t.state === "done").length;
-    const working = laneTasks.filter((t) => t.state === "executing").length;
-    const title = epic ? epicPayload(epic).title || "Untitled epic" : "No epic";
+  function renderEpicEntry(e: Action) {
+    const p = epicPayload(e);
+    const { total, done, working, drain } = epicStats(e);
+    const selected = effectiveScope === e.id;
     return (
-      <section
-        key={epic?.id ?? "no-epic"}
-        className="rounded-xl border border-ink/10 bg-surface/60 p-3"
+      <div
+        key={e.id}
+        role="button"
+        tabIndex={0}
+        aria-pressed={selected}
+        onClick={() => selectScope(e.id)}
+        onKeyDown={entryKeyDown(e.id)}
+        className={entryCls(selected)}
       >
-        <div className="flex items-center gap-2">
-          <Layers size={13} className={`shrink-0 ${epic ? "text-ink/45" : "text-ink/25"}`} />
+        <div className="flex items-center gap-1.5">
+          <Layers size={12} className="shrink-0 text-ink/45" />
           <span
-            className={`min-w-0 flex-1 truncate text-[13px] font-semibold ${epic ? "text-ink" : "text-ink/50"}`}
-            title={epic ? epicPayload(epic).body || title : undefined}
+            className={`min-w-0 flex-1 truncate text-[12.5px] font-semibold ${selected ? "text-ink" : "text-ink/80"}`}
+            title={p.title || "Untitled epic"}
           >
-            {title}
+            {p.title || "Untitled epic"}
           </span>
-          {epic && <StateChip state={epic.state} />}
-          <span className="shrink-0 font-code text-[11px] text-ink/45">
+          <StateChip state={e.state} />
+        </div>
+        <ProgressBar done={done} working={working} total={total} className="mt-1.5 h-1.5" />
+        <div className="mt-1 flex items-center justify-between font-code text-[10px] text-ink/40">
+          <span>
             {done}/{total} done
           </span>
+          {drain && <span className="text-emerald-600 dark:text-emerald-400">{drain}</span>}
         </div>
-        {/* Progress: done in emerald, in-flight in pulsing violet, on an ink
-            track — the at-a-glance "is this moving?" signal. */}
-        <div className="mt-2 flex h-2 overflow-hidden rounded-full bg-ink/[0.08]">
-          {total > 0 && done > 0 && (
-            <div className="h-full bg-emerald-500" style={{ width: `${(done / total) * 100}%` }} />
-          )}
-          {total > 0 && working > 0 && (
-            <div
-              className="h-full animate-pulse bg-violet-500/80"
-              style={{ width: `${(working / total) * 100}%` }}
-            />
-          )}
-        </div>
-        {epic && renderApproveReject(epic, "Approve epic")}
-        {laneTasks.length > 0 ? (
-          <div className="mt-2.5 flex flex-col gap-1.5">{laneTasks.map(renderRow)}</div>
-        ) : (
-          <p className="mt-2 text-[11px] text-ink/35">No tasks under this epic yet.</p>
-        )}
-      </section>
+        {/* The sidebar doubles as the approval inbox. */}
+        {renderApproveReject(e, "Approve epic")}
+      </div>
     );
   }
 
-  const visibleLaneCount =
-    epics.filter((e) => !(filtering && (tasksByEpic.get(e.id) ?? []).length === 0)).length +
-    (epicless.length > 0 ? 1 : 0);
+  // ── Scoped-epic header above the kanban ─────────────────────────────────────
+  function renderScopeHeader(e: Action) {
+    const p = epicPayload(e);
+    const { total, done, working, drain } = epicStats(e);
+    return (
+      <div className="shrink-0 border-b border-ink/5 px-4 py-2.5">
+        <div className="flex items-center gap-2">
+          <Layers size={14} className="shrink-0 text-ink/45" />
+          <button
+            onClick={() => setDetailId(e.id)}
+            title="Open epic details"
+            className="min-w-0 truncate text-left text-[14px] font-semibold text-ink hover:underline"
+          >
+            {p.title || "Untitled epic"}
+          </button>
+          <StateChip state={e.state} />
+          <span className="ml-auto shrink-0 font-code text-[11px] text-ink/45">
+            {done}/{total} done
+            {drain ? ` · ${drain}` : ""}
+          </span>
+        </div>
+        {p.body && (
+          <p className="mt-1 line-clamp-2 text-[12px] leading-relaxed text-ink/60">{p.body}</p>
+        )}
+        <ProgressBar done={done} working={working} total={total} className="mt-2 h-1.5" />
+        <div className="max-w-xs">{renderApproveReject(e, "Approve epic")}</div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
-      {/* Toolbar: projection toggle + a quiet census. */}
-      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-ink/5 px-4 py-2">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="text-sm font-semibold text-ink">Board</span>
-          {!empty && (
-            <span className="hidden font-code text-[11px] text-ink/40 sm:inline">
-              {filtering
-                ? `${visibleTasks.length}/${tasks.length} tasks`
-                : `${tasks.length} task${tasks.length === 1 ? "" : "s"}`}
-              {epics.length > 0 && ` · ${epics.length} epic${epics.length === 1 ? "" : "s"}`}
-            </span>
-          )}
-        </div>
-        <div className="flex shrink-0 rounded-lg border border-ink/10 bg-ink/[0.03] p-0.5">
-          {(["state", "epic"] as const).map((v) => (
-            <button
-              key={v}
-              onClick={() => switchView(v)}
-              aria-pressed={view === v}
-              className={[
-                "rounded-md px-2.5 py-1 text-xs font-semibold transition-colors",
-                view === v ? "bg-surface text-ink shadow-sm" : "text-ink/40 hover:text-ink/65",
-              ].join(" ")}
-            >
-              {v === "state" ? "By state" : "By epic"}
-            </button>
-          ))}
-        </div>
+      {/* Toolbar: mobile sidebar toggle + a quiet census of the current scope. */}
+      <div className="flex shrink-0 items-center gap-2 border-b border-ink/5 px-4 py-2">
+        {!empty && (
+          <button
+            onClick={() => setSidebarOpen((v) => !v)}
+            aria-label="Toggle epic sidebar"
+            aria-expanded={sidebarOpen}
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink/50 transition-colors hover:bg-ink/5 hover:text-ink/80 md:hidden"
+          >
+            <PanelLeft size={15} />
+          </button>
+        )}
+        <span className="text-sm font-semibold text-ink">Board</span>
+        {!empty && (
+          <span className="hidden font-code text-[11px] text-ink/40 sm:inline">
+            {filtering
+              ? `${visibleTasks.length}/${scopedTasks.length} tasks`
+              : `${scopedTasks.length} task${scopedTasks.length === 1 ? "" : "s"}`}
+            {effectiveScope !== "all" && " in scope"}
+            {epics.length > 0 && ` · ${epics.length} epic${epics.length === 1 ? "" : "s"}`}
+          </span>
+        )}
       </div>
 
       {/* Filter bar: search + chip filters, AND-composed. Horizontal scroll on
@@ -624,22 +743,6 @@ export default function TaskBoard({
               </option>
             ))}
           </select>
-          {epics.length > 0 && (
-            <select
-              value={filters.epic}
-              onChange={(e) => setFilters((f) => ({ ...f, epic: e.target.value }))}
-              aria-label="Filter by epic"
-              className={FILTER_SELECT_CLS}
-            >
-              <option value="all">All epics</option>
-              <option value="none">No epic</option>
-              {epics.map((e) => (
-                <option key={e.id} value={e.id}>
-                  {epicTitleById.get(e.id)}
-                </option>
-              ))}
-            </select>
-          )}
           {claimants.length > 0 && (
             <select
               value={filters.claimant}
@@ -703,84 +806,79 @@ export default function TaskBoard({
             your agent to draft a plan — proposed work lands here for your approval.
           </p>
         </div>
-      ) : view === "state" ? (
-        /* Kanban: the whole strip scrolls horizontally (usable on mobile); each
-           column scrolls its own cards. Empty columns collapse to a slim rail.
-           Under a filter, cards simply vanish and the header shows shown/total. */
-        <div className="min-h-0 flex-1 overflow-x-auto">
-          <div className="flex h-full gap-3 px-4 py-3">
-            {COLUMNS.map((col) => {
-              const colAll = tasks.filter((t) => col.states.includes(t.state));
-              const colTasks = filtering
-                ? visibleTasks.filter((t) => col.states.includes(t.state))
-                : colAll;
-              // Proposed EPICS surface in the Proposed column too — approving
-              // an epic is the one-click gate that releases its whole batch,
-              // and it must be findable without knowing about the epic view.
-              const colEpics =
-                col.key === "proposed" ? epics.filter((e) => e.state === "proposed") : [];
-              const slim = colTasks.length === 0 && colEpics.length === 0;
-              const showState = col.states.length > 1;
-              return (
-                <div
-                  key={col.key}
-                  className={`flex min-h-0 shrink-0 flex-col ${slim ? "w-44" : "w-[17rem]"}`}
-                >
-                  <div className="mb-2 flex shrink-0 items-center gap-1.5 px-1">
-                    <span
-                      className="h-2 w-2 shrink-0 rounded-full"
-                      style={{ backgroundColor: col.dot, opacity: slim ? 0.35 : 1 }}
-                    />
-                    <span
-                      className={`truncate text-[11px] font-semibold uppercase tracking-[0.12em] ${slim ? "text-ink/30" : "text-ink/55"}`}
-                    >
-                      {col.label}
-                    </span>
-                    <span className="shrink-0 font-code text-[10px] text-ink/35">
-                      {filtering ? `${colTasks.length}/${colAll.length}` : colTasks.length}
-                    </span>
-                  </div>
-                  {slim ? (
-                    <div className="flex-1 rounded-xl border border-dashed border-ink/10" />
-                  ) : (
-                    <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pb-2 pr-0.5">
-                      {colEpics.map((e) => (
-                        <div
-                          key={e.id}
-                          className="rounded-xl border border-ink/15 bg-ink/[0.03] p-2.5"
-                        >
-                          <div className="mb-1 flex items-center gap-1.5">
-                            <Layers size={12} className="shrink-0 text-ink/45" />
-                            <span className="truncate text-[12px] font-semibold text-ink/80">
-                              {(e.payload as { title?: string })?.title ?? "Untitled epic"}
-                            </span>
-                          </div>
-                          <p className="mb-1.5 text-[10px] uppercase tracking-[0.1em] text-ink/40">
-                            Epic — approving releases every task under it
-                          </p>
-                          {renderApproveReject(e, "Approve epic")}
-                        </div>
-                      ))}
-                      {colTasks.map((t) => renderCard(t, showState))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
       ) : (
-        /* Epic swimlanes: a centred readable column, epics newest-first,
-           epicless work bringing up the rear. Filtered-empty lanes hide. */
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="mx-auto w-full max-w-3xl space-y-3 px-4 py-3">
-            {epics.map((e) => renderLane(e, tasksByEpic.get(e.id) ?? []))}
-            {epicless.length > 0 && renderLane(null, epicless)}
-            {visibleLaneCount === 0 && (
-              <p className="py-6 text-center text-[13px] text-ink/40">
-                {filtering ? "Nothing matches the current filters." : "Nothing to show."}
-              </p>
-            )}
+        <div className="flex min-h-0 min-w-0 flex-1">
+          {/* Epic navigator: the timeline sidebar. Hidden on mobile unless
+              toggled from the toolbar; always visible on md+. */}
+          <aside
+            className={`${sidebarOpen ? "flex" : "hidden"} w-64 shrink-0 flex-col border-r border-ink/5 md:flex`}
+          >
+            <div className="min-h-0 flex-1 overflow-y-auto pb-2">
+              <div className="sticky top-0 z-10 border-b border-ink/5 bg-paper py-1">
+                {renderPseudoEntry("all", "All tasks", tasks.length)}
+                {renderPseudoEntry("none", "No epic", epiclessAll.length)}
+              </div>
+              <div className="px-3 pb-0.5 pt-2.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-ink/30">
+                Epic timeline
+              </div>
+              {epics.map(renderEpicEntry)}
+              {epics.length === 0 && (
+                <p className="px-3 py-1.5 text-[11px] leading-relaxed text-ink/35">
+                  No epics yet — agents propose them as named batches of tasks.
+                </p>
+              )}
+            </div>
+          </aside>
+
+          {/* Main area: ONE kanban, always scoped to the sidebar selection. */}
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            {scopedEpic && renderScopeHeader(scopedEpic)}
+            {/* Kanban: the whole strip scrolls horizontally (usable on mobile);
+                each column scrolls its own cards. Empty columns collapse to a
+                slim rail. Under a filter, cards simply vanish and the header
+                shows shown/total (within the scope). */}
+            <div className="min-h-0 flex-1 overflow-x-auto">
+              <div className="flex h-full gap-3 px-4 py-3">
+                {COLUMNS.map((col) => {
+                  const colAll = scopedTasks.filter((t) => col.states.includes(t.state));
+                  const colTasks = filtering
+                    ? visibleTasks.filter((t) => col.states.includes(t.state))
+                    : colAll;
+                  const slim = colTasks.length === 0;
+                  const showState = col.states.length > 1;
+                  return (
+                    <div
+                      key={col.key}
+                      className={`flex min-h-0 shrink-0 flex-col ${slim ? "w-44" : "w-[17rem]"}`}
+                    >
+                      <div className="mb-2 flex shrink-0 items-center gap-1.5 px-1">
+                        <span
+                          className="h-2 w-2 shrink-0 rounded-full"
+                          style={{ backgroundColor: col.dot, opacity: slim ? 0.35 : 1 }}
+                        />
+                        <span
+                          className={`truncate text-[11px] font-semibold uppercase tracking-[0.12em] ${slim ? "text-ink/30" : "text-ink/55"}`}
+                        >
+                          {col.label}
+                        </span>
+                        <span className="shrink-0 font-code text-[10px] text-ink/35">
+                          {filtering ? `${colTasks.length}/${colAll.length}` : colTasks.length}
+                        </span>
+                      </div>
+                      {slim ? (
+                        <div className="flex-1 rounded-xl border border-dashed border-ink/10" />
+                      ) : (
+                        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pb-2 pr-0.5">
+                          {colTasks.map((t) =>
+                            renderCard(t, showState, effectiveScope === "all"),
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         </div>
       )}
