@@ -86,7 +86,8 @@ export async function handleTool(
         _session_note:
           "Pass `session` back as the `session` argument on EVERY later canvas_* call. The hosted " +
           "MCP connection can reset between calls; carrying this handle keeps your edits on this " +
-          "canvas without having to reconnect.",
+          "canvas without having to reconnect. Note: agent_register returns an UPDATED handle " +
+          "carrying your agent identity — switch to that one after registering.",
       };
     }
 
@@ -110,7 +111,8 @@ export async function handleTool(
         _session_note:
           "Pass `session` back as the `session` argument on EVERY later canvas_* call. The hosted " +
           "MCP connection can reset between calls; carrying this handle keeps your edits on this " +
-          "canvas without having to reconnect.",
+          "canvas without having to reconnect. Note: agent_register returns an UPDATED handle " +
+          "carrying your agent identity — switch to that one after registering.",
       };
       // For an anonymous create, also surface the PRIVATE claim link so the user
       // can take ownership. Keep the two links distinct in what you tell the user.
@@ -723,7 +725,18 @@ export async function handleTool(
       if (res?.agentId) {
         gateway.setAgentId(res.agentId, args.name ? String(args.name) : undefined);
       }
-      return res;
+      // The registered identity now lives on the session, so re-serialize it
+      // into a REFRESHED handle. On the hosted sidecar (fresh Gateway per call)
+      // the old handle knows nothing about this registration — if the model
+      // keeps carrying it, task claims would present the wrong identity (TDM-1).
+      return {
+        ...res,
+        session: gateway.exportSession(),
+        _session_note:
+          "This is an UPDATED session handle carrying your registered agent identity. From now on " +
+          "pass THIS `session` value (not the one from canvas_connect) on every later canvas_* " +
+          "call, so task claims and completions present the same identity.",
+      };
     }
 
     // ── Actions (v1 execution primitive) ────────────────────────────────────────
@@ -906,7 +919,10 @@ export async function handleTool(
     }
 
     case "canvas_task_complete": {
-      const claimant = gateway.claimant();
+      // Same override task_start offers: on the terminal PATCH the API rejects
+      // a completion whose identity doesn't match the claim, so the caller must
+      // be able to present the exact name it claimed with.
+      const claimant = (args.agentName as string | undefined) ?? gateway.claimant();
       const { action } = (await gateway.get(`/api/canvas/actions/${args.id}`)) as {
         action: { state: string; claimedBy?: string };
       };
@@ -2604,7 +2620,9 @@ const RAW_TOOLS = [
     name: "agent_register",
     description:
       "Identify this agent to the canvas on connect. Returns an agentId that is " +
-      "recorded as the author (provenance) of actions this session proposes. v1 " +
+      "recorded as the author (provenance) of actions this session proposes, plus " +
+      "an UPDATED `session` handle carrying this identity — pass that handle (not " +
+      "the connect-time one) on all later calls. v1 " +
       "expects exactly one 'planner' and one 'executor' per canvas.",
     inputSchema: {
       type: "object" as const,
@@ -2905,7 +2923,9 @@ const RAW_TOOLS = [
       "Finish a task with a result summary. Marks it 'done' (or 'failed' via status) — " +
       "auto-claims first if you skipped canvas_task_start. `result` should be a short " +
       "human-readable summary of what was done, INCLUDING the commit hash(es) of the " +
-      "work when commits were made; it shows in the web Tasks panel.",
+      "work when commits were made; it shows in the web Tasks panel. If you passed an " +
+      "agentName to canvas_task_start, pass the SAME identity here — completing under " +
+      "a different name than the claim is rejected.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -2913,6 +2933,12 @@ const RAW_TOOLS = [
         result: { type: "string", description: "What was done / where — include the commit hash(es), PR, or files touched." },
         status: { type: "string", enum: ["done", "failed"] },
         error: { type: "string", description: "Failure detail when status='failed'." },
+        agentName: {
+          type: "string",
+          description:
+            "Identity to complete as — use the same identity you claimed with " +
+            "(defaults to your agent_register / session identity).",
+        },
       },
       required: ["id", "result"],
     },
