@@ -203,3 +203,98 @@ func TestClaimAndReleaseEdges(t *testing.T) {
 		t.Fatalf("re-claim after release failed: %v", err)
 	}
 }
+
+// Requeue puts a FAILED task back in the queue (failed → approved) with its
+// claim AND error cleared; a retry on the now-approved task is idempotent.
+func TestRequeueActionTransition(t *testing.T) {
+	canvasID, actionID := uuid.New(), uuid.New()
+	fake := newFakeActionsServer(canvasID, actionID, "failed")
+	fake.row["claimed_by"] = "agent-a"
+	fake.row["claimed_at"] = "2026-07-27T00:00:00Z"
+	fake.row["error"] = "exit status 1"
+	srv := httptest.NewServer(fake.handler())
+	defer srv.Close()
+
+	st, err := NewSupabase(srv.URL, "test-key")
+	if err != nil {
+		t.Fatalf("NewSupabase: %v", err)
+	}
+	ctx := context.Background()
+
+	if _, _, err := st.RequeueAction(ctx, canvasID, uuid.New()); !errors.Is(err, ErrActionNotFound) {
+		t.Fatalf("requeue of unknown id = %v, want ErrActionNotFound", err)
+	}
+
+	requeued, _, err := st.RequeueAction(ctx, canvasID, actionID)
+	if err != nil {
+		t.Fatalf("requeue failed: %v", err)
+	}
+	if requeued.State != "approved" || requeued.ClaimedBy != nil || requeued.ClaimedAt != nil || requeued.Error != nil {
+		t.Fatalf("requeued action = state %q claimedBy %v claimedAt %v error %v, want approved/nil/nil/nil",
+			requeued.State, requeued.ClaimedBy, requeued.ClaimedAt, requeued.Error)
+	}
+	if got, _ := fake.row["state"].(string); got != "approved" {
+		t.Fatalf("row state=%q, want approved", got)
+	}
+	if fake.row["error"] != nil || fake.row["claimed_by"] != nil || fake.row["claimed_at"] != nil {
+		t.Fatalf("row not cleared: error=%v claimed_by=%v claimed_at=%v",
+			fake.row["error"], fake.row["claimed_by"], fake.row["claimed_at"])
+	}
+
+	// Idempotent retry: the task is already back in 'approved'.
+	if _, _, err := st.RequeueAction(ctx, canvasID, actionID); err != nil {
+		t.Fatalf("requeue retry should be idempotent, got %v", err)
+	}
+
+	// Requeued task is claimable again.
+	if _, _, err := st.ClaimAction(ctx, canvasID, actionID, "agent-b"); err != nil {
+		t.Fatalf("re-claim after requeue failed: %v", err)
+	}
+}
+
+// Requeue only moves tasks OUT OF 'failed' — every other state is refused (the
+// generic PATCH path never allows failed → approved either; the transition
+// lives solely in this conditional UPDATE).
+func TestRequeueActionGuardsNonFailedStates(t *testing.T) {
+	canvasID, actionID := uuid.New(), uuid.New()
+	fake := newFakeActionsServer(canvasID, actionID, "executing")
+	srv := httptest.NewServer(fake.handler())
+	defer srv.Close()
+
+	st, err := NewSupabase(srv.URL, "test-key")
+	if err != nil {
+		t.Fatalf("NewSupabase: %v", err)
+	}
+	ctx := context.Background()
+
+	for _, state := range []string{"proposed", "executing", "done", "rejected"} {
+		fake.row["state"] = state
+		if _, _, err := st.RequeueAction(ctx, canvasID, actionID); !errors.Is(err, ErrIllegalActionState) {
+			t.Fatalf("requeue of %s task = %v, want ErrIllegalActionState", state, err)
+		}
+		if got, _ := fake.row["state"].(string); got != state {
+			t.Fatalf("guard mutated row state to %q, want untouched %q", got, state)
+		}
+	}
+}
+
+// Epics are never claimed/executed, so they can never be requeued — refused by
+// type even if a row somehow reads state 'failed'.
+func TestRequeueActionRejectsEpics(t *testing.T) {
+	canvasID, actionID := uuid.New(), uuid.New()
+	fake := newFakeActionsServer(canvasID, actionID, "failed")
+	fake.row["type"] = "epic"
+	srv := httptest.NewServer(fake.handler())
+	defer srv.Close()
+
+	st, err := NewSupabase(srv.URL, "test-key")
+	if err != nil {
+		t.Fatalf("NewSupabase: %v", err)
+	}
+	if _, _, err := st.RequeueAction(context.Background(), canvasID, actionID); !errors.Is(err, ErrIllegalActionState) {
+		t.Fatalf("requeue of epic = %v, want ErrIllegalActionState", err)
+	}
+	if got, _ := fake.row["state"].(string); got != "failed" {
+		t.Fatalf("epic requeue mutated state to %q", got)
+	}
+}

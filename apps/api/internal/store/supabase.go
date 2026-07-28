@@ -2830,6 +2830,47 @@ func (s *supabaseStore) ReleaseAction(ctx context.Context, canvasID, id uuid.UUI
 	return nil, 0, fmt.Errorf("%w: cannot release task in state %q", ErrIllegalActionState, existing.State)
 }
 
+// RequeueAction sends a failed task back to the queue (failed → approved, claim
+// columns AND error cleared) with the same conditional-UPDATE +
+// re-read-to-disambiguate pattern as ClaimAction/ReleaseAction. A requeue of a
+// task already back in 'approved' is an idempotent success.
+func (s *supabaseStore) RequeueAction(ctx context.Context, canvasID, id uuid.UUID) (*Action, int, error) {
+	var rows []dbAction
+	_, err := s.client.From("actions").
+		Update(map[string]any{
+			"state":      "approved",
+			"claimed_by": nil,
+			"claimed_at": nil,
+			"error":      nil,
+		}, "representation", "").
+		Eq("id", id.String()).
+		Eq("canvas_id", canvasID.String()).
+		Eq("state", "failed").
+		Eq("type", "task").
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(rows) == 1 {
+		v, verr := s.bumpVersion(ctx, canvasID)
+		if verr != nil {
+			return nil, 0, verr
+		}
+		return toAction(rows[0]), v, nil
+	}
+	existing, gerr := s.GetAction(ctx, canvasID, id)
+	if gerr != nil {
+		return nil, 0, ErrActionNotFound
+	}
+	if existing.Type != "task" {
+		return nil, 0, fmt.Errorf("%w: only tasks can be re-queued (this is a %q)", ErrIllegalActionState, existing.Type)
+	}
+	if existing.State == "approved" {
+		return existing, 0, nil // already back in the queue — idempotent retry
+	}
+	return nil, 0, fmt.Errorf("%w: cannot re-queue task in state %q", ErrIllegalActionState, existing.State)
+}
+
 // UpdateActionPayload replaces an action's payload without touching its state —
 // the edit path for task content (title / body / links / assignee).
 func (s *supabaseStore) UpdateActionPayload(ctx context.Context, canvasID, id uuid.UUID, payload json.RawMessage) (int, error) {

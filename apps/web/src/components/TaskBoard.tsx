@@ -1,7 +1,25 @@
-import { useEffect, useMemo, useState } from "react";
-import { Bot, Check, Layers, User, X, Zap } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Bot,
+  Check,
+  GitCommitHorizontal,
+  Layers,
+  Link2,
+  Pencil,
+  RotateCcw,
+  Search,
+  User,
+  X,
+  Zap,
+} from "lucide-react";
 import type { Action, ActionState, CanvasState, EpicPayload, TaskPayload } from "../types";
-import { approveAction, rejectAction } from "../lib/api";
+import {
+  approveAction,
+  rejectAction,
+  releaseTask,
+  requeueTask,
+  updateTask,
+} from "../lib/api";
 import posthog from "../lib/posthog";
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -12,14 +30,20 @@ import posthog from "../lib/posthog";
      · By epic  — swimlanes per epic with an n/m-done progress bar (the "watch
        the project move forward" view), epicless tasks in a final lane.
 
+   A compact filter bar (search + state / epic / claimant / assignee / commit
+   chips, AND-composed) sits over both projections, so the Done/Failed history
+   is genuinely browsable. "/" focuses search; Escape closes the detail panel,
+   then clears filters. Nothing about filters is persisted.
+
    Everything renders from the same version-gated canvas-state props as every
    other view, so claims/completions move cards live over WS — no polling, no
-   local task cache. Mutations (approve / reject) are the existing REST calls;
-   fresh state comes back over the broadcast like everywhere else.
+   local task cache. Mutations are the existing REST calls; fresh state comes
+   back over the broadcast like everywhere else.
 
-   Card click opens a thin READ-ONLY detail popover (wave 1) — a later task
-   builds the full detail / step-in view, so keep TaskDetail small and cleanly
-   replaceable.
+   Card click opens the full TaskDetail side panel (wave 2): complete body,
+   linked context, result with commit chips, provenance, and the step-in
+   controls per state — edit/approve/reject (proposed), release (executing),
+   re-queue (failed). Destructive actions confirm inline (two-step).
    ──────────────────────────────────────────────────────────────────────────── */
 
 const STATE_CHIP: Record<string, { label: string; bg: string; fg: string }> = {
@@ -51,6 +75,21 @@ function taskPayload(a: Action): TaskPayload {
 
 function epicPayload(a: Action): EpicPayload {
   return (a.payload ?? {}) as EpicPayload;
+}
+
+// ── Commit-hash detection ─────────────────────────────────────────────────────
+// A "commit" is a 7-40 char hex word in the result text that contains at least
+// one digit AND one a-f letter — the heuristic keeps plain numbers (ports,
+// timestamps) and ordinary words out while catching every realistic git SHA.
+const COMMIT_RE = /\b[0-9a-fA-F]{7,40}\b/g;
+
+export function extractCommits(text: string | undefined): string[] {
+  if (!text) return [];
+  const out: string[] = [];
+  for (const m of text.match(COMMIT_RE) ?? []) {
+    if (/[0-9]/.test(m) && /[a-fA-F]/.test(m) && !out.includes(m)) out.push(m);
+  }
+  return out;
 }
 
 // Compact relative age ("now", "5m", "2h", "3d", "2w", "4mo"). Renders from
@@ -102,7 +141,7 @@ function ClaimantChip({ name, className = "" }: { name: string; className?: stri
 // Approve / Reject pair for a proposed task or epic. Reject is two-step (the
 // confirm replaces the pair) — no reason field here; the sidebar keeps the
 // full reject-with-reason form. stopPropagation so the card click-through to
-// the detail popover doesn't fire.
+// the detail panel doesn't fire.
 function ApproveRejectControls({
   busy,
   rejecting,
@@ -158,6 +197,27 @@ function ApproveRejectControls({
   );
 }
 
+// ── Filters ──────────────────────────────────────────────────────────────────
+
+type Filters = {
+  state: "all" | ActionState;
+  epic: "all" | "none" | string; // "none" = epicless, otherwise an epic id
+  claimant: "all" | string;
+  assignee: "all" | "agent" | "human";
+  hasCommit: boolean;
+};
+
+const NO_FILTERS: Filters = {
+  state: "all",
+  epic: "all",
+  claimant: "all",
+  assignee: "all",
+  hasCommit: false,
+};
+
+const FILTER_SELECT_CLS =
+  "h-7 max-w-[10rem] shrink-0 rounded-lg border border-ink/15 bg-surface px-1.5 text-[11px] font-medium text-ink/70 outline-none transition-colors focus:border-ink/40";
+
 export default function TaskBoard({
   code,
   state,
@@ -178,6 +238,31 @@ export default function TaskBoard({
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Filter state — deliberately not persisted; every visit starts unfiltered.
+  const [searchInput, setSearchInput] = useState("");
+  const [query, setQuery] = useState(""); // debounced, lowercased
+  const [filters, setFilters] = useState<Filters>(NO_FILTERS);
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const t = setTimeout(() => setQuery(searchInput.trim().toLowerCase()), 150);
+    return () => clearTimeout(t);
+  }, [searchInput]);
+
+  const filtering =
+    query !== "" ||
+    filters.state !== "all" ||
+    filters.epic !== "all" ||
+    filters.claimant !== "all" ||
+    filters.assignee !== "all" ||
+    filters.hasCommit;
+
+  function clearFilters() {
+    setSearchInput("");
+    setQuery("");
+    setFilters(NO_FILTERS);
+  }
 
   function switchView(v: BoardView) {
     setView(v);
@@ -207,22 +292,55 @@ export default function TaskBoard({
     () => new Map(epics.map((e) => [e.id, epicPayload(e).title || "Untitled epic"])),
     [epics],
   );
+  // Everyone who has ever held a claim — done/failed rows keep claimed_by, so
+  // this doubles as the "browse one agent's history" axis.
+  const claimants = useMemo(() => {
+    const s = new Set<string>();
+    for (const t of tasks) if (t.claimedBy) s.add(t.claimedBy);
+    return [...s].sort();
+  }, [tasks]);
+
+  // One predicate, AND-composed — the same filter feeds both projections.
+  function taskMatches(t: Action): boolean {
+    const p = taskPayload(t);
+    if (query) {
+      const hay = `${p.title ?? ""}\n${p.body ?? ""}\n${t.result ?? ""}\n${t.ticketId ?? ""}`.toLowerCase();
+      if (!hay.includes(query)) return false;
+    }
+    if (filters.state !== "all" && t.state !== filters.state) return false;
+    if (filters.epic === "none") {
+      if (p.epicId && epicIds.has(p.epicId)) return false;
+    } else if (filters.epic !== "all" && p.epicId !== filters.epic) {
+      return false;
+    }
+    if (filters.claimant !== "all" && t.claimedBy !== filters.claimant) return false;
+    if (filters.assignee !== "all" && (p.assignee ?? "agent") !== filters.assignee) return false;
+    if (filters.hasCommit && extractCommits(t.result).length === 0) return false;
+    return true;
+  }
+
+  const visibleTasks = useMemo(
+    () => (filtering ? tasks.filter(taskMatches) : tasks),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tasks, filtering, query, filters, epicIds],
+  );
+
   const tasksByEpic = useMemo(() => {
     const m = new Map<string, Action[]>();
-    for (const t of tasks) {
+    for (const t of visibleTasks) {
       const eid = taskPayload(t).epicId;
       if (eid && epicIds.has(eid)) m.set(eid, [...(m.get(eid) ?? []), t]);
     }
     return m;
-  }, [tasks, epicIds]);
+  }, [visibleTasks, epicIds]);
   // No epic, or a dangling epicId — these flow into the final "No epic" lane.
   const epicless = useMemo(
     () =>
-      tasks.filter((t) => {
+      visibleTasks.filter((t) => {
         const eid = taskPayload(t).epicId;
         return !eid || !epicIds.has(eid);
       }),
-    [tasks, epicIds],
+    [visibleTasks, epicIds],
   );
 
   async function run(id: string, fn: () => Promise<void>) {
@@ -254,20 +372,38 @@ export default function TaskBoard({
     });
   }
 
-  // The popover reads the LIVE action from state (not a snapshot), so a claim
-  // or completion landing over WS updates it in place; a deleted task closes it.
+  // The detail panel reads the LIVE action from state (not a snapshot), so a
+  // claim or completion landing over WS updates it in place; a deleted task
+  // closes it. It is independent of the filters — a card filtered out of the
+  // board keeps its open panel alive.
   const detail = detailId ? (state.actions ?? {})[detailId] : undefined;
   useEffect(() => {
     if (detailId && !detail) setDetailId(null);
   }, [detailId, detail]);
+
+  // Keyboard: "/" focuses search; Escape closes the detail panel first, then
+  // clears the filters. Bound per-render so the closures stay fresh.
   useEffect(() => {
-    if (!detailId) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setDetailId(null);
-    };
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        if (detailId) {
+          setDetailId(null);
+        } else if (filtering || searchInput) {
+          clearFilters();
+          searchRef.current?.blur();
+        }
+        return;
+      }
+      if (e.key === "/") {
+        const el = e.target as HTMLElement | null;
+        if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable)) return;
+        e.preventDefault();
+        searchRef.current?.focus();
+      }
+    }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [detailId]);
+  });
 
   const empty = tasks.length === 0 && epics.length === 0;
 
@@ -377,6 +513,9 @@ export default function TaskBoard({
 
   // ── Epic swimlane (the progress bar is the anchor) ──────────────────────────
   function renderLane(epic: Action | null, laneTasks: Action[]) {
+    // A lane with nothing matching the filter vanishes — filtered epic view
+    // shows only the epics that still hold matching work.
+    if (filtering && laneTasks.length === 0) return null;
     const total = laneTasks.length;
     const done = laneTasks.filter((t) => t.state === "done").length;
     const working = laneTasks.filter((t) => t.state === "executing").length;
@@ -422,6 +561,10 @@ export default function TaskBoard({
     );
   }
 
+  const visibleLaneCount =
+    epics.filter((e) => !(filtering && (tasksByEpic.get(e.id) ?? []).length === 0)).length +
+    (epicless.length > 0 ? 1 : 0);
+
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
       {/* Toolbar: projection toggle + a quiet census. */}
@@ -430,7 +573,9 @@ export default function TaskBoard({
           <span className="text-sm font-semibold text-ink">Board</span>
           {!empty && (
             <span className="hidden font-code text-[11px] text-ink/40 sm:inline">
-              {tasks.length} task{tasks.length === 1 ? "" : "s"}
+              {filtering
+                ? `${visibleTasks.length}/${tasks.length} tasks`
+                : `${tasks.length} task${tasks.length === 1 ? "" : "s"}`}
               {epics.length > 0 && ` · ${epics.length} epic${epics.length === 1 ? "" : "s"}`}
             </span>
           )}
@@ -452,6 +597,99 @@ export default function TaskBoard({
         </div>
       </div>
 
+      {/* Filter bar: search + chip filters, AND-composed. Horizontal scroll on
+          narrow screens rather than wrapping into the board. */}
+      {!empty && (
+        <div className="flex shrink-0 items-center gap-1.5 overflow-x-auto border-b border-ink/5 px-4 py-1.5">
+          <div className="relative shrink-0">
+            <Search size={12} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-ink/30" />
+            <input
+              ref={searchRef}
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder='Search tasks  ·  "/"'
+              className="h-7 w-44 rounded-lg border border-ink/15 bg-surface pl-[26px] pr-2 text-[12px] text-ink outline-none placeholder:text-ink/30 focus:border-ink/40 sm:w-52"
+            />
+          </div>
+          <select
+            value={filters.state}
+            onChange={(e) => setFilters((f) => ({ ...f, state: e.target.value as Filters["state"] }))}
+            aria-label="Filter by state"
+            className={FILTER_SELECT_CLS}
+          >
+            <option value="all">All states</option>
+            {Object.entries(STATE_CHIP).map(([k, v]) => (
+              <option key={k} value={k}>
+                {v.label}
+              </option>
+            ))}
+          </select>
+          {epics.length > 0 && (
+            <select
+              value={filters.epic}
+              onChange={(e) => setFilters((f) => ({ ...f, epic: e.target.value }))}
+              aria-label="Filter by epic"
+              className={FILTER_SELECT_CLS}
+            >
+              <option value="all">All epics</option>
+              <option value="none">No epic</option>
+              {epics.map((e) => (
+                <option key={e.id} value={e.id}>
+                  {epicTitleById.get(e.id)}
+                </option>
+              ))}
+            </select>
+          )}
+          {claimants.length > 0 && (
+            <select
+              value={filters.claimant}
+              onChange={(e) => setFilters((f) => ({ ...f, claimant: e.target.value }))}
+              aria-label="Filter by claimant"
+              className={FILTER_SELECT_CLS}
+            >
+              <option value="all">Any claimant</option>
+              {claimants.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          )}
+          <select
+            value={filters.assignee}
+            onChange={(e) => setFilters((f) => ({ ...f, assignee: e.target.value as Filters["assignee"] }))}
+            aria-label="Filter by assignee"
+            className={FILTER_SELECT_CLS}
+          >
+            <option value="all">Anyone's</option>
+            <option value="agent">Agent tasks</option>
+            <option value="human">Your todos</option>
+          </select>
+          <button
+            onClick={() => setFilters((f) => ({ ...f, hasCommit: !f.hasCommit }))}
+            aria-pressed={filters.hasCommit}
+            title="Only tasks whose result mentions a commit hash"
+            className={[
+              "flex h-7 shrink-0 items-center gap-1 rounded-lg border px-2 text-[11px] font-medium transition-colors",
+              filters.hasCommit
+                ? "border-ink/60 bg-ink text-paper"
+                : "border-ink/15 text-ink/60 hover:border-ink/30",
+            ].join(" ")}
+          >
+            <GitCommitHorizontal size={12} /> Has commit
+          </button>
+          {filtering && (
+            <button
+              onClick={clearFilters}
+              title="Clear search and filters (Esc)"
+              className="flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 text-[11px] font-medium text-ink/45 transition-colors hover:bg-ink/5 hover:text-ink/75"
+            >
+              <X size={12} /> Clear
+            </button>
+          )}
+        </div>
+      )}
+
       {error && (
         <div className="mx-4 mt-2 shrink-0 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-[12px] text-rose-700 dark:border-rose-900 dark:bg-rose-950 dark:text-rose-300">
           {error}
@@ -467,11 +705,15 @@ export default function TaskBoard({
         </div>
       ) : view === "state" ? (
         /* Kanban: the whole strip scrolls horizontally (usable on mobile); each
-           column scrolls its own cards. Empty columns collapse to a slim rail. */
+           column scrolls its own cards. Empty columns collapse to a slim rail.
+           Under a filter, cards simply vanish and the header shows shown/total. */
         <div className="min-h-0 flex-1 overflow-x-auto">
           <div className="flex h-full gap-3 px-4 py-3">
             {COLUMNS.map((col) => {
-              const colTasks = tasks.filter((t) => col.states.includes(t.state));
+              const colAll = tasks.filter((t) => col.states.includes(t.state));
+              const colTasks = filtering
+                ? visibleTasks.filter((t) => col.states.includes(t.state))
+                : colAll;
               const slim = colTasks.length === 0;
               const showState = col.states.length > 1;
               return (
@@ -490,7 +732,7 @@ export default function TaskBoard({
                       {col.label}
                     </span>
                     <span className="shrink-0 font-code text-[10px] text-ink/35">
-                      {colTasks.length}
+                      {filtering ? `${colTasks.length}/${colAll.length}` : colTasks.length}
                     </span>
                   </div>
                   {slim ? (
@@ -507,105 +749,484 @@ export default function TaskBoard({
         </div>
       ) : (
         /* Epic swimlanes: a centred readable column, epics newest-first,
-           epicless work bringing up the rear. */
+           epicless work bringing up the rear. Filtered-empty lanes hide. */
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto w-full max-w-3xl space-y-3 px-4 py-3">
             {epics.map((e) => renderLane(e, tasksByEpic.get(e.id) ?? []))}
             {epicless.length > 0 && renderLane(null, epicless)}
-            {epics.length === 0 && epicless.length === 0 && (
-              <p className="py-6 text-center text-[13px] text-ink/40">Nothing to show.</p>
+            {visibleLaneCount === 0 && (
+              <p className="py-6 text-center text-[13px] text-ink/40">
+                {filtering ? "Nothing matches the current filters." : "Nothing to show."}
+              </p>
             )}
           </div>
         </div>
       )}
 
-      {/* Thin read-only detail popover (wave 1) — replaced by the full detail /
-          step-in view in a later task. Deliberately small. */}
       {detail && (
-        <div
-          className="fixed inset-0 z-[2000] flex items-center justify-center bg-ink/20 p-4 backdrop-blur-[2px]"
-          onClick={() => setDetailId(null)}
+        <TaskDetail
+          key={detail.id}
+          code={code}
+          action={detail}
+          state={state}
+          epicTitleById={epicTitleById}
+          readOnly={readOnly}
+          onClose={() => setDetailId(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   TaskDetail — the wave-2 detail / step-in side panel. Renders the LIVE action
+   (props come from canvas state, so WS pushes update it in place) and offers
+   exactly the state's legal human moves:
+     · proposed  — edit title/body, toggle requiresApproval, approve / reject
+     · executing — release the stuck claim
+     · failed    — error shown + re-queue (failed → approved, error cleared)
+     · done / rejected — read-only history
+   Destructive moves (reject / release / re-queue) confirm inline, two-step.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+type DetailConfirm = "reject" | "release" | "requeue" | null;
+
+// Resolve a linked entity id to a human label using the same canvas state the
+// board already receives — roadmap items by title, notes by first line.
+function linkLabel(state: CanvasState, id: string): { kind: string; label: string } | null {
+  const r = (state.roadmapItems ?? {})[id];
+  if (r) return { kind: "goal", label: r.title || "Untitled goal" };
+  const n = (state.notes ?? {})[id];
+  if (n) {
+    const first = (n.body ?? "").split("\n")[0].replace(/^#+\s*/, "").slice(0, 60);
+    return { kind: "note", label: first || "Untitled note" };
+  }
+  return null;
+}
+
+function TaskDetail({
+  code,
+  action,
+  state,
+  epicTitleById,
+  readOnly,
+  onClose,
+}: {
+  code: string;
+  action: Action;
+  state: CanvasState;
+  epicTitleById: Map<string, string>;
+  readOnly: boolean;
+  onClose: () => void;
+}) {
+  const isTask = action.type === "task";
+  const p = taskPayload(action); // epics read title/body through the same shape
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<DetailConfirm>(null);
+  const [editing, setEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState(p.title ?? "");
+  const [editBody, setEditBody] = useState(p.body ?? "");
+
+  const commits = extractCommits(action.result);
+  const epicTitle = isTask && p.epicId ? epicTitleById.get(p.epicId) : undefined;
+
+  async function run(fn: () => Promise<void>) {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await fn();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Content edits REPLACE the payload server-side, so every field the editor
+  // doesn't touch must round-trip or it silently disappears.
+  function draftFrom(overrides: Partial<TaskPayload>): TaskPayload {
+    return {
+      title: p.title ?? "",
+      body: p.body,
+      linkedIds: p.linkedIds,
+      assignee: p.assignee,
+      epicId: p.epicId,
+      requiresApproval: p.requiresApproval,
+      ...overrides,
+    };
+  }
+
+  function saveEdit() {
+    const title = editTitle.trim();
+    if (!title) return;
+    void run(async () => {
+      await updateTask(code, action.id, draftFrom({ title, body: editBody.trim() || undefined }));
+      setEditing(false);
+    });
+  }
+
+  function toggleRequiresApproval() {
+    void run(async () => {
+      await updateTask(code, action.id, draftFrom({ requiresApproval: !p.requiresApproval || undefined }));
+    });
+  }
+
+  function approve() {
+    void run(async () => {
+      await approveAction(code, action.id);
+      posthog.capture(isTask ? "agent_task_approved" : "epic_approved", {
+        canvas_code: code,
+        surface: "board_detail",
+      });
+    });
+  }
+
+  function reject() {
+    void run(async () => {
+      await rejectAction(code, action.id);
+      setConfirm(null);
+    });
+  }
+
+  function release() {
+    void run(async () => {
+      await releaseTask(code, action.id);
+      setConfirm(null);
+    });
+  }
+
+  function requeue() {
+    void run(async () => {
+      await requeueTask(code, action.id);
+      posthog.capture("agent_task_requeued", { canvas_code: code });
+      setConfirm(null);
+    });
+  }
+
+  // Two-step confirm strip for a destructive move (mirrors the board's reject).
+  function confirmStrip(kind: Exclude<DetailConfirm, null>, message: string, label: string, onGo: () => void) {
+    if (confirm !== kind) return null;
+    return (
+      <div className="flex items-center gap-1.5">
+        <span className="min-w-0 flex-1 text-[12px] leading-snug text-ink/60">{message}</span>
+        <button
+          onClick={onGo}
+          disabled={busy}
+          className="shrink-0 rounded-lg bg-rose-600 px-2.5 py-1.5 text-xs font-semibold text-white transition-opacity disabled:opacity-40"
         >
-          <div
-            role="dialog"
-            aria-modal="true"
-            onClick={(e) => e.stopPropagation()}
-            className="max-h-[80vh] w-full max-w-md overflow-y-auto rounded-2xl border border-ink/10 bg-surface p-4 shadow-xl shadow-ink/10"
+          {label}
+        </button>
+        <button
+          onClick={() => setConfirm(null)}
+          className="shrink-0 rounded-lg border border-ink/15 px-2.5 py-1.5 text-xs font-medium text-ink/60 hover:border-ink/30"
+        >
+          Cancel
+        </button>
+      </div>
+    );
+  }
+
+  const primaryBtn =
+    "flex flex-1 items-center justify-center gap-1 rounded-lg bg-ink px-2.5 py-1.5 text-xs font-semibold text-paper transition-opacity disabled:opacity-40";
+  const quietBtn =
+    "flex items-center justify-center gap-1 rounded-lg border border-ink/15 px-2.5 py-1.5 text-xs font-medium text-ink/60 transition-colors hover:border-ink/30 disabled:opacity-40";
+
+  return (
+    <div
+      className="fixed inset-0 z-[2000] flex justify-end bg-ink/20 backdrop-blur-[2px]"
+      onClick={onClose}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        onClick={(e) => e.stopPropagation()}
+        className="flex h-full w-full max-w-xl flex-col border-l border-ink/10 bg-surface shadow-2xl shadow-ink/15"
+      >
+        {/* Header: ticket + state + close. */}
+        <div className="flex shrink-0 items-center gap-2 border-b border-ink/5 px-4 py-3">
+          {action.ticketId && (
+            <span className="shrink-0 font-code text-[12px] font-medium tracking-tight text-ink/50">
+              {action.ticketId}
+            </span>
+          )}
+          {!isTask && (
+            <span className="inline-flex shrink-0 items-center gap-1 rounded-[4px] border border-ink/10 bg-ink/[0.03] px-1.5 py-px text-[10px] font-semibold uppercase tracking-[0.08em] text-ink/50">
+              <Layers size={10} /> Epic
+            </span>
+          )}
+          <StateChip state={action.state} />
+          {isTask && p.requiresApproval && action.state === "proposed" && (
+            <span
+              className="shrink-0 rounded-[4px] bg-amber-500/10 px-1.5 py-px text-[10px] font-semibold uppercase tracking-[0.08em] text-amber-700 dark:text-amber-400"
+              title="The agent flagged this task as needing explicit approval"
+            >
+              needs approval
+            </span>
+          )}
+          <button
+            onClick={onClose}
+            className="ml-auto flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink/40 transition-colors hover:bg-ink/5 hover:text-ink/70"
+            aria-label="Close"
           >
-            <div className="flex items-start justify-between gap-2">
-              <div className="flex min-w-0 items-center gap-1.5">
-                {detail.ticketId && (
-                  <span className="shrink-0 font-code text-[11px] font-medium tracking-tight text-ink/45">
-                    {detail.ticketId}
-                  </span>
-                )}
-                <StateChip state={detail.state} />
+            <X size={15} />
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+          {/* Title + body — inline edit while proposed. */}
+          {editing ? (
+            <div className="flex flex-col gap-2">
+              <input
+                autoFocus
+                value={editTitle}
+                onChange={(e) => setEditTitle(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && saveEdit()}
+                placeholder="Task title"
+                className="w-full rounded-lg border border-ink/15 bg-surface px-2.5 py-1.5 text-sm font-semibold text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
+              />
+              <textarea
+                value={editBody}
+                onChange={(e) => setEditBody(e.target.value)}
+                placeholder="Brief: what, why, acceptance criteria (optional)"
+                rows={10}
+                className="w-full resize-y rounded-lg border border-ink/15 bg-surface px-2.5 py-1.5 text-[13px] leading-relaxed text-ink outline-none placeholder:text-ink/30 focus:border-ink/40"
+              />
+              <div className="flex gap-1.5">
+                <button onClick={saveEdit} disabled={!editTitle.trim() || busy} className={primaryBtn}>
+                  {busy ? "Saving…" : "Save"}
+                </button>
+                <button
+                  onClick={() => {
+                    setEditing(false);
+                    setEditTitle(p.title ?? "");
+                    setEditBody(p.body ?? "");
+                  }}
+                  className={quietBtn}
+                >
+                  Cancel
+                </button>
               </div>
-              <button
-                onClick={() => setDetailId(null)}
-                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-ink/40 transition-colors hover:bg-ink/5 hover:text-ink/70"
-                aria-label="Close"
-              >
-                <X size={14} />
-              </button>
             </div>
-            <h2 className="mt-1.5 text-[15px] font-semibold leading-snug text-ink">
-              {(taskPayload(detail).title ?? epicPayload(detail).title) || "Untitled"}
-            </h2>
-            {(detail.payload as TaskPayload | EpicPayload | undefined)?.body && (
-              <p className="mt-2 whitespace-pre-wrap text-[12.5px] leading-relaxed text-ink/65">
-                {(detail.payload as TaskPayload).body}
-              </p>
-            )}
-            {detail.type === "task" && taskPayload(detail).epicId && (
-              <div className="mt-2.5 flex items-center gap-1.5 text-[11px] text-ink/50">
-                <Layers size={11} className="shrink-0" />
-                <span className="truncate">
-                  {epicTitleById.get(taskPayload(detail).epicId!) ?? "Unknown epic"}
+          ) : (
+            <>
+              <h2 className="text-[16px] font-semibold leading-snug text-ink">
+                {p.title || "Untitled"}
+              </h2>
+              {p.body && (
+                <p className="mt-2 whitespace-pre-wrap text-[13px] leading-relaxed text-ink/70">
+                  {p.body}
+                </p>
+              )}
+            </>
+          )}
+
+          {/* Epic membership. */}
+          {epicTitle && (
+            <div className="mt-3 flex items-center gap-1.5 text-[12px] text-ink/55">
+              <Layers size={12} className="shrink-0" />
+              <span className="truncate">{epicTitle}</span>
+            </div>
+          )}
+
+          {/* Linked context — resolved against the same canvas state the board
+              renders from; ids that aren't on this canvas render raw with a
+              tooltip so provenance is never silently dropped. */}
+          {(p.linkedIds ?? []).length > 0 && (
+            <div className="mt-3">
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink/35">
+                Linked context
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {(p.linkedIds ?? []).map((id) => {
+                  const link = linkLabel(state, id);
+                  return link ? (
+                    <span
+                      key={id}
+                      className="inline-flex max-w-full items-center gap-1 rounded-[4px] border border-ink/10 bg-ink/[0.03] px-1.5 py-0.5 text-[11px] text-ink/60"
+                    >
+                      <Link2 size={10} className="shrink-0" />
+                      <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-ink/35">
+                        {link.kind}
+                      </span>
+                      <span className="truncate">{link.label}</span>
+                    </span>
+                  ) : (
+                    <span
+                      key={id}
+                      title="Linked item is not on this canvas (deleted, or from another surface)"
+                      className="inline-flex max-w-full items-center gap-1 rounded-[4px] border border-dashed border-ink/15 px-1.5 py-0.5 font-code text-[10px] text-ink/40"
+                    >
+                      <Link2 size={10} className="shrink-0" />
+                      <span className="truncate">{id}</span>
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Claim: who holds it, and for how long. */}
+          {action.claimedBy && (action.state === "executing" || action.claimedAt) && (
+            <div className="mt-3 flex items-center gap-1.5">
+              <ClaimantChip name={action.claimedBy} />
+              {action.claimedAt && (
+                <span className="text-[11px] text-ink/40" title={fullDate(action.claimedAt)}>
+                  {action.state === "executing" ? "working for" : "claimed"} {ageOf(action.claimedAt)}
+                  {action.state === "executing" ? "" : " ago"}
                 </span>
-              </div>
-            )}
-            {detail.state === "executing" && detail.claimedBy && (
-              <div className="mt-2.5">
-                <ClaimantChip name={detail.claimedBy} />
-                {detail.claimedAt && (
-                  <span className="ml-1.5 text-[10px] text-ink/35">
-                    since {ageOf(detail.claimedAt)} ago
-                  </span>
-                )}
-              </div>
-            )}
-            {detail.state === "done" && detail.result && (
-              <p className="mt-2.5 rounded-lg bg-emerald-50 px-2.5 py-2 text-[12px] leading-snug text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
-                {detail.result}
-              </p>
-            )}
-            {(detail.state === "failed" || detail.state === "rejected") && detail.error && (
-              <p className="mt-2.5 rounded-lg bg-rose-50 px-2.5 py-2 text-[12px] leading-snug text-rose-800 dark:bg-rose-950 dark:text-rose-200">
-                {detail.error}
-              </p>
-            )}
-            <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-ink/5 pt-2.5 text-[10.5px] text-ink/40">
-              <span className="inline-flex items-center gap-1">
-                {detail.type === "task" && taskPayload(detail).assignee === "human" ? (
-                  <>
-                    <User size={10} /> your todo
-                  </>
-                ) : (
-                  <>
-                    <Bot size={10} /> by {detail.proposedBy}
-                  </>
-                )}
-              </span>
-              {detail.approvedBy && <span>· approved by {detail.approvedBy}</span>}
-              <span className="ml-auto" title={fullDate(detail.createdAt)}>
-                created {ageOf(detail.createdAt)} ago
-              </span>
+              )}
             </div>
-            {renderApproveReject(detail, detail.type === "epic" ? "Approve epic" : "Approve")}
+          )}
+
+          {/* Result — commit hashes surfaced as monospace chips. */}
+          {action.result && (
+            <div className="mt-3">
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink/35">
+                Result
+              </div>
+              <p className="whitespace-pre-wrap rounded-lg bg-emerald-50 px-2.5 py-2 text-[12.5px] leading-relaxed text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
+                {action.result}
+              </p>
+              {commits.length > 0 && (
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                  {commits.map((c) => (
+                    <span
+                      key={c}
+                      title="Commit referenced in the result"
+                      className="inline-flex items-center gap-1 rounded-[4px] border border-emerald-600/20 bg-emerald-500/10 px-1.5 py-0.5 font-code text-[10.5px] text-emerald-700 dark:text-emerald-300"
+                    >
+                      <GitCommitHorizontal size={10} className="shrink-0" />
+                      {c.length > 12 ? c.slice(0, 12) : c}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Failure / rejection detail. */}
+          {(action.state === "failed" || action.state === "rejected") && action.error && (
+            <div className="mt-3">
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink/35">
+                {action.state === "failed" ? "Error" : "Rejection reason"}
+              </div>
+              <p className="whitespace-pre-wrap rounded-lg bg-rose-50 px-2.5 py-2 text-[12.5px] leading-relaxed text-rose-800 dark:bg-rose-950 dark:text-rose-200">
+                {action.error}
+              </p>
+            </div>
+          )}
+
+          {/* Provenance + timestamps. */}
+          <div className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-ink/5 pt-3 text-[11px] text-ink/45">
+            <span className="inline-flex items-center gap-1">
+              {isTask && p.assignee === "human" ? (
+                <>
+                  <User size={11} /> your todo
+                </>
+              ) : (
+                <>
+                  <Bot size={11} /> proposed by {action.proposedBy}
+                </>
+              )}
+            </span>
+            {action.approvedBy && <span>→ approved by {action.approvedBy}</span>}
+            <span className="ml-auto" title={fullDate(action.createdAt)}>
+              created {ageOf(action.createdAt)} ago
+            </span>
           </div>
         </div>
-      )}
+
+        {/* Step-in controls: exactly the current state's legal human moves. */}
+        {!readOnly && !editing && (
+          <div className="shrink-0 border-t border-ink/5 px-4 py-3">
+            {error && (
+              <div className="mb-2 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-[12px] text-rose-700 dark:border-rose-900 dark:bg-rose-950 dark:text-rose-300">
+                {error}
+              </div>
+            )}
+            {action.state === "proposed" &&
+              (confirm === "reject" ? (
+                confirmStrip("reject", `Reject this ${isTask ? "task" : "epic"}?`, "Reject", reject)
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {isTask && (
+                    <div className="flex cursor-pointer items-center gap-2 text-[12px] text-ink/60">
+                      <button
+                        onClick={toggleRequiresApproval}
+                        disabled={busy}
+                        role="switch"
+                        aria-checked={!!p.requiresApproval}
+                        className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border"
+                        style={{
+                          backgroundColor: p.requiresApproval ? "#111111" : "transparent",
+                          borderColor: p.requiresApproval ? "#111111" : "rgba(17,17,17,0.25)",
+                        }}
+                      >
+                        {p.requiresApproval && <Check size={10} color="#fff" />}
+                      </button>
+                      <span onClick={toggleRequiresApproval}>
+                        Requires explicit approval (won't auto-flow with its epic)
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex gap-1.5">
+                    <button onClick={approve} disabled={busy} className={primaryBtn}>
+                      <Check size={13} /> {isTask ? "Approve" : "Approve epic"}
+                    </button>
+                    {isTask && (
+                      <button onClick={() => setEditing(true)} disabled={busy} className={quietBtn}>
+                        <Pencil size={12} /> Edit
+                      </button>
+                    )}
+                    <button onClick={() => setConfirm("reject")} disabled={busy} className={quietBtn}>
+                      <X size={13} /> Reject
+                    </button>
+                  </div>
+                </div>
+              ))}
+            {isTask &&
+              action.state === "executing" &&
+              (confirm === "release" ? (
+                confirmStrip(
+                  "release",
+                  `Clear ${action.claimedBy ?? "the agent"}'s claim and return this task to the queue?`,
+                  "Release",
+                  release,
+                )
+              ) : (
+                <button
+                  onClick={() => setConfirm("release")}
+                  disabled={busy}
+                  title="For when the agent session died mid-task"
+                  className={`${quietBtn} w-full`}
+                >
+                  <RotateCcw size={13} /> Release stuck claim
+                </button>
+              ))}
+            {isTask &&
+              action.state === "failed" &&
+              (confirm === "requeue" ? (
+                confirmStrip(
+                  "requeue",
+                  "Clear the error and send this task back to the queue for another attempt?",
+                  "Re-queue",
+                  requeue,
+                )
+              ) : (
+                <button
+                  onClick={() => setConfirm("requeue")}
+                  disabled={busy}
+                  title="failed → ready: clears the error and the claim so an agent session can retry"
+                  className={`${quietBtn} w-full`}
+                >
+                  <RotateCcw size={13} /> Re-queue for another attempt
+                </button>
+              ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

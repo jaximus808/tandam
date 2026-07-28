@@ -130,6 +130,11 @@ export type TaskDraft = {
   body?: string;
   linkedIds?: string[];
   assignee?: "agent" | "human";
+  // Preserved on edit: updateTask REPLACES the payload, so an editor that
+  // doesn't round-trip these would silently detach the task from its epic /
+  // drop its approval self-flag.
+  epicId?: string;
+  requiresApproval?: boolean;
 };
 
 export async function createTask(code: string, task: TaskDraft): Promise<void> {
@@ -174,6 +179,19 @@ export async function releaseTask(code: string, id: string): Promise<void> {
     `/api/canvas/actions/${id}/release`,
     { method: "POST" },
     "Could not release task",
+  );
+}
+
+// Re-queue a FAILED task: failed → approved with claim AND error cleared, so
+// an agent session can pick it up fresh. Human-only by surface — like release,
+// this endpoint is deliberately not exposed through the MCP gateway (an agent
+// must never requeue its own failures).
+export async function requeueTask(code: string, id: string): Promise<void> {
+  await authedFetch(
+    code,
+    `/api/canvas/actions/${id}/requeue`,
+    { method: "POST" },
+    "Could not re-queue task",
   );
 }
 

@@ -759,6 +759,40 @@ func (h *Handler) ReleaseAction(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"action": action})
 }
 
+// POST /api/canvas/actions/{id}/requeue — send a FAILED task back to the
+// queue: failed → approved, clearing claimed_by/claimed_at AND error, so an
+// agent session can pick it up fresh. The failed → approved transition exists
+// ONLY here — it is deliberately absent from validActionStates, so the generic
+// PATCH path can never make it: an agent must not requeue its own (or a
+// peer's) failure; a human decides a failed task deserves another shot.
+//
+// HUMAN-ONLY BY SURFACE, exactly like ReleaseAction above: the canvas JWT
+// cannot distinguish human from agent, so the gate is that no MCP gateway tool
+// maps to this endpoint — only the web task surfaces call it. Re-queueing a
+// task that is already back in 'approved' is an idempotent success.
+func (h *Handler) RequeueAction(w http.ResponseWriter, r *http.Request) {
+	canvasID := CanvasIDFromCtx(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	action, _, err := h.store.RequeueAction(r.Context(), canvasID, id)
+	if err != nil {
+		switch {
+		case errors.Is(err, store.ErrActionNotFound):
+			writeError(w, http.StatusNotFound, "action not found")
+		case errors.Is(err, store.ErrIllegalActionState):
+			writeError(w, http.StatusBadRequest, err.Error())
+		default:
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
+	writeJSON(w, http.StatusOK, map[string]any{"action": action})
+}
+
 // DELETE /api/canvas/actions/{id}  — remove an action (e.g. delete a task from
 // the queue). Terminal for any state — no state-machine guard.
 func (h *Handler) DeleteAction(w http.ResponseWriter, r *http.Request) {

@@ -838,6 +838,11 @@ type Store interface {
 	// claimed_by/claimed_at, via the same conditional-UPDATE pattern. Human-only —
 	// the gate lives at the route surface (see api.ReleaseAction).
 	ReleaseAction(ctx context.Context, canvasID, id uuid.UUID) (*Action, int, error)
+	// RequeueAction sends a FAILED task back to the queue: failed → approved,
+	// clearing claimed_by/claimed_at and error, via the same conditional-UPDATE
+	// pattern. Human-only — the gate lives at the route surface (see
+	// api.RequeueAction); agents must not requeue their own failures.
+	RequeueAction(ctx context.Context, canvasID, id uuid.UUID) (*Action, int, error)
 	UpdateActionPayload(ctx context.Context, canvasID, id uuid.UUID, payload json.RawMessage) (int, error)
 	DeleteAction(ctx context.Context, canvasID, id uuid.UUID) (int, error)
 	// ApproveEpicTasks batch-approves every currently-proposed task under an epic
