@@ -236,6 +236,12 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 		// (no event table). Both are reads — see fleet_handler.go.
 		r.Get("/api/canvas/agents", h.ListAgentRoster)
 		r.Get("/api/canvas/activity", h.ListActivity)
+		// GitHub ground truth (TDM-45): resolve ONE evidence link from a task
+		// completion into a live state (merged / open / checks red). Registered
+		// with r.Get and nothing else — read-only is the charter fence, and
+		// TestGitHubStatusRouteIsGetOnly walks the router to keep it that way.
+		// See github_status.go for the full argument and the rate-limit story.
+		r.Get("/api/canvas/github/status", h.GetGitHubStatus)
 
 		// Writes — require write role.
 		r.Group(func(r chi.Router) {

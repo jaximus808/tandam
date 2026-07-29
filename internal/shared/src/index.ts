@@ -252,6 +252,23 @@ export interface TaskPayload {
   // Agent self-flag: true forces this task to land 'proposed' regardless of
   // the canvas approval policy (use it when deviating from the approved plan).
   requiresApproval?: boolean;
+  // Completion evidence: commit / PR / branch URLs, appended (never replaced)
+  // by task_complete and by the inbound status API. GitHub links get a live
+  // status on the board — see components/TaskLinks.tsx. Server-maintained:
+  // append through those endpoints, never rewrite the array from a client.
+  links?: string[];
+  // Append-only progress log written by the inbound status API (state:
+  // "progress") and the MCP task_progress tool. Bounded server-side.
+  progress?: TaskProgressEntry[];
+}
+
+// One mid-flight report from whoever holds the task.
+export interface TaskProgressEntry {
+  at: string;
+  agent?: string;
+  by?: string;
+  note: string;
+  percent?: number;
 }
 
 // Payload for `type: "epic"` — a named batch of related tasks approved as one

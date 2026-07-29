@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### `task_complete` carries evidence links (TDM-45)
+
+- `task_complete` / `canvas_task_complete` accept `links: string[]` — the GitHub
+  commit, pull request, and branch URLs the work produced. They ride the same
+  PATCH as the completion (no extra round trip) and the API appends them to the
+  task additively, exactly as the inbound status API's `links[]` does for a CI
+  curl.
+- The board resolves GitHub links live (merged / open / checks failing) through
+  a read-only server-side proxy, so a human reads what HAPPENED rather than only
+  the agent's summary of it. Non-GitHub URLs are kept as plain links.
+
 ### `MCP_TRACE` — per-tool-call latency and a session summary (TDM-43)
 
 - **One stderr line per tool call**: tool name, total handler duration, the API

@@ -963,6 +963,15 @@ export async function handleTool(
       // Send our identity on the terminal PATCH too — the API rejects completing
       // a task a different named agent still holds, closing the "finish someone
       // else's claimed work" hole that the atomic claim alone doesn't cover.
+      // `links` is EVIDENCE (TDM-45): commit / PR / branch URLs that let the
+      // board show what actually happened to the work — merged, open, checks
+      // red — instead of taking the result summary's word for it. Passed
+      // straight through: the API appends them to the task payload additively
+      // (same merge the inbound status API's links[] goes through), so an agent
+      // completion and a CI curl leave identical evidence behind.
+      const links = Array.isArray(args.links)
+        ? args.links.filter((l): l is string => typeof l === "string" && l.trim() !== "")
+        : undefined;
       const res = await gateway.patchWithConflict<Record<string, unknown>, { claimedBy?: string }>(
         `/api/canvas/actions/${args.id}`,
         {
@@ -970,6 +979,7 @@ export async function handleTool(
           result: args.result,
           error: args.error,
           agentName: claimant,
+          ...(links && links.length > 0 ? { links } : {}),
         }
       );
       if (res.conflict) {
@@ -2969,7 +2979,10 @@ const RAW_TOOLS = [
       "Finish a task with a result summary. Marks it 'done' (or 'failed' via status) — " +
       "auto-claims first if you skipped canvas_task_start. `result` should be a short " +
       "human-readable summary of what was done, INCLUDING the commit hash(es) of the " +
-      "work when commits were made; it shows in the web Tasks panel. If you passed an " +
+      "work when commits were made; it shows in the web Tasks panel. Pass `links` with " +
+      "the GitHub URLs your work produced (commit / PR / branch) — the board resolves " +
+      "them live, so the human sees whether the PR merged or the checks went red instead " +
+      "of only your summary of it. If you passed an " +
       "agentName to canvas_task_start, pass the SAME identity here — completing under " +
       "a different name than the claim is rejected.",
     inputSchema: {
@@ -2977,6 +2990,14 @@ const RAW_TOOLS = [
       properties: {
         id: { type: "string" },
         result: { type: "string", description: "What was done / where — include the commit hash(es), PR, or files touched." },
+        links: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Evidence URLs for this completion — GitHub commit / pull request / branch links " +
+            "(e.g. https://github.com/owner/repo/pull/123). GitHub links get a live status on " +
+            "the board (merged, open, checks failing); other URLs are kept as plain links.",
+        },
         status: { type: "string", enum: ["done", "failed"] },
         error: { type: "string", description: "Failure detail when status='failed'." },
         agentName: {

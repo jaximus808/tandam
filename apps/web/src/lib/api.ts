@@ -280,6 +280,34 @@ export async function fetchActivityFeed(code: string, limit = 50): Promise<Activ
   return (await res.json()) as ActivityFeed;
 }
 
+// ── GitHub ground truth (TDM-45) ─────────────────────────────────────────────
+// GET /api/canvas/github/status?url= — resolve ONE evidence link into what
+// GitHub currently says about it. Read-only, server-side, cached there; the
+// browser never talks to api.github.com (no token in a bundle, no CORS, and one
+// shared cache instead of one per tab).
+
+export type GitHubLinkStatus = {
+  kind: "commit" | "pr" | "branch";
+  /** merged | open | closed | draft | ok | failure | pending | unknown */
+  state: string;
+  title?: string;
+  /** pass | fail | pending — only when the ref has checks. */
+  checks?: "pass" | "fail" | "pending";
+  url: string;
+  /** Why the state is unknown: not_found | rate_limited | unavailable. */
+  reason?: string;
+};
+
+export async function fetchGitHubStatus(code: string, url: string): Promise<GitHubLinkStatus> {
+  const res = await authedFetch(
+    code,
+    `/api/canvas/github/status?url=${encodeURIComponent(url)}`,
+    { method: "GET" },
+    "Could not read the GitHub status",
+  );
+  return (await res.json()) as GitHubLinkStatus;
+}
+
 // ── Epics (actions of type "epic") ───────────────────────────────────────────
 // Same born-approved rule as human tasks: the approval gate exists for
 // agent-proposed work, and the human author IS the gate. Under the default

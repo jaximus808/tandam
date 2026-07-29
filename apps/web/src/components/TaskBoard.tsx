@@ -44,6 +44,7 @@ import { epicLifecycle, TERMINAL_STATES } from "../lib/epicLifecycle";
 import { CHIP_BASE, STATE_CHIP } from "../lib/stateChips";
 import { parseAuthoredBy, provenanceTitle } from "../lib/provenance";
 import { auditActorLabel, auditChangeLabel, lastReapprovalEdit } from "../lib/taskAudit";
+import TaskLinks from "./TaskLinks";
 
 /* ─────────────────────────────────────────────────────────────────────────────
    TaskBoard — the Board surface: the one home for tasks on a canvas. Humans
@@ -97,6 +98,11 @@ const COLUMNS: { key: string; label: string; states: ActionState[]; dot: string 
   { key: "done",     label: "Done",     states: ["done"], dot: STATE_CHIP.done.dot },
   { key: "closed",   label: "Failed / Rejected", states: ["failed", "rejected"], dot: STATE_CHIP.failed.dot },
 ];
+
+// How many cards may resolve their evidence links against GitHub on a board
+// load (TDM-45). The rest render their chips without a dot until you open them.
+// See liveLinkTaskIds for why this is a small number.
+const LIVE_LINK_CARDS = 6;
 
 // Sidebar scope — which lens the kanban shows: "all" | "none" | an epic id.
 // Persisted so the board reopens where you left it.
@@ -692,6 +698,23 @@ export default function TaskBoard({
     [scopedTasks, filtering, query, filters],
   );
 
+  // Which cards get a LIVE GitHub status (TDM-45).
+  //
+  // Every card with evidence renders its link chips; only these ask the server
+  // what GitHub says about them. The endpoint behind that spends a
+  // 60-requests-per-hour budget shared by everyone looking at the deployment,
+  // so "resolve all of them" is not an option on a board with a year of done
+  // work. The most recently touched few are also the only ones anyone is
+  // deciding anything about — older evidence is history, and history is one
+  // click away in the detail panel, where the lookup always runs.
+  const liveLinkTaskIds = useMemo(() => {
+    const withLinks = visibleTasks
+      .filter((t) => (taskPayload(t).links ?? []).length > 0)
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+      .slice(0, LIVE_LINK_CARDS);
+    return new Set(withLinks.map((t) => t.id));
+  }, [visibleTasks]);
+
   // Link targets for the composer (roadmap items + notes on this canvas).
   const targets = useMemo(() => linkTargets(state), [state]);
 
@@ -891,6 +914,17 @@ export default function TaskBoard({
             done its job, and a permanent "was edited once" badge on a running
             task is history, not a decision aid. */}
         {t.state === "proposed" && reapproval && <ReapprovalMark edit={reapproval} />}
+        {/* Evidence: what the completion says it produced, and what GitHub says
+            about it. Above the record-metadata row because it's about the WORK,
+            not about the row. Two chips max — the card is a summary; the rest
+            are in the detail panel. */}
+        <TaskLinks
+          code={code}
+          links={p.links}
+          live={liveLinkTaskIds.has(t.id)}
+          max={2}
+          className="mt-1.5"
+        />
         <div className="mt-1.5 flex items-center gap-1.5">
           {epicTitle && epicId && (
             <button
@@ -1829,6 +1863,19 @@ function TaskDetail({
               <p className="whitespace-pre-wrap rounded-md bg-rose-500/10 px-2.5 py-2 text-[12.5px] leading-relaxed text-rose-700 dark:text-rose-300">
                 {action.error}
               </p>
+            </div>
+          )}
+
+          {/* Evidence (TDM-45) — the links the completion carried, each resolved
+              against GitHub. Below the result and the error because it backs
+              BOTH: a failed task's CI run link belongs here too. Always live:
+              you opened this panel to find out. */}
+          {(p.links ?? []).length > 0 && (
+            <div className="mt-3">
+              <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-ink/50">
+                Evidence
+              </div>
+              <TaskLinks code={code} links={p.links} live boxed />
             </div>
           )}
 
