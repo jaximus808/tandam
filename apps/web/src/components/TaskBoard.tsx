@@ -1161,11 +1161,21 @@ export default function TaskBoard({
           </div>
         </div>
       ) : (
-        <div className="flex min-h-0 min-w-0 flex-1">
+        <div className="relative flex min-h-0 min-w-0 flex-1">
           {/* Epic navigator: the timeline sidebar. Hidden on mobile unless
-              toggled from the toolbar; always visible on md+. */}
+              toggled from the toolbar; always visible on md+. Below md it
+              OVERLAYS the kanban (a 256px inline sidebar would squeeze the
+              board to a sliver on a 375px phone) with a scrim to dismiss;
+              picking a scope also dismisses (see selectScope). */}
+          {sidebarOpen && (
+            <div
+              className="absolute inset-0 z-20 bg-ink/25 md:hidden"
+              onClick={() => setSidebarOpen(false)}
+              aria-hidden="true"
+            />
+          )}
           <aside
-            className={`${sidebarOpen ? "flex" : "hidden"} w-64 shrink-0 flex-col border-r border-ink/10 md:flex`}
+            className={`${sidebarOpen ? "flex" : "hidden"} absolute inset-y-0 left-0 z-30 w-64 shrink-0 flex-col border-r border-ink/10 bg-paper shadow-lg md:static md:z-auto md:flex md:shadow-none`}
           >
             <div className="min-h-0 flex-1 overflow-y-auto pb-2">
               <div className="sticky top-0 z-10 border-b border-ink/10 bg-paper py-1">

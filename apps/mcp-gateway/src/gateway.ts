@@ -305,8 +305,18 @@ export class Gateway {
       const ms = Date.now() - start;
       if (err instanceof Error && err.name === "AbortError") {
         process.stderr.write(`[tandem] ${method} ${path} -> timeout (${ms}ms)\n`);
+        // The abort is CLIENT-side: the API may still be processing the request
+        // and a slow-but-successful write often persists after this deadline.
+        // A blind retry of a mutating call would then double-write (observed
+        // with canvas_map_add_batch: the batch fully landed despite the timeout
+        // being reported). So for mutating methods, steer the model to verify
+        // before retrying instead of claiming the API "did not respond".
+        const mutating = method !== "GET" && method !== "HEAD";
         throw new Error(
-          `Request to ${path} timed out after ${timeoutMs}ms — the Tandem API did not respond.`
+          `Request to ${path} timed out after ${timeoutMs}ms waiting for the Tandem API to respond.` +
+            (mutating
+              ? ` IMPORTANT: this was a ${method} (a write) and the timeout is client-side — the change may still have been APPLIED on the server after the deadline. Do NOT retry it blindly, or you may create duplicates. First re-read the affected state (canvas_state_read, or the matching list/get tool) and check whether the change already landed; retry only what is actually missing.`
+              : ` This was a read-only request, so retrying it is safe.`)
         );
       }
       const reason = err instanceof Error ? err.message : String(err);

@@ -1,5 +1,5 @@
 import { useEffect, type ReactNode } from "react";
-import { FolderTree, Settings, X } from "lucide-react";
+import { FolderTree, Link2, Settings, X } from "lucide-react";
 import { SURFACE_ITEMS, type SidebarView, type Surface } from "../lib/sidebar";
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -34,6 +34,7 @@ export default function MobileNavDrawer({
   onSelectView,
   onClose,
   boardBadge = 0,
+  onConnect,
   children,
 }: {
   open: boolean;
@@ -48,6 +49,9 @@ export default function MobileNavDrawer({
   onClose: () => void;
   /** Count bubble on Board (tasks awaiting approval). */
   boardBadge?: number;
+  /** Open the agent-connect dialog (the header's Connect button is desktop-only
+      — this keeps the path reachable on phones). Closes the drawer first. */
+  onConnect?: () => void;
   /** The selected panel body (rendered by the caller). */
   children: ReactNode;
 }) {
@@ -144,6 +148,18 @@ export default function MobileNavDrawer({
               </button>
             );
           })}
+          {onConnect && (
+            <button
+              onClick={() => {
+                onClose();
+                onConnect();
+              }}
+              className="ml-auto flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-[11.5px] font-medium text-accent transition-colors hover:bg-accent/[0.08]"
+            >
+              <Link2 size={14} strokeWidth={1.75} />
+              Connect an agent
+            </button>
+          )}
         </div>
 
         {/* The selected panel body — reused verbatim from the desktop dock. */}

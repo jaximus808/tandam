@@ -997,7 +997,7 @@ export default function App() {
 
   if (!canvasState || !canvas) {
     return (
-      <div className="relative flex h-screen flex-col items-center justify-center overflow-hidden bg-paper text-ink">
+      <div className="relative flex h-app flex-col items-center justify-center overflow-hidden bg-paper text-ink">
         <TandemLogo size={56} />
         <p className="relative mt-6 text-sm font-medium text-ink/70">Joining canvas</p>
         <p className="relative mt-2 rounded-[4px] border border-ink/10 bg-surface px-2.5 py-1 font-code text-xs tracking-[0.3em] text-ink/50">
@@ -1112,7 +1112,7 @@ export default function App() {
 
   return (
     <ModeNavContext.Provider value={setMode}>
-    <div className="flex flex-col h-screen bg-paper text-ink overflow-hidden">
+    <div className="flex flex-col h-app bg-paper text-ink overflow-hidden">
       {/* z-[80] so the header (and its bell dropdown) sits above the agent
           cursor overlay (z-[70]); modals are z-[2000] and still cover it. */}
       <header className="relative z-[80] flex items-center gap-1.5 px-3 py-2.5 bg-paper border-b border-ink/10 shrink-0 sm:gap-2 sm:px-4">
@@ -1151,9 +1151,12 @@ export default function App() {
           <span className="hidden rounded-[3px] border border-ink/10 bg-surface px-1.5 py-px font-code text-[10px] tracking-[0.14em] text-ink/40 shrink-0 sm:inline">
             {canvas.code}
           </span>
+          {/* Desktop-only: the full-width view-only banner under the header
+              carries this on phones — the chip's ~70px would tip a 375px
+              header (logo + name + CTA + sign-in) into clipping. */}
           {canvas.yourRole === "read" && (
             <span
-              className="inline-flex items-center gap-1 rounded-[4px] bg-ink/5 px-1.5 py-px text-[11px] font-medium text-ink/60 shrink-0"
+              className="hidden items-center gap-1 rounded-[4px] bg-ink/5 px-1.5 py-px text-[11px] font-medium text-ink/60 shrink-0 sm:inline-flex"
               title="You have view-only access to this canvas"
             >
               <span className="h-1 w-1 rounded-full bg-ink/35" />
@@ -1217,18 +1220,26 @@ export default function App() {
             </span>
           </button>
           {claiming ? (
-            <span className="hidden h-8 items-center rounded-md border border-ink/15 bg-surface px-3 text-[13px] font-medium text-ink/60 sm:inline-flex">
-              Saving to your account…
+            <span className="inline-flex h-9 items-center rounded-md border border-ink/15 bg-surface px-3 text-[13px] font-medium text-ink/60 sm:h-8">
+              <span className="sm:hidden">Saving…</span>
+              <span className="hidden sm:inline">Saving to your account…</span>
             </span>
           ) : me ? (
             canvas.ownerUserId !== me.id && (
+              // Visible on ALL breakpoints (launch traffic is mostly mobile) —
+              // shorter label + a slightly taller touch target under sm.
               <button
                 onClick={handleCopyToAccount}
                 disabled={copying}
-                className="hidden h-8 items-center rounded-md border border-ink/15 bg-surface px-3 text-[13px] font-medium text-ink/80 transition-colors hover:border-ink/25 hover:bg-ink/[0.03] disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper sm:inline-flex"
+                className="inline-flex h-9 items-center rounded-md border border-ink/15 bg-surface px-3 text-[13px] font-medium text-ink/80 transition-colors hover:border-ink/25 hover:bg-ink/[0.03] disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper sm:h-8"
                 title="Save a copy of this canvas to your account so it shows up in My canvases on every device"
               >
-                {copying ? "Copying…" : "Copy to my account"}
+                {copying ? "Copying…" : (
+                  <>
+                    <span className="sm:hidden">Copy canvas</span>
+                    <span className="hidden sm:inline">Copy to my account</span>
+                  </>
+                )}
               </button>
             )
           ) : (
@@ -1241,7 +1252,7 @@ export default function App() {
               <button
                 onClick={handleSignedOutCopyClick}
                 disabled={copying}
-                className="inline-flex h-8 items-center rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-[filter] hover:brightness-[0.94] disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
+                className="inline-flex h-9 items-center rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-[filter] hover:brightness-[0.94] disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper sm:h-8"
                 title="Sign in and get your own editable copy of this canvas"
               >
                 {copying ? "Copying…" : (
@@ -1262,9 +1273,14 @@ export default function App() {
               Share
             </button>
           )}
+          {/* Desktop-only in the header: on a 375px phone the header can't seat
+              the copy CTA AND Connect without clipping (overflow-hidden shell),
+              and the copy CTA is the one action launch traffic must see. On
+              phones Connect lives in the mobile nav drawer (and still auto-opens
+              on an empty canvas). */}
           <button
             onClick={() => setConnectOpen(true)}
-            className="inline-flex h-8 items-center rounded-md bg-accent px-3.5 text-[13px] font-medium text-white transition-[filter] hover:brightness-[0.94] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
+            className="hidden h-8 items-center rounded-md bg-accent px-3.5 text-[13px] font-medium text-white transition-[filter] hover:brightness-[0.94] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper sm:inline-flex"
           >
             Connect
           </button>
@@ -1535,6 +1551,7 @@ export default function App() {
         onSelectView={setSidebarView}
         onClose={() => setMobileNavOpen(false)}
         boardBadge={proposedTaskCount}
+        onConnect={() => setConnectOpen(true)}
       >
         {mobileNavView === "documents" && (
           <DocumentExplorer

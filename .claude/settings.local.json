@@ -122,33 +122,5 @@
       "mcp__agentcanvas__canvas_event_add_batch",
       "WebFetch(domain:dev.to)"
     ]
-  },
-  "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "Edit|Write|MultiEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "[ ! -f \"/Users/jaxon/.claude/skills/impeccable/scripts/hook.mjs\" ] || node \"/Users/jaxon/.claude/skills/impeccable/scripts/hook.mjs\"",
-            "timeout": 5,
-            "statusMessage": "Checking UI changes"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "[ ! -f \"/Users/jaxon/.claude/skills/impeccable/scripts/hook.mjs\" ] || node \"/Users/jaxon/.claude/skills/impeccable/scripts/hook.mjs\"",
-            "timeout": 30,
-            "statusMessage": "Design deep pass"
-          }
-        ]
-      }
-    ]
-  },
-  "description": "Impeccable design detector: immediate-tier checks after Edit/Write/MultiEdit on UI files, full-rule deep pass on Stop."
+  }
 }

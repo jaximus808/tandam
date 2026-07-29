@@ -33,6 +33,38 @@ body {
   background-color: rgb(var(--color-paper));
 }
 
+/* ── Mobile viewport + touch fixes ───────────────────────────────────────────
+   .h-app: the full-height app shell. 100vh over-measures on phones (mobile
+   Safari's URL bar, LinkedIn/Instagram in-app webviews), clipping the bottom
+   of the canvas behind browser chrome. 100dvh tracks the VISIBLE viewport;
+   plain vh stays first as the fallback for engines without dvh. */
+.h-app {
+  height: 100vh;
+  height: 100dvh;
+}
+
+/* Panning a board or list at its top edge must not trigger the browser's
+   pull-to-refresh — an accidental full canvas reload, especially easy to hit
+   inside in-app webviews. */
+html,
+body {
+  overscroll-behavior-y: none;
+}
+
+/* iOS Safari auto-zooms the whole page when focusing an input whose font-size
+   is under 16px. Inside an overflow-hidden app shell that zoom crops the UI
+   with no way back. Meet the 16px threshold on small touch screens instead of
+   disabling user zoom in the viewport meta (an a11y regression). */
+@media (max-width: 640px) and (pointer: coarse) {
+  /* !important: utility classes (text-[12px] etc.) out-specify a bare element
+     selector, and every sub-16px input must be caught for the fix to hold. */
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
 /* Brand-wide selection + a calmer, paper-friendly scrollbar so the canvas
    chrome feels finished rather than default-OS. */
 ::selection {

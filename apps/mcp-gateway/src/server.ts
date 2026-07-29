@@ -20,7 +20,7 @@ export const SERVER_NAME = "tandem";
 
 // Keep in sync with package.json `version`. Surfaced via `--version` and the
 // MCP server's self-identification over both transports.
-export const VERSION = "2.1.0";
+export const VERSION = "2.3.0";
 
 // Hosted backend. Override with the API_URL env var to point at a local or
 // self-hosted instance (the HTTP sidecar sets this to the in-cluster Go API).

@@ -79,6 +79,9 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 		// Account preferences (e.g. default canvas visibility). RequireUser puts
 		// the user id in context for UpdateMe.
 		r.Patch("/api/auth/me", authH.UpdateMe)
+		// Permanent account deletion (danger zone on /me). Owner's canvases go
+		// with the account; the handler clears the session cookie.
+		r.Delete("/api/auth/me", authH.DeleteMe)
 		r.Get("/api/me/canvases", h.MeCanvases)
 		// Recipient-side of sharing: canvases shared with me + the inbox that
 		// tells me a share happened.

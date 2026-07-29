@@ -169,6 +169,23 @@ export async function saveFollowStyle(style: FollowStyle): Promise<void> {
   }
 }
 
+// deleteAccount permanently deletes the signed-in user's account and every
+// canvas they own (DELETE /api/auth/me). The server clears the session cookie
+// in the response; we clear the local identity cache too so the app lands
+// signed-out immediately. Throws on failure so the confirm modal can surface
+// the error and stay open.
+export async function deleteAccount(): Promise<void> {
+  const res = await fetch("/api/auth/me", {
+    method: "DELETE",
+    credentials: "same-origin",
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(detail || "Failed to delete account");
+  }
+  cacheUser(null);
+}
+
 export async function logout(): Promise<void> {
   try {
     await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" });

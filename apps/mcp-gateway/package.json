@@ -1,6 +1,7 @@
 {
   "name": "@jaximus/tandem-mcp",
-  "version": "2.2.0",
+  "version": "2.3.0",
+  "mcpName": "io.github.jaximus808/tandem-mcp",
   "description": "MCP server for Tandem — the shared state layer for parallel agent sessions: a durable task queue Claude Code, Cursor, Codex, or any MCP-aware session can claim from without colliding.",
   "type": "module",
   "main": "./dist/index.js",
@@ -10,6 +11,7 @@
   "files": [
     "dist",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {

@@ -25,7 +25,7 @@ export default function AccessDenied({
   const notFound = status.kind === "notFound";
 
   return (
-    <div className="flex h-screen flex-col bg-paper text-ink">
+    <div className="flex h-app flex-col bg-paper text-ink">
       <header className="flex items-center gap-2 border-b border-ink/10 px-4 py-3">
         <button onClick={onHome} className="group flex items-center gap-1.5" title="Back to home">
           <TandemLogo size={28} animate={false} />

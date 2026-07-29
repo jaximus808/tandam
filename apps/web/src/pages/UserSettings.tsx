@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { LogOut, Bell, Lock, Globe, Trash2, Eye, Pencil } from "lucide-react";
 import {
+  deleteAccount,
   fetchMe,
   getCachedUser,
   logout,
@@ -8,6 +9,7 @@ import {
   setDefaultPublicRole,
   type User,
 } from "../lib/auth";
+import DeleteAccountModal from "../components/DeleteAccountModal";
 import TandemLogo from "../components/TandemLogo";
 import AccountMenu from "../components/AccountMenu";
 import AccessTokensSection from "../components/AccessTokensSection";
@@ -107,6 +109,31 @@ export default function UserSettings({ onHome, onShowCanvases, onShowAbout, onOp
       setLoad({ status: "ready", user: prev });
     } finally {
       setSavingRole(false);
+    }
+  }
+
+  // Danger zone — account deletion. Confirming (type-to-confirm in the modal)
+  // deletes the account + owned canvases server-side, which also clears the
+  // session cookie; we then reset client identity and route home signed-out.
+  // Cancel (or a failed request) leaves everything intact.
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  async function handleDeleteAccount() {
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteAccount();
+      posthog.capture("account_deleted");
+      posthog.reset();
+      window.google?.accounts.id.disableAutoSelect();
+      setDeleteOpen(false);
+      setLoad({ status: "signedOut" });
+      onHome();
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : "Failed to delete account");
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -288,15 +315,40 @@ export default function UserSettings({ onHome, onShowCanvases, onShowAbout, onOp
               />
             </section>
 
-            {/* Danger zone — account deletion, wired up in a follow-up. */}
+            {/* Danger zone — account deletion. The button opens a
+                type-to-confirm modal; the destructive call lives there. */}
             <section className="mt-6 overflow-hidden rounded-lg border border-rose-500/25 bg-surface">
-              <SettingRow
-                icon={Trash2}
-                title="Delete account"
-                desc="Permanently remove your account and the canvases you own."
-                danger
-              />
+              <div className="flex items-center gap-3.5 px-5 py-4 sm:px-6">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-rose-500/10 text-rose-600 dark:text-rose-400">
+                  <Trash2 className="h-4 w-4" />
+                </div>
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-rose-600 dark:text-rose-400">Delete account</div>
+                  <div className="text-xs text-ink/50">
+                    Permanently remove your account and the canvases you own.
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setDeleteError(null);
+                    setDeleteOpen(true);
+                  }}
+                  className="ml-auto shrink-0 rounded-md border border-rose-500/30 bg-surface px-3 py-1.5 text-sm font-medium text-rose-600 transition-colors hover:bg-rose-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500/40 dark:text-rose-400"
+                >
+                  Delete…
+                </button>
+              </div>
             </section>
+
+            {deleteOpen && (
+              <DeleteAccountModal
+                email={user.email}
+                deleting={deleting}
+                error={deleteError}
+                onCancel={() => setDeleteOpen(false)}
+                onConfirm={handleDeleteAccount}
+              />
+            )}
           </>
         )}
       </main>

@@ -27,7 +27,7 @@ pnpm run build
 npm pack --dry-run
 ```
 
-You should see only `dist/`, `README.md`, `LICENSE`, and `package.json` in the tarball. If you see `src/` or `node_modules/`, fix the `files` field in `package.json` before publishing.
+You should see only `dist/`, `README.md`, `CHANGELOG.md`, `LICENSE`, and `package.json` in the tarball. If you see `src/` or `node_modules/`, fix the `files` field in `package.json` before publishing.
 
 ## Per-release workflow
 

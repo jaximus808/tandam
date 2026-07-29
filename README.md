@@ -64,8 +64,9 @@ Every session:
 
 Planning from a spec: when asked to decompose SPEC.md (or any spec file)
 into work, propose one epic per spec section with `canvas_epic_add`, then
-that section's tasks with `canvas_task_add` passing the epic's id as
-`epicId`. In the epic body, record the spec file path, the section heading,
+that section's tasks in ONE call with `canvas_task_add_batch`, passing the
+epic's id as `epicId` on each. In the epic body, record the spec file path,
+the section heading,
 and the current commit SHA of the spec file. One human approval of the epic
 approves its tasks (canvas approval policy `epic`, the default). Before
 working a claimed task that belongs to an epic, diff the spec section
@@ -98,7 +99,7 @@ Both sessions pull the same queue. Each claim has exactly one winner — the los
 | `apps/web` | React + Vite + Tailwind frontend |
 | `apps/mcp-gateway` | Node stdio MCP server (`@jaximus/tandem-mcp`) that proxies tool calls to the API |
 | `internal/shared` | TypeScript types shared by web + gateway |
-| `migrations/` | Hand-written, numbered SQL applied manually to Supabase |
+| `supabase/migrations/` | Hand-written, numbered SQL applied manually to Supabase |
 
 ## Develop
 

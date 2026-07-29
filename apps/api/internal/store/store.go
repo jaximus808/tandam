@@ -909,6 +909,16 @@ type Store interface {
 	// UpdateUserAgentFollowStyle sets the user's agent_follow_style preference
 	// ('cinematic'|'minimal') and returns the refreshed row.
 	UpdateUserAgentFollowStyle(ctx context.Context, id uuid.UUID, style string) (*User, error)
+	// DeleteUserAccount permanently removes a user account: first every canvas
+	// they OWN (each canvas's content, access rows, and notifications cascade
+	// per-canvas, exactly like DeleteCanvas), then the user row itself — which
+	// cascades their memberships on OTHER people's canvases (canvas_access),
+	// their notification inbox, personal access tokens, and OAuth codes/grants
+	// (all FK users ON DELETE CASCADE). Two statements because
+	// canvases.owner_user_id is ON DELETE SET NULL (migration 0017): deleting
+	// only the user row would orphan owned canvases back to anonymous instead
+	// of removing them.
+	DeleteUserAccount(ctx context.Context, userID uuid.UUID) error
 
 	// Personal access tokens (migration 0027) — user-scoped MCP credentials.
 	// CreatePersonalAccessToken stores the hash and returns the metadata row;

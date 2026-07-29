@@ -6,7 +6,9 @@ This is a standard [Model Context Protocol](https://modelcontextprotocol.io) std
 
 ## What it does
 
-When you connect, you bind the MCP session to one canvas. From then on, every tool call (`canvas_pin_add`, `canvas_event_add`, `canvas_note_add`, …) operates on that canvas. Writes are broadcast over WebSocket to every browser and every other agent subscribed to the same canvas code.
+When you connect, you bind the MCP session to one canvas. From then on, every tool call operates on that canvas, and every write is broadcast over WebSocket to every browser and every other agent subscribed to the same canvas code.
+
+The core loop is the **task queue**: one session proposes work as tasks (grouped into epics), a human approves it once in the web UI, and any number of parallel sessions pull the approved queue, claim tasks atomically (exactly one winner per task — losers are told who won and move on), and complete them with results. Every task carries a per-canvas ticket ID (`TDM-7`) for commit messages, and every claim shows the claimant's name on the live board.
 
 ## Install
 
@@ -68,48 +70,48 @@ To connect as yourself, mint a token under **Access tokens** at [tandemcanvas.co
 
 ## Tools
 
-| Tool                              | Purpose                                                         |
-| --------------------------------- | --------------------------------------------------------------- |
-| `canvas_connect`                  | Bind the session to a canvas by 8-char code. Required first.    |
-| `canvas_state_read`               | Snapshot of pins, events, notes, mode, and pending edits.       |
-| `canvas_mode_set`                 | Switch view: `welcome` / `map` / `itinerary` / `docs`.          |
-| `canvas_map_list`                 | List base-map presets.                                          |
-| `canvas_map_set`                  | Pick a base map. Also switches into map mode.                   |
-| `canvas_pin_{add,update,delete}`  | Manage location pins.                                           |
-| `canvas_event_{add,update,delete}`| Manage timed events. Optionally link to a pin.                  |
-| `canvas_note_{add,update,delete}` | Manage markdown notes. Optionally attach to a pin or event.     |
-| `canvas_pending_edits_read`       | Read scoped edit requests posted from the browser.              |
-| `canvas_pending_edits_complete`   | Mark a scoped edit as done.                                     |
+The task-queue core:
 
-Full schemas are returned by the MCP `tools/list` request, or visible in [`src/tools.ts`](https://github.com/jaximus808/tandam/blob/main/apps/mcp-gateway/src/tools.ts).
+| Tool                              | Purpose                                                                                     |
+| --------------------------------- | ------------------------------------------------------------------------------------------- |
+| `canvas_connect`                  | Bind the session to a canvas by 8-char code. Required first.                                |
+| `canvas_create`                   | Create a new canvas and bind to it in one step.                                             |
+| `agent_register`                  | Register this session's identity (name, role; `parentAgentId` groups a swarm's executors under their orchestrator). Returns an updated `session` handle — pass it on every later call. |
+| `canvas_epic_add`                 | Propose a named batch of tasks approved as one unit. Human approves once; tasks under it fan out to approved. |
+| `canvas_task_add` / `_add_batch`  | Propose tasks (land as `proposed`; born approved under an already-approved epic).           |
+| `canvas_task_list`                | The queue, compact: pass `state: "approved"` for ready-to-work tasks.                       |
+| `canvas_task_get`                 | One task with its linked context hydrated — all a session needs to start.                   |
+| `canvas_task_start`               | Atomic claim (`approved` → `executing`). Losers get `{ claimed: false, claimedBy }`.        |
+| `canvas_task_complete`            | Finish with a `result` (include commit hashes), or `status: "failed"` + `error`.            |
+
+Plus the full canvas surface — documents, notes, roadmap items, sheets, charts, forms, map pins, timed events — each with `add` / `update` / `delete` and `_batch` variants, and `canvas_state_read` for a summary snapshot. Full schemas are returned by the MCP `tools/list` request, or visible in [`src/tools.ts`](https://github.com/jaximus808/tandam/blob/main/apps/mcp-gateway/src/tools.ts).
 
 ## Example session
 
 ```text
-agent: canvas_connect { "code": "TOKYO7X3K" }
-  → { connected: true, canvasName: "Tokyo trip" }
+agent: canvas_connect { "code": "AB3XK9QZ" }
+  → { connected: true, canvasName: "acme-api", url: "https://tandemcanvas.com/c/AB3XK9QZ" }
 
-agent: canvas_pin_add {
-  pinType: "marker", lat: 35.66, lng: 139.7,
-  label: "Shibuya Crossing", body: "Best at sunset."
-}
-  → { id: "pin_abc123", ... }
+agent: agent_register { "role": "executor", "name": "exec-1" }
+  → { agentId: "…", session: "…" }        # use the returned session handle from here on
 
-agent: canvas_event_add {
-  title: "Shibuya at sunset", start: "2026-06-04T18:00:00",
-  pinId: "pin_abc123"
-}
+agent: canvas_task_list { "state": "approved" }
+  → [{ id: "…", ticketId: "TDM-7", title: "Add rate limiter", state: "approved" }, …]
+
+agent: canvas_task_start { "id": "…" }
+  → { claimed: true, action: { ticketId: "TDM-7", … } }
+    # another session got { claimed: false, claimedBy: "exec-1" } and took the next task
+
+  …work happens; commits start with "TDM-7: …"…
+
+agent: canvas_task_complete { "id": "…", "result": "Rate limiter added — commit a1b2c3d" }
 ```
 
-The user sees the pin drop and the event appear on their itinerary in real time, no refresh.
+The human watches the board move in the browser — cards flip to *executing* with the claimant's name, results land as tasks complete — in real time, no refresh.
 
 ## Multi-agent
 
-Multiple agents can connect to the same canvas at the same time. A common pattern:
-
-1. **Scout agent** — searches the web, drops candidate pins.
-2. **Planner agent** — reads `canvas_state_read`, emits day-by-day events linked to pins.
-3. **Reporter agent** — walks final state, writes a markdown summary via `canvas_note_add`.
+Any number of sessions connect to the same canvas and pull the same queue; claims are atomic, so each task has exactly one winner. For orchestrated swarms, the orchestrator registers as role `planner` and threads its returned `agentId` into each subagent's spawn prompt; each subagent registers as role `executor` with `parentAgentId` set to that id, so the board shows the swarm grouped under its orchestrator.
 
 The canvas is the shared blackboard. Hand-offs happen through canvas state, not a shared prompt — so you can mix vendors (Claude, GPT, local) without rewriting the orchestration.
 

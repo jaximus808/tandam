@@ -4186,6 +4186,26 @@ func (s *supabaseStore) UpdateUserAgentFollowStyle(_ context.Context, id uuid.UU
 	return toUser(rows[0]), nil
 }
 
+// DeleteUserAccount removes a user and everything anchored to them. Owned
+// canvases go first — canvases.owner_user_id is ON DELETE SET NULL (0017), so
+// deleting only the user row would orphan them as anonymous canvases instead
+// of removing them; each canvas delete cascades its content/access/
+// notifications like DeleteCanvas. The user-row delete then cascades
+// canvas_access memberships on other people's canvases, the notification
+// inbox, personal access tokens, and OAuth codes/grants (all FK users ON
+// DELETE CASCADE). Canvases merely SHARED WITH this user survive — only their
+// membership row drops.
+func (s *supabaseStore) DeleteUserAccount(_ context.Context, userID uuid.UUID) error {
+	if err := s.exec(s.client.From("canvases").
+		Delete("minimal", "").
+		Eq("owner_user_id", userID.String())); err != nil {
+		return err
+	}
+	return s.exec(s.client.From("users").
+		Delete("minimal", "").
+		Eq("id", userID.String()))
+}
+
 // ── Personal access tokens (migration 0027) ────────────────────────────────────
 
 func toPersonalAccessToken(d dbToken) *PersonalAccessToken {

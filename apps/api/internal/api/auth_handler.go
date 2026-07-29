@@ -174,6 +174,27 @@ func (h *AuthHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, user)
 }
 
+// DELETE /api/auth/me — permanently deletes the signed-in user's account and
+// every canvas they own (canvases shared WITH them survive; only their
+// membership row drops — see store.DeleteUserAccount). Sits behind RequireUser,
+// so the user id comes from the validated session context. Clears the session
+// cookie so the client lands signed-out; the session JWT is stateless and
+// can't be individually revoked, but any surviving copy is useless — the user
+// row is gone, so every user-scoped lookup 401s from here on.
+func (h *AuthHandler) DeleteMe(w http.ResponseWriter, r *http.Request) {
+	uid, ok := UserIDFromCtx(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "not signed in")
+		return
+	}
+	if err := h.store.DeleteUserAccount(r.Context(), uid); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	h.clearSessionCookie(w)
+	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
+}
+
 // POST /api/auth/logout — clears the session cookie.
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	h.clearSessionCookie(w)

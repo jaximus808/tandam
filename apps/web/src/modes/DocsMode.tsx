@@ -142,7 +142,7 @@ export default function DocsMode({ canvasId, state, readOnly }: Props) {
     <div ref={scrollRef} className="tandem-scroll flex-1 overflow-y-auto bg-paper">
       {/* Wide enough to seat the rail beside a full-width prose column rather
           than stealing from it; the rail itself is lg-only (see Outline). */}
-      <div className="mx-auto flex w-full max-w-[64rem] gap-6 px-6 py-6">
+      <div className="mx-auto flex w-full max-w-[64rem] gap-6 px-4 py-6 sm:px-6">
         {showOutline && (
           <Outline
             notes={notes}

@@ -135,7 +135,7 @@ export default function DocumentTabs({
                   e.stopPropagation();
                   onClose(doc.id);
                 }}
-                className="flex h-4 w-4 items-center justify-center rounded text-current/50 opacity-0 hover:bg-ink/10 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 group-hover:opacity-100 group-focus-within:opacity-100"
+                className="flex h-4 w-4 items-center justify-center rounded text-current/50 opacity-0 hover:bg-ink/10 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 group-hover:opacity-100 group-focus-within:opacity-100 max-sm:opacity-100"
                 title="Close tab"
                 aria-label={`Close ${doc.name}`}
               >
