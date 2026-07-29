@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -20,18 +22,54 @@ import (
 // plaintext — there is nothing to compare a hash against. The mitigation is a
 // projection discipline enforced here, not a convention callers have to
 // remember:
-//   - every SELECT that can reach a response body asks for webhookReadCols,
-//     which omits `secret`;
-//   - the ONE read that needs the key material, ListWebhooksForEvent, asks for
-//     webhookSecretCols and is documented as emit-path-only;
+//   - every SELECT whose rows leave the store with key material intact asks for
+//     webhookReadCols, which omits `secret`;
+//   - the two reads that need the key material — ListWebhooksForEvent and
+//     GetWebhookWithSecret — ask for webhookSecretCols and are documented as
+//     emit/deliver-path-only;
 //   - mutations return the full row (PostgREST's return=representation can't be
 //     projected through this client), so their results are run through
 //     scrubSecret before leaving the store;
 //   - Webhook.Secret is `json:"-"`, a second belt for anything that slips past.
+//
+// ListWebhooks is the one deliberate exception to the projection half of that
+// rule, and it is worth spelling out because it reads like a violation. The
+// config list in the web UI shows the TRAILING 4 CHARS of each secret (the
+// mitigation migration 0038 names, and the only way to tell two configs on the
+// same URL apart), and last-four lives nowhere but the column itself — there is
+// no stored/generated `secret_last_four`, and PostgREST cannot project
+// `right(secret,4)`. So ListWebhooks selects the secret, derives
+// SecretLastFour, and scrubs the key material IN THE SAME LOOP, before any row
+// is appended to the result. Nothing with a populated Secret is ever returned
+// from it, and `json:"-"` still means a slip could not serialize anyway. The
+// alternative — a generated column — would couple this feature's UI to a second
+// migration landing first, for a value that is four characters wide.
 const (
 	webhookReadCols   = "id,canvas_id,url,events,enabled,name,description,created_by,created_at,updated_at"
 	webhookSecretCols = webhookReadCols + ",secret"
 )
+
+// WebhookSecretPrefix namespaces webhook signing secrets. It exists for the same
+// reason PATPrefix does: a secret that turns up in a log or a support ticket is
+// immediately identifiable as what it is (and as what it is NOT — a PAT, a claim
+// token, a canvas code). Receivers see it verbatim as their HMAC key.
+const WebhookSecretPrefix = "whsec_"
+
+// GenerateWebhookSecret mints a webhook signing key: WebhookSecretPrefix + 32
+// random bytes (hex) = 256 bits, the same budget as a PAT and far more than
+// HMAC-SHA256 needs. crypto/rand, obviously — this key is the only thing
+// standing between a receiver and a forged task.completed.
+//
+// The server ALWAYS generates it. There is no path for a client to supply one:
+// a caller-chosen secret is a caller-chosen weak secret, and it would also mean
+// accepting key material on a request body that gets logged by proxies.
+func GenerateWebhookSecret() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Errorf("crypto/rand: %w", err))
+	}
+	return WebhookSecretPrefix + hex.EncodeToString(b)
+}
 
 // scrubSecret blanks the key material on a config that came back from a write
 // echo, keeping the last-four hint the UI shows. Returns w for chaining.
@@ -211,10 +249,14 @@ func (s *supabaseStore) CreateWebhook(_ context.Context, canvasID uuid.UUID, w *
 	return scrubSecret(toWebhook(rows[0])), nil
 }
 
+// ListWebhooks backs the config list in the web UI. It selects the secret ONLY
+// to derive SecretLastFour and scrubs it in the same breath — see the secret
+// handling note at the top of this file for why that exception exists and why
+// it is safe. No row leaves here with key material on it.
 func (s *supabaseStore) ListWebhooks(_ context.Context, canvasID uuid.UUID) ([]*Webhook, error) {
 	var rows []dbWebhook
 	if _, err := s.client.From("webhooks").
-		Select(webhookReadCols, "", false).
+		Select(webhookSecretCols, "", false).
 		Eq("canvas_id", canvasID.String()).
 		Order("created_at", &postgrest.OrderOpts{Ascending: true}).
 		ExecuteTo(&rows); err != nil {
@@ -222,15 +264,19 @@ func (s *supabaseStore) ListWebhooks(_ context.Context, canvasID uuid.UUID) ([]*
 	}
 	out := make([]*Webhook, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, toWebhook(r))
+		out = append(out, scrubSecret(toWebhook(r)))
 	}
 	return out, nil
 }
 
+// GetWebhook is ListWebhooks for one row, and carries the same
+// select-then-scrub exception so a single read and a list agree on what
+// SecretLastFour contains (UpdateWebhook falls back to this when a PATCH
+// changes nothing — without it, a no-op save would blank the hint in the UI).
 func (s *supabaseStore) GetWebhook(_ context.Context, canvasID, id uuid.UUID) (*Webhook, error) {
 	var rows []dbWebhook
 	if _, err := s.client.From("webhooks").
-		Select(webhookReadCols, "", false).
+		Select(webhookSecretCols, "", false).
 		Eq("id", id.String()).
 		Eq("canvas_id", canvasID.String()).
 		ExecuteTo(&rows); err != nil {
@@ -239,7 +285,7 @@ func (s *supabaseStore) GetWebhook(_ context.Context, canvasID, id uuid.UUID) (*
 	if len(rows) == 0 {
 		return nil, ErrWebhookNotFound
 	}
-	return toWebhook(rows[0]), nil
+	return scrubSecret(toWebhook(rows[0])), nil
 }
 
 func (s *supabaseStore) UpdateWebhook(_ context.Context, canvasID, id uuid.UUID, patch WebhookPatch) (*Webhook, error) {
@@ -568,4 +614,53 @@ func (s *supabaseStore) ListWebhookDeliveries(_ context.Context, canvasID uuid.U
 		out = append(out, toWebhookDelivery(r))
 	}
 	return out, nil
+}
+
+// RetryWebhookDelivery is the human "Retry" button on the dead-letter list: it
+// puts one delivery back on the queue for the worker to pick up on its next
+// poll. Same delivery id, so a receiver that DID apply the original still
+// dedupes it (0038's replay contract); fresh signature and timestamp, so it
+// isn't a stale replay either.
+//
+// It resets attempt_count to 0, which is the whole point and not an oversight.
+// A dead row has already spent its budget, so leaving the counter alone would
+// make "Retry" mean "make exactly one more attempt and die again" — every
+// transient failure would need a second click. A human pressing retry has
+// (usually) just fixed their endpoint, and wants the same backoff budget a
+// fresh event gets. The cost is that attempt_count reads as "attempts in the
+// current cycle" rather than "attempts ever", which is what the UI labels it.
+//
+// The previous attempt's error/response are cleared for the same reason: the
+// row now describes a pending attempt, and a stale 502 sitting next to
+// status='pending' is a lie the dead-letter list would happily render.
+//
+// Scoped by canvas_id (this is reachable from a canvas-scoped UI, so the canvas
+// is half the authorization) AND by status: only 'failed' and 'dead' are
+// retryable. 'delivering' is in flight and re-queueing it would race the worker
+// that holds the lease; 'ok' already succeeded and re-sending it would be a
+// duplicate notification the caller never asked for; 'pending' is already
+// queued. A zero-row result is reported as ErrWebhookDeliveryNotRetryable
+// rather than split into 404/409, because distinguishing them costs a second
+// round trip to tell a human two things they'd act on identically.
+func (s *supabaseStore) RetryWebhookDelivery(_ context.Context, canvasID, id uuid.UUID) (*WebhookDelivery, error) {
+	var rows []dbWebhookDelivery
+	if _, err := s.client.From("webhook_deliveries").
+		Update(map[string]any{
+			"status":          "pending",
+			"attempt_count":   0,
+			"next_attempt_at": tsFmt(time.Now().UTC()),
+			"error":           nil,
+			"response_status": nil,
+			"response_body":   nil,
+		}, "representation", "").
+		Eq("id", id.String()).
+		Eq("canvas_id", canvasID.String()).
+		In("status", []string{"failed", "dead"}).
+		ExecuteTo(&rows); err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, ErrWebhookDeliveryNotRetryable
+	}
+	return toWebhookDelivery(rows[0]), nil
 }

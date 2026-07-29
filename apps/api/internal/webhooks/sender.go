@@ -169,6 +169,17 @@ func (s *Sender) Send(ctx context.Context, target, secret string, deliveryID uui
 	return a
 }
 
+// ValidateTargetURL is the config-time half of the target guard: the cheap,
+// purely syntactic checks the sender runs before every attempt, exposed so the
+// webhook CONFIG handler can reject an unusable URL at save time instead of
+// letting the human discover it in the dead-letter list an hour later.
+//
+// It deliberately stops short of the IP-level guard (IsBlockedIP, wired into the
+// dialer's Control hook). Resolving DNS at save time would be security theatre:
+// a name that resolves publicly now can resolve to 169.254.169.254 at delivery
+// time, so the check that matters has to happen per-attempt, and it does.
+func ValidateTargetURL(raw string) error { return validateTargetURL(raw) }
+
 // validateTargetURL rejects anything that isn't a plain absolute http(s) URL
 // with a host, before any network activity.
 func validateTargetURL(raw string) error {

@@ -129,6 +129,27 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 		r.Get("/api/canvases/{code}/access", h.ListCanvasAccess)
 		r.Post("/api/canvases/{code}/access", h.AddCanvasAccess)
 		r.Delete("/api/canvases/{code}/access/{userId}", h.RemoveCanvasAccess)
+
+		// Outbound webhooks (TDM-39) — owner-only canvas config, HUMAN-ONLY BY
+		// CONSTRUCTION. These sit in this group, and not under /api/canvas/*,
+		// for one reason: RequireUser accepts a session COOKIE and nothing else,
+		// so none of the credentials an agent can hold — canvas JWT, PAT, OAuth
+		// access token — reaches them. A webhook config names an endpoint and
+		// mints a signing secret, so an agent that could create one could point
+		// the board at a server it controls; migration 0038 forbids the MCP
+		// surface and this is where that is enforced. See webhook_handler.go for
+		// the full argument, including the honest limits.
+		//
+		// The static "deliveries" segment is registered alongside {id}; chi
+		// prefers static segments, and TestWebhookDeliveriesRouteDoesNotShadow
+		// pins it so a future route edit can't silently reroute one to the other.
+		r.Get("/api/canvases/{code}/webhooks", h.ListCanvasWebhooks)
+		r.Post("/api/canvases/{code}/webhooks", h.CreateCanvasWebhook)
+		r.Get("/api/canvases/{code}/webhooks/deliveries", h.ListCanvasWebhookDeliveries)
+		r.Post("/api/canvases/{code}/webhooks/deliveries/{id}/retry", h.RetryCanvasWebhookDelivery)
+		r.Patch("/api/canvases/{code}/webhooks/{id}", h.UpdateCanvasWebhook)
+		r.Delete("/api/canvases/{code}/webhooks/{id}", h.DeleteCanvasWebhook)
+		r.Post("/api/canvases/{code}/webhooks/{id}/rotate", h.RotateCanvasWebhookSecret)
 	})
 
 	// Sheet export — public by canvas code (matches WS auth model).

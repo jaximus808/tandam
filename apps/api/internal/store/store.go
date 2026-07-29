@@ -29,6 +29,11 @@ var (
 	// ErrWebhookNotFound is returned by the webhook config reads/mutations when
 	// the id doesn't resolve to a webhook on the canvas (migration 0038).
 	ErrWebhookNotFound = errors.New("webhook not found")
+	// ErrWebhookDeliveryNotRetryable is returned by RetryWebhookDelivery when
+	// the conditional re-queue matched no row: the id isn't a delivery on this
+	// canvas, or it is but its status isn't one the human retry button applies
+	// to ('failed' and 'dead' are the only two — see the method's doc).
+	ErrWebhookDeliveryNotRetryable = errors.New("webhook delivery not found or not retryable")
 	// ErrIllegalActionState wraps a ClaimAction/ReleaseAction that matched no
 	// row because the action is in a state the transition doesn't apply to
 	// (e.g. claiming a task still in 'proposed').
@@ -1140,6 +1145,12 @@ type Store interface {
 	// first, optionally narrowed to one webhook and/or one status ("dead" for
 	// the dead-letter list; "" for all).
 	ListWebhookDeliveries(ctx context.Context, canvasID uuid.UUID, webhookID *uuid.UUID, status string, limit int) ([]*WebhookDelivery, error)
+	// RetryWebhookDelivery re-queues one dead-lettered (or waiting-to-retry)
+	// delivery: status back to 'pending', next_attempt_at = now, and a FRESH
+	// attempt budget. Canvas-scoped, because it is reachable from the human
+	// dead-letter list in the web UI. Returns ErrWebhookDeliveryNotRetryable
+	// when nothing matched.
+	RetryWebhookDelivery(ctx context.Context, canvasID, id uuid.UUID) (*WebhookDelivery, error)
 
 	// Pending edits
 	CreatePendingEdit(ctx context.Context, canvasID uuid.UUID, entityID uuid.UUID, instruction string) (*PendingEdit, error)
