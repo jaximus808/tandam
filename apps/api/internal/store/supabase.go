@@ -1315,7 +1315,11 @@ func (s *supabaseStore) GetCanvasState(_ context.Context, canvasID uuid.UUID) (*
 	var rows []dbCanvasWithChildren
 
 	_, err := s.client.From("canvases").
-		Select("*,documents(*),pins(*),events(*),notes(*),roadmap_items(*),sheets(*, sheet_rows(*)),charts(*),forms(*),actions(*),agents(*),pending_edits(*)", "", false).
+		// documents must name its FK: canvases ↔ documents has TWO relationships
+		// since 0037 added canvases.briefing_doc_id → documents(id), and a bare
+		// documents(*) embed makes PostgREST return a relationship-ambiguity
+		// error object instead of rows.
+		Select("*,documents!documents_canvas_id_fkey(*),pins(*),events(*),notes(*),roadmap_items(*),sheets(*, sheet_rows(*)),charts(*),forms(*),actions(*),agents(*),pending_edits(*)", "", false).
 		Eq("id", canvasID.String()).
 		ExecuteTo(&rows)
 	if err != nil {
