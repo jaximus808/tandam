@@ -62,6 +62,45 @@ export function onAgentActivity(fn: ActivityHandler): () => void {
   };
 }
 
+// Fleet lifecycle pings (TDM-46): one message per action transition, so a
+// surface can react to "who moved what" without refetching the whole canvas.
+// Shares the `activity` message type with the presence pulse above — the two are
+// told apart by `actionId`, which only the lifecycle form carries.
+export type FleetActivityAction =
+  | "proposed"
+  | "approved"
+  | "rejected"
+  | "claimed"
+  | "completed"
+  | "released"
+  | "requeued"
+  | "claim_expired";
+
+export type FleetActivity = {
+  action: FleetActivityAction;
+  /** Who moved it: an agent name, "human", or "agent" when the surface was anonymous. */
+  actor?: string;
+  at: string;
+  actionId: string;
+  actionType: string;
+  ticketId?: string;
+  title?: string;
+  epicId?: string;
+  /** The action's state AT this fact — not necessarily its state now. */
+  state?: string;
+  result?: string;
+  error?: string;
+};
+type FleetHandler = (a: FleetActivity) => void;
+let fleetHandlers: FleetHandler[] = [];
+
+export function onFleetActivity(fn: FleetHandler): () => void {
+  fleetHandlers.push(fn);
+  return () => {
+    fleetHandlers = fleetHandlers.filter((h) => h !== fn);
+  };
+}
+
 // Access outcome for a canvas we can't open (or were just kicked from). A failed
 // WS upgrade is invisible to the browser (close 1006, no status), so we probe
 // HTTP to learn the real reason and surface a proper screen instead of an
@@ -194,7 +233,15 @@ function connect(code: string) {
           )
         );
       } else if (msg.type === "activity") {
-        activityHandlers.forEach((h) => h({ action: msg.action as AgentActivity["action"] }));
+        // Two shapes share this type: the lightweight pulse ({action:"read"} /
+        // lean claim_expired / reverted pings) and the action-lifecycle fact,
+        // which is the one carrying an actionId. Route each to its own
+        // subscribers.
+        if (msg.actionId) {
+          fleetHandlers.forEach((h) => h(msg as FleetActivity));
+        } else {
+          activityHandlers.forEach((h) => h({ action: msg.action as AgentActivity["action"] }));
+        }
       } else if (msg.type === "access") {
         // The owner changed sharing while we're connected.
         const role = msg.role as "write" | "read" | "none";

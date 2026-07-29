@@ -466,7 +466,11 @@ type Agent struct {
 	Model         *string    `json:"model,omitempty"`
 	ParentAgentID *uuid.UUID `json:"parentAgentId,omitempty"`
 	Status        string     `json:"status"`
-	LastSeenAt    time.Time  `json:"lastSeen"`
+	// CreatedAt is when this identity first registered on the canvas — the
+	// "member since" half of presence, next to LastSeenAt's "still alive".
+	// Zero on the cheap summary read, which selects only id+name.
+	CreatedAt  time.Time `json:"createdAt,omitempty"`
+	LastSeenAt time.Time `json:"lastSeen"`
 }
 
 type User struct {
@@ -1045,6 +1049,12 @@ type Store interface {
 	RegisterAgent(ctx context.Context, canvasID uuid.UUID, a *Agent) (int, error)
 	// GetAgent fetches one agent scoped to a canvas (parentAgentId validation).
 	GetAgent(ctx context.Context, canvasID, id uuid.UUID) (*Agent, error)
+	// ListAgents returns every registered agent on a canvas, oldest first — the
+	// roster behind GET /api/canvas/agents. Deliberately NOT a join with
+	// actions: the handler pairs agents with their in-flight claims in memory
+	// (one extra ListActions call), so this stays one flat round trip and the
+	// join logic sits where it can also account for UNREGISTERED claimants.
+	ListAgents(ctx context.Context, canvasID uuid.UUID) ([]*Agent, error)
 	// TouchAgentLastSeen bumps last_seen_at (and re-marks online) for the agent a
 	// claimant identity resolves to — the liveness heartbeat behind the swarm
 	// view. Claimant is the task_start/complete identity: the registered agent

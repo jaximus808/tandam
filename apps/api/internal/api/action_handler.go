@@ -299,6 +299,7 @@ func (h *Handler) ProposeAction(w http.ResponseWriter, r *http.Request) {
 		h.emitTaskEvent(canvasID, webhooks.EventTaskApproved, action)
 	}
 	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
+	broadcastProposeActivity(h.hub, canvasID, action) // TDM-46 live fleet feed
 	writeJSON(w, http.StatusCreated, action)
 }
 
@@ -404,6 +405,7 @@ func (h *Handler) ProposeActionsBatch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
+	broadcastProposeActivity(h.hub, canvasID, actions...) // TDM-46 live fleet feed
 	writeJSON(w, http.StatusCreated, map[string]any{"actions": actions})
 }
 
@@ -545,6 +547,10 @@ func (h *Handler) transitionAction(w http.ResponseWriter, r *http.Request, to st
 	}
 	fresh.UpdatedAt = time.Now().UTC()
 	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
+	// TDM-46 live fleet feed. ONE line covers approve / reject / complete on
+	// every surface — the MCP PATCH and the CI status API both funnel through
+	// here — and activityVerbFor returns "" (no-op) for anything else.
+	broadcastActionActivity(h.hub, canvasID, activityVerbFor(to), &fresh)
 	writeJSON(w, http.StatusOK, map[string]any{"action": &fresh})
 	return &fresh, true
 }
@@ -605,6 +611,7 @@ func (h *Handler) ApproveAction(w http.ResponseWriter, r *http.Request) {
 				// entered the queue and each is separately claimable.
 				h.emitTaskApprovedEach(canvasID, tasks)
 				broadcastStateAsync(ctx, h.store, h.hub, canvasID)
+				broadcastActionActivity(h.hub, canvasID, activityApproved, tasks...) // TDM-46
 			}
 		}()
 	}
@@ -663,6 +670,7 @@ func (h *Handler) ApproveActionsBatch(w http.ResponseWriter, r *http.Request) {
 		// nothing. Non-task rows (epics) are filtered inside emitTaskEvent.
 		h.emitTaskApprovedEach(canvasID, rows)
 		broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
+		broadcastActionActivity(h.hub, canvasID, activityApproved, rows...) // TDM-46
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"approved": approved, "skipped": skipped})
 
@@ -711,6 +719,7 @@ func (h *Handler) ApproveActionsBatch(w http.ResponseWriter, r *http.Request) {
 			// Per-task events, emitted per epic as each cascade commits — a
 			// later epic failing must not swallow the earlier ones' events.
 			h.emitTaskApprovedEach(canvasID, tasks)
+			broadcastActionActivity(h.hub, canvasID, activityApproved, tasks...) // TDM-46
 			total += len(tasks)
 		}
 		// One extra broadcast for the whole cascade, only if any task flipped.
@@ -882,6 +891,10 @@ func (h *Handler) claimTask(ctx context.Context, canvasID, id uuid.UUID, agentNa
 			log.Printf("claim %s: touching agent last_seen (%s): %v", id, agentName, err)
 		}
 	}()
+	// TDM-46 live fleet feed: a claim is the transition the presence UI most
+	// needs pushed (who just picked up what), and it is the one the webhook
+	// vocabulary deliberately stays silent on.
+	broadcastActionActivity(h.hub, canvasID, activityClaimed, action)
 	// Claim expiry is LAZY — there is no sweeper (see store.DefaultClaimTTL), so
 	// the takeover inside ClaimAction is the one and only moment a lapsed claim
 	// becomes observable. A non-empty ExpiredClaimBy means THIS claim expired
@@ -892,9 +905,11 @@ func (h *Handler) claimTask(ctx context.Context, canvasID, id uuid.UUID, agentNa
 		h.emitTaskEvent(canvasID, webhooks.EventTaskClaimExpired, action, withExpiredClaim(outcome))
 		// The caller's full-state broadcast already reconciles the board, but it
 		// says nothing about WHY the claimant changed. This is the lightweight
-		// signal the Tasks panel can surface as activity ("a claim lapsed"),
-		// matching the read-pulse path.
-		broadcastActivity(h.hub, canvasID, "claim_expired")
+		// signal the Tasks panel can surface as activity ("a claim lapsed").
+		// The actor is passed explicitly (TDM-46): `action` has ALREADY been
+		// restamped to the new claimant, so the agent that went dark — the
+		// subject of this event — is only knowable from the outcome.
+		broadcastActionActivityAs(h.hub, canvasID, activityClaimExpired, action, outcome.ExpiredClaimBy)
 	}
 	return action, nil
 }
@@ -931,6 +946,7 @@ func (h *Handler) ReleaseAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
+	broadcastActionActivity(h.hub, canvasID, activityReleased, action) // TDM-46
 	writeJSON(w, http.StatusOK, map[string]any{"action": action})
 }
 
@@ -965,6 +981,7 @@ func (h *Handler) RequeueAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
+	broadcastActionActivity(h.hub, canvasID, activityRequeued, action) // TDM-46
 	writeJSON(w, http.StatusOK, map[string]any{"action": action})
 }
 

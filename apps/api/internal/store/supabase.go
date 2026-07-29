@@ -239,6 +239,7 @@ type dbAgent struct {
 	Model         *string `json:"model"`
 	ParentAgentID *string `json:"parent_agent_id"`
 	Status        string  `json:"status"`
+	CreatedAt     string  `json:"created_at"`
 	LastSeenAt    string  `json:"last_seen_at"`
 }
 
@@ -613,7 +614,7 @@ func toAgent(d dbAgent) *Agent {
 	id, _ := uuid.Parse(d.ID)
 	a := &Agent{ID: id, Kind: "agent",
 		Name: d.Name, Role: d.Role, Model: d.Model, Status: d.Status,
-		LastSeenAt: parseTime(d.LastSeenAt)}
+		CreatedAt: parseTime(d.CreatedAt), LastSeenAt: parseTime(d.LastSeenAt)}
 	if d.ParentAgentID != nil {
 		if pid, err := uuid.Parse(*d.ParentAgentID); err == nil {
 			a.ParentAgentID = &pid
@@ -2820,6 +2821,28 @@ func (s *supabaseStore) GetAgent(_ context.Context, canvasID, id uuid.UUID) (*Ag
 		return nil, fmt.Errorf("agent %s not found", id)
 	}
 	return toAgent(rows[0]), nil
+}
+
+// ListAgents returns a canvas's whole roster in ONE round trip, oldest first.
+// No join with actions on purpose: PostgREST can only join on a real FK, and
+// actions.claimed_by is a free-text agent NAME (it has to be — a CI job that
+// curls the status API claims work before it has any row here). The pairing is
+// done in the handler, which also gets to surface claimants that never
+// registered at all.
+func (s *supabaseStore) ListAgents(_ context.Context, canvasID uuid.UUID) ([]*Agent, error) {
+	var rows []dbAgent
+	if _, err := s.client.From("agents").
+		Select("*", "", false).
+		Eq("canvas_id", canvasID.String()).
+		Order("created_at", nil).
+		ExecuteTo(&rows); err != nil {
+		return nil, err
+	}
+	out := make([]*Agent, 0, len(rows))
+	for _, d := range rows {
+		out = append(out, toAgent(d))
+	}
+	return out, nil
 }
 
 // TouchAgentLastSeen bumps last_seen_at for the agent the claimant identity

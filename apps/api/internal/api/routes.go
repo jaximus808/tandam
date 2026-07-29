@@ -218,6 +218,12 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 		r.Get("/api/canvas/actions/{id}", h.ReadAction)
 		r.Get("/api/canvas/roadmap-items", h.ListRoadmapItems)
 		r.Get("/api/canvas/documents", h.ListDocuments)
+		// Fleet presence + activity (TDM-46). The roster pairs every registered
+		// agent with the task(s) it currently holds, and lists claimants that
+		// never registered; the feed is derived from action state timestamps
+		// (no event table). Both are reads — see fleet_handler.go.
+		r.Get("/api/canvas/agents", h.ListAgentRoster)
+		r.Get("/api/canvas/activity", h.ListActivity)
 
 		// Writes — require write role.
 		r.Group(func(r chi.Router) {
