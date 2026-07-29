@@ -10,6 +10,9 @@ import { X } from "lucide-react";
 import type { Action } from "../types";
 import type { FleetAgent, FleetTask } from "../lib/api";
 import { useFleetRoster } from "../lib/useFleetRoster";
+import { useActivityFeed } from "../lib/useActivityFeed";
+import { ageOf, fullDate } from "../lib/relativeTime";
+import ActivityFeed from "./ActivityFeed";
 import posthog from "../lib/posthog";
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -37,6 +40,13 @@ import posthog from "../lib/posthog";
    fleet that is actually around (holding a claim, or online and recently
    active) and folds the rest behind a disclosure — and the trigger chip counts
    the active ones, so "4 agents" means four agents you could be waiting on.
+
+   TWO TABS, ONE PANEL (TDM-48). "Who is working" and "what just happened" are
+   the same question asked in two tenses, so the Feed is a tab on THIS popover
+   rather than a second one competing for the same corner of the header: one
+   place to watch the team. The roster is unchanged behind its tab; the Feed
+   loads nothing until you look at it, and carries a small count while facts
+   pile up on the side you aren't reading.
    ──────────────────────────────────────────────────────────────────────────── */
 
 // An idle registered agent counts as "around" for this long after its last
@@ -67,6 +77,12 @@ interface Props {
   /** Open the Connect dialog — the empty state's one action. */
   onConnect: () => void;
 }
+
+type TabId = "fleet" | "feed";
+const TABS: { id: TabId; label: string }[] = [
+  { id: "fleet", label: "Fleet" },
+  { id: "feed", label: "Feed" },
+];
 
 // ── identity ─────────────────────────────────────────────────────────────────
 
@@ -111,25 +127,8 @@ const VENDOR_CLS: Record<VendorKind, string> = {
 };
 
 // ── time ─────────────────────────────────────────────────────────────────────
-
-function ageOf(iso: string | undefined): string {
-  if (!iso) return "—";
-  const ms = Date.now() - Date.parse(iso);
-  if (!Number.isFinite(ms)) return "—";
-  const s = Math.max(0, Math.round(ms / 1000));
-  if (s < 60) return `${s}s`;
-  const m = Math.round(s / 60);
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h`;
-  return `${Math.floor(h / 24)}d`;
-}
-
-function fullDate(iso: string | undefined): string | undefined {
-  if (!iso) return undefined;
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? undefined : d.toLocaleString();
-}
+// ageOf / fullDate live in lib/relativeTime so the Feed tab's right-hand column
+// reads identically to the roster's.
 
 function within(iso: string | undefined, ms: number): boolean {
   if (!iso) return false;
@@ -154,6 +153,11 @@ export default function FleetView({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const [showDormant, setShowDormant] = useState(false);
+  const [tab, setTab] = useState<TabId>("fleet");
+  const [actorFilter, setActorFilter] = useState<string | null>(null);
+  // The feed fetches only while it's the visible tab — a board where nobody
+  // opens it costs one WS subscription and nothing else.
+  const feed = useActivityFeed(code, open && tab === "feed");
   // Re-render on a slow tick so relative ages stay honest while the panel is up.
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -161,6 +165,9 @@ export default function FleetView({
     const t = setInterval(() => setTick((n) => n + 1), TICK_MS);
     return () => clearInterval(t);
   }, [open]);
+
+  // Another board's agent names mean nothing here.
+  useEffect(() => setActorFilter(null), [code]);
 
   const all = useMemo(() => roster?.agents ?? [], [roster]);
   // Working, or online and recently active. Everything else is dormant history.
@@ -227,6 +234,20 @@ export default function FleetView({
       e.preventDefault();
       first.focus();
     }
+  }
+
+  // Left/Right move between the tabs, per the tabs pattern. Both stay in the
+  // Tab order (rather than roving tabindex) so the panel's existing focus trap
+  // keeps working unchanged.
+  function onTabKey(e: ReactKeyboardEvent) {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    const i = TABS.findIndex((t) => t.id === tab);
+    const next = TABS[(i + (e.key === "ArrowRight" ? 1 : TABS.length - 1)) % TABS.length];
+    setTab(next.id);
+    (e.currentTarget as HTMLElement)
+      .querySelector<HTMLElement>(`#fleet-tab-${next.id}`)
+      ?.focus();
   }
 
   function openTask(id: string) {
@@ -316,17 +337,50 @@ export default function FleetView({
             onKeyDown={trapTab}
             className="absolute right-0 top-full z-50 mt-2 flex max-h-[min(70vh,560px)] w-[min(380px,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-[10px] border border-ink/10 bg-surface shadow-lg focus-visible:outline-none"
           >
-            {/* Head */}
-            <div className="flex shrink-0 items-center gap-2 border-b border-ink/10 px-3 py-2.5">
-              <div className="flex min-w-0 flex-1 items-baseline gap-2">
-                <h2 className="shrink-0 text-[13px] font-semibold tracking-tight text-ink">Fleet</h2>
-                {total > 0 && (
-                  <p className="min-w-0 truncate text-[11px] text-ink/50">
-                    {workingCount} working
-                    {total - workingCount > 0 ? ` · ${total - workingCount} idle` : ""}
-                    {counts && counts.unregistered > 0 ? ` · ${counts.unregistered} external` : ""}
-                  </p>
-                )}
+            {/* Head — the two readings of "how is the team doing", plus close.
+                The tab labels are the panel's title; a separate heading over
+                them would say "Fleet" twice. */}
+            <div className="flex shrink-0 items-center gap-1 border-b border-ink/10 px-2 py-1.5">
+              <div
+                role="tablist"
+                aria-label="Fleet views"
+                onKeyDown={onTabKey}
+                className="flex min-w-0 items-center gap-1"
+              >
+                {TABS.map((t) => (
+                  <button
+                    key={t.id}
+                    role="tab"
+                    id={`fleet-tab-${t.id}`}
+                    aria-selected={tab === t.id}
+                    aria-controls={`fleet-panel-${t.id}`}
+                    onClick={() => {
+                      setTab(t.id);
+                      if (t.id === "feed") {
+                        posthog.capture("fleet_feed_opened", { canvas_code: code, unseen: feed.unseen });
+                      }
+                    }}
+                    className={[
+                      "flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[11.5px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
+                      tab === t.id
+                        ? "bg-accent/[0.08] text-accent"
+                        : "text-ink/50 hover:bg-ink/5 hover:text-ink/80",
+                    ].join(" ")}
+                  >
+                    {t.label}
+                    {/* What happened while you were reading the other tab.
+                        Terracotta is the agent-activity token — this count is
+                        exactly that. */}
+                    {t.id === "feed" && tab !== "feed" && feed.unseen > 0 && (
+                      <span
+                        aria-label={`${feed.unseen} new`}
+                        className="flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-agent px-1 text-[10px] font-semibold leading-none text-white tabular-nums"
+                      >
+                        {feed.unseen > 9 ? "9+" : feed.unseen}
+                      </span>
+                    )}
+                  </button>
+                ))}
               </div>
               <button
                 onClick={() => {
@@ -334,14 +388,46 @@ export default function FleetView({
                   triggerRef.current?.focus();
                 }}
                 aria-label="Close fleet"
-                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-ink/40 transition-colors hover:bg-ink/5 hover:text-ink/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                className="ml-auto flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-ink/40 transition-colors hover:bg-ink/5 hover:text-ink/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
               >
                 <X size={14} />
               </button>
             </div>
 
+            {tab === "feed" && (
+              <div
+                role="tabpanel"
+                id="fleet-panel-feed"
+                aria-labelledby="fleet-tab-feed"
+                className="flex min-h-0 flex-1 flex-col"
+              >
+                <ActivityFeed
+                  events={feed.events}
+                  loading={feed.loading}
+                  error={feed.error}
+                  onReload={() => void feed.reload()}
+                  onOpenTask={openTask}
+                  actorFilter={actorFilter}
+                  onFilterChange={setActorFilter}
+                />
+              </div>
+            )}
+
             {/* Roster */}
-            <div className="min-h-0 flex-1 overflow-y-auto">
+            <div
+              role="tabpanel"
+              id="fleet-panel-fleet"
+              aria-labelledby="fleet-tab-fleet"
+              hidden={tab !== "fleet"}
+              className={tab === "fleet" ? "min-h-0 flex-1 overflow-y-auto" : "hidden"}
+            >
+              {total > 0 && (
+                <p className="border-b border-ink/[0.07] px-3 py-1.5 text-[11px] text-ink/50">
+                  {workingCount} working
+                  {total - workingCount > 0 ? ` · ${total - workingCount} idle` : ""}
+                  {counts && counts.unregistered > 0 ? ` · ${counts.unregistered} external` : ""}
+                </p>
+              )}
               {/* A failed refresh keeps the last roster on screen — stale rows
                   beat a blank panel while the next ping or poll retries. */}
               {error && roster && (

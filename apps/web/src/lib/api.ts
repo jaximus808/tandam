@@ -1,4 +1,5 @@
 import type { CanvasMeta } from "../types";
+import type { FleetActivityAction } from "./ws";
 
 // Image upload is disabled for v1 (no durable-storage story yet). Reading
 // stays available so any imageRefs left from dev still render via the
@@ -231,6 +232,52 @@ export async function fetchAgentRoster(code: string): Promise<FleetRoster> {
     "Could not load the fleet",
   );
   return (await res.json()) as FleetRoster;
+}
+
+// ── Activity feed (TDM-48) ───────────────────────────────────────────────────
+// GET /api/canvas/activity — "what has the fleet done here, newest first".
+//
+// One fact per event, and deliberately the SAME shape the WS lifecycle ping
+// pushes (ws.ts `FleetActivity`), so a surface loads history over REST and then
+// appends live messages onto the very same list with one renderer.
+//
+// The backfill is DERIVED from action rows, not an event log: it can't show
+// claim expiries, releases, requeues, or anything about a deleted action. Those
+// exist only in the live stream — which is exactly why the feed merges both.
+
+export type ActivityEvent = {
+  type?: "activity";
+  action: FleetActivityAction;
+  /** Who did it: an agent name, "human", or "agent" when the surface was anonymous. */
+  actor?: string;
+  at: string;
+  actionId: string;
+  actionType: string;
+  ticketId?: string;
+  title?: string;
+  epicId?: string;
+  /** The action's state AT this fact — not necessarily its state now. */
+  state?: string;
+  result?: string;
+  error?: string;
+};
+
+export type ActivityFeed = {
+  type: "activity.feed";
+  generatedAt: string;
+  limit: number;
+  truncated: boolean;
+  events: ActivityEvent[];
+};
+
+export async function fetchActivityFeed(code: string, limit = 50): Promise<ActivityFeed> {
+  const res = await authedFetch(
+    code,
+    `/api/canvas/activity?limit=${encodeURIComponent(String(limit))}`,
+    { method: "GET" },
+    "Could not load the activity feed",
+  );
+  return (await res.json()) as ActivityFeed;
 }
 
 // ── Epics (actions of type "epic") ───────────────────────────────────────────
