@@ -217,6 +217,21 @@ body {
   .tandem-ping { animation: none; }
 }
 
+/* Fleet "working" breath (components/FleetView.tsx). The ONE pulse the design
+   system allows: a live working indicator. Slow and shallow on purpose — a
+   fleet of five breathing dots must read as calm liveness, not an alarm. Under
+   reduced motion the indicator stays fully lit; the state is in the colour, the
+   breath only says "still running". */
+@keyframes tandem-breathe {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.35; }
+}
+.tandem-breathe { animation: tandem-breathe 2.8s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .tandem-breathe { animation: none; opacity: 1; }
+}
+
 /* Terminal block-cursor blink — machine text on the landing demo terminals. */
 @keyframes tandem-caret {
   0%, 49% { opacity: 1; }

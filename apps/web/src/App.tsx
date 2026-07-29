@@ -36,6 +36,7 @@ import TandemLogo from "./components/TandemLogo";
 import AccountMenu from "./components/AccountMenu";
 import AgentCursor from "./components/AgentCursor";
 import AgentPresence from "./components/AgentPresence";
+import FleetView from "./components/FleetView";
 import NotificationBell from "./components/NotificationBell";
 import AgentToasts from "./components/AgentToasts";
 import QuickLog from "./components/QuickLog";
@@ -239,10 +240,13 @@ export default function App() {
       /* ignore */
     }
   }
-  // Agent-proposed tasks awaiting your approval — badges the header button.
+  // Agent-proposed tasks awaiting your approval — badges the header button, and
+  // is what the fleet panel reports the fleet as blocked on.
   const proposedTaskCount = Object.values(canvasState?.actions ?? {}).filter(
     (a) => a.type === "task" && a.state === "proposed",
   ).length;
+  // The fleet roster popover (header chip + the presence cluster both open it).
+  const [fleetOpen, setFleetOpen] = useState(false);
   // Set when this canvas can't be opened (private, no access) or our access was
   // revoked live. Drives the access-denied screen instead of an endless spinner.
   const [accessError, setAccessError] = useState<AccessStatus | null>(null);
@@ -1039,11 +1043,6 @@ export default function App() {
     openBoard();
   }
 
-  // Following is armed even before any agent shows up — distinguish "an agent is
-  // here" from "on, waiting for one" so the button reads as live, not dead.
-  const agentPresent = agentList.length > 0;
-  // Toggling off pins the view to the current tab; on resumes following.
-  const toggleFollow = () => setActiveDocId(following ? effectiveDocId : null);
   // Whether the selected side-panel view applies right now: Settings rides
   // along with any surface; the document explorer belongs to Documents only
   // (the selection persists — switch back and it's still there).
@@ -1182,43 +1181,29 @@ export default function App() {
             edit={agentEdit}
             reading={agentReading}
             // Jumping to the agent means watching it edit documents — make
-            // sure the Documents surface is showing, then resume following.
+            // sure the Documents surface is showing, then track its edits.
             onJump={() => {
               setSurface("documents");
               setActiveDocId(null);
             }}
             onOpenTask={openBoardTask}
+            onOpenFleet={() => setFleetOpen(true)}
           />
-          <button
-            onClick={toggleFollow}
-            className={[
-              "inline-flex items-center gap-1.5 rounded-md h-8 px-3 text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper",
-              following ? "bg-accent/[0.08] text-accent" : "text-ink/55 hover:bg-ink/5 hover:text-ink/80",
-            ].join(" ")}
-            title={
-              following
-                ? agentPresent
-                  ? "Following the agent — your view jumps to whatever it's working on. Click to pin your own view."
-                  : "Armed and waiting — the moment an agent connects and edits, your view jumps to it. Click to pin your own view."
-                : "Pinned to your own view. Click to follow the agent and track where it's working."
-            }
-            aria-pressed={following}
-          >
-            <span className="relative flex h-1.5 w-1.5">
-              {following && (
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-70" />
-              )}
-              <span
-                className={[
-                  "relative inline-flex h-1.5 w-1.5 rounded-full",
-                  following ? "bg-accent" : "bg-ink/30",
-                ].join(" ")}
-              />
-            </span>
-            <span className="hidden sm:inline">
-              {following ? (agentPresent ? "Following" : "Following · waiting") : "Follow agent"}
-            </span>
-          </button>
+          {/* The fleet readout — who's on this canvas, what they hold, what
+              they're waiting on. Replaced the "Follow agent" toggle (TDM-47):
+              a camera that trails ONE agent through the document tabs answers
+              the wrong question once a team is working the board. */}
+          <FleetView
+            code={canvas.code}
+            actions={canvasState?.actions ?? {}}
+            agentCount={Object.keys(canvasState?.agents ?? {}).length}
+            proposedCount={proposedTaskCount}
+            open={fleetOpen}
+            onOpenChange={setFleetOpen}
+            onOpenTask={openBoardTask}
+            onOpenBoard={openBoard}
+            onConnect={() => setConnectOpen(true)}
+          />
           {claiming ? (
             <span className="inline-flex h-9 items-center rounded-md border border-ink/15 bg-surface px-3 text-[13px] font-medium text-ink/60 sm:h-8">
               <span className="sm:hidden">Saving…</span>

@@ -170,6 +170,69 @@ export async function deleteTask(code: string, id: string): Promise<void> {
   );
 }
 
+// ── Fleet roster (TDM-46) ────────────────────────────────────────────────────
+// GET /api/canvas/agents — "who is on this canvas, and what are they holding".
+// A canvas-JWT read like the task calls above (any role), joined server-side in
+// two round trips, so the cost is flat whether the fleet is 2 agents or 40.
+//
+// The roster is deliberately WIDER than state.agents: it also lists claimants
+// that never called agent_register (registered:false), because a roster that
+// hides whoever actually holds your tasks is worse than useless.
+
+export type FleetTask = {
+  id: string;
+  ticketId?: string;
+  title?: string;
+  type: string;
+  state: string;
+  epicId?: string;
+  claimedAt?: string;
+};
+
+export type FleetAgent = {
+  /** Absent for an unregistered claimant — it has no `agents` row. */
+  id?: string;
+  name: string;
+  role?: string;
+  /** Free-text model string ("claude-opus-4-6", "gpt-5-codex", …) when declared. */
+  model?: string;
+  parentAgentId?: string;
+  /** "online" | "offline" for a registered agent; "unknown" for a claimant. */
+  status: string;
+  registered: boolean;
+  registeredAt?: string;
+  lastSeen?: string;
+  /** max(registeredAt, lastSeen, claimedAt) — newest provable activity. */
+  lastActivityAt?: string;
+  tasks: FleetTask[];
+};
+
+export type FleetCounts = {
+  agents: number;
+  registered: number;
+  unregistered: number;
+  working: number;
+  idle: number;
+  claims: number;
+};
+
+export type FleetRoster = {
+  type: "agents.roster";
+  generatedAt: string;
+  counts: FleetCounts;
+  agents: FleetAgent[];
+};
+
+export async function fetchAgentRoster(code: string): Promise<FleetRoster> {
+  const res = await authedFetch(
+    code,
+    "/api/canvas/agents",
+    { method: "GET" },
+    "Could not load the fleet",
+  );
+  return (await res.json()) as FleetRoster;
+}
+
 // ── Epics (actions of type "epic") ───────────────────────────────────────────
 // Same born-approved rule as human tasks: the approval gate exists for
 // agent-proposed work, and the human author IS the gate. Under the default
