@@ -263,6 +263,19 @@ func (h *Handler) statusProgress(w http.ResponseWriter, r *http.Request, canvasI
 		writeError(w, http.StatusInternalServerError, "could not record progress")
 		return
 	}
+	// A progress report is a heartbeat, so it EXTENDS the claim lease (TDM-64).
+	// Claim expiry is lazy off claimed_at, so without this a worker still
+	// reporting after the TTL is reclaimable and a rival takes its task
+	// mid-flight. Holder-only: the store's claimed_by predicate is the guard, so
+	// a report that got past guardClaimedTask on a non-exclusive holder ("" /
+	// "agent") extends nothing. Best-effort — the note has already landed, and
+	// answering 500 over a lease refresh would send a live worker round the
+	// retry loop for a report that succeeded.
+	if fresh, extended, err := h.store.TouchActionClaim(r.Context(), canvasID, id, agent); err != nil {
+		log.Printf("task status %s: progress recorded but extending the claim lease failed: %v", id, err)
+	} else if extended {
+		current.ClaimedAt = fresh.ClaimedAt
+	}
 	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
 	writeJSON(w, http.StatusOK, map[string]any{"action": current})
 }

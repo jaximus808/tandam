@@ -29,19 +29,28 @@ export interface AgentEdit {
   mode: CanvasMode;
 }
 
-// A batch of same-mode changes from one broadcast, shown as a single unit: one
-// highlight wrapping all `memberIds`, a smooth pan down them, and an "adding X"
-// label. `id` is unique per segment so effects re-fire even for back-to-back
-// segments of the same shape. A single-item change is just a segment of size 1.
-export interface AgentShowcase {
+// What the agent cursor needs to draw itself: a halo around `memberIds` and a
+// label naming what's happening. Deliberately mode-free, so a surface with no
+// CanvasMode behind it (the task board) can drive the same cursor — see App's
+// board follow, which spotlights a card with exactly this shape.
+export interface CursorShowcase {
   id: number;
-  mode: CanvasMode;
   memberIds: string[];
   op: AgentOp;
   noun: string;
   count: number;
   agentName: string;
   isClaude: boolean;
+  /** Overrides the derived "Adding a doc" wording ("Picked up TDM-7"). */
+  label?: string;
+}
+
+// A batch of same-mode changes from one broadcast, shown as a single unit: one
+// highlight wrapping all `memberIds`, a smooth pan down them, and an "adding X"
+// label. `id` is unique per segment so effects re-fire even for back-to-back
+// segments of the same shape. A single-item change is just a segment of size 1.
+export interface AgentShowcase extends CursorShowcase {
+  mode: CanvasMode;
 }
 
 export interface PresentAgent {

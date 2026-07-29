@@ -49,6 +49,18 @@ type Config struct {
 	// applied, or on a second process that shouldn't also drain the queue.
 	WebhooksEnabled bool
 
+	// WebhooksAllowPrivateTargets disables the delivery worker's SSRF guard
+	// (webhooks.IsBlockedIP, wired into the dialer's Control hook), letting
+	// deliveries reach loopback / RFC1918 / link-local addresses.
+	//
+	// LOCAL DEV ONLY, and off unless TANDEM_WEBHOOKS_ALLOW_PRIVATE is exactly
+	// "1" or "true". It exists so the `tandem-local` container can deliver to a
+	// `tandem-mcp listen` running on the host (http://host.docker.internal:8787),
+	// which the guard otherwise refuses non-retryably. Setting it in production
+	// turns every canvas's webhook config into an internal-network port scanner
+	// — including the 169.254.169.254 cloud metadata endpoint. Never set it there.
+	WebhooksAllowPrivateTargets bool
+
 	// MetricsEnabled registers GET /api/metrics — in-memory per-route and
 	// per-op latency percentiles, task-queue counters (claims, claim conflicts,
 	// TTL takeovers), webhook delivery outcomes and the connected-client gauge.
@@ -132,5 +144,23 @@ func Load() (*Config, error) {
 		PublicBaseURL:   strings.TrimRight(os.Getenv("PUBLIC_BASE_URL"), "/"),
 		MetricsEnabled:  os.Getenv("METRICS_ENABLED") != "false",
 		WebhooksEnabled: os.Getenv("WEBHOOKS_ENABLED") != "false",
+
+		WebhooksAllowPrivateTargets: envOptIn("TANDEM_WEBHOOKS_ALLOW_PRIVATE"),
 	}, nil
+}
+
+// envOptIn reads a flag that turns an UNSAFE behaviour on. Only "1" and "true"
+// count; anything else (including "yes", "TRUE", or an unset var) leaves the
+// safe default in place.
+//
+// Deliberately stricter than the `!= "false"` flags above: those are opt-OUTs of
+// a safe default, where being lenient costs nothing. This is an opt-IN to an
+// unsafe one, so a typo has to fail closed.
+func envOptIn(name string) bool {
+	switch strings.TrimSpace(os.Getenv(name)) {
+	case "1", "true":
+		return true
+	default:
+		return false
+	}
 }

@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+### `task_progress` is a heartbeat that extends your claim (TDM-67)
+
+- `task_progress` now reports through the inbound status endpoint
+  (`POST /api/canvas/{code}/tasks/{id}/status` with `state: "progress"`) under
+  the caller's claimant identity, instead of client-side editing the task
+  payload. Each report **refreshes the claim lease** server-side, so a worker
+  that heartbeats through an hour of real work no longer has its ~15-minute
+  claim expire and the task reclaimed underneath it.
+- The "is this task mine?" check moves from this process to the server. A
+  non-holder's report is rejected and comes back as **data** —
+  `{ recorded: false, reason: "claimed_by_other", claimedBy, message }` (or
+  `reason: "not_executing"` with the current `state`) — never a thrown error
+  mid-work.
+- Success now reflects what the server actually stored: `entries` counts the
+  task's real progress log, and `claimedAt` / `leaseExtended` show the refreshed
+  lease. `percent` is folded into the reported line, since the stored entry is
+  `{at, agent, note}`.
+
+### `canvas_connect` registers you too — one call (TDM-61)
+
+- `canvas_connect` accepts `role` ('planner' | 'executor'), `name`, `model` and
+  `parentAgentId`. With `role` present it ALSO registers the agent, and returns
+  `agentId` plus a `session` handle **already carrying that identity** — so the
+  very next `task_claim` runs under the registered name. A subagent handed only
+  the canvas code can now come up under its planner in one call, which is what
+  makes the fleet tree form; a separate registration call was a step it could
+  (and did) skip.
+- A `parentAgentId` the canvas rejects no longer kills the session: the
+  registration is retried **unparented** and the problem comes back as data on
+  `agent.problem`. Working unparented beats not working.
+- `agent_register` is now on the DEFAULT (facade) surface — 12 tools instead of
+  11 — for re-registration after connect: fixing a bad parent id, recording the
+  model, switching role.
+
 ### `task_complete` carries evidence links (TDM-45)
 
 - `task_complete` / `canvas_task_complete` accept `links: string[]` — the GitHub

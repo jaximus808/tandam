@@ -528,6 +528,161 @@ func TestClaimActionSameClaimantExpiredReclaimRestamps(t *testing.T) {
 	}
 }
 
+// ── TouchActionClaim: a progress report is a heartbeat (TDM-64) ─────────────
+
+// rewindClaim models time passing. Expiry is computed purely from claimed_at,
+// so pushing the stored stamp back by d is indistinguishable from d elapsing —
+// and unlike a sleep it is exact and instant.
+func rewindClaim(t *testing.T, f *fakeActionsServer, d time.Duration) {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	raw, _ := f.row["claimed_at"].(string)
+	at, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		t.Fatalf("row has no parsable claimed_at (%q): %v", raw, err)
+	}
+	f.row["claimed_at"] = at.Add(-d).Format(time.RFC3339Nano)
+}
+
+// The bug TDM-64 fixes: a worker that claims a task, works it for longer than
+// the TTL and reports progress the whole way must NOT lose the task. The
+// progress report restamps claimed_at, so a rival arriving after the ORIGINAL
+// claim would have lapsed still loses.
+func TestTouchActionClaimExtendsLeasePastOriginalTTL(t *testing.T) {
+	canvasID, actionID := uuid.New(), uuid.New()
+	fake := newFakeActionsServer(canvasID, actionID, "approved")
+	srv := httptest.NewServer(fake.handler())
+	defer srv.Close()
+
+	st, err := NewSupabase(srv.URL, "test-key") // default TTL: 15m
+	if err != nil {
+		t.Fatalf("NewSupabase: %v", err)
+	}
+	ctx := context.Background()
+
+	if _, _, err := st.ClaimAction(ctx, canvasID, actionID, "agent-a"); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+
+	// 14 minutes of real work, then a progress report — INSIDE the TTL window.
+	rewindClaim(t, fake, 14*time.Minute)
+	touched, extended, err := st.TouchActionClaim(ctx, canvasID, actionID, "agent-a")
+	if err != nil || !extended {
+		t.Fatalf("holder's heartbeat = extended %v, err %v; want the lease extended", extended, err)
+	}
+	if touched.ClaimedAt == nil || time.Since(*touched.ClaimedAt) > time.Minute {
+		t.Fatalf("heartbeat claimed_at = %v, want a just-now stamp", touched.ClaimedAt)
+	}
+
+	// 10 more minutes: 24 since the original claim (well past the 15m TTL), but
+	// only 10 since the heartbeat. A rival must still lose.
+	rewindClaim(t, fake, 10*time.Minute)
+	_, _, cerr := st.ClaimAction(ctx, canvasID, actionID, "agent-b")
+	var already *AlreadyClaimedError
+	if !errors.As(cerr, &already) {
+		t.Fatalf("rival claim after a heartbeat = %v, want *AlreadyClaimedError (the lease was extended)", cerr)
+	}
+	if already.ClaimedBy != "agent-a" {
+		t.Fatalf("conflict names %q, want the live holder agent-a", already.ClaimedBy)
+	}
+	if got, _ := fake.row["claimed_by"].(string); got != "agent-a" {
+		t.Fatalf("row claimed_by=%q — the reporting worker lost its task", got)
+	}
+}
+
+// The control for the test above: with NO heartbeat, the same 24 minutes of
+// work does hand the task to the rival. Without this the extension test could
+// pass against a fixture where takeover never fires at all.
+func TestClaimTakenOverWithoutAHeartbeat(t *testing.T) {
+	canvasID, actionID := uuid.New(), uuid.New()
+	fake := newFakeActionsServer(canvasID, actionID, "approved")
+	srv := httptest.NewServer(fake.handler())
+	defer srv.Close()
+
+	st, err := NewSupabase(srv.URL, "test-key")
+	if err != nil {
+		t.Fatalf("NewSupabase: %v", err)
+	}
+	ctx := context.Background()
+
+	if _, _, err := st.ClaimAction(ctx, canvasID, actionID, "agent-a"); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	rewindClaim(t, fake, 24*time.Minute)
+	if _, _, err := st.ClaimAction(ctx, canvasID, actionID, "agent-b"); err != nil {
+		t.Fatalf("rival claim on a silent 24m claim = %v, want the takeover to succeed", err)
+	}
+}
+
+// Only the holder extends. A non-holder's touch matches 0 rows (the claimed_by
+// predicate lives in the UPDATE, not in Go), leaves claimed_at untouched, and
+// the claim still expires on schedule — otherwise any caller could keep a dead
+// agent's claim alive forever.
+func TestTouchActionClaimIsHolderOnly(t *testing.T) {
+	canvasID, actionID := uuid.New(), uuid.New()
+	fake := newFakeActionsServer(canvasID, actionID, "approved")
+	srv := httptest.NewServer(fake.handler())
+	defer srv.Close()
+
+	st, err := NewSupabase(srv.URL, "test-key")
+	if err != nil {
+		t.Fatalf("NewSupabase: %v", err)
+	}
+	ctx := context.Background()
+
+	if _, _, err := st.ClaimAction(ctx, canvasID, actionID, "agent-a"); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	rewindClaim(t, fake, 14*time.Minute)
+	before, _ := fake.row["claimed_at"].(string)
+
+	for _, who := range []string{"agent-b", "", "agent"} {
+		a, extended, err := st.TouchActionClaim(ctx, canvasID, actionID, who)
+		if err != nil || extended || a != nil {
+			t.Fatalf("touch by non-holder %q = (%v, %v, %v), want (nil, false, nil)", who, a, extended, err)
+		}
+		if got, _ := fake.row["claimed_at"].(string); got != before {
+			t.Fatalf("non-holder %q moved claimed_at %q → %q", who, before, got)
+		}
+	}
+
+	// And the lease it failed to extend still lapses on the original schedule.
+	rewindClaim(t, fake, 10*time.Minute)
+	if _, _, err := st.ClaimAction(ctx, canvasID, actionID, "agent-b"); err != nil {
+		t.Fatalf("takeover after a non-holder's touch = %v, want success", err)
+	}
+}
+
+// The lease only exists while a task is executing: a touch on any other state
+// (a done task whose claim columns linger, a task released back to the queue)
+// extends nothing.
+func TestTouchActionClaimOnlyExtendsExecutingTasks(t *testing.T) {
+	canvasID, actionID := uuid.New(), uuid.New()
+	fake := newFakeActionsServer(canvasID, actionID, "executing")
+	fake.row["claimed_by"] = "agent-a"
+	stamp := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339Nano)
+	fake.row["claimed_at"] = stamp
+	srv := httptest.NewServer(fake.handler())
+	defer srv.Close()
+
+	st, err := NewSupabase(srv.URL, "test-key")
+	if err != nil {
+		t.Fatalf("NewSupabase: %v", err)
+	}
+
+	for _, state := range []string{"approved", "done", "failed", "proposed"} {
+		fake.row["state"] = state
+		_, extended, err := st.TouchActionClaim(context.Background(), canvasID, actionID, "agent-a")
+		if err != nil || extended {
+			t.Fatalf("touch on a %s task = extended %v, err %v; want no extension", state, extended, err)
+		}
+		if got, _ := fake.row["claimed_at"].(string); got != stamp {
+			t.Fatalf("touch on a %s task moved claimed_at to %q", state, got)
+		}
+	}
+}
+
 // ── ClaimOutcome: the only report a lapsed claim ever gets (TDM-37) ──────────
 
 // Claim expiry here is LAZY — no sweeper walks stale claims — so the takeover

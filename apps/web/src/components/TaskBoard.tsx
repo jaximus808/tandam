@@ -45,6 +45,7 @@ import { CHIP_BASE, STATE_CHIP } from "../lib/stateChips";
 import { parseAuthoredBy, provenanceTitle } from "../lib/provenance";
 import { auditActorLabel, auditChangeLabel, lastReapprovalEdit } from "../lib/taskAudit";
 import TaskLinks from "./TaskLinks";
+import { useCardFlight } from "../lib/useCardFlight";
 
 /* ─────────────────────────────────────────────────────────────────────────────
    TaskBoard — the Board surface: the one home for tasks on a canvas. Humans
@@ -424,6 +425,9 @@ export default function TaskBoard({
   onOpenConnect,
   onOpenDocuments,
   onOpenRoadmapDoc,
+  spotlightTaskId,
+  spotlightNonce,
+  active = true,
 }: {
   code: string;
   state: CanvasState;
@@ -445,6 +449,17 @@ export default function TaskBoard({
   // mounted after first visit so a localStorage write alone never re-scopes.
   focusEpicId?: string | null;
   onScopeHandled?: () => void;
+  // FOLLOW handoff (App's useFollowMoves): an agent just moved this task between
+  // columns and the viewer is following. Unlike focusTaskId this does NOT open
+  // the detail panel — following is watching, not stepping in — it only makes
+  // sure the card is on screen while useCardFlight flies it to its new lane.
+  // `spotlightNonce` re-fires the effect for repeat moves of the same task.
+  spotlightTaskId?: string | null;
+  spotlightNonce?: number;
+  /** Whether the Board surface is the one showing. The board stays MOUNTED and
+   *  hidden with CSS (keep-alive), and a hidden element measures as a zero rect
+   *  — so the flight animation has to re-measure the moment it comes back. */
+  active?: boolean;
 }) {
   // Sidebar scope — raw as stored; validated against the live epic set below.
   const [scope, setScope] = useState<string>(() => {
@@ -464,6 +479,8 @@ export default function TaskBoard({
       return false;
     }
   });
+  // The card the follow camera just brought us to (see the spotlight effect).
+  const [spotlightGlow, setSpotlightGlow] = useState<{ id: string; nonce: number } | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
@@ -718,6 +735,13 @@ export default function TaskBoard({
   // Link targets for the composer (roadmap items + notes on this canvas).
   const targets = useMemo(() => linkTargets(state), [state]);
 
+  // Cards that change lane FLY there (lib/useCardFlight): a ghost clone crosses
+  // the gap while the real card waits, then wears an arrival ring for a beat.
+  // Not gated on following — a board you're looking at should show its own
+  // movement whether or not the camera brought you here.
+  const kanbanRef = useRef<HTMLDivElement>(null);
+  const landed = useCardFlight(kanbanRef, [visibleTasks, effectiveScope, active]);
+
   async function run(id: string, fn: () => Promise<void>) {
     setBusyId(id);
     setError(null);
@@ -810,6 +834,50 @@ export default function TaskBoard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusTaskId]);
 
+  // FOLLOW spotlight: an agent moved this card and we're watching. Get it on
+  // screen and stay out of the way — no detail panel, no scope change unless
+  // the current lens would hide it outright.
+  //
+  // Two scrolls, deliberately. The lifecycle ping and the state broadcast are
+  // separate WS messages with no guaranteed order, so the first pass may find
+  // the card still sitting in its OLD column — which is the better opening shot
+  // anyway (you watch it leave). The second pass re-centres once it has landed.
+  useEffect(() => {
+    if (!spotlightTaskId) return;
+    // A stale filter or a narrow epic scope would hide the very card we're
+    // about to point at (the same trap the TDM-14 handoff hit).
+    if (filtering) clearFilters();
+    // The ping can beat the state broadcast, in which case we don't know the
+    // task's epic yet — skip the re-scope and let the scrolls below find the
+    // card wherever it renders. Its next move will scope correctly.
+    const t = (state.actions ?? {})[spotlightTaskId];
+    if (t && effectiveScope !== "all") {
+      const eid = taskPayload(t).epicId;
+      if (eid && epicIds.has(eid)) {
+        if (effectiveScope !== eid) selectScope(eid);
+      } else if (eid || effectiveScope !== "none") {
+        selectScope(eid ? "all" : "none");
+      }
+    }
+    const center = () =>
+      document
+        .querySelector(`[data-task-id="${CSS.escape(spotlightTaskId)}"]`)
+        ?.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
+    // Ring the card even when the flight didn't run — being pulled here from
+    // another surface means the board was hidden (zero rects) when it moved, so
+    // the glow is the only tell that THIS is the card you were brought to see.
+    setSpotlightGlow({ id: spotlightTaskId, nonce: spotlightNonce ?? 0 });
+    const first = setTimeout(center, 90);
+    const second = setTimeout(center, 820);
+    const fade = setTimeout(() => setSpotlightGlow(null), 2600);
+    return () => {
+      clearTimeout(first);
+      clearTimeout(second);
+      clearTimeout(fade);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [spotlightNonce, spotlightTaskId]);
+
   // Epic-scope handoff: a roadmap chip asked for this epic. One-shot, mirrors
   // the task-focus effect above (the board stays mounted, so props are the
   // only reliable channel — a bare localStorage write never re-scopes).
@@ -866,16 +934,24 @@ export default function TaskBoard({
   // ── Kanban card ─────────────────────────────────────────────────────────────
   // withEpicChip: only the All-tasks scope shows the epic chip (clicking it
   // jumps the sidebar to that epic); inside an epic scope it's redundant.
-  function renderCard(t: Action, showState: boolean, withEpicChip: boolean) {
+  function renderCard(t: Action, showState: boolean, withEpicChip: boolean, colKey: string) {
     const p = taskPayload(t);
     const terminal = t.state === "done" || t.state === "failed" || t.state === "rejected";
     const reapproval = lastReapprovalEdit(p);
     const epicId = p.epicId;
     const epicTitle = withEpicChip && epicId ? epicTitleById.get(epicId) : undefined;
+    // Just flew in from another lane (or the camera brought us here for it) —
+    // hold the agent ring while it settles.
+    const justLanded = landed[t.id] !== undefined || spotlightGlow?.id === t.id;
     return (
       <div
         key={t.id}
         data-task-id={t.id}
+        // The lane this card is in, so useCardFlight can tell a MOVE from a
+        // re-render, and the anchor the agent cursor's halo wraps when the
+        // follow camera brings the viewer here.
+        data-task-col={colKey}
+        data-agent-target={t.id}
         role="button"
         tabIndex={0}
         onClick={() => setDetailId(t.id)}
@@ -888,7 +964,9 @@ export default function TaskBoard({
             setDetailId(t.id);
           }
         }}
-        className="cursor-pointer rounded-lg border border-ink/10 bg-surface p-2.5 transition-[border-color,box-shadow] hover:border-ink/25 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+        className={`cursor-pointer rounded-lg border bg-surface p-2.5 transition-[border-color,box-shadow] hover:border-ink/25 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${
+          justLanded ? "tandem-card-land border-agent/40" : "border-ink/10"
+        }`}
       >
         <div className="flex items-start justify-between gap-2">
           <span
@@ -1388,7 +1466,7 @@ export default function TaskBoard({
                 each column scrolls its own cards. Empty columns collapse to a
                 slim rail. Under a filter, cards simply vanish and the header
                 shows shown/total (within the scope). */}
-            <div className="min-h-0 flex-1 overflow-x-auto">
+            <div ref={kanbanRef} className="min-h-0 flex-1 overflow-x-auto">
               {/* pr on sm+: the QuickLog chip rail floats over the right gutter
                   (App.tsx renders it absolutely at right-4, z-20). The extra
                   end-padding lets the last kanban column scroll fully clear of
@@ -1437,7 +1515,7 @@ export default function TaskBoard({
                       ) : (
                         <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pb-2 pr-0.5">
                           {colTasks.map((t) =>
-                            renderCard(t, showState, effectiveScope === "all"),
+                            renderCard(t, showState, effectiveScope === "all", col.key),
                           )}
                         </div>
                       )}

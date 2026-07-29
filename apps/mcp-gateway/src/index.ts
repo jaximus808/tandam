@@ -33,6 +33,7 @@ import {
   runInit,
   type CanvasHandle,
 } from "./init.js";
+import { ListenUsageError, listenHelp, parseListenArgs, runListen } from "./listen/index.js";
 
 function printHelp() {
   process.stdout.write(
@@ -43,6 +44,10 @@ function printHelp() {
       `  tandem-mcp init            Set up this project: create a canvas, write\n` +
       `                             .mcp.json, print the agent snippet.\n` +
       `                             (\`tandem-mcp init --help\` for its options.)\n` +
+      `  tandem-mcp listen          Run a command when work is approved: a local\n` +
+      `                             webhook listener that launches your\n` +
+      `                             orchestrator. Needs --exec.\n` +
+      `                             (\`tandem-mcp listen --help\` for its options.)\n` +
       `  tandem-mcp --full-tools    Also advertise the full CRUD tool surface\n` +
       `                             (maps, sheets, charts, forms, …) alongside\n` +
       `                             the default 10-tool intent facade.\n` +
@@ -70,14 +75,16 @@ function printHelp() {
 }
 
 const cliArgs = process.argv.slice(2);
-// `init` is the only subcommand; everything else (including no args at all)
-// keeps the stdio-MCP-server default untouched.
+// Two subcommands — `init` and `listen`. Everything else (including no args at
+// all) keeps the stdio-MCP-server default untouched.
 const INIT_MODE = cliArgs[0] === "init";
-if (!INIT_MODE && (cliArgs.includes("--version") || cliArgs.includes("-v"))) {
+const LISTEN_MODE = cliArgs[0] === "listen";
+const SUBCOMMAND = INIT_MODE || LISTEN_MODE;
+if (!SUBCOMMAND && (cliArgs.includes("--version") || cliArgs.includes("-v"))) {
   process.stdout.write(`@jaximus/tandem-mcp ${VERSION}\n`);
   process.exit(0);
 }
-if (!INIT_MODE && (cliArgs.includes("--help") || cliArgs.includes("-h"))) {
+if (!SUBCOMMAND && (cliArgs.includes("--help") || cliArgs.includes("-h"))) {
   printHelp();
   process.exit(0);
 }
@@ -137,9 +144,26 @@ async function runInitCommand(): Promise<number> {
   });
 }
 
+/**
+ * `listen` (TDM-56): the approval → orchestrator bridge. Deliberately shares
+ * nothing with the Gateway — it talks to no API, it only receives signed
+ * webhooks from one and execs a command.
+ */
+async function runListenCommand(): Promise<number> {
+  const opts = parseListenArgs(cliArgs.slice(1), process.env);
+  if (opts.help) {
+    process.stdout.write(listenHelp());
+    return 0;
+  }
+  return runListen(opts);
+}
+
 async function main() {
   if (INIT_MODE) {
     process.exit(await runInitCommand());
+  }
+  if (LISTEN_MODE) {
+    process.exit(await runListenCommand());
   }
   const server = createTandemServer(gateway, VERSION, { fullTools: FULL_TOOLS });
   // MCP_TRACE only: prints the session summary when the client goes away
@@ -157,6 +181,13 @@ main().catch((err) => {
     process.stderr.write(`\ntandem init: ${err instanceof Error ? err.message : err}\n`);
     if (err instanceof InitUsageError) {
       process.stderr.write(`Run \`tandem-mcp init --help\` for options.\n`);
+    }
+    process.exit(1);
+  }
+  if (LISTEN_MODE) {
+    process.stderr.write(`\ntandem listen: ${err instanceof Error ? err.message : err}\n`);
+    if (err instanceof ListenUsageError) {
+      process.stderr.write(`Run \`tandem-mcp listen --help\` for options.\n`);
     }
     process.exit(1);
   }

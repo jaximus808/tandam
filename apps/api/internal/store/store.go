@@ -1088,6 +1088,15 @@ type Store interface {
 	// NEW one if a takeover race was lost), or an ErrIllegalActionState-wrapped
 	// error for other states.
 	ClaimAction(ctx context.Context, canvasID, id uuid.UUID, claimedBy string) (*Action, ClaimOutcome, error)
+	// TouchActionClaim refreshes the claim lease on an executing task —
+	// restamping claimed_at to now — so a worker that is alive and reporting
+	// progress cannot be reclaimed out from under itself once its ORIGINAL claim
+	// passes the TTL (TDM-64). HOLDER-ONLY: the conditional UPDATE carries a
+	// claimed_by predicate, so nobody can extend a claim they don't hold.
+	// Returns the restamped action and ok=true when the lease moved; ok=false
+	// (nil error) when nothing matched — not executing, not this holder, gone.
+	// Best-effort by contract: the caller must not fail a report over it.
+	TouchActionClaim(ctx context.Context, canvasID, id uuid.UUID, claimedBy string) (*Action, bool, error)
 	// ReleaseAction frees a stuck claim: executing → approved, clearing
 	// claimed_by/claimed_at, via the same conditional-UPDATE pattern. Human-only —
 	// the gate lives at the route surface (see api.ReleaseAction).

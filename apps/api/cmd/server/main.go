@@ -94,6 +94,13 @@ func main() {
 		if metricsReg != nil {
 			wOpts = append(wOpts, webhooks.WithObserver(metricsReg))
 		}
+		if cfg.WebhooksAllowPrivateTargets {
+			// Local-dev escape hatch (TDM-56): lets the container deliver to a
+			// `tandem-mcp listen` on the host. NewWorker's default sender has the
+			// guard on, so this is the only way it can ever be off in a server.
+			log.Printf("WARNING: webhook SSRF guard disabled — private targets allowed (TANDEM_WEBHOOKS_ALLOW_PRIVATE)")
+			wOpts = append(wOpts, webhooks.WithSender(webhooks.NewSender(webhooks.WithAllowPrivateTargets(true))))
+		}
 		go webhooks.NewWorker(db, wOpts...).Run(webhookCtx)
 	} else {
 		log.Printf("WEBHOOKS_ENABLED=false — outbound webhook delivery worker disabled")

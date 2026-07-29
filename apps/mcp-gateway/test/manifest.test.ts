@@ -14,6 +14,7 @@ import { isFacadeTool } from "../src/facade.js";
 
 const EXPECTED_FACADE = [
   "canvas_connect",
+  "agent_register",
   "context_get",
   "queue_next",
   "task_get",
@@ -21,14 +22,15 @@ const EXPECTED_FACADE = [
   "task_progress",
   "task_complete",
   "task_propose",
+  "epic_propose",
   "doc_write",
   "board_status",
 ];
 
-test("default manifest is exactly the 10-tool intent facade", () => {
+test("default manifest is exactly the 12-tool intent facade", () => {
   const names = manifestFor(false).map((t) => t.name);
   assert.deepEqual(names, EXPECTED_FACADE);
-  assert.equal(names.length, 10);
+  assert.equal(names.length, 12);
 });
 
 test("TANDEM_FULL_TOOLS adds the CRUD surface without dropping or duplicating", () => {
@@ -48,6 +50,29 @@ test("facade's canvas_connect wins over the CRUD one (queue-first description)",
   const connect = manifestFor(true).find((t) => t.name === "canvas_connect")!;
   assert.match(connect.description, /STEP 1/);
   assert.match(connect.description, /queue_next/);
+});
+
+test("canvas_connect advertises connect-AND-register (TDM-61)", () => {
+  // The fan-out recipe hangs off this: a subagent gets the code and must come up
+  // registered under its planner in ONE call, or the fleet tree never forms.
+  const connect = manifestFor(false).find((t) => t.name === "canvas_connect")!;
+  const props = connect.inputSchema.properties as Record<string, any>;
+  assert.deepEqual(props.role.enum, ["planner", "executor"]);
+  assert.equal(props.name?.type, "string");
+  assert.equal(props.model?.type, "string");
+  assert.equal(props.parentAgentId?.type, "string");
+  // Only the code is mandatory — registering stays opt-in.
+  assert.deepEqual(connect.inputSchema.required, ["code"]);
+  assert.match(connect.description, /role/);
+});
+
+test("agent_register is on the DEFAULT surface, for re-registration", () => {
+  const reg = manifestFor(false).find((t) => t.name === "agent_register")!;
+  assert.ok(reg, "a subagent that skipped role at connect must still be able to register");
+  assert.deepEqual(reg.inputSchema.required, ["role"]);
+  // It points back at the one-call path rather than competing with it.
+  assert.match(reg.description, /canvas_connect/);
+  assert.equal(reg.annotations.readOnlyHint, false);
 });
 
 test("fullToolsEnabled: explicit override beats the env var", () => {
@@ -104,16 +129,17 @@ test("read-only facade tools are annotated read-only", () => {
   for (const n of ["context_get", "queue_next", "task_get", "board_status"]) {
     assert.equal(byName.get(n)!.annotations.readOnlyHint, true, `${n} is a read`);
   }
-  for (const n of ["task_claim", "task_complete", "doc_write", "task_propose"]) {
+  for (const n of ["task_claim", "task_complete", "doc_write", "task_propose", "epic_propose"]) {
     assert.equal(byName.get(n)!.annotations.readOnlyHint, false, `${n} writes`);
     assert.equal(byName.get(n)!.annotations.destructiveHint, false);
   }
 });
 
-test("isFacadeTool routes facade names but leaves canvas_connect to the CRUD handler", () => {
+test("isFacadeTool routes facade names but leaves the identity pair to the CRUD handler", () => {
   assert.equal(isFacadeTool("queue_next"), true);
   assert.equal(isFacadeTool("doc_write"), true);
-  // canvas_connect is shared: one implementation, in tools.ts.
+  // Shared: advertised by the facade, one implementation, in tools.ts.
   assert.equal(isFacadeTool("canvas_connect"), false);
+  assert.equal(isFacadeTool("agent_register"), false);
   assert.equal(isFacadeTool("canvas_task_list"), false);
 });

@@ -57,6 +57,140 @@ export function adoptCarriedSession(gateway: Gateway, toolName: string, args: Ar
   delete args.session;
 }
 
+// ── Agent identity (shared by agent_register and connect-time registration) ───
+
+const AGENT_ROLES = new Set(["planner", "executor"]);
+
+/** The registration fields, after trimming — role validated by the caller. */
+interface AgentIdentity {
+  name?: string;
+  role: string;
+  model?: string;
+  parentAgentId?: string;
+}
+
+/** Pull the registration fields off a tool's args, dropping empties. */
+function readAgentIdentity(args: Args): {
+  role: string;
+  name?: string;
+  model?: string;
+  parentAgentId?: string;
+} {
+  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+  return {
+    role: str(args.role) ?? "",
+    name: str(args.name),
+    model: str(args.model),
+    parentAgentId: str(args.parentAgentId),
+  };
+}
+
+/**
+ * POST the agent row and remember the returned id ON the session, so every
+ * later call presents that identity (claims, provenance header). Single-sourced
+ * because two callers mint identity: the `agent_register` tool and
+ * canvas_connect's one-call registration (TDM-61) — they must not drift.
+ */
+async function registerAgentIdentity(
+  gateway: Gateway,
+  identity: AgentIdentity
+): Promise<{ agentId?: string; parentAgentId?: string }> {
+  const res = (await gateway.post("/api/canvas/agents", {
+    name: identity.name,
+    role: identity.role,
+    model: identity.model,
+    parentAgentId: identity.parentAgentId,
+  })) as { agentId?: string; parentAgentId?: string };
+  if (res?.agentId) {
+    // Mirror the server's default (name falls back to role) so a nameless
+    // registration still claims as "executor", not a raw UUID — the board's
+    // claimant chips and filter read this string.
+    gateway.setAgentId(res.agentId, identity.name ?? identity.role);
+  }
+  return res;
+}
+
+/**
+ * Connect-time registration (TDM-61 / E9.1). A subagent is handed the canvas
+ * CODE and must come up as an executor under its planner; making that a second
+ * tool call is a step it can skip, and the fleet tree then never forms. So
+ * canvas_connect takes the registration fields and does both in ONE call.
+ *
+ * Returns the `agent` block for the connect result, or undefined when the call
+ * asked for no identity at all (a plain connect). NEVER throws: a bad
+ * `parentAgentId` is a 400 from the API, and a subagent that dies on its parent
+ * id is worse than one working unparented — so a parent rejection retries the
+ * registration WITHOUT the parent and reports the problem as data.
+ */
+async function registerOnConnect(gateway: Gateway, args: Args): Promise<Args | undefined> {
+  const { role, name, model, parentAgentId } = readAgentIdentity(args);
+
+  if (!role) {
+    // Registration fields with no role can't be honoured (the API requires one);
+    // say so rather than silently connecting as nobody.
+    if (!name && !model && !parentAgentId) return undefined;
+    return {
+      registered: false,
+      problem:
+        "Connected, but NOT registered: `role` is required to register on connect — pass " +
+        "role 'planner' (you dispatch work) or 'executor' (you do it), or call agent_register now.",
+    };
+  }
+  if (!AGENT_ROLES.has(role)) {
+    return {
+      registered: false,
+      problem:
+        `Connected, but NOT registered: role must be 'planner' or 'executor' (got "${role}"). ` +
+        "Call agent_register with a valid role.",
+    };
+  }
+
+  const identity: AgentIdentity = { name, role, model };
+  try {
+    const res = await registerAgentIdentity(gateway, { ...identity, parentAgentId });
+    return {
+      registered: true,
+      agentId: res.agentId,
+      name: name ?? role,
+      role,
+      ...(res.parentAgentId ? { parentAgentId: res.parentAgentId } : {}),
+    };
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err);
+    if (parentAgentId) {
+      // The parent is the likely culprit (it must name an agent registered on
+      // THIS canvas). Come up unparented rather than not at all.
+      try {
+        const res = await registerAgentIdentity(gateway, identity);
+        return {
+          registered: true,
+          agentId: res.agentId,
+          name: name ?? role,
+          role,
+          parentAgentId: null,
+          problem:
+            `Registered UNPARENTED: the canvas rejected parentAgentId "${parentAgentId}" — it must ` +
+            `be the agentId of an agent already registered on THIS canvas. You are working, but ` +
+            `your work will not nest under that planner. Ask whoever spawned you for the right id ` +
+            `and re-run agent_register with it. (${why})`,
+        };
+      } catch (retryErr) {
+        const retryWhy = retryErr instanceof Error ? retryErr.message : String(retryErr);
+        return {
+          registered: false,
+          problem:
+            `Connected, but registration failed both with and without parentAgentId ` +
+            `"${parentAgentId}": ${retryWhy}. Retry with agent_register.`,
+        };
+      }
+    }
+    return {
+      registered: false,
+      problem: `Connected, but registration failed: ${why}. Retry with agent_register.`,
+    };
+  }
+}
+
 export async function handleTool(
   gateway: Gateway,
   toolName: string,
@@ -88,12 +222,19 @@ export async function handleTool(
         );
       }
       const session = await gateway.connectWithCode(code);
+      // One-call connect + register (TDM-61): when the call carries `role`, this
+      // ALSO mints the agent identity, so the `session` handle exported below
+      // already carries it and later claims run under the registered name.
+      // Never throws — a rejected parentAgentId comes back as data.
+      const agent = await registerOnConnect(gateway, args);
       return {
         connected: true,
         canvasId: session.canvasId,
         canvasName: session.canvasName,
         canvasCode: session.canvasCode,
         url: gateway.canvasUrl(session.canvasCode),
+        ...(agent?.registered === true ? { agentId: agent.agentId } : {}),
+        ...(agent ? { agent } : {}),
         session: gateway.exportSession(),
         _surface_url_now:
           "FIRST, before any research or edits: tell the user the canvas is connected and give them " +
@@ -734,18 +875,8 @@ export async function handleTool(
 
     // ── Agents (v1 identity / provenance) ───────────────────────────────────────
     case "agent_register": {
-      const res = (await gateway.post("/api/canvas/agents", {
-        name: args.name,
-        role: args.role,
-        model: args.model,
-        parentAgentId: args.parentAgentId,
-      })) as { agentId: string };
-      if (res?.agentId) {
-        // Mirror the server's default (name falls back to role) so a nameless
-        // registration still claims as "executor", not a raw UUID — the board's
-        // claimant chips and filter read this string.
-        gateway.setAgentId(res.agentId, String(args.name ?? args.role));
-      }
+      const identity = readAgentIdentity(args);
+      const res = await registerAgentIdentity(gateway, identity);
       // The registered identity now lives on the session, so re-serialize it
       // into a REFRESHED handle. On the hosted sidecar (fresh Gateway per call)
       // the old handle knows nothing about this registration — if the model
@@ -902,14 +1033,14 @@ export async function handleTool(
       }
       // Contextual fan-out nudge: only when there's a real batch of ready work.
       // Subagents are a HARNESS capability (e.g. Claude Code's Agent tool), not
-      // something this server can start — so this just tells the agent it may
-      // offer it. Each subagent should agent_register (role "executor",
-      // parentAgentId = the orchestrator's id) so the fan-out shows on the board
-      // rather than the orchestrator narrating what it's doing.
+      // something this server can start — but where the harness HAS them, fan-out
+      // is the default, not an option to float past the user. Worded to match the
+      // `handoff` block queue_next attaches (TDM-62), so the two can't disagree:
+      // one connect-and-register call per worker, each claiming its OWN task.
       const approvedCount = tasks.filter((t) => t.state === "approved").length;
       const hint =
         approvedCount >= 2
-          ? `${approvedCount} approved tasks are ready. If you're in a harness with subagents (e.g. Claude Code), you can offer the user to spin up one subagent per task and execute them in parallel — have each subagent connect, agent_register (role "executor", parentAgentId = your registered agent id), then task_start → work → task_complete. Skip this if your harness has no subagent primitive.`
+          ? `${approvedCount} approved tasks are ready. If you have subagents, DISPATCH — do not claim these yourself: spawn one subagent per task and give it the canvas CODE plus that task's id and ticket. Each worker calls canvas_connect with role "executor" and parentAgentId = your registered agent id (one call connects AND registers it under you), then task_claim on ITS task — and on claimed:false takes a different ready task instead. Never hand a subagent your session handle; the CODE is what travels. queue_next returns a paste-ready \`handoff\` block per task carrying exactly these steps.`
           : undefined;
       return { tasks, ...(hint ? { hint } : {}) };
     }
@@ -1000,6 +1131,33 @@ export async function handleTool(
   }
 }
 
+/**
+ * The agent-identity fields, shared verbatim by `agent_register` and
+ * `canvas_connect`'s one-call connect+register (TDM-61) so the two can't drift.
+ */
+export const AGENT_IDENTITY_PROPS = {
+  role: {
+    type: "string",
+    enum: ["planner", "executor"],
+    description:
+      "'planner' if you dispatch work to other agents, 'executor' if you claim and do tasks " +
+      "yourself. Registering is what puts you on the board's fleet view.",
+  },
+  name: {
+    type: "string",
+    description:
+      "Human-readable agent name shown on the board (e.g. 'opus-executor-3'). Defaults to the " +
+      "role. Re-registering the same name refreshes the SAME agent, never a duplicate.",
+  },
+  model: { type: "string", description: "Optional model id, e.g. 'claude-opus-4-8'." },
+  parentAgentId: {
+    type: "string",
+    description:
+      "For subagents spawned by an orchestrator: the orchestrator's registered agentId, so the " +
+      "fleet view nests this executor under it. Omit when not spawned by another registered agent.",
+  },
+} as const;
+
 const RAW_TOOLS = [
   {
     name: "canvas_connect",
@@ -1010,10 +1168,16 @@ const RAW_TOOLS = [
       "every other tool operates on that canvas with no ID needed. Returns the shareable web " +
       "`url` — surface it to the user right away (before you start researching or editing) so " +
       "they can open the canvas and watch your changes live, then repeat it in your final summary. " +
+      "Pass `role` (plus `name`, `model`, and — if an orchestrator spawned you — `parentAgentId`) " +
+      "to REGISTER as an agent in the same call: you get back an `agentId` and a `session` handle " +
+      "already carrying that identity, so your claims show up as you on the fleet view. " +
       "May be called again to switch the session to a different canvas.",
     inputSchema: {
       type: "object" as const,
-      properties: { code: { type: "string", description: "Canvas code given by the user." } },
+      properties: {
+        code: { type: "string", description: "Canvas code given by the user." },
+        ...AGENT_IDENTITY_PROPS,
+      },
       required: ["code"],
     },
   },
@@ -2657,29 +2821,21 @@ const RAW_TOOLS = [
   {
     name: "agent_register",
     description:
-      "Identify this agent to the canvas on connect. Returns an agentId that is " +
-      "recorded as the author (provenance) of actions this session proposes, plus " +
-      "an UPDATED `session` handle carrying this identity — pass that handle (not " +
-      "the connect-time one) on all later calls. Re-registering a name refreshes " +
-      "the SAME agent (same agentId) rather than creating a duplicate. " +
-      "Multi-agent swarms: an orchestrator registers as role 'planner' and threads " +
-      "its returned agentId into each subagent's spawn prompt; each subagent then " +
-      "registers role 'executor' with parentAgentId = that id, so the board shows " +
-      "the swarm grouped under the orchestrator.",
+      "Register (or re-register) this session's agent identity. Prefer doing it IN " +
+      "canvas_connect — pass `role` there and you connect and register in one call. " +
+      "Use this tool when you didn't, or to CHANGE your identity afterwards: correct " +
+      "a parentAgentId the canvas rejected, record the model you're actually running, " +
+      "or switch role. Returns an agentId that is recorded as the author (provenance) " +
+      "of actions this session proposes, plus an UPDATED `session` handle carrying " +
+      "this identity — pass that handle (not the connect-time one) on all later calls. " +
+      "Re-registering a name refreshes the SAME agent (same agentId) rather than " +
+      "creating a duplicate. Multi-agent fleets: an orchestrator registers as role " +
+      "'planner' and threads its returned agentId into each subagent's spawn prompt; " +
+      "each subagent then registers role 'executor' with parentAgentId = that id, so " +
+      "the board shows the fleet grouped under the orchestrator.",
     inputSchema: {
       type: "object" as const,
-      properties: {
-        name: { type: "string", description: "Human-readable agent name." },
-        role: { type: "string", enum: ["planner", "executor"] },
-        model: { type: "string", description: "Optional model id, e.g. 'claude-opus-4-8'." },
-        parentAgentId: {
-          type: "string",
-          description:
-            "For subagents spawned by an orchestrator: the orchestrator's registered " +
-            "agentId, so the presence view nests this executor under it. Omit when " +
-            "not spawned by another registered agent.",
-        },
-      },
+      properties: { ...AGENT_IDENTITY_PROPS },
       required: ["role"],
     },
   },

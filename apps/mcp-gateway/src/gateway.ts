@@ -423,6 +423,25 @@ export class Gateway {
     return res.json() as Promise<T>;
   }
 
+  /**
+   * POST that surfaces an HTTP 409 as structured data instead of throwing.
+   * The inbound status endpoint (POST /api/canvas/{code}/tasks/{id}/status) uses
+   * 409 for two OUTCOMES a model should route on rather than crash over:
+   * `claimed_by_other` (someone else holds the task) and `not_executing` (it was
+   * never claimed, or already finished). Both are answers, not failures — same
+   * reasoning as patchWithConflict on the atomic task claim.
+   */
+  async postWithConflict<T, C>(path: string, body?: unknown): Promise<{ data?: T; conflict?: C }> {
+    const res = await this.safeFetch(path, {
+      method: "POST",
+      headers: this.authHeaders(),
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    if (res.status === 409) return { conflict: (await res.json()) as C };
+    await this.assertOk("POST", path, res);
+    return { data: (await res.json()) as T };
+  }
+
   async patch<T>(path: string, body: unknown): Promise<T> {
     const res = await this.safeFetch(path, {
       method: "PATCH",

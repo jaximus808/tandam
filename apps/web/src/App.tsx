@@ -37,15 +37,19 @@ import TandemLogo from "./components/TandemLogo";
 import AccountMenu from "./components/AccountMenu";
 import AgentCursor from "./components/AgentCursor";
 import AgentPresence from "./components/AgentPresence";
+import FollowControl from "./components/FollowControl";
 import FleetView from "./components/FleetView";
 import NotificationBell from "./components/NotificationBell";
 import AgentToasts from "./components/AgentToasts";
 import QuickLog from "./components/QuickLog";
 import TaskBoard from "./components/TaskBoard";
 import ErrorBoundary from "./components/ErrorBoundary";
-import { useAgentActivity } from "./lib/useAgentActivity";
+import { useAgentActivity, type CursorShowcase } from "./lib/useAgentActivity";
 import { useAgentNotifications } from "./lib/useAgentNotifications";
 import { useFollowStyle } from "./lib/followStyle";
+import { useFollowPrefs } from "./lib/followAgents";
+import { useFocusGuard } from "./lib/useFocusGuard";
+import { useFollowMoves } from "./lib/useFollowMoves";
 import { scrollParentOf, alignTopScroll, alignBottomScroll, animateScrollTop } from "./lib/showcaseScroll";
 import { recordRecent } from "./lib/recentCanvases";
 import { loadTabState, saveTabState } from "./lib/tabState";
@@ -345,6 +349,10 @@ export default function App() {
     for (const d of documents) m[d.id] = d;
     return m;
   }, [documents]);
+  // Mirrored for the follow effects, which read the doc titles at event time
+  // (naming the tab you were pulled away from) without depending on them.
+  const docsByIdRef = useRef<Record<string, Document>>({});
+  docsByIdRef.current = docsById;
   const openSet = useMemo(() => new Set(openDocIds), [openDocIds]);
   const openDocs = useMemo(() => documents.filter((d) => openSet.has(d.id)), [documents, openSet]);
 
@@ -761,15 +769,103 @@ export default function App() {
   // reactively so flipping it in settings changes the next reveal immediately.
   const followStyle = useFollowStyle();
 
-  // Auto-follow: while following, an agent batch pulls the follower to the
-  // document it lives in (so you watch the agent move between tabs).
+  // ── Following the fleet ─────────────────────────────────────────────────────
+  // The camera. `followPrefs` says whether to follow and whom (per canvas,
+  // device-local); `guard` says whether the viewer is mid-sentence, which is the
+  // ONLY thing that suspends it. Scrolling, reading, opening another document —
+  // all of that is browsing, and browsing never drops you out of follow. That's
+  // the whole point: you keep looking around, and when an agent does something
+  // you're taken to it.
+  const [followPrefs, setFollowPrefs] = useFollowPrefs(canvas?.code);
+  const guard = useFocusGuard();
+  const { move: followMove, pending: followPending } = useFollowMoves(
+    followPrefs,
+    guard.busy,
+    guard.busyRef,
+  );
+  // Live camera: on, and the viewer isn't writing.
+  const followLive = followPrefs.on && !guard.busy;
+  // Latest surface, for effects that must not re-run when it changes.
+  const surfaceRef = useRef(surface);
+  surfaceRef.current = surface;
+  // When the board camera last fired. A task transition usually lands with
+  // document writes around it (a result written, a note updated); without this
+  // the two cameras would fight over the surface for a second.
+  const boardJumpAt = useRef(0);
+  // The last document showcase the camera acted on — one jump per showcase.
+  const followedShowcaseId = useRef(0);
+  // The card the Board should put on screen, and the halo that names the move.
+  const [spotlight, setSpotlight] = useState<{ id: string; nonce: number } | null>(null);
+  const [boardShowcase, setBoardShowcase] = useState<CursorShowcase | null>(null);
+  // Where the camera took you FROM, so one click puts you back. Only set when
+  // follow moved you off another surface — never when you were already there.
+  const [returnTo, setReturnTo] = useState<
+    { surface: Surface; docId: string | null; label: string } | null
+  >(null);
+
+  // A followed agent moved a task between columns: go to the Board, spotlight
+  // the card, and let TaskBoard fly it into its new lane.
   useEffect(() => {
-    if (activeDocId !== null || !agentShowcase || !canvasState) return;
+    if (!followMove) return;
+    if (surfaceRef.current !== "board") {
+      const from = effectiveDocIdRef.current;
+      setReturnTo({
+        surface: "documents",
+        docId: from,
+        label: (from && docsByIdRef.current[from]?.name) || "your documents",
+      });
+      setSurface("board");
+    }
+    boardJumpAt.current = Date.now();
+    setSpotlight({ id: followMove.actionId, nonce: followMove.nonce });
+    setBoardShowcase({
+      id: followMove.nonce,
+      memberIds: [followMove.actionId],
+      op: followMove.verb === "completed" ? "updated" : "created",
+      noun: "task",
+      count: 1,
+      agentName: followMove.actor || "Agent",
+      isClaude: /claude/i.test(followMove.actor ?? ""),
+      label: followMove.label,
+    });
+    const t = setTimeout(() => setBoardShowcase(null), 3400);
+    return () => clearTimeout(t);
+  }, [followMove]);
+
+  // The "back to where I was" offer expires — it's a courtesy after a jump, not
+  // a permanent control.
+  useEffect(() => {
+    if (!returnTo) return;
+    const t = setTimeout(() => setReturnTo(null), 20_000);
+    return () => clearTimeout(t);
+  }, [returnTo]);
+
+  // Auto-follow: an agent batch pulls the viewer to the document it lives in
+  // (and to the Documents surface), so you watch the agent move between tabs.
+  // Following now WINS over a pinned tab — browsing somewhere else is not a
+  // decision to stop watching, it's just what you were doing until this landed.
+  useEffect(() => {
+    if (!followLive || !agentShowcase || !canvasState) return;
+    // Once per SHOWCASE, not once per state push: without this, any later
+    // broadcast would re-run the jump and drag a viewer who has since walked
+    // back to the board off to Documents again.
+    if (followedShowcaseId.current === agentShowcase.id) return;
+    followedShowcaseId.current = agentShowcase.id;
     const anchor = agentShowcase.memberIds[0];
     if (!anchor) return; // label-only segment (e.g. a removal) — nothing to open
     const docId = documentIdForEntity(canvasState, anchor);
-    if (docId) setFollowDocId(docId);
-  }, [agentShowcase, activeDocId, canvasState]);
+    if (!docId) return;
+    setFollowDocId(docId);
+    setActiveDocId(null);
+    // Don't yank a board follow straight back to Documents over the write that
+    // accompanied the transition.
+    if (Date.now() - boardJumpAt.current > 2500) {
+      if (surfaceRef.current !== "documents") {
+        setSurface("documents");
+        setReturnTo({ surface: "board", docId: null, label: "the board" });
+      }
+    }
+  }, [agentShowcase, followLive, canvasState]);
 
   // While following, sweep the batch into view. Members may not be mounted yet
   // (the tab is mid-switch), so retry across a few frames until present. Then
@@ -778,8 +874,12 @@ export default function App() {
   //               the bottom, so you watch every added item scroll past;
   //   minimal   — a quick settle (center if it fits, else a short two-step nudge).
   // The follow-style preference (followStyle) chooses; both drive the same halo.
+  //
+  // A user scroll gesture within the last beat vetoes THIS pan (never the
+  // follow itself) — nothing is worse than the page arguing with your flick.
   useEffect(() => {
-    if (activeDocId !== null || !agentShowcase || agentShowcase.memberIds.length === 0) return;
+    if (!followLive || !agentShowcase || agentShowcase.memberIds.length === 0) return;
+    if (guard.scrollingRef.current) return;
     const ids = agentShowcase.memberIds;
     let raf = 0;
     let tries = 0;
@@ -834,39 +934,14 @@ export default function App() {
       if (panTimer) clearTimeout(panTimer);
       cancelAnim?.();
     };
-  }, [agentShowcase, activeDocId, followStyle]);
+  }, [agentShowcase, followLive, followStyle, guard.scrollingRef]);
 
-  // A user scroll/pan while following = "I'm taking the wheel": pin to the
-  // current tab and stop following until they click Follow again. We listen for
-  // wheel/touch (unambiguous scroll intent) and ONLY the keyboard keys that
-  // actually scroll the page — not every keypress. Typing in a field, hitting a
-  // shortcut, or cmd-tabbing must never silently drop follow. We also skip
-  // 'scroll' itself, which the auto-scroll above fires programmatically.
-  useEffect(() => {
-    if (activeDocId !== null) return;
-    const stop = () => setActiveDocId(effectiveDocIdRef.current);
-    const passive: AddEventListenerOptions = { passive: true };
-    // The keys that move the viewport — only these hand off the wheel.
-    const SCROLL_KEYS = new Set([
-      "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
-      "PageUp", "PageDown", "Home", "End", " ", "Spacebar",
-    ]);
-    const onKey = (e: KeyboardEvent) => {
-      if (!SCROLL_KEYS.has(e.key)) return;
-      // A scroll key aimed at a text field moves the caret, not the page — ignore.
-      const t = e.target as HTMLElement | null;
-      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
-      stop();
-    };
-    window.addEventListener("wheel", stop, passive);
-    window.addEventListener("touchmove", stop, passive);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("wheel", stop, passive);
-      window.removeEventListener("touchmove", stop, passive);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [activeDocId]);
+  // NOTE — what used to live here: a wheel/touch listener that read any scroll
+  // as "I'm taking the wheel" and silently dropped you out of follow. It made
+  // the camera unusable for its actual job, which is to keep watching while you
+  // look around. Stopping the camera is now an explicit act (FollowControl),
+  // and the only implicit pause is writing (useFocusGuard) — the one case where
+  // being moved genuinely costs you something.
 
   // OAuth consent — a self-contained page (its own sign-in + redirect flow), so
   // it needs none of the canvas/nav wiring below.
@@ -1223,6 +1298,16 @@ export default function App() {
             onOpenTask={openBoardTask}
             onOpenFleet={() => setFleetOpen(true)}
           />
+          {/* The camera switch: follow the whole fleet, or just the agents you
+              care about. Sits beside the roster because "who is working" and
+              "whose work should come to me" are the same list. */}
+          <FollowControl
+            agents={agentList}
+            prefs={followPrefs}
+            onChange={setFollowPrefs}
+            paused={guard.busy}
+            pending={followPending}
+          />
           {/* The fleet readout — who's on this canvas, what they hold, what
               they're waiting on. Replaced the "Follow agent" toggle (TDM-47):
               a camera that trails ONE agent through the document tabs answers
@@ -1462,6 +1547,10 @@ export default function App() {
               // Plan chip on a scoped epic → the roadmap doc it delivers.
               // openDoc switches to the Documents surface and focuses the tab.
               onOpenRoadmapDoc={openDoc}
+              // Follow camera: put this card on screen while it changes lanes.
+              spotlightTaskId={spotlight?.id ?? null}
+              spotlightNonce={spotlight?.nonce}
+              active={surface === "board"}
             />
           </div>
         )}
@@ -1625,7 +1714,32 @@ export default function App() {
         <ShareDialog code={canvas.code} canvas={canvas} onClose={() => setShareOpen(false)} />
       )}
 
-      <AgentCursor showcase={agentShowcase} name={agentList[0]?.name ?? "Claude"} />
+      {/* One cursor, two sources: the document showcase, or — while the follow
+          camera is on a card — the board move, which narrates itself ("Picked
+          up TDM-7"). The board move wins because it's the thing that just
+          teleported you here. */}
+      <AgentCursor
+        showcase={boardShowcase ?? agentShowcase}
+        name={agentList[0]?.name ?? "Claude"}
+      />
+
+      {/* Follow took you somewhere; this takes you back. Transient by design —
+          if you haven't clicked it within a few moves, you're watching, and a
+          permanent escape hatch is just clutter. */}
+      {returnTo && (
+        <button
+          onClick={() => {
+            setSurface(returnTo.surface);
+            if (returnTo.docId) setActiveDocId(returnTo.docId);
+            setReturnTo(null);
+          }}
+          className="tandem-toast-in fixed bottom-4 left-4 z-[75] inline-flex items-center gap-1.5 rounded-full border border-ink/10 bg-surface/95 px-3 py-1.5 text-[12px] font-medium text-ink/70 shadow-lg backdrop-blur transition-colors hover:border-ink/25 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          title="Follow moved you here — go back to what you were looking at"
+        >
+          <span aria-hidden="true">←</span>
+          Back to {returnTo.label}
+        </button>
+      )}
     </div>
     </ModeNavContext.Provider>
   );

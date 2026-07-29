@@ -73,6 +73,32 @@ func TestSendBlocksPrivateTarget(t *testing.T) {
 	}
 }
 
+// The private-target escape hatch is opt-IN at every layer, and there is exactly
+// one path by which a running server can have it on: cmd/server passing
+// WithSender(NewSender(WithAllowPrivateTargets(true))) when
+// TANDEM_WEBHOOKS_ALLOW_PRIVATE is set. This pins both halves — the default is
+// the guarded sender, and the option actually reaches the worker.
+func TestAllowPrivateTargetsIsOptInAndPlumbsThroughTheWorker(t *testing.T) {
+	if NewSender().allowPrivateTargets {
+		t.Error("NewSender() must default to the guard ON")
+	}
+	if NewSender(WithAllowPrivateTargets(false)).allowPrivateTargets {
+		t.Error("WithAllowPrivateTargets(false) must leave the guard ON")
+	}
+	if !NewSender(WithAllowPrivateTargets(true)).allowPrivateTargets {
+		t.Error("WithAllowPrivateTargets(true) must disable the guard")
+	}
+
+	// NewWorker with no options builds its own sender: production posture.
+	if NewWorker(nil).sender.allowPrivateTargets {
+		t.Error("NewWorker()'s default sender must have the guard ON")
+	}
+	w := NewWorker(nil, WithSender(NewSender(WithAllowPrivateTargets(true))))
+	if !w.sender.allowPrivateTargets {
+		t.Error("WithSender did not plumb the relaxed sender through to the worker")
+	}
+}
+
 // Schemes other than http(s) never reach the network at all.
 func TestSendRejectsNonHTTPSchemes(t *testing.T) {
 	s := NewSender()

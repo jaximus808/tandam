@@ -5,11 +5,20 @@
  * a time. That's a fine machine interface and a bad agent interface: it costs a
  * large slice of the context window before the session does anything, and it
  * leaves the model to invent the workflow. This file replaces it as the DEFAULT
- * manifest with 10 tools shaped like the things an agent session actually wants
+ * manifest with 12 tools shaped like the things an agent session actually wants
  * to do, in the order it wants to do them:
  *
- *     canvas_connect → context_get → queue_next → task_get → task_claim
- *                    → (work, task_progress) → doc_write → task_complete
+ *     canvas_connect (+ role: register) → context_get → queue_next → task_get
+ *              → task_claim → (work, task_progress) → doc_write → task_complete
+ *
+ * …or, with subagents, the same queue forks at queue_next: every ready task
+ * comes back with a `handoff` block (TDM-62) the orchestrator pastes into one
+ * subagent per task. It dispatches; the workers claim. See buildHandoff.
+ *
+ * agent_register is here too, but only as the SECOND chance: identity is meant
+ * to be minted by canvas_connect's `role` argument (TDM-61), because a separate
+ * registration call is a step a subagent can skip — and then the fleet tree the
+ * board draws never forms.
  *
  * Implementation rule: these are a FACADE, not a second backend. Every tool
  * either delegates to the matching CRUD handler in tools.ts (so claim
@@ -34,9 +43,22 @@ type Args = Record<string, unknown>;
 
 /** Reuse a CRUD tool's input schema verbatim, so the two can't drift. */
 function schemaOf(name: string) {
+  return rawOf(name).inputSchema;
+}
+
+/**
+ * Reuse a CRUD tool's description verbatim. Facade tools normally get their own
+ * (intent-shaped) prose; this is for the few tools the facade advertises but
+ * does not reimplement, where one description serves both surfaces.
+ */
+function descriptionOf(name: string) {
+  return rawOf(name).description;
+}
+
+function rawOf(name: string): RawTool {
   const raw = RAW_TOOL_BY_NAME.get(name);
-  if (!raw) throw new Error(`facade: no CRUD tool named ${name} to borrow a schema from`);
-  return raw.inputSchema;
+  if (!raw) throw new Error(`facade: no CRUD tool named ${name} to borrow from`);
+  return raw;
 }
 
 // The one line every facade description repeats, because the handle is the
@@ -159,7 +181,8 @@ async function composeContext(gateway: Gateway) {
     },
     _next:
       ready.length > 0
-        ? "There is approved work waiting. Call queue_next, then task_get + task_claim on the one you'll do."
+        ? "There is approved work waiting. Call queue_next: it returns a paste-ready `handoff` per " +
+          "task to dispatch a subagent with, or task_get + task_claim the one you'll do yourself."
         : "No approved work. Ask the human what to do, or draft tasks with task_propose (they land as 'proposed' for approval).",
   };
 }
@@ -198,6 +221,69 @@ async function resolveNotesDocument(gateway: Gateway, ref: string): Promise<stri
   return created.document.id;
 }
 
+// ── Dispatch handoff (TDM-62 / E9.2) ─────────────────────────────────────────
+
+/**
+ * THE DELEGATION CONTRACT, made machine-readable.
+ *
+ * An agent claims only what it will personally do. An orchestrator dispatches:
+ * it never claims, never completes on a worker's behalf, and never transports
+ * its `session` handle — that handle is ~700 base64 characters of JWT + identity
+ * and handing it over makes every worker claim as the planner, collapsing the
+ * fleet tree the board draws.
+ *
+ * So queue_next attaches a `handoff` to every ready task: the 8-char canvas
+ * CODE, the task's id/ticket/title, the planner's agentId to parent under, and
+ * the literal steps the worker follows. The orchestrator pastes it into a
+ * subagent spawn verbatim — nothing to compose, nothing to leak.
+ */
+type Handoff = {
+  canvasCode: string;
+  taskId: string;
+  ticketId?: string;
+  title: string;
+  /** The planner's registered id, or null when the caller never registered. */
+  parentAgentId: string | null;
+  /** The literal instruction sequence, in order. */
+  steps: string[];
+};
+
+/**
+ * What goes where the planner's agentId should be when the caller of queue_next
+ * isn't registered. Spelled out rather than omitted, because a handoff missing
+ * its parent link silently produces an orphaned worker — the exact failure the
+ * fleet tree exists to make visible.
+ */
+const UNREGISTERED_PARENT =
+  '<the planner\'s agentId — you have none yet: reconnect with canvas_connect role "planner" to get one>';
+
+function buildHandoff(
+  task: Record<string, unknown>,
+  canvasCode: string,
+  parentAgentId?: string
+): Handoff {
+  const taskId = String(task.id ?? "");
+  const ticketId = typeof task.ticketId === "string" ? task.ticketId : undefined;
+  const title = typeof task.title === "string" ? task.title : "";
+  const parent = parentAgentId ?? UNREGISTERED_PARENT;
+  const ticketSuffix = ticketId ? ` (${ticketId})` : "";
+  return {
+    canvasCode,
+    taskId,
+    ...(ticketId ? { ticketId } : {}),
+    title,
+    parentAgentId: parentAgentId ?? null,
+    steps: [
+      `canvas_connect with code "${canvasCode}", role "executor", a name for yourself, and parentAgentId "${parent}" — one call, connects AND registers you under the planner that sent you.`,
+      `task_claim id "${taskId}"${ticketSuffix} — "${title}". Claim it yourself; the planner deliberately did not claim it for you.`,
+      `If it comes back claimed:false, another session got there first — call queue_next and take a different ready task. Never work a task you did not claim.`,
+      `task_get id "${taskId}" for the full brief (linked notes and roadmap items), then do the work.`,
+      `task_progress on long work — one line per meaningful step, so the board shows movement instead of silence.`,
+      `task_complete with a result summary (what changed, which files) plus \`links\` to any commit or PR.`,
+    ],
+  };
+}
+
 /** `## title` + blank line + body, when a title was given. */
 function composeMarkdown(title: unknown, body: unknown): string {
   const t = typeof title === "string" ? title.trim() : "";
@@ -209,6 +295,7 @@ function composeMarkdown(title: unknown, body: unknown): string {
 
 const FACADE_NAMES = new Set([
   "canvas_connect",
+  "agent_register",
   "context_get",
   "queue_next",
   "task_get",
@@ -216,13 +303,23 @@ const FACADE_NAMES = new Set([
   "task_progress",
   "task_complete",
   "task_propose",
+  "epic_propose",
   "doc_write",
   "board_status",
 ]);
 
-/** Does this tool name belong to the facade? (canvas_connect is shared.) */
+/**
+ * Advertised on the facade but IMPLEMENTED on the CRUD surface (tools.ts), so
+ * both manifests run one implementation. canvas_connect and agent_register are
+ * the identity pair: connect takes the registration fields (TDM-61) and
+ * agent_register re-registers afterwards — the same handler serves both
+ * surfaces, only the description differs.
+ */
+const IMPLEMENTED_BY_CRUD = new Set(["canvas_connect", "agent_register"]);
+
+/** Does this tool name route to handleFacadeTool? (Some facade names don't.) */
 export function isFacadeTool(name: string): boolean {
-  return FACADE_NAMES.has(name) && name !== "canvas_connect";
+  return FACADE_NAMES.has(name) && !IMPLEMENTED_BY_CRUD.has(name);
 }
 
 export async function handleFacadeTool(
@@ -244,7 +341,9 @@ export async function handleFacadeTool(
     }
 
     case "queue_next": {
-      // Thin intent rename of canvas_task_list pinned to the ready queue.
+      // Thin intent rename of canvas_task_list pinned to the ready queue, plus
+      // the per-task dispatch handoff (TDM-62) — the reason an orchestrator
+      // never has to improvise a subagent brief, or reach for its session handle.
       const limit = Number.isFinite(Number(args.limit)) ? Number(args.limit) : 10;
       const listed = (await handleTool(gateway, "canvas_task_list", {
         state: "approved",
@@ -252,17 +351,37 @@ export async function handleFacadeTool(
         ...(args.epicId ? { epicId: args.epicId } : {}),
       })) as { tasks?: unknown[]; hint?: string };
       const tasks = listed.tasks ?? [];
+      const session = gateway.getSession();
+      const shown = tasks.slice(0, Math.max(1, limit)).map((t) => {
+        const row = (t ?? {}) as Record<string, unknown>;
+        return { ...row, handoff: buildHandoff(row, session.canvasCode, session.agentId) };
+      });
+      // canvas_task_list's fan-out `hint` is deliberately NOT passed through:
+      // it says the same thing as `_dispatch` below, and the handoffs make it
+      // concrete. The hint stays for sessions calling canvas_task_list directly
+      // on the CRUD surface, which get no handoffs.
       return {
-        tasks: tasks.slice(0, Math.max(1, limit)),
+        tasks: shown,
         ...(tasks.length > limit ? { truncated: tasks.length - limit } : {}),
-        ...(listed.hint ? { hint: listed.hint } : {}),
-        ...(tasks.length === 0
+        ...(shown.length > 0
           ? {
+              _dispatch:
+                "If you have subagents, dispatch — do not claim these yourself. Spawn one " +
+                "subagent per task and paste that task's `handoff` into it verbatim; each " +
+                "worker registers under you and claims its own task. Working alone? Pick ONE, " +
+                "task_get it, task_claim it, then work. Either way your `session` handle stays " +
+                "with you — the canvas CODE in the handoff is what travels." +
+                (session.agentId
+                  ? ""
+                  : " You are not registered, so the handoffs carry a placeholder parent: " +
+                    'reconnect with canvas_connect role "planner" and call queue_next again ' +
+                    "so your workers show up under you on the board."),
+            }
+          : {
               _next:
                 "Nothing approved. Tasks you propose land as 'proposed' and need a human to " +
                 "approve them on the board — check board_status, or ask the human.",
-            }
-          : {}),
+            }),
       };
     }
 
@@ -273,52 +392,86 @@ export async function handleFacadeTool(
       return handleTool(gateway, "canvas_task_start", args);
 
     case "task_progress": {
-      // No dedicated progress endpoint exists. DESIGN CHOICE: append to the
-      // task's own payload under `progress[]` via the payload-only PATCH
-      // (/api/canvas/actions/{id} with no `state`), so progress travels WITH the
-      // task and comes back from task_get — rather than scattering loose notes
-      // on the canvas that no one links back. Read-modify-write, because that
-      // PATCH replaces the payload wholesale.
+      // Progress is a HEARTBEAT, not just a note (TDM-67). It goes through the
+      // inbound status endpoint — POST /api/canvas/{code}/tasks/{id}/status with
+      // state "progress" — and NOT the payload-only PATCH this used to do, for
+      // two reasons the client-side version could not give us:
+      //
+      //   1. The lease. A claim expires ~15 min after claimed_at, and the server
+      //      only refreshes it (TouchActionClaim, TDM-64) for the holder who
+      //      reports through this endpoint. Over the old PATCH a worker doing an
+      //      hour of real work heartbeated the whole time and still had its task
+      //      reclaimed underneath it.
+      //   2. The guard. The PATCH carries no caller identity, so the "is this
+      //      yours?" check had to be a client-side read-modify-write that any
+      //      other client could simply not do. Now the server enforces it.
+      //
+      // The append-to-payload.progress[] behaviour is unchanged — the endpoint
+      // does the same merge server-side (capped, additive), so progress still
+      // travels WITH the task and comes back from task_get.
       const id = String(args.id ?? "");
       const note = typeof args.note === "string" ? args.note.trim() : "";
       if (!id) throw new Error("`id` (string) is required");
       if (!note) throw new Error("`note` (string) is required — say what changed since last time");
 
       const claimant = (args.agentName as string | undefined) ?? gateway.claimant();
-      const { action } = (await gateway.get(`/api/canvas/actions/${id}`)) as {
-        action: { state: string; claimedBy?: string; payload?: Record<string, unknown> };
-      };
-      // Mirror task_complete's guard: the payload PATCH has no server-side claim
-      // check, so don't let a session narrate progress on someone else's task.
-      const holder = action.claimedBy;
-      if (action.state === "executing" && holder && holder !== "agent" && holder !== claimant) {
+      const percent = typeof args.percent === "number" ? args.percent : undefined;
+      // The stored entry is {at, agent, note} — there is no percent field on the
+      // wire. Fold it into the line rather than dropping the caller's number.
+      const summary = percent === undefined ? note : `${note} (${Math.round(percent)}%)`;
+      const code = gateway.getSession().canvasCode;
+
+      const { data, conflict } = await gateway.postWithConflict<
+        { action?: { claimedBy?: string; claimedAt?: string; payload?: Record<string, unknown> } },
+        { error?: string; message?: string; claimedBy?: string; state?: string }
+      >(`/api/canvas/${encodeURIComponent(code)}/tasks/${encodeURIComponent(id)}/status`, {
+        state: "progress",
+        agent: claimant,
+        summary,
+      });
+
+      // A rejected heartbeat is an ANSWER, not a crash: the model should route on
+      // it (go take a task that is actually yours) rather than see a thrown
+      // protocol error mid-work. Same shape the old client-side guard returned.
+      if (conflict) {
+        const holder = conflict.claimedBy;
         return {
           recorded: false,
-          claimedBy: holder,
-          message:
-            `This task is claimed by "${holder}" — it is not yours to report on. ` +
-            `Call queue_next and pick a task you can claim.`,
+          id,
+          by: claimant,
+          reason: conflict.error ?? "rejected",
+          ...(holder ? { claimedBy: holder } : {}),
+          ...(conflict.state ? { state: conflict.state } : {}),
+          message: holder
+            ? `This task is claimed by "${holder}" — it is not yours to report on. ` +
+              `Call queue_next and pick a task you can claim.`
+            : conflict.state
+              ? `This task is "${conflict.state}", not executing — only the agent currently ` +
+                `working a task can report on it. Claim it with task_claim first.`
+              : (conflict.message ?? "The API rejected this progress report."),
         };
       }
 
-      const payload = { ...(action.payload ?? {}) };
-      const prior = Array.isArray(payload.progress) ? (payload.progress as unknown[]) : [];
-      const entry = {
-        at: new Date().toISOString(),
-        by: claimant,
-        note,
-        ...(typeof args.percent === "number" ? { percent: args.percent } : {}),
-      };
-      // Bounded: a long-running task must not grow its payload without limit.
-      payload.progress = [...prior, entry].slice(-20);
-
-      await gateway.patch(`/api/canvas/actions/${id}`, { payload });
+      const action = data?.action ?? {};
+      const stored = Array.isArray(action.payload?.progress)
+        ? (action.payload?.progress as unknown[])
+        : [];
       return {
         recorded: true,
         id,
         by: claimant,
-        entries: (payload.progress as unknown[]).length,
-        note: "Progress is stored on the task payload and comes back from task_get.",
+        entries: stored.length,
+        ...(percent === undefined ? {} : { percent }),
+        // The fresh claimed_at IS the lease extension — hand it back so a worker
+        // (and the human reading the board) can see the clock reset. The server
+        // refreshes it holder-only, and its predicate is exactly "claimed_by =
+        // this agent", so mirror that rather than claiming an extension for a
+        // report accepted against a non-exclusive holder ("" / "agent").
+        ...(action.claimedAt ? { claimedAt: action.claimedAt } : {}),
+        leaseExtended: Boolean(action.claimedBy) && action.claimedBy === claimant,
+        note:
+          "Progress is stored on the task and comes back from task_get. Reporting also " +
+          "extends your claim, so keep heartbeating on long work and no one can reclaim it.",
       };
     }
 
@@ -335,6 +488,59 @@ export async function handleFacadeTool(
         throw new Error("Pass `title` (one task) or `tasks` (an array of them)");
       }
       return handleTool(gateway, "canvas_task_add", args);
+    }
+
+    case "epic_propose": {
+      // The container a plan hangs off. Without this on the facade an agent
+      // asked to "write an epic" could only propose loose tasks, which land
+      // unparented and each need their own approval.
+      const title = typeof args.title === "string" ? args.title.trim() : "";
+      if (!title) throw new Error("`title` (string) is required — name the batch of work");
+
+      // Validate the optional plan BEFORE writing the epic: a batch rejected by
+      // the API after the epic landed would leave an empty epic on the board.
+      const many = Array.isArray(args.tasks) ? (args.tasks as Args[]) : [];
+      for (const [i, t] of many.entries()) {
+        if (!t || typeof t.title !== "string" || !t.title.trim()) {
+          throw new Error(`tasks[${i}] needs a \`title\` — one line saying what to do`);
+        }
+      }
+
+      const epic = (await handleTool(gateway, "canvas_epic_add", {
+        title,
+        body: args.body,
+        linkedIds: args.linkedIds,
+      })) as { id?: string; state?: string };
+      if (!epic?.id) throw new Error("The epic was not created — no id came back");
+
+      // Then the plan under it, in one write. The epic's id WINS over any
+      // epicId an item carried: this call's whole point is the new container.
+      let tasks: Array<Record<string, unknown>> = [];
+      if (many.length > 0) {
+        const batch = (await handleTool(gateway, "canvas_task_add_batch", {
+          tasks: many.map((t) => ({ ...t, epicId: epic.id })),
+        })) as { actions?: Array<{ id: string; ticketId?: string; state: string; payload?: { title?: string } }> };
+        // Project: ids and titles are what a session needs to refer back to
+        // these; the bodies it just wrote are not.
+        tasks = (batch.actions ?? []).map((a) => ({
+          id: a.id,
+          ...(a.ticketId ? { ticketId: a.ticketId } : {}),
+          title: a.payload?.title ?? "",
+          state: a.state,
+        }));
+      }
+
+      return {
+        created: true,
+        epicId: epic.id,
+        state: epic.state ?? "proposed",
+        ...(many.length > 0 ? { tasks } : {}),
+        url: canvasBlock(gateway).url,
+        _next:
+          "The epic is 'proposed'. A HUMAN approves it once in the web Tasks panel and that " +
+          "approval cascades to every task under it — do not try to approve it yourself. " +
+          "Add more tasks to it later with task_propose and this `epicId`.",
+      };
     }
 
     case "doc_write": {
@@ -427,8 +633,19 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
       "given to you by the human. Nothing else works until you do. Returns the shareable web " +
       "`url` — give it to the user IMMEDIATELY, before you start work, so they can watch your " +
       "changes land live — and a `session` handle. Pass that handle as `session` on EVERY later " +
-      "call. Next: context_get to learn the canvas, or queue_next to go straight to the work.",
+      "call. ALSO REGISTER HERE: pass `role` ('planner' if you'll dispatch work to subagents, " +
+      "'executor' if you'll claim and do tasks yourself), a `name`, and — if an orchestrator " +
+      "spawned you — the `parentAgentId` it gave you. That registers you in the SAME call and " +
+      "returns `agentId` plus a `session` handle already carrying it, so your claims show as you " +
+      "on the fleet view instead of an anonymous session. If a `parentAgentId` is rejected you " +
+      "still connect: the result carries `agent.problem` saying so. " +
+      "Next: context_get to learn the canvas, or queue_next to go straight to the work.",
     inputSchema: schemaOf("canvas_connect"),
+  },
+  {
+    name: "agent_register",
+    description: descriptionOf("agent_register") + " " + SESSION_CONVENTION,
+    inputSchema: schemaOf("agent_register"),
   },
   {
     name: "context_get",
@@ -446,9 +663,15 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
     description:
       "THE ENTRY POINT FOR WORK: the approved tasks ready to be picked up right now, compact " +
       "({id, ticketId, title, state, epicId}) — no bodies. Start here rather than reading the " +
-      "canvas. Pick ONE, then task_get it for the full brief and task_claim it before you touch " +
-      "anything. Empty means nothing is approved: tasks you propose sit at 'proposed' until a " +
-      "human approves them on the board. " +
+      "canvas. IF YOU HAVE SUBAGENTS, DISPATCH — do NOT claim these yourself: spawn one subagent " +
+      "per ready task and paste that task's `handoff` block into it VERBATIM. The handoff carries " +
+      "the 8-char canvas CODE, the task's id/ticket/title, and the steps its worker follows " +
+      "(connect+register as an executor under you → claim ITS task → work → task_complete), so " +
+      "there is nothing for you to compose. An orchestrator never claims, never completes on a " +
+      "worker's behalf, and never passes on its `session` handle — the handle stays with you, the " +
+      "CODE is what travels. WORKING ALONE: pick ONE, task_get it for the full brief, task_claim " +
+      "it, then work. Empty means nothing is approved: tasks you propose sit at 'proposed' until " +
+      "a human approves them on the board. " +
       SESSION_CONVENTION,
     inputSchema: {
       type: "object" as const,
@@ -472,11 +695,14 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
   {
     name: "task_claim",
     description:
-      "Claim a task before you do any work on it (approved → executing), so parallel sessions " +
-      "skip it. The claim is ATOMIC and losing is NORMAL: { claimed: false, claimedBy } means " +
-      "another session got there first — do NOT work on it, go back to queue_next and take the " +
-      "next one. On success you get the task's `ticketId` (e.g. 'TDM-142'); put it in your commit " +
-      "messages so the work traces back. " +
+      "Claim a task you are about to do YOURSELF (approved → executing), so parallel sessions " +
+      "skip it. Claim only what you will personally work: if you are dispatching subagents, do " +
+      "NOT claim here — hand each worker the task's `handoff` from queue_next and let it claim " +
+      "its own. A task claimed by an orchestrator that never touches it reads on the board as " +
+      "in-flight work nobody is doing. The claim is ATOMIC and losing is NORMAL: " +
+      "{ claimed: false, claimedBy } means another session got there first — do NOT work on it, " +
+      "go back to queue_next and take the next one. On success you get the task's `ticketId` " +
+      "(e.g. 'TDM-142'); put it in your commit messages so the work traces back. " +
       SESSION_CONVENTION,
     inputSchema: schemaOf("canvas_task_start"),
   },
@@ -486,8 +712,10 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
       "Report progress on a task you claimed, mid-flight. Use it on long work so the human (and " +
       "other sessions) can see movement instead of silence — after a meaningful step, or when you " +
       "hit a blocker and change approach. One short line per call: what changed since last time. " +
-      "The entry is stored ON the task and comes back from task_get. This is NOT the finish line — " +
-      "call task_complete for that. " +
+      "The entry is stored ON the task and comes back from task_get. It is also a HEARTBEAT: each " +
+      "report extends your claim, so on work longer than ~15 minutes report as you go or the task " +
+      "becomes reclaimable and another session can take it out from under you. This is NOT the " +
+      "finish line — call task_complete for that. " +
       SESSION_CONVENTION,
     inputSchema: {
       type: "object" as const,
@@ -528,7 +756,8 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
       "them on the board before any session can claim them, so this is how you hand off work " +
       "instead of doing it. Keep `body` a tight brief (what to do, acceptance criteria) and put " +
       "the heavy context in notes/roadmap items referenced by `linkedIds` — task_get hydrates " +
-      "those for whoever picks it up. " +
+      "those for whoever picks it up. For a whole plan, prefer epic_propose: it creates the epic " +
+      "AND its tasks in one call, so the human approves once instead of task by task. " +
       SESSION_CONVENTION,
     inputSchema: {
       type: "object" as const,
@@ -543,8 +772,10 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
         epicId: {
           type: "string",
           description:
-            "Epic this task belongs to. Under the default approval policy, a task added to an " +
-            "already-approved epic is born approved instead of waiting for its own approval.",
+            "Epic this task belongs to (from epic_propose, task_get or board_status). Under the " +
+            "default approval policy, a task added to an already-approved epic is born approved " +
+            "instead of waiting for its own approval; under a still-proposed epic it waits for " +
+            "that epic's single approval. Without one the task is unparented and needs its own.",
         },
         assignee: {
           type: "string",
@@ -568,7 +799,12 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
               title: { type: "string" },
               body: { type: "string" },
               linkedIds: { type: "array", items: { type: "string" } },
-              epicId: { type: "string" },
+              epicId: {
+                type: "string",
+                description:
+                  "Epic this task belongs to — set it per item, or use epic_propose to create " +
+                  "the epic and its tasks together.",
+              },
               assignee: { type: "string", enum: ["agent", "human"] },
               requiresApproval: { type: "boolean" },
             },
@@ -576,6 +812,49 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
           },
         },
       },
+    },
+  },
+  {
+    name: "epic_propose",
+    description:
+      "Propose an EPIC — the named container a plan hangs off — and, in the SAME call, the tasks " +
+      "under it via `tasks` (same item shape as task_propose). Use this whenever you're asked to " +
+      "'write an epic' or plan a feature: tasks proposed without one are unparented and each need " +
+      "their own approval. The epic lands as 'proposed'; a HUMAN approves it ONCE in the web Tasks " +
+      "panel and that single approval cascades to every task under it. You must NOT try to approve " +
+      "it yourself — that gate is the human's, and the gateway refuses agent approval of epics. " +
+      "Returns `epicId`: pass it as `epicId` on later task_propose calls to add work to the same " +
+      "batch (once the epic is approved, those tasks are born approved). " +
+      SESSION_CONVENTION,
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        title: { type: "string", description: "Short name for the batch, e.g. 'Dark mode rollout'." },
+        body: { type: "string", description: "What this batch achieves; scope and intent." },
+        linkedIds: {
+          type: "array",
+          items: { type: "string" },
+          description: "Ids of notes / roadmap items carrying the detailed context.",
+        },
+        tasks: {
+          type: "array",
+          description:
+            "The plan, created under the new epic in one write — each item takes the same fields " +
+            "as task_propose. Any `epicId` on an item is overridden with the new epic's id.",
+          items: {
+            type: "object" as const,
+            properties: {
+              title: { type: "string" },
+              body: { type: "string" },
+              linkedIds: { type: "array", items: { type: "string" } },
+              assignee: { type: "string", enum: ["agent", "human"] },
+              requiresApproval: { type: "boolean" },
+            },
+            required: ["title"],
+          },
+        },
+      },
+      required: ["title"],
     },
   },
   {

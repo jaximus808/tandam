@@ -1,13 +1,13 @@
 import { useEffect, useRef, type CSSProperties } from "react";
-import type { AgentShowcase } from "../lib/useAgentActivity";
+import type { CursorShowcase } from "../lib/useAgentActivity";
 
 interface Props {
-  showcase: AgentShowcase | null;
+  showcase: CursorShowcase | null;
   name: string;
 }
 
 // Present-tense verb for the live label ("Adding", "Updating", "Removing").
-const LIVE_VERB: Record<AgentShowcase["op"], string> = {
+const LIVE_VERB: Record<CursorShowcase["op"], string> = {
   created: "Adding",
   updated: "Updating",
   removed: "Removing",
@@ -15,7 +15,9 @@ const LIVE_VERB: Record<AgentShowcase["op"], string> = {
 
 // "Adding 10 itinerary events" / "Adding a doc". Batches lead with the count;
 // singles read naturally with an article. Every noun pluralises with a plain -s.
-function liveLabel(s: AgentShowcase): string {
+// A showcase may carry its own `label` instead (board moves narrate the
+// transition, not the shape of the edit) — see the call site below.
+function liveLabel(s: CursorShowcase): string {
   const verb = LIVE_VERB[s.op];
   if (s.count > 1) return `${verb} ${s.count} ${s.noun}s`;
   const article = /^[aeiou]/i.test(s.noun) ? "an" : "a";
@@ -38,7 +40,7 @@ export default function AgentCursor({ showcase, name }: Props) {
   const haloRef = useRef<HTMLDivElement>(null);
   const pointerRef = useRef<HTMLDivElement>(null);
   // Latest showcase, read inside the rAF loop without restarting it.
-  const showRef = useRef<AgentShowcase | null>(showcase);
+  const showRef = useRef<CursorShowcase | null>(showcase);
   showRef.current = showcase;
 
   useEffect(() => {
@@ -88,7 +90,7 @@ export default function AgentCursor({ showcase, name }: Props) {
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  const label = showcase ? liveLabel(showcase) : "";
+  const label = showcase ? (showcase.label ?? liveLabel(showcase)) : "";
   const who = showcase?.agentName || name;
 
   return (

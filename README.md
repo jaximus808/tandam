@@ -91,6 +91,8 @@ claude "work through the approved Tandem queue until it's empty"
 
 Both sessions pull the same queue. Each claim has exactly one winner — the loser sees `{ claimed: false, claimedBy: "…" }` and moves to the next task. Watch the board at tandemcanvas.com: cards flip to *executing* with the claimant's name, every task carries its `TDM-n` ticket, and results (with commit hashes) land as tasks complete.
 
+Want approving a task to *launch* the sessions instead of you starting them? Wire a webhook to a local listener — see [docs/ORCHESTRATION.md](docs/ORCHESTRATION.md).
+
 ## Monorepo
 
 | Path | What it is |

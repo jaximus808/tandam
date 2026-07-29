@@ -163,18 +163,20 @@ Same fields, one JSON object per line, so the numbers can be scraped straight ou
 
 ## Tools
 
-The default surface is a **10-tool intent facade** shaped like the work loop, not like the API:
+The default surface is a **12-tool intent facade** shaped like the work loop, not like the API:
 
 | Tool             | Purpose                                                                                                     |
 | ---------------- | ----------------------------------------------------------------------------------------------------------- |
-| `canvas_connect` | Bind the session to a canvas by 8-char code. Required first; returns the `session` handle and the share URL. |
+| `canvas_connect` | Bind the session to a canvas by 8-char code. Required first; returns the `session` handle and the share URL. Pass `role` (+ `name`, `model`, `parentAgentId`) to **register in the same call** — you get an `agentId` and a handle already carrying it. |
+| `agent_register` | Register or re-register this session's identity after connect — fix a rejected `parentAgentId`, record the model, switch role. |
 | `context_get`    | The canvas briefing in one cheap call — identity, mode, document tabs, per-kind counts, queue state.        |
 | `queue_next`     | The approved tasks ready to work, compact. The entry point for work.                                        |
 | `task_get`       | One task with its linked context hydrated — all a session needs to start.                                   |
 | `task_claim`     | Atomic claim (`approved` → `executing`). Losers get `{ claimed: false, claimedBy }` and move on.             |
-| `task_progress`  | Mid-flight progress on a task you claimed; stored on the task, returned by `task_get`.                       |
+| `task_progress`  | Mid-flight progress on a task you claimed; stored on the task, returned by `task_get`. Also a heartbeat — each report extends your claim, so long work keeps its task. |
 | `task_complete`  | Finish with a `result` (include commit hashes) plus `links` (commit / PR / branch URLs), or `status: "failed"` + `error`. |
 | `task_propose`   | Propose one task or a whole plan (`tasks: [...]`). Lands as `proposed` for human approval.                   |
+| `epic_propose`   | Propose an epic, optionally with its whole plan (`tasks: [...]`) in one call. A human approves the epic once and it cascades to every task under it. |
 | `doc_write`      | Leave context behind as a markdown note; names a tab and creates it if new.                                  |
 | `board_status`   | Board-shaped overview — counts by state, in-flight claims, epics — without dumping the canvas.               |
 
@@ -217,6 +219,55 @@ The human watches the board move in the browser — cards flip to *executing* wi
 Any number of sessions connect to the same canvas and pull the same queue; claims are atomic, so each task has exactly one winner. For orchestrated swarms, the orchestrator registers as role `planner` and threads its returned `agentId` into each subagent's spawn prompt; each subagent registers as role `executor` with `parentAgentId` set to that id, so the board shows the swarm grouped under its orchestrator.
 
 The canvas is the shared blackboard. Hand-offs happen through canvas state, not a shared prompt — so you can mix vendors (Claude, GPT, local) without rewriting the orchestration.
+
+## `listen` — approval-triggered orchestration
+
+The other direction: instead of an agent polling the queue, the **board launches the agent**. `tandem-mcp listen` is a local HTTP listener for Tandem's outbound webhooks. You approve tasks in the browser, Tandem POSTs a signed `task.approved`, and the listener runs the command you gave it — with the approved tickets in its environment.
+
+```bash
+tandem-mcp listen --exec 'claude -p "Connect to canvas $TANDEM_CANVAS_CODE, run queue_next, claim and complete the approved tasks"'
+```
+
+The listener binds `127.0.0.1:8787` and never anything else, so add the webhook on your canvas (**Settings → Webhooks**) pointing at a **tunnel** in front of it — e.g. `cloudflared tunnel --url http://127.0.0.1:8787`, then use `https://<tunnel-host>/webhook`. The hosted API's SSRF guard refuses to dial private addresses, so a raw `127.0.0.1` or `host.docker.internal` URL is rejected non-retryably. (Against a *local* API you can skip the tunnel: `TANDEM_WEBHOOKS_ALLOW_PRIVATE=1` on that server relaxes the guard for local dev.) Copy the `whsec_…` secret when it's shown — it is shown once.
+
+```bash
+export TANDEM_WEBHOOK_SECRET=whsec_…
+tandem-mcp listen --exec ./on-approval.sh --port 8787 --debounce 5000
+```
+
+### Flags
+
+| Flag | Default | |
+| --- | --- | --- |
+| `--exec <command>` | *required* | Command run **via the shell** when work is approved. |
+| `--port <n>` | `8787` | Bound to `127.0.0.1` only. Path is `/webhook`, method `POST`. |
+| `--secret <whsec_…>` | `$TANDEM_WEBHOOK_SECRET` | The canvas webhook's signing secret. The flag wins over the env var; without either, startup fails. |
+| `--events <csv>` | `task.approved` | Which events trigger. Others are acked `200` and ignored. Vocabulary: `task.approved`, `task.completed`, `task.claim_expired`. |
+| `--debounce <ms>` | `5000` | Trailing-edge quiet period: each event restarts the timer, and one run fires once the burst stops. `0` disables coalescing. |
+| `--help`, `-h` | | Print this contract. |
+
+`--flag value` and `--flag=value` both work. An unknown flag is a usage error — the listener refuses to start rather than run with a typo'd flag at its default.
+
+### Environment given to the command
+
+On top of your own environment:
+
+| Var | |
+| --- | --- |
+| `TANDEM_EVENT` | The distinct event types in this run, comma-joined — usually just `task.approved`. |
+| `TANDEM_CANVAS_CODE` | Canvas code for `canvas_connect`: the payload's `canvas_code` if it ever has one, else the listener's own `$TANDEM_CANVAS_CODE` (the one `tandem-mcp init` writes into `.mcp.json`), else empty. In practice the second — the payload carries the canvas **id**, not the code. |
+| `TANDEM_CANVAS_ID` | Canvas UUID straight from the event payload. Empty if absent. |
+| `TANDEM_TICKETS` | Every ticket coalesced into this run, comma-separated — `TDM-56,TDM-57`. Empty string when none of the events carried one. |
+
+### What it guarantees
+
+- **Verified.** `Tandem-Signature` is recomputed as HMAC-SHA256 over the **raw** `"<timestamp>.<body>"` bytes and compared in constant time. A missing, malformed, or stale `Tandem-Timestamp` (±60s replay window) is `400`; a missing, malformed, or mismatched signature is `401`. Everything that gets past verification is acked `200` — including duplicates and filtered-out event types — because a non-2xx would only earn a retry. An unsigned POST can never start a Claude on your machine.
+- **One run per approval.** Retries reuse `Tandem-Delivery-Id`, and a repeated id is acked without re-running.
+- **One run per epic.** Approving an epic fans out one webhook per task; they're coalesced by the debounce window into a single trigger whose `TANDEM_TICKETS` lists them all.
+- **Never two at once.** Single-flight: approvals arriving while a command is running merge into exactly one follow-up run that starts when it exits. Nothing is dropped, nothing stacks up.
+- Webhooks are acked immediately — the orchestrator runs detached — and logs (`received` / `ignored` / `deduped` / `triggered` / `exec exited`) go to stderr. `Ctrl-C` shuts down cleanly.
+
+`tandem-mcp listen --help` prints the same contract. End-to-end wiring — creating the webhook on your canvas, tunnelling, local dev against `tandem-local`, and the orchestrator prompt — is in `docs/ORCHESTRATION.md` in the repo.
 
 ## License
 

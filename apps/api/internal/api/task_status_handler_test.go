@@ -52,6 +52,8 @@ type statusFakeStore struct {
 	claimOutcome store.ClaimOutcome
 
 	payloadWrites int
+	// claimTouches counts lease extensions the handler asked for (TDM-64).
+	claimTouches int
 }
 
 func (f *statusFakeStore) GetCanvasByCode(_ context.Context, code string) (*store.Canvas, error) {
@@ -167,6 +169,26 @@ func (f *statusFakeStore) UpdateActionPayload(_ context.Context, _ uuid.UUID, id
 
 func (f *statusFakeStore) TouchOrCreateAgent(_ context.Context, _ uuid.UUID, _ string) error {
 	return nil
+}
+
+// TouchActionClaim models the store's HOLDER-ONLY lease refresh: the real one
+// puts state='executing' AND claimed_by=<holder> in the UPDATE's WHERE clause,
+// so anything else matches no row and extends nothing.
+func (f *statusFakeStore) TouchActionClaim(_ context.Context, _ uuid.UUID, id uuid.UUID, claimedBy string) (*store.Action, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	a, ok := f.actions[id]
+	if !ok || a.Type != "task" || a.State != "executing" || claimedBy == "" {
+		return nil, false, nil
+	}
+	if a.ClaimedBy == nil || *a.ClaimedBy != claimedBy {
+		return nil, false, nil
+	}
+	now := time.Now().UTC()
+	a.ClaimedAt = &now
+	f.claimTouches++
+	copy := *a
+	return &copy, true, nil
 }
 
 // GetCanvasState backs the async post-write broadcast; erroring makes it a no-op.
@@ -520,6 +542,73 @@ func TestReportTaskStatusProgressAppends(t *testing.T) {
 	}
 	// A heartbeat is not a queue transition: nothing may reach a webhook receiver.
 	em.settleTypes(t)
+}
+
+// ── A progress report is a heartbeat: it extends the claim lease (TDM-64) ────
+
+// Claim expiry is lazy off claimed_at, so a worker that is alive and reporting
+// must have its lease refreshed by the report — otherwise it becomes
+// reclaimable mid-flight the moment its ORIGINAL claim passes the TTL, and a
+// rival takes the task out from under it.
+func TestReportTaskStatusProgressExtendsClaimLease(t *testing.T) {
+	task := statusTask("executing", "ci-github")
+	claimedAt := time.Now().UTC().Add(-14 * time.Minute)
+	task.ClaimedAt = &claimedAt
+	h, fake, _, canvasID := newStatusHarness(t, task)
+
+	w := postStatus(t, h, canvasID, task.ID, map[string]any{
+		"state": "progress", "agent": "ci-github", "summary": "still building",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("progress = %d: %s", w.Code, w.Body)
+	}
+	if fake.claimTouches != 1 {
+		t.Fatalf("claim touches = %d, want 1 — the report did not extend the lease", fake.claimTouches)
+	}
+	stored := fake.stored(task.ID)
+	if stored.ClaimedAt == nil || !stored.ClaimedAt.After(claimedAt) {
+		t.Fatalf("stored claimedAt = %v, want it moved forward from %v", stored.ClaimedAt, claimedAt)
+	}
+	// The response carries the refreshed stamp too, so a caller polling its own
+	// task sees the lease it just earned rather than the one it started with.
+	action, _ := decodeStatus(t, w)["action"].(map[string]any)
+	at, err := time.Parse(time.RFC3339Nano, fmt.Sprint(action["claimedAt"]))
+	if err != nil || !at.After(claimedAt) {
+		t.Fatalf("response claimedAt = %v (parse err %v), want a fresh stamp", action["claimedAt"], err)
+	}
+}
+
+// Holder-only. A report from a rival is already refused, and it must not extend
+// anything on the way out — a caller that cannot report on a task certainly
+// cannot keep its claim alive.
+func TestReportTaskStatusProgressFromNonHolderExtendsNothing(t *testing.T) {
+	task := statusTask("executing", "agent-a")
+	claimedAt := time.Now().UTC().Add(-14 * time.Minute)
+	task.ClaimedAt = &claimedAt
+	h, fake, _, canvasID := newStatusHarness(t, task)
+
+	w := postStatus(t, h, canvasID, task.ID, map[string]any{
+		"state": "progress", "agent": "ci-github", "summary": "I am not the holder",
+	})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("progress from a rival = %d: %s", w.Code, w.Body)
+	}
+	if got := decodeStatus(t, w)["error"]; got != "claimed_by_other" {
+		t.Errorf("error = %v, want claimed_by_other", got)
+	}
+	if fake.claimTouches != 0 {
+		t.Errorf("claim touches = %d, want 0 — a non-holder extended the lease", fake.claimTouches)
+	}
+	if fake.payloadWrites != 0 {
+		t.Errorf("payload writes = %d, want 0 — a non-holder's note was recorded", fake.payloadWrites)
+	}
+	stored := fake.stored(task.ID)
+	if stored.ClaimedAt == nil || !stored.ClaimedAt.Equal(claimedAt) {
+		t.Errorf("claimedAt = %v, want the holder's original stamp %v", stored.ClaimedAt, claimedAt)
+	}
+	if stored.ClaimedBy == nil || *stored.ClaimedBy != "agent-a" {
+		t.Errorf("claimedBy = %v, want the untouched holder agent-a", stored.ClaimedBy)
+	}
 }
 
 // The progress log is capped so a looping CI job can't grow the row (and every

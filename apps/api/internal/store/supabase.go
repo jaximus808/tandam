@@ -3268,6 +3268,51 @@ func (s *supabaseStore) takeOverExpiredClaim(ctx context.Context, canvasID, id u
 	return nil, 0, false, nil
 }
 
+// TouchActionClaim refreshes the claim lease on an executing task: ONE
+// conditional UPDATE (… WHERE state='executing' AND claimed_by = <holder>)
+// restamping claimed_at to now.
+//
+// A progress report is a HEARTBEAT (TDM-64). Claim expiry is lazy off
+// claimed_at (see ClaimAction), so without this a worker that is alive and
+// reporting every few minutes still becomes reclaimable the moment its
+// original claim passes the TTL — and a rival takes the task out from under it
+// mid-flight. That is survivable while an orchestrator holds claims for short
+// batches; it is not once a worker holds its own claim for the length of a
+// real task.
+//
+// HOLDER-ONLY, and enforced in SQL rather than in Go: the claimed_by predicate
+// is what makes "extend" unforgeable. A report that got past a caller's own
+// guard — an anonymous holder, a task that changed hands between the read and
+// this write — matches 0 rows and extends nothing (ok=false).
+//
+// No version bump: claimed_at is not board content, and the caller's own state
+// broadcast already carries the refreshed row (same rule as TouchAgentLastSeen).
+func (s *supabaseStore) TouchActionClaim(_ context.Context, canvasID, id uuid.UUID, claimedBy string) (*Action, bool, error) {
+	// An empty holder is no holder: Eq would never match a NULL claimed_by
+	// anyway, and skipping saves the round-trip.
+	if claimedBy == "" {
+		return nil, false, nil
+	}
+	var rows []dbAction
+	_, err := s.client.From("actions").
+		Update(map[string]any{
+			"claimed_at": time.Now().UTC().Format(time.RFC3339Nano),
+		}, "representation", "").
+		Eq("id", id.String()).
+		Eq("canvas_id", canvasID.String()).
+		Eq("type", "task").
+		Eq("state", "executing").
+		Eq("claimed_by", claimedBy).
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(rows) != 1 {
+		return nil, false, nil
+	}
+	return toAction(rows[0]), true, nil
+}
+
 // ReleaseAction frees a stuck claim (executing → approved, claim columns
 // cleared) with the same conditional-UPDATE + re-read-to-disambiguate pattern
 // as ClaimAction. A release of an already-released task is an idempotent

@@ -31,6 +31,32 @@ Sessions start from the task queue, NOT a full state read:
    then `canvas_task_complete` with a short result summary (what was done, where —
    commit / PR / files). The result shows in the web Tasks panel.
 
+That is the **single-session** loop: you claim, you work, you complete. The rule
+underneath it: **an agent claims only what it will personally do. An orchestrator
+dispatches; it never claims, never completes on a worker's behalf, and never
+transports its `session` handle.**
+
+**Fan-out variant — dispatching means you do not claim.** If you are spawning
+subagents to work the queue, you are the orchestrator, and steps 3–4 above are
+*theirs*, not yours:
+
+1. `canvas_connect` with `role: "planner"` and a name — one call connects and
+   registers you; keep the returned `agentId` and `session`.
+2. `queue_next` (the facade's ready-queue call, same list as step 2 above). Each
+   task comes back with a `handoff` block: the 8-char canvas **code**, the task
+   id, ticket id, title, your `agentId` as parent, and the literal steps the
+   worker follows.
+3. Spawn **one subagent per ready task** and paste that task's `handoff` in
+   **verbatim**. The worker connects with `role: "executor"` and
+   `parentAgentId`, claims its own task, works, and completes under the identity
+   it claimed with. On `claimed:false` it takes a different ready task.
+4. You claim nothing and complete nothing. Never hand a subagent your `session`
+   handle — the canvas **code** is what travels. To report, read `board_status`;
+   a task still `executing` is something you report, not something you close.
+
+The full recipes: `docs/ORCHESTRATION.md` (webhook-triggered) and the
+`tandem-watch` skill in `.claude/skills/tandem-watch/` (in-session watch loop).
+
 When asked to plan work rather than execute it, draft tasks with `canvas_task_add`
 (one per unit of work, concise body, heavy context linked via `linkedIds`) — they
 land as `proposed` for human approval in the web UI.
