@@ -16,6 +16,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import type { Gateway } from "./gateway.js";
 import { TOOLS, decorateTools, handleTool } from "./tools.js";
 import { FACADE_RAW_TOOLS, handleFacadeTool, isFacadeTool } from "./facade.js";
+import { tracer } from "./trace.js";
 
 export const SERVER_NAME = "tandem";
 
@@ -32,12 +33,6 @@ export const DEFAULT_API_URL = "https://tandemcanvas.com";
 // on this default) so links use the public domain rather than the internal
 // API_URL (e.g. http://tandem:7891).
 export const DEFAULT_WEB_URL = "https://tandemcanvas.com";
-
-// Opt-in per-tool-call wall-time logging: set TANDEM_MCP_TIMING to any value
-// to emit one `[timing] <tool> <ms>ms` line per call. MUST go to stderr —
-// stdout carries the stdio MCP protocol frames. Checked once at module load so
-// the disabled path costs nothing per call.
-const TIMING = !!process.env.TANDEM_MCP_TIMING;
 
 // The intent facade (facade.ts), decorated exactly like the CRUD surface.
 export const FACADE_TOOLS = decorateTools(FACADE_RAW_TOOLS);
@@ -130,13 +125,15 @@ export function createTandemServer(
     const name = request.params.name.replace(/\./g, "_");
     const a = (request.params.arguments ?? {}) as Record<string, unknown>;
 
-    if (!TIMING) return dispatch(gateway, name, a);
-    const start = performance.now();
-    try {
-      return await dispatch(gateway, name, a);
-    } finally {
-      console.error(`[timing] ${name} ${(performance.now() - start).toFixed(1)}ms`);
-    }
+    // Per-call trace (MCP_TRACE, see trace.ts): duration, the API time inside
+    // it, and ok/error. A pass-through when tracing is off. `isError` on the
+    // dispatch result is the tool-level failure signal — dispatch catches
+    // throws and turns them into an error payload.
+    return tracer.call(
+      name,
+      () => dispatch(gateway, name, a),
+      (result) => !(result as { isError?: boolean }).isError
+    );
   });
 
   async function dispatch(gateway: Gateway, name: string, a: Record<string, unknown>) {

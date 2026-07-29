@@ -21,6 +21,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { Gateway } from "./gateway.js";
 import { createTandemServer, VERSION, DEFAULT_API_URL, DEFAULT_WEB_URL } from "./server.js";
+import { installSessionSummary, isOffValue } from "./trace.js";
 
 const API_URL = (process.env.API_URL ?? DEFAULT_API_URL).replace(/\/$/, "");
 // User-facing share/claim links must use the public domain, NOT the internal
@@ -135,8 +136,11 @@ const sessions = new Map<string, Session>();
 // whether claude.ai reuses the canvas_connect session for later tool calls
 // (same sid, hit=yes) or lands them on a fresh/other session (sid changes or
 // hit=no) — the latter is why writes come back "not connected". On by default
-// while we chase it; set MCP_TRACE=0 to silence.
-const TRACE = process.env.MCP_TRACE !== "0";
+// while we chase it; set MCP_TRACE=0 (or off/false/no) to silence.
+//
+// Setting MCP_TRACE to 1 or json additionally turns on the per-tool-call trace
+// and the exit summary shared with the stdio CLI — see trace.ts.
+const TRACE = !isOffValue(process.env.MCP_TRACE ?? "on");
 
 /** Pull the JSON-RPC method and (for tools/call) the tool name out of a body. */
 function describeRpc(body: unknown): string {
@@ -300,6 +304,11 @@ const httpServer = createServer((req, res) => {
 
   res.writeHead(404, { "Content-Type": "text/plain" }).end("Not found");
 });
+
+// Process-lifetime tool-call summary on SIGTERM/SIGINT (container shutdown).
+// Installs nothing unless MCP_TRACE=1|json — the default sidecar deployment,
+// which only wants the per-request routing trace above, is untouched.
+installSessionSummary();
 
 httpServer.listen(PORT, () => {
   process.stderr.write(

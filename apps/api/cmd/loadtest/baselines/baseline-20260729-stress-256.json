@@ -1,0 +1,427 @@
+{
+  "schema": "tandem.loadtest.v1",
+  "run": {
+    "run_id": "6f63e7ad",
+    "started_at": "2026-07-29T06:28:53.689056Z",
+    "finished_at": "2026-07-29T06:29:25.789318Z",
+    "api": "http://localhost:7891",
+    "git_rev": "b75a4765c1d7fbd2c1dddc41f60f990944b9a981",
+    "git_dirty": true,
+    "go_version": "go1.26.3",
+    "goos": "darwin",
+    "goarch": "arm64",
+    "num_cpu": 10,
+    "seed": 1,
+    "notes": [
+      "agents-256: op \"context_get\" could not be measured — GET /api/canvas/context is not served by this build",
+      "agents-256: server exposes no claim counters — cross-check skipped (build predates TDM-42, or metrics are disabled)"
+    ]
+  },
+  "targets": [
+    {
+      "id": "task_claim_p95",
+      "kind": "latency_p95",
+      "op": "task_claim",
+      "limit_ms": 100,
+      "description": "atomic task claim p95 \u003c 100ms"
+    },
+    {
+      "id": "queue_list_p95",
+      "kind": "latency_p95",
+      "op": "queue_list",
+      "limit_ms": 150,
+      "description": "approved-queue read p95 \u003c 150ms"
+    },
+    {
+      "id": "task_get_p95",
+      "kind": "latency_p95",
+      "op": "task_get",
+      "limit_ms": 150,
+      "description": "single task read p95 \u003c 150ms"
+    },
+    {
+      "id": "context_get_p95",
+      "kind": "latency_p95",
+      "op": "context_get",
+      "limit_ms": 250,
+      "description": "one-call connect bundle p95 \u003c 250ms"
+    },
+    {
+      "id": "status_post_p95",
+      "kind": "latency_p95",
+      "op": "status_post",
+      "limit_ms": 100,
+      "description": "inbound status POST (the CI surface) p95 \u003c 100ms"
+    },
+    {
+      "id": "throughput",
+      "kind": "throughput_min",
+      "min_per_sec": 100,
+      "description": "sustained 100 task-ops/sec (queue reads, task reads, context reads, claims, conflicts, status posts and completes, over the measured window)"
+    },
+    {
+      "id": "no_double_claims",
+      "kind": "invariant_no_double_claim",
+      "description": "ZERO double-claims: every task claimed and completed by exactly one agent"
+    }
+  ],
+  "scenarios": [
+    {
+      "name": "agents-256",
+      "params": {
+        "name": "agents-256",
+        "agents": 256,
+        "queue_depth": 192,
+        "rounds": 3,
+        "ops_per_agent_round": 6,
+        "max_progress_per_task": 1,
+        "mix": {
+          "queue_list": 25,
+          "task_get": 20,
+          "context_get": 15,
+          "task_claim": 40,
+          "status_post": 50,
+          "task_complete": 40
+        },
+        "note": "stress point — gated on agents-64 finishing clean"
+      },
+      "started_at": "2026-07-29T06:28:53.73989Z",
+      "finished_at": "2026-07-29T06:29:20.988421Z",
+      "wall_seconds": 27.249,
+      "measured_seconds": 20.232,
+      "live_agents": 256,
+      "rounds_run": 1,
+      "tasks_seeded": 192,
+      "task_ops_per_sec": 35.686,
+      "ops": {
+        "claim_conflict": {
+          "count": 145,
+          "errors": 0,
+          "p50_ms": 9031.545,
+          "p95_ms": 13788.182,
+          "p99_ms": 14672.692,
+          "max_ms": 16386.293
+        },
+        "connect": {
+          "count": 256,
+          "errors": 0,
+          "p50_ms": 2991.328,
+          "p95_ms": 5143.568,
+          "p99_ms": 5365.236,
+          "max_ms": 5370.749
+        },
+        "context_get": {
+          "count": 0,
+          "errors": 0,
+          "p50_ms": 0,
+          "p95_ms": 0,
+          "p99_ms": 0,
+          "max_ms": 0,
+          "unavailable": true,
+          "note": "GET /api/canvas/context is not served by this build"
+        },
+        "queue_list": {
+          "count": 421,
+          "errors": 0,
+          "p50_ms": 5386.222,
+          "p95_ms": 10713.447,
+          "p99_ms": 13528.33,
+          "max_ms": 18242.536
+        },
+        "seed_batch": {
+          "count": 2,
+          "errors": 0,
+          "p50_ms": 401.171,
+          "p95_ms": 450.712,
+          "p99_ms": 450.712,
+          "max_ms": 450.712
+        },
+        "task_claim": {
+          "count": 4,
+          "errors": 0,
+          "p50_ms": 5913.964,
+          "p95_ms": 12142.73,
+          "p99_ms": 12142.73,
+          "max_ms": 12142.73
+        },
+        "task_complete": {
+          "count": 4,
+          "errors": 0,
+          "p50_ms": 1823.51,
+          "p95_ms": 6415.936,
+          "p99_ms": 6415.936,
+          "max_ms": 6415.936
+        },
+        "task_get": {
+          "count": 148,
+          "errors": 0,
+          "p50_ms": 5198.126,
+          "p95_ms": 11172.289,
+          "p99_ms": 13975.315,
+          "max_ms": 18245.895
+        }
+      },
+      "server": {
+        "available": true,
+        "counters_available": false,
+        "windowed": false,
+        "window_seconds": 0,
+        "percentiles_are_windowed": false,
+        "routes": [
+          {
+            "route": "POST /api/mcp/auth",
+            "op": "connect",
+            "count_total": 387,
+            "count_delta": 0,
+            "p50_ms": 1661.254835,
+            "p95_ms": 4985.465127,
+            "p99_ms": 5314.369461,
+            "max_ms": 5331.460461,
+            "window_count": 0
+          },
+          {
+            "route": "GET /api/canvas/actions",
+            "op": "queue_list",
+            "count_total": 2732,
+            "count_delta": 422,
+            "p50_ms": 1745.271209,
+            "p95_ms": 8522.672711,
+            "p99_ms": 11899.580631,
+            "max_ms": 18219.833382,
+            "window_count": 0
+          },
+          {
+            "route": "GET /api/canvas/actions/{id}",
+            "op": "task_get",
+            "count_total": 1170,
+            "count_delta": 148,
+            "p50_ms": 1237.354334,
+            "p95_ms": 6059.683253,
+            "p99_ms": 9077.83738,
+            "max_ms": 18242.302258,
+            "window_count": 0
+          },
+          {
+            "route": "GET /api/canvas/context",
+            "op": "context_get",
+            "count_total": 0,
+            "count_delta": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "max_ms": 0,
+            "window_count": 0,
+            "note": "route absent from /api/metrics — the server never served it"
+          },
+          {
+            "route": "PATCH /api/canvas/actions/{id}",
+            "op": "task_claim",
+            "count_total": 1848,
+            "count_delta": 153,
+            "p50_ms": 2704.495043,
+            "p95_ms": 10015.135671,
+            "p99_ms": 12676.97138,
+            "max_ms": 16379.381423,
+            "window_count": 0,
+            "note": "shared route: these samples cover task_claim, claim_conflict AND task_complete — the server cannot separate them"
+          },
+          {
+            "route": "POST /api/canvas/{code}/tasks/{id}/status",
+            "op": "status_post",
+            "count_total": 0,
+            "count_delta": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "max_ms": 0,
+            "window_count": 0,
+            "note": "route absent from /api/metrics — the server never served it"
+          },
+          {
+            "route": "POST /api/canvas/actions/batch",
+            "op": "seed_batch",
+            "count_total": 25,
+            "count_delta": 2,
+            "p50_ms": 413.333167,
+            "p95_ms": 839.603209,
+            "p99_ms": 1690.034418,
+            "max_ms": 1690.034418,
+            "window_count": 0
+          }
+        ],
+        "claims_delta": 0,
+        "claim_conflicts_delta": 0,
+        "ttl_expiries_delta": 0,
+        "note": "this server exposes no counters block — it predates TDM-42, so claims / claim_conflicts could not be cross-checked; this server reports ALL-TIME percentiles (no recency window) — its route p95s include every request since the process booted, so read count_delta to judge how much of that is this scenario"
+      },
+      "invariant": {
+        "double_claim_free": true,
+        "ok": true,
+        "tasks_seeded": 192,
+        "tasks_done": 4,
+        "tasks_approved": 188,
+        "tasks_executing": 0,
+        "tasks_other": 0,
+        "claim_wins": 4,
+        "completions": 4
+      },
+      "claim_cross_check": {
+        "available": false,
+        "client_claim_wins": 4,
+        "server_claims_delta": 0,
+        "claims_agree": false,
+        "client_conflicts": 145,
+        "server_conflicts_delta": 0,
+        "conflicts_agree": false,
+        "note": "server exposes no claim counters — cross-check skipped (build predates TDM-42, or metrics are disabled)"
+      },
+      "assertions": [
+        {
+          "target": "task_claim_p95",
+          "source": "client",
+          "observed": 12142.73,
+          "limit": 100,
+          "unit": "ms",
+          "samples": 4,
+          "status": "fail"
+        },
+        {
+          "target": "task_claim_p95",
+          "source": "server",
+          "observed": 10015.135671,
+          "limit": 100,
+          "unit": "ms",
+          "samples": 0,
+          "status": "fail",
+          "note": "server-side percentiles are windowed over ALL traffic the process served, not only this scenario; shared route: these samples cover task_claim, claim_conflict AND task_complete — the server cannot separate them"
+        },
+        {
+          "target": "queue_list_p95",
+          "source": "client",
+          "observed": 10713.447,
+          "limit": 150,
+          "unit": "ms",
+          "samples": 421,
+          "status": "fail"
+        },
+        {
+          "target": "queue_list_p95",
+          "source": "server",
+          "observed": 8522.672711,
+          "limit": 150,
+          "unit": "ms",
+          "samples": 0,
+          "status": "fail",
+          "note": "server-side percentiles are windowed over ALL traffic the process served, not only this scenario"
+        },
+        {
+          "target": "task_get_p95",
+          "source": "client",
+          "observed": 11172.289,
+          "limit": 150,
+          "unit": "ms",
+          "samples": 148,
+          "status": "fail"
+        },
+        {
+          "target": "task_get_p95",
+          "source": "server",
+          "observed": 6059.683253,
+          "limit": 150,
+          "unit": "ms",
+          "samples": 0,
+          "status": "fail",
+          "note": "server-side percentiles are windowed over ALL traffic the process served, not only this scenario"
+        },
+        {
+          "target": "context_get_p95",
+          "source": "client",
+          "observed": 0,
+          "limit": 250,
+          "unit": "ms",
+          "samples": 0,
+          "status": "skipped",
+          "note": "GET /api/canvas/context is not served by this build"
+        },
+        {
+          "target": "context_get_p95",
+          "source": "server",
+          "observed": 0,
+          "limit": 250,
+          "unit": "ms",
+          "samples": 0,
+          "status": "skipped",
+          "note": "the server reported no samples for this op's route — it either never served the route (endpoint absent on this build) or saw no traffic on it inside the metrics window"
+        },
+        {
+          "target": "status_post_p95",
+          "source": "client",
+          "observed": 0,
+          "limit": 100,
+          "unit": "ms",
+          "samples": 0,
+          "status": "skipped",
+          "note": "op never attempted in this scenario"
+        },
+        {
+          "target": "status_post_p95",
+          "source": "server",
+          "observed": 0,
+          "limit": 100,
+          "unit": "ms",
+          "samples": 0,
+          "status": "skipped",
+          "note": "the server reported no samples for this op's route — it either never served the route (endpoint absent on this build) or saw no traffic on it inside the metrics window"
+        },
+        {
+          "target": "throughput",
+          "source": "client",
+          "observed": 35.686,
+          "limit": 100,
+          "unit": "ops/sec",
+          "samples": 722,
+          "status": "fail",
+          "note": "offered load is bounded by 256 concurrent agents; a miss here may be a load-generator limit rather than a server limit"
+        },
+        {
+          "target": "no_double_claims",
+          "source": "invariant",
+          "observed": 0,
+          "limit": 0,
+          "unit": "double-claims",
+          "samples": 4,
+          "status": "pass"
+        }
+      ],
+      "assertion_summary": {
+        "passed": 1,
+        "failed": 7,
+        "skipped": 4
+      },
+      "aborted": true,
+      "abort_reason": "claim_conflict p95 11381ms exceeds the 10000ms absolute ceiling — backing off shared infrastructure",
+      "task_prefix": "loadtest-6f63e7ad-agents-256-",
+      "canvas": {
+        "code": "SNXFVX3K",
+        "id": "76bd60d1-e380-4b8b-810e-58763e21fedc",
+        "name": "loadtest-tdm44-agents-256-6f63e7ad",
+        "scenario": "agents-256",
+        "seeds_deleted": 192
+      }
+    }
+  ],
+  "summary": {
+    "passed": 1,
+    "failed": 7,
+    "skipped": 4
+  },
+  "scratch_canvases": [
+    {
+      "code": "SNXFVX3K",
+      "id": "76bd60d1-e380-4b8b-810e-58763e21fedc",
+      "name": "loadtest-tdm44-agents-256-6f63e7ad",
+      "scenario": "agents-256",
+      "seeds_deleted": 192
+    }
+  ]
+}

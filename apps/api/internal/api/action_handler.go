@@ -874,8 +874,21 @@ func (h *Handler) claimAction(w http.ResponseWriter, r *http.Request, agentName 
 func (h *Handler) claimTask(ctx context.Context, canvasID, id uuid.UUID, agentName string) (*store.Action, error) {
 	action, outcome, err := h.store.ClaimAction(ctx, canvasID, id, agentName)
 	if err != nil {
+		// Contention metric (TDM-42). Counted HERE, at the one function both
+		// claim surfaces funnel through, rather than in the store (which would
+		// have to be handed a registry and is untestable behind the fake stores)
+		// or in the two HTTP handlers (which would double-count nothing today and
+		// silently miss the next surface that starts a task). A lost claim is the
+		// signal that matters — rising claim_conflicts means the fleet is racing
+		// for the same work. Only a rival holder counts: not-found and
+		// illegal-state are caller bugs, not contention.
+		var claimed *store.AlreadyClaimedError
+		if errors.As(err, &claimed) {
+			h.metrics.IncClaimConflict()
+		}
 		return nil, err
 	}
+	h.metrics.IncClaim()
 	// Liveness heartbeat: a claim proves the agent is alive — refresh its
 	// last_seen_at so the swarm view's staleness threshold stays honest.
 	// Touch-or-create ("when an agent takes a task it should still be
@@ -901,6 +914,7 @@ func (h *Handler) claimTask(ctx context.Context, canvasID, id uuid.UUID, agentNa
 	// someone else's; an ordinary claim off the queue (and a self-reclaim) emits
 	// nothing — approved → executing is not an event.
 	if outcome.ExpiredClaimBy != "" {
+		h.metrics.IncTTLExpiry()
 		log.Printf("claim %s: expired claim held by %q, taken over by %q", id, outcome.ExpiredClaimBy, agentName)
 		h.emitTaskEvent(canvasID, webhooks.EventTaskClaimExpired, action, withExpiredClaim(outcome))
 		// The caller's full-state broadcast already reconciles the board, but it

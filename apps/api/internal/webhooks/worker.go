@@ -84,11 +84,32 @@ type WorkerStore interface {
 	ReapStuckWebhookDeliveries(ctx context.Context, olderThan time.Duration) (int, error)
 }
 
+// Delivery outcomes reported to a DeliveryObserver. These mirror the three
+// terminal-for-this-attempt branches below: delivered, will be retried,
+// dead-lettered.
+const (
+	OutcomeOK     = "ok"
+	OutcomeFailed = "failed"
+	OutcomeDead   = "dead"
+)
+
+// DeliveryObserver is the optional metrics seam (TDM-42): the worker reports
+// each attempt's outcome and nothing else — no URL, no canvas, no payload, so
+// an observer can be wired to an open endpoint. Declared here rather than
+// importing the metrics package, keeping the dependency pointing one way.
+//
+// OPTIONAL and nil-safe in the emitter style: nil means nobody is counting.
+type DeliveryObserver interface {
+	ObserveWebhookDelivery(outcome string)
+}
+
 // Worker is the background delivery loop: lease due deliveries → sign + send →
 // record ok / schedule retry / dead-letter.
 type Worker struct {
 	store  WorkerStore
 	sender *Sender
+	// observer counts delivery outcomes. Optional; see DeliveryObserver.
+	observer DeliveryObserver
 
 	pollInterval time.Duration
 	batchSize    int
@@ -123,6 +144,12 @@ func WithBatchSize(n int) WorkerOption { return func(w *Worker) { w.batchSize = 
 
 // WithClock replaces the clock (tests assert the scheduled next_attempt_at).
 func WithClock(now func() time.Time) WorkerOption { return func(w *Worker) { w.now = now } }
+
+// WithObserver attaches the delivery-outcome metrics seam. Pass nil (or omit)
+// to count nothing.
+func WithObserver(o DeliveryObserver) WorkerOption {
+	return func(w *Worker) { w.observer = o }
+}
 
 // WithLogger replaces the log sink (tests silence it).
 func WithLogger(logf func(string, ...any)) WorkerOption {
@@ -277,6 +304,9 @@ func (w *Worker) deliver(ctx context.Context, cache *webhookCache, d *store.Webh
 	}
 
 	if att.OK {
+		// Counted on the DELIVERY outcome, not on the bookkeeping write: the
+		// receiver did get it even if marking the row afterwards fails.
+		w.observe(OutcomeOK)
 		if err := w.store.MarkWebhookDeliveryOK(ctx, d.ID, res); err != nil {
 			w.logf("webhooks: mark delivery %s ok: %v", d.ID, err)
 		}
@@ -285,12 +315,23 @@ func (w *Worker) deliver(ctx context.Context, cache *webhookCache, d *store.Webh
 	w.finish(ctx, d, res, att.Retryable)
 }
 
+// observe reports a delivery outcome to the optional metrics seam.
+func (w *Worker) observe(outcome string) {
+	if w.observer != nil {
+		w.observer.ObserveWebhookDelivery(outcome)
+	}
+}
+
 // finish records a failed attempt: schedule the next retry if the failure is
 // retryable AND budget remains, otherwise dead-letter.
 func (w *Worker) finish(ctx context.Context, d *store.WebhookDelivery, res store.WebhookDeliveryResult, retryable bool) {
 	if retryable {
 		if delay, ok := NextRetryDelay(d.AttemptCount); ok {
 			next := w.now().Add(delay)
+			// A retryable failure with budget left: counted as failed, not dead.
+			// The distinction is the whole point — webhook_failed climbing while
+			// webhook_dead stays flat is a receiver flapping, not a broken config.
+			w.observe(OutcomeFailed)
 			if err := w.store.MarkWebhookDeliveryFailed(ctx, d.ID, next, res); err != nil {
 				w.logf("webhooks: mark delivery %s failed: %v", d.ID, err)
 			}
@@ -299,6 +340,7 @@ func (w *Worker) finish(ctx context.Context, d *store.WebhookDelivery, res store
 	}
 	// Dead letter: budget spent, or a failure retrying cannot fix (4xx, blocked
 	// target, redirect, deleted/disabled config).
+	w.observe(OutcomeDead)
 	if err := w.store.MarkWebhookDeliveryDead(ctx, d.ID, res); err != nil {
 		w.logf("webhooks: mark delivery %s dead: %v", d.ID, err)
 		return

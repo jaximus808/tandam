@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/agentcanvas/api/internal/maps"
+	"github.com/agentcanvas/api/internal/metrics"
 	"github.com/agentcanvas/api/internal/store"
 	"github.com/agentcanvas/api/internal/ws"
 	"github.com/go-chi/chi/v5"
@@ -42,6 +43,10 @@ type Handler struct {
 	// "no webhooks wired" and every emit is a no-op, which is what handler tests
 	// and a WEBHOOKS_ENABLED=false deployment get. See task_events.go.
 	events TaskEventEmitter
+	// metrics is the /api/metrics registry (TDM-42). OPTIONAL: a nil registry
+	// makes every counter increment a no-op (the methods are nil-receiver safe),
+	// which is what handler tests and a METRICS_ENABLED=false deployment get.
+	metrics *metrics.Registry
 }
 
 // HandlerOption customizes NewHandler. Optional dependencies go here rather than
@@ -52,6 +57,14 @@ type HandlerOption func(*Handler)
 // WithTaskEvents attaches the outbound task-lifecycle event emitter.
 func WithTaskEvents(e TaskEventEmitter) HandlerOption {
 	return func(h *Handler) { h.events = e }
+}
+
+// WithMetrics attaches the operational metrics registry, so the handlers can
+// count the task-queue signals (claims, claim conflicts, TTL takeovers) that no
+// per-route latency number can show. Threaded as the concrete *metrics.Registry
+// rather than an interface so a nil stays a usable nil.
+func WithMetrics(reg *metrics.Registry) HandlerOption {
+	return func(h *Handler) { h.metrics = reg }
 }
 
 func NewHandler(s store.Store, hub *ws.Hub, mapsReg *maps.Registry, opts ...HandlerOption) *Handler {

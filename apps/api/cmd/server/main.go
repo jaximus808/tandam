@@ -20,6 +20,7 @@ import (
 	"github.com/agentcanvas/api/internal/auth"
 	"github.com/agentcanvas/api/internal/config"
 	"github.com/agentcanvas/api/internal/maps"
+	"github.com/agentcanvas/api/internal/metrics"
 	"github.com/agentcanvas/api/internal/store"
 	"github.com/agentcanvas/api/internal/webhooks"
 	"github.com/agentcanvas/api/internal/ws"
@@ -54,7 +55,25 @@ func main() {
 		log.Printf("GOOGLE_CLIENT_ID not set — google sign-in disabled")
 	}
 
+	// Operational metrics (TDM-42): ONE registry for the process, built here
+	// because three things need the same one — the hub (broadcast fan-out +
+	// the ws_clients gauge), the webhook delivery worker (delivery outcomes)
+	// and the API handlers (per-route latency + claim counters). It stays nil
+	// when METRICS_ENABLED=false, and every seam below is nil-safe, so "off"
+	// really means nothing is recorded rather than recorded-and-hidden.
+	var metricsReg *metrics.Registry
+	if cfg.MetricsEnabled {
+		metricsReg = metrics.NewRegistry()
+	} else {
+		log.Printf("METRICS_ENABLED=false — GET /api/metrics disabled, nothing recorded")
+	}
+
 	hub := ws.NewHub()
+	if metricsReg != nil {
+		// Wired BEFORE Run so there is no window where broadcasts go unmeasured.
+		// (SetObserver is safe on a running hub too — the field is mutex-guarded.)
+		hub.SetObserver(metricsReg)
+	}
 	go hub.Run()
 
 	// Outbound-webhook delivery worker (TDM-36 / migration 0038). Same shape as
@@ -71,7 +90,11 @@ func main() {
 	var emitter *webhooks.Emitter
 	if cfg.WebhooksEnabled {
 		emitter = webhooks.NewEmitter(db)
-		go webhooks.NewWorker(db).Run(webhookCtx)
+		var wOpts []webhooks.WorkerOption
+		if metricsReg != nil {
+			wOpts = append(wOpts, webhooks.WithObserver(metricsReg))
+		}
+		go webhooks.NewWorker(db, wOpts...).Run(webhookCtx)
 	} else {
 		log.Printf("WEBHOOKS_ENABLED=false — outbound webhook delivery worker disabled")
 	}
@@ -87,7 +110,7 @@ func main() {
 	}
 	log.Printf("loaded %d map presets: %v", len(mapsReg.IDs()), mapsReg.IDs())
 
-	router := api.NewRouter(db, hub, authSvc, googleVerifier, cfg.CookieSecure, mapsReg, cfg.WebDistPath, cfg.ImageDir, cfg.PublicBaseURL, cfg.MetricsEnabled, emitter)
+	router := api.NewRouter(db, hub, authSvc, googleVerifier, cfg.CookieSecure, mapsReg, cfg.WebDistPath, cfg.ImageDir, cfg.PublicBaseURL, metricsReg, emitter)
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%s", cfg.Port),

@@ -5,39 +5,83 @@ import (
 	"sort"
 )
 
-// serverTaskState is what the API reports for a seeded task after the drain.
+// The invariant check. This is the product's core promise, so it is checked
+// against BOTH sides of the run and it is checked exhaustively:
+//
+//	client side — every agent's own record of which tasks it won the atomic
+//	              claim on, and which it drove to done;
+//	server side — the final state of every task the run seeded, read back in one
+//	              list after the load stops, with the claimant the server recorded.
+//
+// Neither side alone is proof. The client alone would miss a server that handed
+// the same task to two agents and then let the second overwrite the first's
+// claimedBy; the server alone would miss two agents both believing they own a
+// task whose final row shows only the last writer. Requiring them to AGREE, task
+// by task, is what makes "zero double-claims" a measurement rather than a
+// slogan.
+
+// serverTaskState is what the API reports for a seeded task after the run.
 type serverTaskState struct {
 	State     string `json:"state"`
 	ClaimedBy string `json:"claimedBy"`
 }
 
-// doubleClaim records one task that appears in more than one worker's win set
-// — the exact failure the product promises can never happen.
-type doubleClaim struct {
-	TaskID  string   `json:"task_id"`
-	Workers []string `json:"workers"`
+// DoubleClaim records one task that more than one agent believed it owned — the
+// exact failure the product promises can never happen.
+type DoubleClaim struct {
+	TaskID string   `json:"task_id"`
+	Agents []string `json:"agents"`
+	// Kind is "claim" (two agents won the atomic claim) or "complete" (two
+	// agents drove the same task to done). Either is a broken promise; they are
+	// distinguished because they implicate different code.
+	Kind string `json:"kind"`
 }
 
-// reconResult is the verdict of the post-drain correctness assertion.
-type reconResult struct {
-	OK           bool          `json:"ok"`
-	DoubleClaims []doubleClaim `json:"double_claims,omitempty"`
+// InvariantResult is the verdict.
+type InvariantResult struct {
+	// DoubleClaimFree is THE answer: did any task get claimed or completed by
+	// more than one agent. It is reported separately from OK so that a run with
+	// unrelated hygiene problems (an orphaned claim left by a transport error,
+	// say) still gives an unambiguous verdict on the core promise.
+	DoubleClaimFree bool `json:"double_claim_free"`
+	// OK additionally requires state consistency: nothing left executing, every
+	// done task attributable to exactly one agent, client and server agreeing on
+	// who that was, and the op counts adding up.
+	OK bool `json:"ok"`
+
+	TasksSeeded    int `json:"tasks_seeded"`
+	TasksDone      int `json:"tasks_done"`
+	TasksApproved  int `json:"tasks_approved"`
+	TasksExecuting int `json:"tasks_executing"`
+	TasksOther     int `json:"tasks_other"`
+
+	ClaimWins   int `json:"claim_wins"`
+	Completions int `json:"completions"`
+
+	DoubleClaims []DoubleClaim `json:"double_claims,omitempty"`
 	Violations   []string      `json:"violations,omitempty"`
 }
 
-// reconcile is the correctness assertion, pure so it can be unit-tested:
-//   - every seeded task is in exactly one worker's win set (any overlap, or a
-//     task won twice by the same worker, is a DOUBLE-CLAIM);
-//   - every seeded task ended state "done" on the server;
-//   - the server's claimedBy agrees with the client-side winner;
-//   - wins == len(seeded), and wins + losses == attempts.
+// checkInvariant is pure so it can be unit-tested against hand-built evidence,
+// including evidence that is deliberately broken.
 //
-// states may be nil in tests that only exercise the win-set overlap logic.
-func reconcile(seeded []string, winsByWorker map[string][]string, states map[string]serverTaskState, counts opCounts) reconResult {
-	res := reconResult{OK: true}
+// states may be nil in tests that only exercise the client-side overlap logic.
+func checkInvariant(
+	seeded []string,
+	claimedBy map[string][]string,
+	completedBy map[string][]string,
+	states map[string]serverTaskState,
+	ops map[string]OpStat,
+) InvariantResult {
+	res := InvariantResult{DoubleClaimFree: true, OK: true, TasksSeeded: len(seeded)}
 	fail := func(format string, args ...any) {
 		res.OK = false
 		res.Violations = append(res.Violations, fmt.Sprintf(format, args...))
+	}
+	doubled := func(dc DoubleClaim) {
+		res.DoubleClaimFree = false
+		res.OK = false
+		res.DoubleClaims = append(res.DoubleClaims, dc)
 	}
 
 	seededSet := make(map[string]bool, len(seeded))
@@ -45,71 +89,147 @@ func reconcile(seeded []string, winsByWorker map[string][]string, states map[str
 		seededSet[id] = true
 	}
 
-	// Win-set overlap: task id → every (worker, occurrence) that claims it won.
-	winners := make(map[string][]string)
-	totalWins := 0
-	// Deterministic worker order so violation output is stable.
-	workerNames := make([]string, 0, len(winsByWorker))
-	for w := range winsByWorker {
-		workerNames = append(workerNames, w)
-	}
-	sort.Strings(workerNames)
-	for _, w := range workerNames {
-		for _, id := range winsByWorker[w] {
-			winners[id] = append(winners[id], w)
-			totalWins++
+	// ── Overlap: which agents believe they won / finished each task ───────────
+	winners := map[string][]string{}
+	finishers := map[string][]string{}
+	for _, agent := range sortedKeys(claimedBy) {
+		for _, id := range claimedBy[agent] {
+			winners[id] = append(winners[id], agent)
+			res.ClaimWins++
 			if !seededSet[id] {
-				fail("worker %s won task %s that was never seeded by this run", w, id)
+				fail("agent %s won task %s, which this run never seeded", agent, id)
 			}
 		}
 	}
-	for id, ws := range winners {
-		if len(ws) > 1 {
-			res.OK = false
-			res.DoubleClaims = append(res.DoubleClaims, doubleClaim{TaskID: id, Workers: ws})
+	for _, agent := range sortedKeys(completedBy) {
+		for _, id := range completedBy[agent] {
+			finishers[id] = append(finishers[id], agent)
+			res.Completions++
+			if !containsStr(claimedBy[agent], id) {
+				fail("agent %s completed task %s without ever winning its claim", agent, id)
+			}
 		}
 	}
-	sort.Slice(res.DoubleClaims, func(i, j int) bool {
-		return res.DoubleClaims[i].TaskID < res.DoubleClaims[j].TaskID
-	})
-	if len(res.DoubleClaims) > 0 {
-		fail("DOUBLE-CLAIM DETECTED: %d task(s) won by more than one worker", len(res.DoubleClaims))
+	for _, id := range sortedKeys(winners) {
+		if len(winners[id]) > 1 {
+			doubled(DoubleClaim{TaskID: id, Agents: winners[id], Kind: "claim"})
+		}
+	}
+	for _, id := range sortedKeys(finishers) {
+		if len(finishers[id]) > 1 {
+			doubled(DoubleClaim{TaskID: id, Agents: finishers[id], Kind: "complete"})
+		}
 	}
 
-	// Every seeded task won exactly once, done on the server, claimant agrees.
+	// ── Server side: the final state of every seeded task ─────────────────────
 	for _, id := range seeded {
-		ws := winners[id]
-		if len(ws) == 0 {
-			fail("task %s was seeded but never claimed by any worker", id)
-		}
 		if states == nil {
 			continue
 		}
 		st, ok := states[id]
 		if !ok {
-			fail("task %s has no server state after the drain", id)
+			fail("task %s has no server state after the run", id)
 			continue
 		}
-		if st.State != "done" {
-			fail("task %s ended in state %q, expected done", id, st.State)
-		}
-		if len(ws) == 1 && st.ClaimedBy != "" && st.ClaimedBy != ws[0] {
-			fail("task %s: server says claimedBy=%q but client-side winner was %q", id, st.ClaimedBy, ws[0])
+		switch st.State {
+		case "done":
+			res.TasksDone++
+			switch len(finishers[id]) {
+			case 1:
+				if st.ClaimedBy != "" && st.ClaimedBy != finishers[id][0] {
+					fail("task %s: server recorded claimedBy=%q but %q completed it client-side",
+						id, st.ClaimedBy, finishers[id][0])
+				}
+			case 0:
+				fail("task %s is done on the server but no agent recorded completing it", id)
+			}
+		case "approved":
+			res.TasksApproved++
+			if n := len(winners[id]); n > 0 {
+				fail("task %s is back in the queue but %d agent(s) recorded winning its claim", id, n)
+			}
+		case "executing":
+			res.TasksExecuting++
+			fail("task %s was left executing (claimedBy=%q) — a claim leaked", id, st.ClaimedBy)
+		default:
+			res.TasksOther++
+			fail("task %s ended in unexpected state %q", id, st.State)
 		}
 	}
 
-	// Count invariants.
-	if totalWins != len(seeded) {
-		fail("wins=%d but %d tasks were seeded", totalWins, len(seeded))
-	}
-	if counts.ClaimsWon != totalWins {
-		fail("recorder counted %d wins but win sets hold %d", counts.ClaimsWon, totalWins)
-	}
-	if got := counts.ClaimsWon + counts.ClaimsLost409 + counts.ClaimsLostStale; got != counts.ClaimAttempts {
-		fail("wins+losses=%d but attempts=%d", got, counts.ClaimAttempts)
-	}
-	if counts.Completed != counts.ClaimsWon {
-		fail("completed=%d but claims_won=%d — a won task was not completed", counts.Completed, counts.ClaimsWon)
+	// ── Counts must add up ────────────────────────────────────────────────────
+	if ops != nil {
+		if got := ops[opClaim].Count; got != res.ClaimWins {
+			fail("recorder counted %d winning claims but agents' win sets hold %d", got, res.ClaimWins)
+		}
+		if got := ops[opComplete].Count; got != res.Completions {
+			fail("recorder counted %d completions but agents' completion sets hold %d", got, res.Completions)
+		}
 	}
 	return res
+}
+
+// ── Cross-check against the server's own contention counters ──────────────────
+
+// ClaimCrossCheck compares what the benchmark observed on the wire against what
+// the server counted internally (TDM-42's claims / claim_conflicts). Two
+// independent instruments measuring the same events: if they disagree, one of
+// them is wrong and it matters which.
+type ClaimCrossCheck struct {
+	Available            bool   `json:"available"`
+	ClientClaimWins      int    `json:"client_claim_wins"`
+	ServerClaimsDelta    int64  `json:"server_claims_delta"`
+	ClaimsAgree          bool   `json:"claims_agree"`
+	ClientConflicts      int    `json:"client_conflicts"`
+	ServerConflictsDelta int64  `json:"server_conflicts_delta"`
+	ConflictsAgree       bool   `json:"conflicts_agree"`
+	Note                 string `json:"note,omitempty"`
+}
+
+// crossCheckClaims is pure — unit tested.
+func crossCheckClaims(inv InvariantResult, view ServerView, ops map[string]OpStat) ClaimCrossCheck {
+	cc := ClaimCrossCheck{
+		ClientClaimWins: inv.ClaimWins,
+		ClientConflicts: ops[opClaimConflict].Count,
+	}
+	if !view.Available || !view.CountersAvailable {
+		cc.Note = "server exposes no claim counters — cross-check skipped (build predates TDM-42, or metrics are disabled)"
+		return cc
+	}
+	cc.Available = true
+	cc.ServerClaimsDelta = view.ClaimsDelta
+	cc.ServerConflictsDelta = view.ClaimConflictsDelta
+	cc.ClaimsAgree = cc.ServerClaimsDelta == int64(cc.ClientClaimWins)
+	cc.ConflictsAgree = cc.ServerConflictsDelta == int64(cc.ClientConflicts)
+
+	switch {
+	case cc.ClaimsAgree && cc.ConflictsAgree:
+		cc.Note = "exact agreement: every claim and every conflict the benchmark saw on the wire was counted once by the server"
+	case cc.ServerClaimsDelta > int64(cc.ClientClaimWins) || cc.ServerConflictsDelta > int64(cc.ClientConflicts):
+		// The usual innocent explanation on a shared dev box.
+		cc.Note = "server counted MORE than the benchmark issued — expected if anything else (a browser tab, another session) touched a queue on this server during the run"
+	default:
+		cc.Note = "server counted FEWER claims/conflicts than the benchmark observed on the wire — that is a real divergence and should be investigated"
+	}
+	return cc
+}
+
+// ── small helpers ─────────────────────────────────────────────────────────────
+
+func sortedKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func containsStr(hay []string, needle string) bool {
+	for _, s := range hay {
+		if s == needle {
+			return true
+		}
+	}
+	return false
 }
