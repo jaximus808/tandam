@@ -7,6 +7,7 @@ import (
 
 	"github.com/agentcanvas/api/internal/auth"
 	"github.com/agentcanvas/api/internal/store"
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
 
@@ -196,6 +197,90 @@ func RequireUser(authSvc *auth.Service) func(http.Handler) http.Handler {
 				return
 			}
 			ctx := context.WithValue(r.Context(), userIDKey, uid)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+// RequireCanvasByCode authenticates a route whose canvas is named by a {code}
+// path param instead of by the token — the inbound status API (TDM-38), where a
+// CI job's URL is the human-shareable thing and the credential is whatever the
+// job happens to have.
+//
+// It accepts EITHER credential, because "how long does the caller live" is the
+// only question that matters here and the two answers want different tokens:
+//
+//   - a canvas JWT (from POST /api/mcp/auth): self-contained, 24h. Fine for a
+//     job that exchanges the canvas code at the top of every run, useless as a
+//     CI secret. It already names a canvas, so the {code} in the path must
+//     resolve to that SAME canvas — a token for canvas A cannot be replayed
+//     against canvas B's URL (403).
+//   - a personal access token (tdm_pat_…) or an OAuth access token (tdm_oat_…):
+//     long-lived, revocable, and validated against the DB on every request —
+//     which is exactly what a `TANDEM_PAT` in CI secrets needs to be. Role comes
+//     from ResolveCanvasRole, so a CI job has precisely the access its owner has
+//     on that canvas, private canvases included.
+//
+// There is deliberately no anonymous path: a public canvas's write posture lets
+// anyone MINT a canvas token, but reporting task status is a fleet-member act
+// and must carry a credential, not just knowledge of the URL.
+//
+// Injects *auth.Claims exactly as RequireJWT does, so everything downstream
+// (CanvasIDFromCtx, RoleFromCtx, RequireWrite, RequireLiveGrant) is unchanged.
+// Claims synthesized for a PAT/OAuth caller carry no grant binding, so
+// RequireLiveGrant no-ops on them — correct, since those tokens were just
+// checked live against the DB.
+func RequireCanvasByCode(authSvc *auth.Service, s store.Store) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			header := r.Header.Get("Authorization")
+			if !strings.HasPrefix(header, "Bearer ") {
+				writeError(w, http.StatusUnauthorized, "missing or invalid Authorization header")
+				return
+			}
+			token := strings.TrimPrefix(header, "Bearer ")
+			canvas, err := s.GetCanvasByCode(r.Context(), chi.URLParam(r, "code"))
+			if err != nil {
+				writeError(w, http.StatusNotFound, "canvas not found — check the canvas code in the URL")
+				return
+			}
+
+			var claims *auth.Claims
+			if strings.HasPrefix(token, store.PATPrefix) || strings.HasPrefix(token, store.OAuthAccessPrefix) {
+				uid, ok := patUserID(s, r)
+				if !ok {
+					uid, _, ok = oauthUserID(s, r)
+				}
+				if !ok {
+					writeError(w, http.StatusUnauthorized, "invalid token: not a live access token")
+					return
+				}
+				role, err := s.ResolveCanvasRole(r.Context(), canvas, &uid)
+				if err != nil {
+					writeError(w, http.StatusInternalServerError, "could not resolve canvas access")
+					return
+				}
+				if role == "none" {
+					writeError(w, http.StatusForbidden, "this canvas is private — ask its owner to share it with your account")
+					return
+				}
+				claims = &auth.Claims{CanvasID: canvas.ID, Role: role}
+			} else {
+				c, err := authSvc.Validate(token)
+				if err != nil {
+					writeError(w, http.StatusUnauthorized, "invalid token: "+err.Error())
+					return
+				}
+				// The whole reason the code is in the path: it is checkable. A
+				// token scoped elsewhere is a 403, never a silent write to the
+				// canvas the token happens to name.
+				if c.CanvasID != canvas.ID {
+					writeError(w, http.StatusForbidden, "this token is scoped to a different canvas than the one in the URL")
+					return
+				}
+				claims = c
+			}
+			ctx := context.WithValue(r.Context(), claimsKey, claims)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

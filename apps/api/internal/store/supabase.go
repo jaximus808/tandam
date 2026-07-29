@@ -3036,7 +3036,7 @@ func (s *supabaseStore) UpdateActionState(ctx context.Context, canvasID, id uuid
 // predicate no longer matches (the race window is seconds; the TTL is
 // minutes, so the winner's fresh stamp can never itself read as expired to a
 // concurrent racer). The loser falls through to a 409 naming the NEW holder.
-func (s *supabaseStore) ClaimAction(ctx context.Context, canvasID, id uuid.UUID, claimedBy string) (*Action, int, error) {
+func (s *supabaseStore) ClaimAction(ctx context.Context, canvasID, id uuid.UUID, claimedBy string) (*Action, ClaimOutcome, error) {
 	now := time.Now().UTC()
 	var rows []dbAction
 	_, err := s.client.From("actions").
@@ -3051,25 +3051,26 @@ func (s *supabaseStore) ClaimAction(ctx context.Context, canvasID, id uuid.UUID,
 		Eq("type", "task").
 		ExecuteTo(&rows)
 	if err != nil {
-		return nil, 0, err
+		return nil, ClaimOutcome{}, err
 	}
 	if len(rows) == 1 {
 		v, verr := s.bumpVersion(ctx, canvasID)
 		if verr != nil {
-			return nil, 0, verr
+			return nil, ClaimOutcome{}, verr
 		}
-		return toAction(rows[0]), v, nil
+		// Ordinary claim off the queue — nothing expired.
+		return toAction(rows[0]), ClaimOutcome{Version: v}, nil
 	}
 	// No row updated — disambiguate the reason from current state.
 	existing, gerr := s.GetAction(ctx, canvasID, id)
 	if gerr != nil {
-		return nil, 0, ErrActionNotFound
+		return nil, ClaimOutcome{}, ErrActionNotFound
 	}
 	// Only tasks are claimable. An epic claimed via a raw update_state would
 	// leave 'approved' and permanently brick its cascade (approve can't reach
 	// 'executing'), so refuse by type before any state-based reasoning.
 	if existing.Type != "task" {
-		return nil, 0, fmt.Errorf("%w: only tasks can be claimed (this is a %q)", ErrIllegalActionState, existing.Type)
+		return nil, ClaimOutcome{}, fmt.Errorf("%w: only tasks can be claimed (this is a %q)", ErrIllegalActionState, existing.Type)
 	}
 	if existing.State == "executing" {
 		holder := ""
@@ -3092,16 +3093,20 @@ func (s *supabaseStore) ClaimAction(ctx context.Context, canvasID, id uuid.UUID,
 				if terr != nil {
 					// A lost self-takeover race means someone ELSE now holds it —
 					// surface that as the conflict it is.
-					return nil, 0, terr
+					return nil, ClaimOutcome{}, terr
 				}
 				if ok {
-					return a, v, nil
+					// SELF-takeover: the TTL lapsed but the task never changed
+					// hands, so ExpiredClaimBy stays empty (see ClaimOutcome) and
+					// no task.claim_expired fires — the agent is alive, it just
+					// took longer than the TTL.
+					return a, ClaimOutcome{Version: v}, nil
 				}
 				// No takeover happened (e.g. claimed_at refreshed concurrently by
 				// our own parallel retry) — the claim is live again; fall through
 				// to the idempotent success below.
 			}
-			return existing, 0, nil
+			return existing, ClaimOutcome{}, nil
 		}
 		// Expired claim → atomic takeover. The Go-side expiry check is only an
 		// optimization gate (skip the extra UPDATE on the common non-expired
@@ -3111,15 +3116,22 @@ func (s *supabaseStore) ClaimAction(ctx context.Context, canvasID, id uuid.UUID,
 		if s.claimTTL > 0 && existing.ClaimedAt != nil && now.Sub(*existing.ClaimedAt) >= s.claimTTL {
 			a, v, ok, terr := s.takeOverExpiredClaim(ctx, canvasID, id, claimedBy, now)
 			if terr != nil {
-				return nil, 0, terr
+				return nil, ClaimOutcome{}, terr
 			}
 			if ok {
-				return a, v, nil
+				// The one place a lapsed claim is ever observed (lazy expiry, no
+				// sweeper). Report who lost it so the API can fire
+				// task.claim_expired — this is the ONLY source of that event.
+				out := ClaimOutcome{Version: v, ExpiredClaimBy: holder}
+				if existing.ClaimedAt != nil {
+					out.ExpiredClaimAt = *existing.ClaimedAt
+				}
+				return a, out, nil
 			}
 		}
-		return nil, 0, &AlreadyClaimedError{ClaimedBy: holder}
+		return nil, ClaimOutcome{}, &AlreadyClaimedError{ClaimedBy: holder}
 	}
-	return nil, 0, fmt.Errorf("%w: cannot claim task in state %q", ErrIllegalActionState, existing.State)
+	return nil, ClaimOutcome{}, fmt.Errorf("%w: cannot claim task in state %q", ErrIllegalActionState, existing.State)
 }
 
 // takeOverExpiredClaim attempts the TDM-7 takeover UPDATE (caller has already
@@ -3283,8 +3295,10 @@ func (s *supabaseStore) DeleteAction(ctx context.Context, canvasID, id uuid.UUID
 // ApproveEpicTasks flips every currently-proposed task under an epic to
 // approved in ONE bulk UPDATE (payload->>epicId match), stamping approved_by
 // with the policy provenance ('policy:epic'). Called when a human approves the
-// epic itself — the one-time gate that lets its tasks flow.
-func (s *supabaseStore) ApproveEpicTasks(ctx context.Context, canvasID, epicID uuid.UUID, approvedBy string) (int, error) {
+// epic itself — the one-time gate that lets its tasks flow. Returns the rows
+// that actually flipped (representation), because each one is a task that just
+// entered the ready-to-work queue and therefore its own task.approved webhook.
+func (s *supabaseStore) ApproveEpicTasks(ctx context.Context, canvasID, epicID uuid.UUID, approvedBy string) ([]*Action, error) {
 	// requiresApproval:true is the agent's self-flag for work that deviates from
 	// the approved plan — those tasks keep their individual human gate even when
 	// their epic is approved. The .is.null arm keeps tasks that never set the
@@ -3299,16 +3313,20 @@ func (s *supabaseStore) ApproveEpicTasks(ctx context.Context, canvasID, epicID u
 		Or("payload->>requiresApproval.is.null,payload->>requiresApproval.neq.true", "").
 		ExecuteTo(&rows)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	// Nothing matched → no state change, no version bump, no broadcast needed.
 	if len(rows) == 0 {
-		return 0, nil
+		return []*Action{}, nil
+	}
+	out := make([]*Action, 0, len(rows))
+	for _, d := range rows {
+		out = append(out, toAction(d))
 	}
 	if _, err := s.bumpVersion(ctx, canvasID); err != nil {
-		return len(rows), err
+		return out, err
 	}
-	return len(rows), nil
+	return out, nil
 }
 
 // ApproveActionsBatch flips every listed action still in 'proposed' to

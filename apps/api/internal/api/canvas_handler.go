@@ -38,10 +38,28 @@ type Handler struct {
 	store store.Store
 	hub   *ws.Hub
 	maps  *maps.Registry
+	// events is the outbound task-webhook seam (TDM-37). OPTIONAL: nil means
+	// "no webhooks wired" and every emit is a no-op, which is what handler tests
+	// and a WEBHOOKS_ENABLED=false deployment get. See task_events.go.
+	events TaskEventEmitter
 }
 
-func NewHandler(s store.Store, hub *ws.Hub, mapsReg *maps.Registry) *Handler {
-	return &Handler{store: s, hub: hub, maps: mapsReg}
+// HandlerOption customizes NewHandler. Optional dependencies go here rather than
+// in the positional signature so wiring one doesn't churn every test that
+// constructs a Handler without caring about it.
+type HandlerOption func(*Handler)
+
+// WithTaskEvents attaches the outbound task-lifecycle event emitter.
+func WithTaskEvents(e TaskEventEmitter) HandlerOption {
+	return func(h *Handler) { h.events = e }
+}
+
+func NewHandler(s store.Store, hub *ws.Hub, mapsReg *maps.Registry, opts ...HandlerOption) *Handler {
+	h := &Handler{store: s, hub: hub, maps: mapsReg}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
 }
 
 // POST /api/canvases

@@ -527,3 +527,83 @@ func TestClaimActionSameClaimantExpiredReclaimRestamps(t *testing.T) {
 		t.Fatalf("rival after restamp: err = %v, want AlreadyClaimedError{agent-a}", rerr)
 	}
 }
+
+// ── ClaimOutcome: the only report a lapsed claim ever gets (TDM-37) ──────────
+
+// Claim expiry here is LAZY — no sweeper walks stale claims — so the takeover
+// inside ClaimAction is the single moment the expiry is observable. If the
+// outcome doesn't name the holder that lost it, task.claim_expired has nothing
+// to fire on and a dead agent's handoff is silent.
+func TestClaimOutcomeReportsExpiredHolderOnTakeover(t *testing.T) {
+	canvasID, actionID := uuid.New(), uuid.New()
+	fake := newFakeActionsServer(canvasID, actionID, "executing")
+	fake.row["claimed_by"] = "dead-agent"
+	staleAt := time.Now().UTC().Add(-2 * time.Hour)
+	fake.row["claimed_at"] = staleAt.Format(time.RFC3339Nano)
+	srv := httptest.NewServer(fake.handler())
+	defer srv.Close()
+
+	st, err := NewSupabase(srv.URL, "test-key")
+	if err != nil {
+		t.Fatalf("NewSupabase: %v", err)
+	}
+
+	_, outcome, err := st.ClaimAction(context.Background(), canvasID, actionID, "agent-b")
+	if err != nil {
+		t.Fatalf("takeover: %v", err)
+	}
+	if outcome.ExpiredClaimBy != "dead-agent" {
+		t.Errorf("ExpiredClaimBy = %q, want dead-agent", outcome.ExpiredClaimBy)
+	}
+	// The ORIGINAL claim stamp, not the fresh one — it says how long the agent
+	// had been dark.
+	if outcome.ExpiredClaimAt.Sub(staleAt).Abs() > time.Second {
+		t.Errorf("ExpiredClaimAt = %v, want the lapsed claim's stamp %v", outcome.ExpiredClaimAt, staleAt)
+	}
+}
+
+// An ordinary claim off the queue expired nothing — reporting one would fire a
+// spurious task.claim_expired on every task start.
+func TestClaimOutcomeIsEmptyOnOrdinaryClaim(t *testing.T) {
+	canvasID, actionID := uuid.New(), uuid.New()
+	fake := newFakeActionsServer(canvasID, actionID, "approved")
+	srv := httptest.NewServer(fake.handler())
+	defer srv.Close()
+
+	st, err := NewSupabase(srv.URL, "test-key")
+	if err != nil {
+		t.Fatalf("NewSupabase: %v", err)
+	}
+
+	_, outcome, err := st.ClaimAction(context.Background(), canvasID, actionID, "agent-a")
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if outcome.ExpiredClaimBy != "" {
+		t.Errorf("ExpiredClaimBy = %q on a plain claim, want empty", outcome.ExpiredClaimBy)
+	}
+}
+
+// A SELF-takeover restamps a lapsed claim but nothing changed hands — the agent
+// is demonstrably alive, so there is no expiry to announce.
+func TestClaimOutcomeIsEmptyOnSelfTakeover(t *testing.T) {
+	canvasID, actionID := uuid.New(), uuid.New()
+	fake := newFakeActionsServer(canvasID, actionID, "executing")
+	fake.row["claimed_by"] = "agent-a"
+	fake.row["claimed_at"] = time.Now().UTC().Add(-30 * time.Minute).Format(time.RFC3339Nano)
+	srv := httptest.NewServer(fake.handler())
+	defer srv.Close()
+
+	st, err := NewSupabase(srv.URL, "test-key")
+	if err != nil {
+		t.Fatalf("NewSupabase: %v", err)
+	}
+
+	_, outcome, err := st.ClaimAction(context.Background(), canvasID, actionID, "agent-a")
+	if err != nil {
+		t.Fatalf("self-reclaim: %v", err)
+	}
+	if outcome.ExpiredClaimBy != "" {
+		t.Errorf("ExpiredClaimBy = %q on a self-takeover, want empty", outcome.ExpiredClaimBy)
+	}
+}

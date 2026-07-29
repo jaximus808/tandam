@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/agentcanvas/api/internal/store"
+	"github.com/agentcanvas/api/internal/webhooks"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
@@ -285,6 +286,13 @@ func (h *Handler) ProposeAction(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// A task can be BORN approved — a human passing state:"approved", or the
+	// 'auto'/'epic' approval policy stamping it above. Either way it just entered
+	// the ready-to-work queue, so it is a task.approved like any other. Emitted
+	// only after the insert committed (TDM-37).
+	if action.State == "approved" {
+		h.emitTaskEvent(canvasID, webhooks.EventTaskApproved, action)
+	}
 	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
 	writeJSON(w, http.StatusCreated, action)
 }
@@ -377,6 +385,13 @@ func (h *Handler) ProposeActionsBatch(w http.ResponseWriter, r *http.Request) {
 	if _, err := h.store.CreateActions(r.Context(), canvasID, actions); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	// One task.approved per task born approved — same rule as ProposeAction, and
+	// per-task even though the insert was one round trip (TDM-37).
+	for _, a := range actions {
+		if a.State == "approved" {
+			h.emitTaskEvent(canvasID, webhooks.EventTaskApproved, a)
+		}
 	}
 	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
 	writeJSON(w, http.StatusCreated, map[string]any{"actions": actions})
@@ -515,7 +530,15 @@ func (h *Handler) ApproveAction(w http.ResponseWriter, r *http.Request) {
 	if approvedBy == "" {
 		approvedBy = "human"
 	}
-	fresh, _ := h.transitionAction(w, r, "approved", store.ActionStatePatch{ApprovedBy: &approvedBy})
+	fresh, moved := h.transitionAction(w, r, "approved", store.ActionStatePatch{ApprovedBy: &approvedBy})
+	// task.approved fires on the TRANSITION only (moved), never on the idempotent
+	// already-approved retry — a client re-sending an approve must not hand the
+	// fleet the same task twice. emitTaskEvent skips non-tasks, so approving an
+	// EPIC emits nothing here; its tasks each get their own event from the
+	// cascade below.
+	if moved {
+		h.emitTaskEvent(CanvasIDFromCtx(r.Context()), webhooks.EventTaskApproved, fresh)
+	}
 	// Cascade whenever the epic IS approved, not only on the first transition:
 	// ApproveEpicTasks is an idempotent bulk UPDATE, so re-running it on an
 	// approve retry repairs a previously-failed cascade instead of stranding the
@@ -540,12 +563,15 @@ func (h *Handler) ApproveAction(w http.ResponseWriter, r *http.Request) {
 				}
 				return
 			}
-			n, err := h.store.ApproveEpicTasks(ctx, canvasID, epicID, "policy:epic")
+			tasks, err := h.store.ApproveEpicTasks(ctx, canvasID, epicID, "policy:epic")
 			if err != nil {
 				log.Printf("approve epic %s: batch-approving its tasks: %v", epicID, err)
 				return
 			}
-			if n > 0 {
+			if len(tasks) > 0 {
+				// The fan-out is per TASK, not per epic: each of these just
+				// entered the queue and each is separately claimable.
+				h.emitTaskApprovedEach(canvasID, tasks)
 				broadcastStateAsync(ctx, h.store, h.hub, canvasID)
 			}
 		}()
@@ -600,6 +626,10 @@ func (h *Handler) ApproveActionsBatch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(approved) > 0 {
+		// N approvals are N events. `rows` holds only the ids that ACTUALLY
+		// flipped, so a stale panel retry (ids already approved → skipped) emits
+		// nothing. Non-task rows (epics) are filtered inside emitTaskEvent.
+		h.emitTaskApprovedEach(canvasID, rows)
 		broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"approved": approved, "skipped": skipped})
@@ -641,12 +671,15 @@ func (h *Handler) ApproveActionsBatch(w http.ResponseWriter, r *http.Request) {
 		}
 		total := 0
 		for _, epicID := range epicIDs {
-			n, err := h.store.ApproveEpicTasks(ctx, canvasID, epicID, "policy:epic")
+			tasks, err := h.store.ApproveEpicTasks(ctx, canvasID, epicID, "policy:epic")
 			if err != nil {
 				log.Printf("approve-batch epic %s: batch-approving its tasks: %v", epicID, err)
 				continue
 			}
-			total += n
+			// Per-task events, emitted per epic as each cascade commits — a
+			// later epic failing must not swallow the earlier ones' events.
+			h.emitTaskApprovedEach(canvasID, tasks)
+			total += len(tasks)
 		}
 		// One extra broadcast for the whole cascade, only if any task flipped.
 		if total > 0 {
@@ -738,9 +771,17 @@ func (h *Handler) UpdateActionState(w http.ResponseWriter, r *http.Request) {
 			}
 		}()
 	}
-	h.transitionAction(w, r, body.State, store.ActionStatePatch{
+	fresh, moved := h.transitionAction(w, r, body.State, store.ActionStatePatch{
 		Result: body.Result, Error: body.Error, Payload: body.Payload,
 	})
+	// Terminal transition → task.completed, for 'done' AND 'failed' alike; the
+	// payload's task.state says which, and task.error carries the failure reason.
+	// (Rationale for folding 'failed' in here rather than staying silent: see the
+	// package note in task_events.go.) `moved` is false on the idempotent
+	// already-done retry, so a re-sent completion notifies once.
+	if moved {
+		h.emitTaskEvent(CanvasIDFromCtx(r.Context()), webhooks.EventTaskCompleted, fresh)
+	}
 }
 
 // claimAction is the task-start path: approved → executing decided by a single
@@ -758,7 +799,7 @@ func (h *Handler) claimAction(w http.ResponseWriter, r *http.Request, agentName 
 	if agentName == "" {
 		agentName = "agent"
 	}
-	action, _, err := h.store.ClaimAction(r.Context(), canvasID, id, agentName)
+	action, err := h.claimTask(r.Context(), canvasID, id, agentName)
 	if err != nil {
 		var claimed *store.AlreadyClaimedError
 		switch {
@@ -776,23 +817,54 @@ func (h *Handler) claimAction(w http.ResponseWriter, r *http.Request, agentName 
 		}
 		return
 	}
+	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
+	writeJSON(w, http.StatusOK, map[string]any{"action": action})
+}
+
+// claimTask is THE claim — the atomic store call plus the two side effects every
+// claim owes the rest of the system, with no HTTP in it. Both surfaces that can
+// start a task go through here: the MCP/web PATCH (claimAction, above) and the
+// inbound status API a CI job curls (statusStarted, TDM-38). That's the point —
+// a curl from GitHub Actions and an MCP task_start must leave the board, the
+// presence view and the webhook stream in states nobody can tell apart.
+//
+// The caller maps the error onto a status code and broadcasts state; everything
+// that must happen REGARDLESS of surface lives here.
+func (h *Handler) claimTask(ctx context.Context, canvasID, id uuid.UUID, agentName string) (*store.Action, error) {
+	action, outcome, err := h.store.ClaimAction(ctx, canvasID, id, agentName)
+	if err != nil {
+		return nil, err
+	}
 	// Liveness heartbeat: a claim proves the agent is alive — refresh its
 	// last_seen_at so the swarm view's staleness threshold stays honest.
 	// Touch-or-create ("when an agent takes a task it should still be
 	// connected"): a claimant that never called agent_register gets a minimal
 	// executor row on this canvas, so any session that takes a task appears in
 	// presence/swarm views labelled with its task (the web side already matches
-	// claimedBy → agent name). Best-effort and DETACHED: presence must never
-	// add a round-trip to the claim path (the exact latency the loadtest
-	// measures).
-	touchCtx := context.WithoutCancel(r.Context())
+	// claimedBy → agent name). This is also what puts a CI job on the board as a
+	// named member. Best-effort and DETACHED: presence must never add a
+	// round-trip to the claim path (the exact latency the loadtest measures).
+	touchCtx := context.WithoutCancel(ctx)
 	go func() {
 		if err := h.store.TouchOrCreateAgent(touchCtx, canvasID, agentName); err != nil {
 			log.Printf("claim %s: touching agent last_seen (%s): %v", id, agentName, err)
 		}
 	}()
-	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
-	writeJSON(w, http.StatusOK, map[string]any{"action": action})
+	// Claim expiry is LAZY — there is no sweeper (see store.DefaultClaimTTL), so
+	// the takeover inside ClaimAction is the one and only moment a lapsed claim
+	// becomes observable. A non-empty ExpiredClaimBy means THIS claim expired
+	// someone else's; an ordinary claim off the queue (and a self-reclaim) emits
+	// nothing — approved → executing is not an event.
+	if outcome.ExpiredClaimBy != "" {
+		log.Printf("claim %s: expired claim held by %q, taken over by %q", id, outcome.ExpiredClaimBy, agentName)
+		h.emitTaskEvent(canvasID, webhooks.EventTaskClaimExpired, action, withExpiredClaim(outcome))
+		// The caller's full-state broadcast already reconciles the board, but it
+		// says nothing about WHY the claimant changed. This is the lightweight
+		// signal the Tasks panel can surface as activity ("a claim lapsed"),
+		// matching the read-pulse path.
+		broadcastActivity(h.hub, canvasID, "claim_expired")
+	}
+	return action, nil
 }
 
 // POST /api/canvas/actions/{id}/release — stuck-claim escape hatch: an

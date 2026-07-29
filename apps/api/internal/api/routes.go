@@ -11,13 +11,20 @@ import (
 	"github.com/agentcanvas/api/internal/maps"
 	"github.com/agentcanvas/api/internal/metrics"
 	"github.com/agentcanvas/api/internal/store"
+	"github.com/agentcanvas/api/internal/webhooks"
 	"github.com/agentcanvas/api/internal/ws"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 )
 
-func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier *auth.GoogleVerifier, cookieSecure bool, mapsReg *maps.Registry, webDistPath string, imageDir string, publicBaseURL string, metricsEnabled bool) http.Handler {
+// NewRouter builds the whole HTTP surface. emitter is the outbound-webhook
+// emitter (TDM-37) and is OPTIONAL — pass nil when webhooks are disabled and
+// every task-lifecycle emit becomes a no-op. It is threaded as a nilable
+// *webhooks.Emitter rather than the TaskEventEmitter interface precisely so a nil
+// here stays a nil: a typed-nil pointer boxed into an interface would be
+// non-nil and panic on first emit.
+func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier *auth.GoogleVerifier, cookieSecure bool, mapsReg *maps.Registry, webDistPath string, imageDir string, publicBaseURL string, metricsEnabled bool, emitter *webhooks.Emitter) http.Handler {
 	r := chi.NewRouter()
 
 	metricsReg := metrics.NewRegistry()
@@ -31,7 +38,11 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 		AllowCredentials: false,
 	}))
 
-	h := NewHandler(s, hub, mapsReg)
+	var hOpts []HandlerOption
+	if emitter != nil {
+		hOpts = append(hOpts, WithTaskEvents(emitter))
+	}
+	h := NewHandler(s, hub, mapsReg, hOpts...)
 	wsH := NewWSHandler(s, hub, authSvc, mapsReg)
 	mapsH := NewMapsHandler(mapsReg)
 	authH := NewAuthHandler(s, authSvc, googleVerifier, cookieSecure)
@@ -118,6 +129,27 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 		r.Get("/api/canvases/{code}/access", h.ListCanvasAccess)
 		r.Post("/api/canvases/{code}/access", h.AddCanvasAccess)
 		r.Delete("/api/canvases/{code}/access/{userId}", h.RemoveCanvasAccess)
+
+		// Outbound webhooks (TDM-39) — owner-only canvas config, HUMAN-ONLY BY
+		// CONSTRUCTION. These sit in this group, and not under /api/canvas/*,
+		// for one reason: RequireUser accepts a session COOKIE and nothing else,
+		// so none of the credentials an agent can hold — canvas JWT, PAT, OAuth
+		// access token — reaches them. A webhook config names an endpoint and
+		// mints a signing secret, so an agent that could create one could point
+		// the board at a server it controls; migration 0038 forbids the MCP
+		// surface and this is where that is enforced. See webhook_handler.go for
+		// the full argument, including the honest limits.
+		//
+		// The static "deliveries" segment is registered alongside {id}; chi
+		// prefers static segments, and TestWebhookDeliveriesRouteDoesNotShadow
+		// pins it so a future route edit can't silently reroute one to the other.
+		r.Get("/api/canvases/{code}/webhooks", h.ListCanvasWebhooks)
+		r.Post("/api/canvases/{code}/webhooks", h.CreateCanvasWebhook)
+		r.Get("/api/canvases/{code}/webhooks/deliveries", h.ListCanvasWebhookDeliveries)
+		r.Post("/api/canvases/{code}/webhooks/deliveries/{id}/retry", h.RetryCanvasWebhookDelivery)
+		r.Patch("/api/canvases/{code}/webhooks/{id}", h.UpdateCanvasWebhook)
+		r.Delete("/api/canvases/{code}/webhooks/{id}", h.DeleteCanvasWebhook)
+		r.Post("/api/canvases/{code}/webhooks/{id}/rotate", h.RotateCanvasWebhookSecret)
 	})
 
 	// Sheet export — public by canvas code (matches WS auth model).
@@ -126,6 +158,20 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 	// Itinerary export — public by canvas code. Doubles as a calendar
 	// subscription URL (Google / Apple / Outlook poll it to stay in sync).
 	r.Get("/api/canvas/{code}/itinerary.ics", h.ExportItineraryICS)
+
+	// ── Inbound status API (TDM-38) ────────────────────────────────────────────
+	// A fleet member with no MCP client — a CI job, a Modal function, a cron
+	// script — reports task status with one curl. Canvas is addressed by CODE
+	// here (not by the token's embedded id) because the URL is the thing a human
+	// pastes into a workflow file; RequireCanvasByCode makes the two agree.
+	// RequireWrite applies as it does to every other mutation: a read-only
+	// credential can watch the board, not move it.
+	r.Group(func(r chi.Router) {
+		r.Use(RequireCanvasByCode(authSvc, s))
+		r.Use(RequireLiveGrant(s))
+		r.Use(RequireWrite)
+		r.Post("/api/canvas/{code}/tasks/{id}/status", h.ReportTaskStatus)
+	})
 
 	// Image upload is intentionally disabled for v1 — needs a real storage
 	// story (durable disk + backups) before we offer it. The read path below

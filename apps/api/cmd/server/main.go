@@ -21,6 +21,7 @@ import (
 	"github.com/agentcanvas/api/internal/config"
 	"github.com/agentcanvas/api/internal/maps"
 	"github.com/agentcanvas/api/internal/store"
+	"github.com/agentcanvas/api/internal/webhooks"
 	"github.com/agentcanvas/api/internal/ws"
 )
 
@@ -56,6 +57,25 @@ func main() {
 	hub := ws.NewHub()
 	go hub.Run()
 
+	// Outbound-webhook delivery worker (TDM-36 / migration 0038). Same shape as
+	// the hub above: a goroutine started at boot, stopped by cancelling its
+	// context during graceful shutdown. It owns all outbound HTTP for webhooks —
+	// request handlers only ever enqueue (webhooks.Emitter), so a slow or dead
+	// receiver can never slow a canvas mutation.
+	// The Emitter is the request-path half: handlers hand it task-lifecycle
+	// events (TDM-37) and it enqueues one delivery row per subscribed webhook.
+	// It stays nil when webhooks are off, which makes every emit in the handlers
+	// a no-op — nothing is enqueued that no worker would ever drain.
+	webhookCtx, stopWebhooks := context.WithCancel(context.Background())
+	defer stopWebhooks()
+	var emitter *webhooks.Emitter
+	if cfg.WebhooksEnabled {
+		emitter = webhooks.NewEmitter(db)
+		go webhooks.NewWorker(db).Run(webhookCtx)
+	} else {
+		log.Printf("WEBHOOKS_ENABLED=false — outbound webhook delivery worker disabled")
+	}
+
 	var mapsReg *maps.Registry
 	if dir := os.Getenv("MAPS_DIR"); dir != "" {
 		mapsReg, err = maps.LoadFromDir(dir)
@@ -67,7 +87,7 @@ func main() {
 	}
 	log.Printf("loaded %d map presets: %v", len(mapsReg.IDs()), mapsReg.IDs())
 
-	router := api.NewRouter(db, hub, authSvc, googleVerifier, cfg.CookieSecure, mapsReg, cfg.WebDistPath, cfg.ImageDir, cfg.PublicBaseURL, cfg.MetricsEnabled)
+	router := api.NewRouter(db, hub, authSvc, googleVerifier, cfg.CookieSecure, mapsReg, cfg.WebDistPath, cfg.ImageDir, cfg.PublicBaseURL, cfg.MetricsEnabled, emitter)
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%s", cfg.Port),
@@ -106,6 +126,7 @@ func main() {
 	defer cancel()
 
 	hub.Shutdown()
+	stopWebhooks()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Printf("graceful shutdown: %v (forcing close)", err)
 		_ = srv.Close()

@@ -55,6 +55,12 @@ type activityMsg struct {
 // Used by read-only paths (GetState) that change nothing but are still worth
 // surfacing as live agent presence.
 func broadcastActivity(hub *ws.Hub, canvasID uuid.UUID, action string) {
+	// Nil hub = no WS surface (handler tests). Unlike broadcastState, which is
+	// saved by its store read failing first, this path would deref straight into
+	// the hub's channel.
+	if hub == nil {
+		return
+	}
 	data, err := json.Marshal(activityMsg{Type: "activity", Action: action, Actor: "agent"})
 	if err != nil {
 		log.Printf("broadcastActivity marshal: %v", err)

@@ -82,6 +82,8 @@ type policyFakeStore struct {
 	epicApprovedID uuid.UUID
 	epicApprovedBy string
 	epicCalls      int
+	// epicTasks overrides what the cascade reports as flipped.
+	epicTasks []*store.Action
 }
 
 func (f *policyFakeStore) GetCanvasByID(_ context.Context, id uuid.UUID) (*store.Canvas, error) {
@@ -174,13 +176,21 @@ func (f *policyFakeStore) ApproveActionsBatch(_ context.Context, _ uuid.UUID, id
 	return out, nil
 }
 
-func (f *policyFakeStore) ApproveEpicTasks(_ context.Context, _ uuid.UUID, epicID uuid.UUID, approvedBy string) (int, error) {
+// ApproveEpicTasks records the cascade call and returns the tasks that "flipped".
+// epicTasks lets a test control that fan-out (the webhook tests assert one
+// task.approved per returned task); unset, it returns a single synthetic task so
+// the cascade still counts as having changed something.
+func (f *policyFakeStore) ApproveEpicTasks(_ context.Context, _ uuid.UUID, epicID uuid.UUID, approvedBy string) ([]*store.Action, error) {
 	f.epicMu.Lock()
 	defer f.epicMu.Unlock()
 	f.epicCalls++
 	f.epicApprovedID = epicID
 	f.epicApprovedBy = approvedBy
-	return 1, nil
+	if f.epicTasks != nil {
+		return f.epicTasks, nil
+	}
+	return []*store.Action{{ID: uuid.New(), Type: "task", State: "approved",
+		Payload: json.RawMessage(`{"title":"cascaded"}`)}}, nil
 }
 
 // GetCanvasState backs the async post-write broadcast; erroring makes it a no-op.

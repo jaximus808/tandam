@@ -134,14 +134,15 @@ func (f *agentFakeStore) waitTouched(t *testing.T, want int) []string {
 	}
 }
 
-func (f *agentFakeStore) ClaimAction(_ context.Context, _ uuid.UUID, id uuid.UUID, claimedBy string) (*store.Action, int, error) {
+func (f *agentFakeStore) ClaimAction(_ context.Context, _ uuid.UUID, id uuid.UUID, claimedBy string) (*store.Action, store.ClaimOutcome, error) {
 	a, ok := f.actions[id]
 	if !ok {
-		return nil, 0, store.ErrActionNotFound
+		return nil, store.ClaimOutcome{}, store.ErrActionNotFound
 	}
 	a.State = "executing"
 	a.ClaimedBy = &claimedBy
-	return a, 1, nil
+	// An ordinary claim off the queue: nothing expired.
+	return a, store.ClaimOutcome{Version: 1}, nil
 }
 
 func (f *agentFakeStore) GetAction(_ context.Context, _ uuid.UUID, id uuid.UUID) (*store.Action, error) {
