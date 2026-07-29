@@ -36,7 +36,7 @@ func assertVariants(t *testing.T, base []byte) {
 	t.Helper()
 	variants := buildRouteVariants(base)
 
-	for _, path := range []string{"/mcp", "/about"} {
+	for _, path := range []string{"/mcp", "/about", "/why-tandem"} {
 		html, ok := variants[path]
 		if !ok {
 			t.Fatalf("no variant built for %s", path)

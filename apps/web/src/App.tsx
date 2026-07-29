@@ -21,6 +21,7 @@ import WelcomeMode from "./modes/WelcomeMode";
 import Landing from "./pages/Landing";
 import MCPSupport from "./pages/MCPSupport";
 import About from "./pages/About";
+import WhyTandem from "./pages/WhyTandem";
 import MyCanvases from "./pages/MyCanvases";
 import StatsPage from "./pages/StatsPage";
 import UserSettings from "./pages/UserSettings";
@@ -135,7 +136,7 @@ const SIDEBAR_WIDTH_KEY = "tandem.sidebar.width";
 // it dies with the tab instead of ambushing a later, unrelated sign-in.
 const PENDING_COPY_KEY = "tandem.pendingCopy";
 
-type Route = "home" | "mcp" | "dashboard" | "stats" | "settings" | "about" | "authorize";
+type Route = "home" | "mcp" | "dashboard" | "stats" | "settings" | "about" | "why" | "authorize";
 
 function routeFromPath(): Route {
   const p = window.location.pathname.replace(/\/$/, "");
@@ -144,6 +145,7 @@ function routeFromPath(): Route {
   if (p === "/stats") return "stats";
   if (p === "/me") return "settings";
   if (p === "/about") return "about";
+  if (p === "/why-tandem") return "why";
   // OAuth consent screen (hosted MCP connector). This is the authorization_endpoint
   // advertised to clients; it renders a self-contained consent page.
   if (p === "/oauth/authorize") return "authorize";
@@ -643,6 +645,11 @@ export default function App() {
     setRoute("about");
   }
 
+  function showWhy() {
+    window.history.pushState(null, "", "/why-tandem");
+    setRoute("why");
+  }
+
   // Deep-copy the current canvas into my account, then open the owned copy.
   async function handleCopyToAccount() {
     if (!canvas || copying) return;
@@ -881,6 +888,7 @@ export default function App() {
         onShowCanvases={showMyCanvases}
         onShowSettings={showSettings}
         onAbout={showAbout}
+        onWhy={showWhy}
         onOpenCanvas={(code) => {
           setRoute("home");
           handleJoin(code);
@@ -902,6 +910,31 @@ export default function App() {
         }}
         onShowCanvases={showMyCanvases}
         onShowSettings={showSettings}
+        onWhy={showWhy}
+        onOpenCanvas={(code) => {
+          setRoute("home");
+          handleJoin(code);
+        }}
+      />
+    );
+  }
+
+  // The research essay ("The fleet outgrew the machine") — a sibling marketing
+  // surface to About, so it takes the same wiring.
+  if (route === "why") {
+    return (
+      <WhyTandem
+        onBack={() => {
+          window.history.pushState(null, "", "/");
+          setRoute("home");
+        }}
+        onOpenMCP={() => {
+          setMCPInURL();
+          setRoute("mcp");
+        }}
+        onShowCanvases={showMyCanvases}
+        onShowSettings={showSettings}
+        onAbout={showAbout}
         onOpenCanvas={(code) => {
           setRoute("home");
           handleJoin(code);
@@ -981,6 +1014,7 @@ export default function App() {
         onShowCanvases={showMyCanvases}
         onShowSettings={showSettings}
         onAbout={showAbout}
+        onWhy={showWhy}
       />
     );
   }

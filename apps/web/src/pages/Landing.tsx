@@ -22,6 +22,7 @@ interface Props {
   onShowCanvases: () => void;
   onShowSettings: () => void;
   onAbout: () => void;
+  onWhy?: () => void;
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -233,7 +234,7 @@ const ACCOUNT_PERKS: { icon: string; title: string; desc: string }[] = [
 
 /* ── the page ────────────────────────────────────────────────────────────────── */
 
-export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSettings, onAbout }: Props) {
+export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSettings, onAbout, onWhy }: Props) {
   const [launcher, setLauncher] = useState<null | "create" | "join">(null);
   const [recents, setRecents] = useState(() => listRecent());
   const [user, setUser] = useState<User | null>(getCachedUser);
@@ -289,6 +290,7 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
         onShowCanvases={onShowCanvases}
         onShowSettings={onShowSettings}
         onAbout={onAbout}
+        onWhy={onWhy}
         onUserChange={setUser}
         samePageAnchors
       />
@@ -617,6 +619,13 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
             <span>Tandem — you and your agents, in tandem.</span>
           </div>
           <div className="flex items-center gap-4">
+            <a
+              href="/why-tandem"
+              onClick={onWhy ? spaLink(onWhy) : undefined}
+              className="inline-flex items-center gap-1.5 transition-colors hover:text-ink"
+            >
+              Why Tandem
+            </a>
             <a
               href="/about"
               onClick={spaLink(onAbout)}

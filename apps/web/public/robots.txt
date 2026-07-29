@@ -1,11 +1,11 @@
 # Tandem Canvas — https://tandemcanvas.com
 #
-# Only three URLs are meant to rank: /, /mcp, /about. Everything else is the app
-# — a canvas at /c/{code}, the dashboard, settings, the OAuth consent screen —
-# and all of it serves the landing page's HTML shell, so crawling it spends
-# budget on near-duplicates of "/" and risks putting shared canvas codes in the
-# index. Disallowed here rather than noindexed because the shell can't carry a
-# per-route noindex without rendering JS first.
+# Only four URLs are meant to rank: /, /mcp, /why-tandem, /about. Everything
+# else is the app — a canvas at /c/{code}, the dashboard, settings, the OAuth
+# consent screen — and all of it serves the landing page's HTML shell, so
+# crawling it spends budget on near-duplicates of "/" and risks putting shared
+# canvas codes in the index. Disallowed here rather than noindexed because the
+# shell can't carry a per-route noindex without rendering JS first.
 User-agent: *
 Allow: /
 Disallow: /c/

@@ -20,6 +20,10 @@ interface Props {
   onShowCanvases: () => void;
   onShowSettings: () => void;
   onAbout: () => void;
+  // /why-tandem, the research essay. Optional: the link is a real anchor, so a
+  // surface that doesn't pass a handler still renders a crawlable link — the
+  // browser just navigates normally instead of routing in-app.
+  onWhy?: () => void;
   // Landing passes its own setUser so signing in through the AccountMenu keeps
   // the hero in sync; other pages omit it.
   onUserChange?: (u: User | null) => void;
@@ -53,6 +57,7 @@ export default function LandingNav({
   onShowCanvases,
   onShowSettings,
   onAbout,
+  onWhy,
   onUserChange,
   samePageAnchors = false,
 }: Props) {
@@ -117,7 +122,15 @@ export default function LandingNav({
             Quickstart
           </a>
           {/* Real anchors, not buttons — see lib/spaNav: these are the only
-              internal links to /about and /mcp a crawler can follow. */}
+              internal links to /why-tandem, /about and /mcp a crawler can
+              follow. */}
+          <a
+            href="/why-tandem"
+            onClick={onWhy ? spaLink(onWhy) : undefined}
+            className="hidden rounded-md px-3 py-1.5 text-ink/55 transition-colors hover:bg-ink/5 hover:text-ink sm:inline"
+          >
+            Why Tandem
+          </a>
           <a
             href="/about"
             onClick={spaLink(onAbout)}

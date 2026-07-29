@@ -7,6 +7,7 @@ interface Props {
   onShowCanvases: () => void;
   onShowSettings: () => void;
   onAbout: () => void;
+  onWhy?: () => void;
   onOpenCanvas: (code: string) => void;
 }
 
@@ -407,6 +408,7 @@ export default function MCPSupport({
   onShowCanvases,
   onShowSettings,
   onAbout,
+  onWhy,
   onOpenCanvas,
 }: Props) {
   const [pathTab, setPathTab] = useState<"connector" | "gateway">("connector");
@@ -436,6 +438,7 @@ export default function MCPSupport({
         onShowCanvases={onShowCanvases}
         onShowSettings={onShowSettings}
         onAbout={onAbout}
+        onWhy={onWhy}
       />
 
       <div className="max-w-4xl mx-auto px-6 py-12 space-y-14">

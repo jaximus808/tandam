@@ -66,6 +66,9 @@ interface Props {
   onShowCanvases: () => void;
   onShowSettings: () => void;
   onOpenCanvas: (code: string) => void;
+  // /why-tandem — optional so the surfaces that don't route it still compile;
+  // the links are real anchors and fall back to a normal navigation.
+  onWhy?: () => void;
 }
 
 // Jaxon's personal links.
@@ -231,7 +234,7 @@ function ProvenanceCard() {
   );
 }
 
-export default function About({ onBack, onOpenMCP, onShowCanvases, onShowSettings, onOpenCanvas }: Props) {
+export default function About({ onBack, onOpenMCP, onShowCanvases, onShowSettings, onOpenCanvas, onWhy }: Props) {
   return (
     <div className="min-h-screen bg-paper font-sans text-ink [text-rendering:optimizeLegibility] antialiased">
       <LandingNav
@@ -241,6 +244,7 @@ export default function About({ onBack, onOpenMCP, onShowCanvases, onShowSetting
         onShowCanvases={onShowCanvases}
         onShowSettings={onShowSettings}
         onAbout={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+        onWhy={onWhy}
       />
 
       {/* ── Origin: the page proves the claim instead of making it ───────────── */}
@@ -395,24 +399,34 @@ export default function About({ onBack, onOpenMCP, onShowCanvases, onShowSetting
         </div>
       </section>
 
-      {/* Footer — same shape as Landing's, minus the self-referential About link. */}
+      {/* Footer — same shape as Landing's, minus the self-referential About link
+          (the sibling essay, /why-tandem, still gets one). */}
       <footer className="border-t border-ink/10 bg-surface">
         <div className="mx-auto flex max-w-3xl flex-col items-center justify-between gap-3 px-6 py-8 text-xs text-ink/45 sm:flex-row">
           <div className="flex items-center gap-2">
             <TandemLogo size={18} animate={false} />
             <span>Tandem — you and your agents, in tandem.</span>
           </div>
-          <p>
-            made by{" "}
+          <div className="flex items-center gap-4">
             <a
-              href={WEBSITE_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline transition-colors hover:text-ink"
+              href="/why-tandem"
+              onClick={onWhy ? spaLink(onWhy) : undefined}
+              className="inline-flex items-center gap-1.5 transition-colors hover:text-ink"
             >
-              Jaxon
+              Why Tandem
             </a>
-          </p>
+            <p>
+              made by{" "}
+              <a
+                href={WEBSITE_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline transition-colors hover:text-ink"
+              >
+                Jaxon
+              </a>
+            </p>
+          </div>
         </div>
       </footer>
     </div>
