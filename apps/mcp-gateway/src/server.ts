@@ -14,7 +14,8 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { Gateway } from "./gateway.js";
-import { TOOLS, handleTool } from "./tools.js";
+import { TOOLS, decorateTools, handleTool } from "./tools.js";
+import { FACADE_RAW_TOOLS, handleFacadeTool, isFacadeTool } from "./facade.js";
 
 export const SERVER_NAME = "tandem";
 
@@ -38,18 +39,62 @@ export const DEFAULT_WEB_URL = "https://tandemcanvas.com";
 // the disabled path costs nothing per call.
 const TIMING = !!process.env.TANDEM_MCP_TIMING;
 
+// The intent facade (facade.ts), decorated exactly like the CRUD surface.
+export const FACADE_TOOLS = decorateTools(FACADE_RAW_TOOLS);
+
+/**
+ * Is the full ~80-tool CRUD surface opted in? Default is FACADE ONLY: the
+ * facade is the product's agent UX, and the CRUD manifest costs a large slice
+ * of the context window before a session does anything.
+ *
+ * Opt in with TANDEM_FULL_TOOLS=1 (also accepts true/yes), or `tandem-mcp
+ * --full-tools`, which index.ts passes through as an explicit override.
+ */
+export function fullToolsEnabled(override?: boolean): boolean {
+  if (override !== undefined) return override;
+  const v = (process.env.TANDEM_FULL_TOOLS ?? "").trim().toLowerCase();
+  return v === "1" || v === "true" || v === "yes";
+}
+
+/**
+ * The advertised manifest. When the full surface is opted in it is ADDITIVE:
+ * facade first, then every CRUD tool the facade doesn't already own by name
+ * (only canvas_connect overlaps, and the facade's version wins because its
+ * description teaches the queue-first workflow). Additive rather than
+ * either/or because the facade covers the queue but not maps, sheets, charts
+ * or forms — a session that opts in usually wants both.
+ */
+export function manifestFor(fullTools: boolean) {
+  if (!fullTools) return FACADE_TOOLS;
+  const owned = new Set(FACADE_TOOLS.map((t) => t.name));
+  return [...FACADE_TOOLS, ...TOOLS.filter((t) => !owned.has(t.name))];
+}
+
 /**
  * Build an MCP Server bound to `gateway`. One Gateway (and therefore one
  * Server) per session — for stdio that's the whole process; for HTTP it's one
  * per connected client.
+ *
+ * `options.fullTools` overrides the TANDEM_FULL_TOOLS env check (the stdio
+ * entrypoint passes it for the --full-tools CLI flag).
  */
-export function createTandemServer(gateway: Gateway, version: string): Server {
+export function createTandemServer(
+  gateway: Gateway,
+  version: string,
+  options?: { fullTools?: boolean }
+): Server {
   const server = new Server(
     { name: SERVER_NAME, version },
     { capabilities: { tools: {} } }
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
+  const fullTools = fullToolsEnabled(options?.fullTools);
+  const tools = manifestFor(fullTools);
+  process.stderr.write(
+    `[tandem] tool manifest: ${fullTools ? "facade + full CRUD" : "intent facade"} (${tools.length} tools)\n`
+  );
+
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     // Normalize legacy dotted tool names (canvas.connect) to the underscore
@@ -68,7 +113,13 @@ export function createTandemServer(gateway: Gateway, version: string): Server {
 
   async function dispatch(gateway: Gateway, name: string, a: Record<string, unknown>) {
     try {
-      const result = await handleTool(gateway, name, a);
+      // Routing is by NAME, not by manifest: the CRUD tools stay CALLABLE even
+      // when they aren't advertised, so saved prompts, older clients, and agents
+      // told to "use canvas_task_list" keep working after the manifest shrank.
+      // Gating the manifest is a context-window decision, not an access control.
+      const result = isFacadeTool(name)
+        ? await handleFacadeTool(gateway, name, a)
+        : await handleTool(gateway, name, a);
 
       // For state.read, decorate with the active canvas so the agent always knows where it is.
       if (name === "canvas_state_read" && gateway.isConnected()) {

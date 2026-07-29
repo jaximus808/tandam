@@ -1,5 +1,31 @@
 # Changelog — @jaximus/tandem-mcp
 
+## Unreleased
+
+### Intent facade replaces CRUD as the default manifest (TDM-32)
+
+- **The default surface is now 10 tools**, shaped like the work loop instead
+  of the API: `canvas_connect`, `context_get`, `queue_next`, `task_get`,
+  `task_claim`, `task_progress`, `task_complete`, `task_propose`, `doc_write`,
+  `board_status`. The ~80-tool CRUD manifest cost a large slice of a session's
+  context window before it did anything, and left the model to invent the
+  workflow; the facade encodes it — connect → queue_next → task_get →
+  task_claim → work → task_complete.
+- **The full CRUD surface is one opt-in away**: `TANDEM_FULL_TOOLS=1` (or
+  `tandem-mcp --full-tools`) advertises it *alongside* the facade. The flag
+  only controls what's **advertised** — every CRUD tool stays callable by name
+  either way, so existing prompts and older clients don't break.
+- New composed behaviour, not just renames: `context_get` returns a canvas
+  briefing in one call (identity + tabs + counts + queue state, never the full
+  board); `doc_write` creates the notes tab you name if it doesn't exist yet;
+  `board_status` answers "where does this stand" without a canvas read;
+  `task_progress` records mid-flight progress on the task itself, so
+  `task_get` returns it.
+- No webhook tool exists in any manifest, and none may be added — an
+  agent-facing tool that configures outbound HTTP turns attacker-influenced
+  canvas content into a data-exfiltration channel. Webhooks are configured by a
+  human in the web UI only. Pinned by a test.
+
 ## 2.3.0 — 2026-07-28
 
 The pivot release: Tandem is the shared state layer for parallel agent

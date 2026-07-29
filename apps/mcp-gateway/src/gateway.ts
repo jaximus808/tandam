@@ -358,6 +358,29 @@ export class Gateway {
     return res.json() as Promise<T>;
   }
 
+  /**
+   * GET an endpoint that MAY NOT EXIST on the connected API yet, returning null
+   * instead of throwing when it isn't there. Used by the intent facade's
+   * `context_get`, which prefers a server-built briefing (TDM-29 / E1.3) but must
+   * keep working against an API deployed before that endpoint landed.
+   *
+   * "Isn't there" is broader than a 404: the API mounts the SPA on `/*`, so an
+   * unrouted `/api/...` path is answered with index.html and a 200. So treat
+   * anything that isn't a 2xx JSON body as absent, and only surface real errors
+   * (401 expiry, 5xx) through assertOk.
+   */
+  async getIfAvailable<T>(path: string): Promise<T | null> {
+    const res = await this.safeFetch(path, { headers: this.authHeaders() });
+    if (res.status === 404) return null;
+    await this.assertOk("GET", path, res);
+    if (!(res.headers.get("content-type") ?? "").includes("json")) return null;
+    try {
+      return (await res.json()) as T;
+    } catch {
+      return null;
+    }
+  }
+
   /** GET an endpoint that does not require auth (e.g. /api/maps). */
   async getPublic<T>(path: string): Promise<T> {
     const res = await this.safeFetch(path);

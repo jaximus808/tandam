@@ -31,12 +31,16 @@ function printHelp() {
       `\n` +
       `Usage:\n` +
       `  tandem-mcp                 Run as an MCP stdio server (default).\n` +
+      `  tandem-mcp --full-tools    Also advertise the full CRUD tool surface\n` +
+      `                             (maps, sheets, charts, forms, …) alongside\n` +
+      `                             the default 10-tool intent facade.\n` +
       `  tandem-mcp --version, -v   Print version and exit.\n` +
       `  tandem-mcp --help, -h      Show this help.\n` +
       `\n` +
       `Environment:\n` +
       `  API_URL                    Tandem API base URL.\n` +
       `                             Default: ${DEFAULT_API_URL}\n` +
+      `  TANDEM_FULL_TOOLS          Set to 1 for the same effect as --full-tools.\n` +
       `  TANDEM_TOKEN               Personal access token — lets Claude act as you\n` +
       `                             on your private / shared canvases. Mint one at\n` +
       `                             ${DEFAULT_API_URL}/me. Optional; without it the\n` +
@@ -57,6 +61,9 @@ if (cliArgs.includes("--help") || cliArgs.includes("-h")) {
   printHelp();
   process.exit(0);
 }
+// Opt in to the full CRUD surface on top of the default intent facade. The flag
+// is an explicit override; without it, TANDEM_FULL_TOOLS decides (see server.ts).
+const FULL_TOOLS = cliArgs.includes("--full-tools") ? true : undefined;
 
 const apiUrlFromEnv = process.env.API_URL;
 const API_URL = (apiUrlFromEnv ?? DEFAULT_API_URL).replace(/\/$/, "");
@@ -84,7 +91,7 @@ const gateway = new Gateway({
 });
 
 async function main() {
-  const server = createTandemServer(gateway, VERSION);
+  const server = createTandemServer(gateway, VERSION, { fullTools: FULL_TOOLS });
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
