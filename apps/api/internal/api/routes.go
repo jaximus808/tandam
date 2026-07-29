@@ -33,8 +33,11 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 	r.Use(metricsReg.Middleware) // per-route latency, keyed by chi RoutePattern
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"*"},
-		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
+		AllowedMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		// X-Tandem-Agent is how a caller asserts its agent identity for provenance
+		// (see provenance.go). Node-based agents don't preflight, but a browser-
+		// hosted one would, so it has to be allow-listed here.
+		AllowedHeaders: []string{"Accept", "Authorization", "Content-Type", AgentIdentityHeader},
 		AllowCredentials: false,
 	}))
 
@@ -197,6 +200,12 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 		// Kill tokens whose OAuth connection was revoked mid-session (before the
 		// 24h JWT TTL). No-op for anonymous/PAT tokens, which carry no binding.
 		r.Use(RequireLiveGrant(s))
+		// Derive authored_by (human | agent:<id> | anonymous) for this request and
+		// park it in the context, so every create path below stamps provenance the
+		// server computed rather than anything the body claimed. No DB work — see
+		// provenance.go. Applied to the whole group (reads included) so a create
+		// route added later can't silently miss it.
+		r.Use(Provenance(authSvc))
 
 		// Reads — any valid role.
 		r.Get("/api/canvas/state", h.GetState)

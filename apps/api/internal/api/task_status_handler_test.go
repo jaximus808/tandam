@@ -138,16 +138,31 @@ func (f *statusFakeStore) UpdateActionState(_ context.Context, _ uuid.UUID, id u
 	return 1, nil
 }
 
-func (f *statusFakeStore) UpdateActionPayload(_ context.Context, _ uuid.UUID, id uuid.UUID, payload json.RawMessage) (int, error) {
+// Runs the REAL content gate (store.DecideContentUpdate). That is the point for
+// this file specifically: the status API's whole promise is that a progress
+// report is ADDITIVE, and "additive" now means "does not trip the gate". If a
+// change ever made mergeTaskStatusPayload touch title/body, every status test
+// here would start reverting tasks to 'proposed' and fail loudly.
+func (f *statusFakeStore) UpdateActionPayload(_ context.Context, _ uuid.UUID, id uuid.UUID, payload json.RawMessage, actor string) (*store.ContentUpdate, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	a, ok := f.actions[id]
 	if !ok {
-		return 0, fmt.Errorf("action %s not found", id)
+		return nil, store.ErrActionNotFound
 	}
-	a.Payload = payload
+	next, out, err := store.DecideContentUpdate(a, payload, actor, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	a.Payload = next
+	if out.Reverted {
+		a.State = "proposed"
+		a.ClaimedBy, a.ClaimedAt, a.ApprovedBy = nil, nil, nil
+		out.Action = a
+	}
 	f.payloadWrites++
-	return 1, nil
+	out.Version = 1
+	return out, nil
 }
 
 func (f *statusFakeStore) TouchOrCreateAgent(_ context.Context, _ uuid.UUID, _ string) error {

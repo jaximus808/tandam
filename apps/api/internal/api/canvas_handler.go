@@ -971,6 +971,9 @@ func (h *Handler) CreateNote(w http.ResponseWriter, r *http.Request) {
 		Body: body.Body, ImageRefs: body.ImageRefs,
 		ParentID: body.ParentID, ParentKind: body.ParentKind,
 		CreatedBy: body.CreatedBy,
+		// Provenance (TDM-40): server-derived, never from the body — CreatedBy
+		// above is the caller's freeform label, AuthoredBy is the trustworthy one.
+		AuthoredBy: AuthorFromCtx(r.Context()),
 	}
 	if _, err := h.store.CreateNote(r.Context(), canvasID, n); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -1023,6 +1026,8 @@ func (h *Handler) CreateNotesBatch(w http.ResponseWriter, r *http.Request) {
 		docCache[ref] = &id
 		return &id, nil
 	}
+	// Provenance (TDM-40) is per-request, so one derivation covers the batch.
+	author := AuthorFromCtx(r.Context())
 	notes := make([]*store.Note, 0, len(body.Notes))
 	for i := range body.Notes {
 		item := body.Notes[i]
@@ -1043,7 +1048,7 @@ func (h *Handler) CreateNotesBatch(w http.ResponseWriter, r *http.Request) {
 			ID: uuid.New(), Kind: "note", DocumentID: docID,
 			Body: item.Body, ImageRefs: item.ImageRefs,
 			ParentID: item.ParentID, ParentKind: item.ParentKind,
-			CreatedBy: createdBy,
+			CreatedBy: createdBy, AuthoredBy: author,
 		})
 	}
 	if _, err := h.store.CreateNotes(r.Context(), canvasID, notes); err != nil {

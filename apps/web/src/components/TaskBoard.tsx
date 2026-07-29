@@ -3,12 +3,14 @@ import {
   Bot,
   Check,
   ChevronRight,
+  CircleDashed,
   GitCommitHorizontal,
   Layers,
   Link2,
   Milestone,
   PanelLeft,
   Pencil,
+  PenLine,
   Plus,
   RotateCcw,
   Search,
@@ -18,7 +20,14 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import type { Action, ActionState, CanvasState, EpicPayload, TaskPayload } from "../types";
+import type {
+  Action,
+  ActionState,
+  CanvasState,
+  ContentAuditEntry,
+  EpicPayload,
+  TaskPayload,
+} from "../types";
 import {
   approveAction,
   approveBatch,
@@ -33,6 +42,8 @@ import posthog from "../lib/posthog";
 import TaskComposer, { linkTargets } from "./TaskComposer";
 import { epicLifecycle, TERMINAL_STATES } from "../lib/epicLifecycle";
 import { CHIP_BASE, STATE_CHIP } from "../lib/stateChips";
+import { parseAuthoredBy, provenanceTitle } from "../lib/provenance";
+import { auditActorLabel, auditChangeLabel, lastReapprovalEdit } from "../lib/taskAudit";
 
 /* ─────────────────────────────────────────────────────────────────────────────
    TaskBoard — the Board surface: the one home for tasks on a canvas. Humans
@@ -214,6 +225,107 @@ function ClaimantChip({ name, className = "" }: { name: string; className?: stri
       <Zap size={11} className="shrink-0" />
       <span className="truncate">{name}</span>
     </span>
+  );
+}
+
+// Provenance (TDM-40): who the SERVER concluded wrote this, next to `proposedBy`
+// — which is only what the caller called itself.
+//
+// This is the quietest mark on a card, on purpose. The six semantic hues belong
+// to STATE; authorship is a record fact, so it sits in dim ink alongside the age
+// readout with no fill and no border. The agent case is the only one that spends
+// width on a label, because it's the only one carrying something the glyph can't
+// say: WHICH agent. human and anonymous are one bit each — glyph plus a title,
+// with the bit preserved for screen readers via aria-label.
+//
+// No provenance at all renders NOTHING. A row that predates migration 0039 is
+// genuinely unknown, and an "unknown" chip on every old task would be noise
+// standing in for information.
+function ProvenanceChip({
+  authoredBy,
+  verbose = false,
+  className = "",
+}: {
+  authoredBy?: string;
+  /** Detail-panel mode: spell the authorship out instead of leaning on a glyph. */
+  verbose?: boolean;
+  className?: string;
+}) {
+  const p = parseAuthoredBy(authoredBy);
+  if (!p) return null;
+
+  // Verbose lives in the detail footer, a strip of plain-text facts ("proposed
+  // by …", "created 2h ago") that already opens with a Bot glyph. A second glyph
+  // there is an accessory, not information — the words do the work instead.
+  if (verbose) {
+    return (
+      <span className={`text-[11px] text-ink/50 ${className}`} title={provenanceTitle(p)}>
+        authored by {p.label}
+      </span>
+    );
+  }
+
+  const Glyph = p.kind === "agent" ? Bot : p.kind === "human" ? PenLine : CircleDashed;
+  return (
+    <span
+      className={`inline-flex min-w-0 items-center gap-1 text-[10px] text-ink/45 ${className}`}
+      title={provenanceTitle(p)}
+      aria-label={`Authored by ${p.label}`}
+    >
+      <Glyph size={10} className="shrink-0" aria-hidden="true" />
+      {/* Only the agent case spends width on a label — it's the only one whose
+          glyph leaves a real question ("which agent?") unanswered. */}
+      {p.kind === "agent" && <span className="max-w-[7rem] truncate">{p.label}</span>}
+    </span>
+  );
+}
+
+// Re-approval surfacing (TDM-41): this proposed task is NOT new — it was
+// approved once, its title or body was rewritten, and the approval was
+// withdrawn. The state chip already moved the card; what it can't say is that
+// you have read this task before and it has since changed.
+//
+// Amber, and amber only here. The board's six semantic hues belong to STATE,
+// and provenance sits in dim ink as a record fact — this is neither. It is the
+// one thing on a Proposed card that should pull the eye first, so it gets the
+// board's only unclaimed attention hue and nothing else does.
+
+// Card form: one line, glyph plus three words, above the record-metadata row so
+// it doesn't compete with the epic chip and the provenance group.
+function ReapprovalMark({ edit }: { edit: ContentAuditEntry }) {
+  return (
+    <div
+      className="mt-1.5 inline-flex items-center gap-1 text-[10.5px] font-medium text-amber-600 dark:text-amber-400"
+      title={`${auditActorLabel(edit.actor)} changed the ${auditChangeLabel(edit.change)} after this was approved, so it went back for approval. ${edit.summary}`}
+    >
+      <RotateCcw size={10} className="shrink-0" aria-hidden="true" />
+      edited after approval
+    </div>
+  );
+}
+
+// Detail form: the facts, then the diff hint the server recorded. The hint is
+// the reason this exists — at the moment of deciding whether to approve again,
+// seeing exactly what moved beats any amount of prose about it. Rendered in the
+// code face with the arrow intact, because it is a quotation, not a sentence.
+function ReapprovalNotice({ edit }: { edit: ContentAuditEntry }) {
+  return (
+    <div className="mt-3 rounded-md border border-amber-500/25 bg-amber-500/[0.07] px-2.5 py-2">
+      <div className="flex items-center gap-1.5 text-[12px] font-semibold text-amber-700 dark:text-amber-400">
+        <RotateCcw size={12} className="shrink-0" aria-hidden="true" />
+        Edited after approval — needs re-approval
+      </div>
+      <p className="mt-1 text-[11.5px] leading-relaxed text-ink/65">
+        {auditActorLabel(edit.actor)} changed the {auditChangeLabel(edit.change)}{" "}
+        <span title={fullDate(edit.at)}>{ageOf(edit.at)} ago</span>, so the task went back to
+        proposed and its claim was released. Read it again before approving.
+      </p>
+      {edit.summary && (
+        <p className="mt-1.5 overflow-x-auto whitespace-pre font-code text-[10.5px] leading-relaxed text-ink/55">
+          {edit.summary}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -734,6 +846,7 @@ export default function TaskBoard({
   function renderCard(t: Action, showState: boolean, withEpicChip: boolean) {
     const p = taskPayload(t);
     const terminal = t.state === "done" || t.state === "failed" || t.state === "rejected";
+    const reapproval = lastReapprovalEdit(p);
     const epicId = p.epicId;
     const epicTitle = withEpicChip && epicId ? epicTitleById.get(epicId) : undefined;
     return (
@@ -774,6 +887,10 @@ export default function TaskBoard({
             <ClaimantChip name={t.claimedBy} />
           </div>
         )}
+        {/* Only while it's waiting on a human. Once re-approved the mark has
+            done its job, and a permanent "was edited once" badge on a running
+            task is history, not a decision aid. */}
+        {t.state === "proposed" && reapproval && <ReapprovalMark edit={reapproval} />}
         <div className="mt-1.5 flex items-center gap-1.5">
           {epicTitle && epicId && (
             <button
@@ -791,12 +908,15 @@ export default function TaskBoard({
           {p.assignee === "human" && (
             <User size={11} className="shrink-0 text-ink/40" aria-label="Your own todo" />
           )}
-          <span
-            className="ml-auto shrink-0 font-code text-[10px] text-ink/50"
-            title={fullDate(t.createdAt)}
-          >
-            {ageOf(t.createdAt)}
-          </span>
+          {/* Record metadata, right-aligned as one group: who wrote it, when.
+              Both are facts about the row rather than its status, so they read
+              at the same dim weight. */}
+          <div className="ml-auto flex shrink-0 items-center gap-1.5">
+            <ProvenanceChip authoredBy={t.authoredBy} />
+            <span className="font-code text-[10px] text-ink/50" title={fullDate(t.createdAt)}>
+              {ageOf(t.createdAt)}
+            </span>
+          </div>
         </div>
         {renderApproveReject(t)}
       </div>
@@ -1364,6 +1484,9 @@ function TaskDetail({
 
   const commits = extractCommits(action.result);
   const epicTitle = isTask && p.epicId ? epicTitleById.get(p.epicId) : undefined;
+  // The last edit that cost an approval, if any — epics are gated the same way,
+  // so this reads through the shared payload shape too.
+  const reapproval = lastReapprovalEdit(p);
 
   // aria-modal contract: move focus INTO the dialog on open, keep Tab cycling
   // inside it, and hand focus back to the opener on close. The component
@@ -1417,16 +1540,17 @@ function TaskDetail({
 
   // Content edits REPLACE the payload server-side, so every field the editor
   // doesn't touch must round-trip or it silently disappears.
+  // A payload PATCH REPLACES the payload, so an edit must round-trip everything
+  // it isn't changing. Spreading the whole stored payload (rather than naming
+  // fields) is what keeps that true as the payload grows: a task that has been
+  // executing carries CI progress and evidence links, and a reverted task
+  // reaches this editor still holding both. Listing fields by hand meant every
+  // human edit quietly deleted the ones nobody remembered to add.
+  //
+  // `audit` rides along too and is harmless — the server ignores whatever a
+  // caller sends under it and re-attaches its own copy (TDM-41).
   function draftFrom(overrides: Partial<TaskPayload>): TaskPayload {
-    return {
-      title: p.title ?? "",
-      body: p.body,
-      linkedIds: p.linkedIds,
-      assignee: p.assignee,
-      epicId: p.epicId,
-      requiresApproval: p.requiresApproval,
-      ...overrides,
-    };
+    return { ...p, title: p.title ?? "", ...overrides };
   }
 
   function saveEdit() {
@@ -1605,6 +1729,13 @@ function TaskDetail({
             </>
           )}
 
+          {/* Why this is back in triage. Sits directly under the content it is
+              about — it changes how you read the title above it, so it must not
+              be further down the panel than the thing it qualifies. */}
+          {!editing && action.state === "proposed" && reapproval && (
+            <ReapprovalNotice edit={reapproval} />
+          )}
+
           {/* Epic membership. */}
           {epicTitle && (
             <div className="mt-3 flex items-center gap-1.5 text-[12px] text-ink/55">
@@ -1715,6 +1846,10 @@ function TaskDetail({
               )}
             </span>
             {action.approvedBy && <span>→ approved by {action.approvedBy}</span>}
+            {/* The claimed label above is whatever the caller sent; this is what
+                the server derived from how the request authenticated. Sitting
+                them side by side is the point. */}
+            <ProvenanceChip authoredBy={action.authoredBy} verbose />
             <span className="ml-auto" title={fullDate(action.createdAt)}>
               created {ageOf(action.createdAt)} ago
             </span>

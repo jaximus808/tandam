@@ -38,6 +38,11 @@ var (
 	// row because the action is in a state the transition doesn't apply to
 	// (e.g. claiming a task still in 'proposed').
 	ErrIllegalActionState = errors.New("illegal action state transition")
+	// ErrContentLocked wraps a content edit (title/body) refused because the
+	// action is terminal — done or failed. See content_gate.go: an approved task
+	// that is edited re-enters the gate, but a FINISHED one is history, and
+	// history is not rewritten.
+	ErrContentLocked = errors.New("task content is locked")
 )
 
 // AlreadyClaimedError is returned by ClaimAction when the conditional claim
@@ -104,9 +109,9 @@ type Canvas struct {
 	// share posture, not a secret. YourRole is the requester's resolved role for
 	// this canvas ('write'|'read'|'none'); it is NOT stored, so toCanvas leaves it
 	// empty and handlers fill it per-request via ResolveCanvasRole.
-	Visibility string    `json:"visibility,omitempty"`
-	PublicRole string    `json:"publicRole,omitempty"`
-	YourRole   string    `json:"yourRole,omitempty"`
+	Visibility string `json:"visibility,omitempty"`
+	PublicRole string `json:"publicRole,omitempty"`
+	YourRole   string `json:"yourRole,omitempty"`
 	// ApprovalPolicy ('strict'|'epic'|'auto', migration 0033) sets how much human
 	// gating agent-proposed tasks get. Empty (legacy row) is treated as 'epic',
 	// the DB default. Enforced in the action create/approve handlers.
@@ -115,9 +120,9 @@ type Canvas struct {
 	// read-me-first context an agent pulls on connect (migration 0037). At most
 	// one per canvas by construction. nil = no briefing designated.
 	BriefingDocID *uuid.UUID `json:"briefingDocId,omitempty"`
-	Version    int       `json:"version"`
-	CreatedAt  time.Time `json:"createdAt"`
-	UpdatedAt  time.Time `json:"updatedAt"`
+	Version       int        `json:"version"`
+	CreatedAt     time.Time  `json:"createdAt"`
+	UpdatedAt     time.Time  `json:"updatedAt"`
 }
 
 // CanvasAccess is one account a canvas has been shared with (a canvas_access row
@@ -206,7 +211,12 @@ type Note struct {
 	ParentKind *string    `json:"parentKind,omitempty"`
 	SortOrder  int        `json:"sortOrder"`
 	CreatedBy  string     `json:"createdBy"`
-	UpdatedAt  time.Time  `json:"updatedAt"`
+	// AuthoredBy is server-derived provenance (migration 0039): "human" |
+	// "agent:<identity>" | "anonymous", stamped on INSERT from the request's
+	// auth context and NEVER read off the request body. nil = the row predates
+	// provenance. Unlike CreatedBy, a client cannot set or change it.
+	AuthoredBy *string   `json:"authoredBy,omitempty"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 	// Freshness pair (migration 0037). VerifiedAt is when someone last asserted
 	// this content is still TRUE — not when the bytes last changed (that's
 	// UpdatedAt). StaleAfterSeconds is how long that assertion stays good. Both
@@ -369,26 +379,32 @@ type Patch struct {
 // "navigate" it is { goalLabel?, goal?{lat,lng}, waypoints?[{lat,lng}] }.
 // Stored raw (json.RawMessage) so the canvas stays agnostic to payload shape.
 type Action struct {
-	ID           uuid.UUID       `json:"id"`
-	Kind         string          `json:"kind"` // always "action"
-	Type         string          `json:"type"`
-	State        string          `json:"state"`
-	Payload      json.RawMessage `json:"payload"`
-	ProposedBy   string          `json:"proposedBy"`
-	ApprovedBy   *string         `json:"approvedBy,omitempty"`
+	ID         uuid.UUID       `json:"id"`
+	Kind       string          `json:"kind"` // always "action"
+	Type       string          `json:"type"`
+	State      string          `json:"state"`
+	Payload    json.RawMessage `json:"payload"`
+	ProposedBy string          `json:"proposedBy"`
+	ApprovedBy *string         `json:"approvedBy,omitempty"`
 	// ClaimedBy/ClaimedAt record which agent holds the executing claim (set by
 	// ClaimAction, cleared by ReleaseAction). Migration 0032.
-	ClaimedBy    *string         `json:"claimedBy,omitempty"`
-	ClaimedAt    *time.Time      `json:"claimedAt,omitempty"`
-	Result       *string         `json:"result,omitempty"`
-	Error        *string         `json:"error,omitempty"`
-	LinkedPinIDs []uuid.UUID     `json:"linkedPinIds"`
+	ClaimedBy    *string     `json:"claimedBy,omitempty"`
+	ClaimedAt    *time.Time  `json:"claimedAt,omitempty"`
+	Result       *string     `json:"result,omitempty"`
+	Error        *string     `json:"error,omitempty"`
+	LinkedPinIDs []uuid.UUID `json:"linkedPinIds"`
 	// Ticket is the per-canvas sequential task number (type "task" only; nil
 	// for other action types). Only the integer is stored — the "TDM-<n>"
 	// display form is added at serialization time (see MarshalJSON).
-	Ticket    *int      `json:"ticket,omitempty"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	Ticket *int `json:"ticket,omitempty"`
+	// AuthoredBy is server-derived provenance (migration 0039): "human" |
+	// "agent:<identity>" | "anonymous", stamped on INSERT from the request's
+	// auth context and NEVER read off the request body. nil = the row predates
+	// provenance. Unlike ProposedBy — a freeform label the caller sends — this
+	// one cannot be spoofed into claiming a human wrote the task.
+	AuthoredBy *string   `json:"authoredBy,omitempty"`
+	CreatedAt  time.Time `json:"createdAt"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
 // TicketID renders a stored ticket integer as the display form humans and
@@ -470,8 +486,8 @@ type User struct {
 	// the agent-activity showcase auto-scrolls a batch change into view. Purely a
 	// client-side display preference; the server just stores and echoes it.
 	AgentFollowStyle string    `json:"agentFollowStyle"`
-	CreatedAt         time.Time `json:"createdAt"`
-	LastSeenAt        time.Time `json:"lastSeenAt"`
+	CreatedAt        time.Time `json:"createdAt"`
+	LastSeenAt       time.Time `json:"lastSeenAt"`
 }
 
 // PersonalAccessToken is one user-scoped MCP credential (migration 0027). The
@@ -662,7 +678,13 @@ type Document struct {
 	SortOrder int            `json:"sortOrder"`
 	Config    map[string]any `json:"config"`
 	CreatedBy string         `json:"createdBy"`
-	UpdatedAt time.Time      `json:"updatedAt"`
+	// AuthoredBy is server-derived provenance (migration 0039): "human" |
+	// "agent:<identity>" | "anonymous", stamped on INSERT from the request's
+	// auth context and NEVER read off the request body. nil = the row predates
+	// provenance (or, today, was minted as the backing document of a sheet —
+	// see CreateSheet).
+	AuthoredBy *string   `json:"authoredBy,omitempty"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 	// Freshness pair (migration 0037) — see Note.VerifiedAt. On a document this
 	// vouches for the doc as a whole (the briefing doc is the motivating case).
 	VerifiedAt        *time.Time `json:"verifiedAt,omitempty"`
@@ -1065,7 +1087,25 @@ type Store interface {
 	// pattern. Human-only — the gate lives at the route surface (see
 	// api.RequeueAction); agents must not requeue their own failures.
 	RequeueAction(ctx context.Context, canvasID, id uuid.UUID) (*Action, int, error)
-	UpdateActionPayload(ctx context.Context, canvasID, id uuid.UUID, payload json.RawMessage) (int, error)
+	// UpdateActionPayload is the ONE write path for an action's payload, and
+	// therefore the place the content gate lives (TDM-41 — see content_gate.go
+	// for the full rule table and its rationale). Every payload write goes
+	// through it precisely so there is no ungated back door:
+	//
+	//   - a non-content write (progress[], links[], assignee, linkedIds …)
+	//     stores as before, in any state;
+	//   - a content write (title/body) on an approved/executing action REVERTS
+	//     it to 'proposed', clears the claim and approved_by, and appends a
+	//     server-owned audit entry — the edit re-enters the human gate;
+	//   - a content write on a done/failed action returns ErrContentLocked;
+	//   - a content write on proposed/rejected is allowed and audited.
+	//
+	// `actor` is the server-derived provenance string (api.AuthorFromCtx —
+	// "human" | "agent:<id>" | "anonymous"); "" records as "unknown". The
+	// revert is a conditional UPDATE predicated on the state that was read, so
+	// an action that moves under an in-flight edit yields
+	// ErrIllegalActionState rather than a lost update.
+	UpdateActionPayload(ctx context.Context, canvasID, id uuid.UUID, payload json.RawMessage, actor string) (*ContentUpdate, error)
 	DeleteAction(ctx context.Context, canvasID, id uuid.UUID) (int, error)
 	// ApproveEpicTasks batch-approves every currently-proposed task under an epic
 	// (actions rows with type='task', state='proposed', payload epicId = epicID)

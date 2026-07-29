@@ -2751,7 +2751,14 @@ const RAW_TOOLS = [
       "'executing' (approved → executing), 'done' / 'failed' (executing → …). Set " +
       "`result` on done, `error` on failed. `payload` may be set to write computed " +
       "waypoints back (e.g. before approval) — note that computing a path does not " +
-      "move the robot.",
+      "move the robot. `payload` must NOT change a task's title or body: approval " +
+      "binds to the CONTENT a human read, so a state change carrying rewritten " +
+      "content is refused (409 content_locked), and a payload-only edit of an " +
+      "approved or executing task sends it back to 'proposed' with its claim " +
+      "released, to be approved again. Editing a done/failed task's content is " +
+      "refused outright. Every content edit is recorded in payload.audit[] with the " +
+      "server's own view of who made it. If the task you were given is wrong, say so " +
+      "in `error` or propose a new task — do not rewrite the approved one.",
     inputSchema: {
       type: "object" as const,
       properties: {

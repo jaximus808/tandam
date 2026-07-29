@@ -47,7 +47,11 @@ export function onStateUpdate(fn: StateHandler): () => void {
 // Stateless agent-presence pulses (e.g. "an agent just read the canvas"),
 // separate from the heavyweight state stream so the UI can animate live
 // activity without a full re-render. Not wired through the mock backend.
-export type AgentActivity = { action: "read" };
+// The verbs the server sends today: "read" (an agent pulled canvas state),
+// "claim_expired" (a lapsed claim was taken over), "reverted" (a content edit
+// cost a task its approval — TDM-41, so a board can call out WHY a card just
+// jumped back to Proposed rather than showing it silently teleport).
+export type AgentActivity = { action: "read" | "claim_expired" | "reverted" };
 type ActivityHandler = (a: AgentActivity) => void;
 let activityHandlers: ActivityHandler[] = [];
 
@@ -190,7 +194,7 @@ function connect(code: string) {
           )
         );
       } else if (msg.type === "activity") {
-        activityHandlers.forEach((h) => h({ action: msg.action as "read" }));
+        activityHandlers.forEach((h) => h({ action: msg.action as AgentActivity["action"] }));
       } else if (msg.type === "access") {
         // The owner changed sharing while we're connected.
         const role = msg.role as "write" | "read" | "none";

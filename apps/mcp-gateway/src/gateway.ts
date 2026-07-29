@@ -273,11 +273,26 @@ export class Gateway {
     return this.session;
   }
 
-  private authHeaders() {
-    return {
+  private authHeaders(): Record<string, string> {
+    const s = this.getSession();
+    const headers: Record<string, string> = {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${this.getSession().token}`,
+      Authorization: `Bearer ${s.token}`,
     };
+    // Provenance (TDM-40): tell the API which agent this is, so it can stamp
+    // authored_by = "agent:<identity>" on whatever we create. Deliberately the
+    // SAME identity claimant() uses for task claims, so a task's provenance chip
+    // and its claimedBy agree instead of naming two different things.
+    //
+    // Read straight off the session rather than via claimant(), because
+    // claimant() lazily MINTS a claimantId — and a mint here would never make it
+    // back into the serialized session handle, so every request would invent a
+    // different identity. No identity in the handle ⇒ no header ⇒ the server
+    // derives "anonymous", which is the honest answer for a session that never
+    // identified itself.
+    const agent = s.agentName ?? s.agentId ?? s.claimantId;
+    if (agent) headers["X-Tandem-Agent"] = agent;
+    return headers;
   }
 
   /**

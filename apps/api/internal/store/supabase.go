@@ -85,23 +85,23 @@ func LastFour(token string) string {
 // ── DB row types (snake_case = Supabase column names) ─────────────────────────
 
 type dbCanvas struct {
-	ID           string          `json:"id"`
-	Code         string          `json:"code"`
-	Name         string          `json:"name"`
-	Mode         string          `json:"mode"`
-	MapID        *string         `json:"map_id"`
-	OwnerUserID  *string         `json:"owner_user_id"`
-	ClaimToken   *string         `json:"claim_token"`
-	Visibility   string          `json:"visibility"`
-	PublicRole   string          `json:"public_role"`
+	ID          string  `json:"id"`
+	Code        string  `json:"code"`
+	Name        string  `json:"name"`
+	Mode        string  `json:"mode"`
+	MapID       *string `json:"map_id"`
+	OwnerUserID *string `json:"owner_user_id"`
+	ClaimToken  *string `json:"claim_token"`
+	Visibility  string  `json:"visibility"`
+	PublicRole  string  `json:"public_role"`
 	// approval_policy (migration 0033); empty until the migration is applied.
-	ApprovalPolicy string          `json:"approval_policy"`
+	ApprovalPolicy string `json:"approval_policy"`
 	// briefing_doc_id (migration 0037); null until a briefing is designated.
-	BriefingDocID  *string         `json:"briefing_doc_id"`
-	EnabledModes   json.RawMessage `json:"enabled_modes"`
-	Version      int             `json:"version"`
-	CreatedAt    string          `json:"created_at"`
-	UpdatedAt    string          `json:"updated_at"`
+	BriefingDocID *string         `json:"briefing_doc_id"`
+	EnabledModes  json.RawMessage `json:"enabled_modes"`
+	Version       int             `json:"version"`
+	CreatedAt     string          `json:"created_at"`
+	UpdatedAt     string          `json:"updated_at"`
 }
 
 type dbPin struct {
@@ -144,6 +144,7 @@ type dbNote struct {
 	ParentKind *string  `json:"parent_kind"`
 	SortOrder  int      `json:"sort_order"`
 	CreatedBy  string   `json:"created_by"`
+	AuthoredBy *string  `json:"authored_by"`
 	UpdatedAt  string   `json:"updated_at"`
 	// Freshness pair (migration 0037); both null on rows written before it.
 	VerifiedAt        *string `json:"verified_at"`
@@ -226,6 +227,7 @@ type dbAction struct {
 	Error        *string         `json:"error"`
 	LinkedPinIDs json.RawMessage `json:"linked_pin_ids"`
 	Ticket       *int            `json:"ticket"`
+	AuthoredBy   *string         `json:"authored_by"`
 	CreatedAt    string          `json:"created_at"`
 	UpdatedAt    string          `json:"updated_at"`
 }
@@ -270,14 +272,15 @@ type dbPendingEdit struct {
 }
 
 type dbDocument struct {
-	ID        string          `json:"id"`
-	Type      string          `json:"type"`
-	Name      string          `json:"name"`
-	ParentID  *string         `json:"parent_id"`
-	SortOrder int             `json:"sort_order"`
-	Config    json.RawMessage `json:"config"`
-	CreatedBy string          `json:"created_by"`
-	UpdatedAt string          `json:"updated_at"`
+	ID         string          `json:"id"`
+	Type       string          `json:"type"`
+	Name       string          `json:"name"`
+	ParentID   *string         `json:"parent_id"`
+	SortOrder  int             `json:"sort_order"`
+	Config     json.RawMessage `json:"config"`
+	CreatedBy  string          `json:"created_by"`
+	AuthoredBy *string         `json:"authored_by"`
+	UpdatedAt  string          `json:"updated_at"`
 	// Freshness pair (migration 0037); both null on rows written before it.
 	VerifiedAt        *string `json:"verified_at"`
 	StaleAfterSeconds *int    `json:"stale_after_seconds"`
@@ -388,7 +391,8 @@ func toDocument(d dbDocument) *Document {
 	doc := &Document{ID: id, Kind: "document",
 		Type: d.Type, Name: d.Name, SortOrder: d.SortOrder,
 		ParentID:  parseUUIDPtr(d.ParentID),
-		CreatedBy: d.CreatedBy, UpdatedAt: parseTime(d.UpdatedAt),
+		CreatedBy: d.CreatedBy, AuthoredBy: d.AuthoredBy,
+		UpdatedAt:  parseTime(d.UpdatedAt),
 		VerifiedAt: parseTimePtr(d.VerifiedAt), StaleAfterSeconds: d.StaleAfterSeconds,
 		Config: map[string]any{},
 	}
@@ -419,7 +423,7 @@ func toCanvas(d dbCanvas) *Canvas {
 		EnabledModes: parseEnabledModes(d.EnabledModes), MapID: d.MapID, OwnerUserID: owner,
 		Visibility: d.Visibility, PublicRole: d.PublicRole,
 		ApprovalPolicy: d.ApprovalPolicy, BriefingDocID: parseUUIDPtr(d.BriefingDocID),
-		Version: d.Version,
+		Version:   d.Version,
 		CreatedAt: parseTime(d.CreatedAt), UpdatedAt: parseTime(d.UpdatedAt)}
 }
 
@@ -492,7 +496,8 @@ func toNote(d dbNote) *Note {
 		Body:      d.Body,
 		ImageRefs: d.ImageRefs, ParentKind: d.ParentKind,
 		SortOrder: d.SortOrder,
-		CreatedBy: d.CreatedBy, UpdatedAt: parseTime(d.UpdatedAt),
+		CreatedBy: d.CreatedBy, AuthoredBy: d.AuthoredBy,
+		UpdatedAt:  parseTime(d.UpdatedAt),
 		VerifiedAt: parseTimePtr(d.VerifiedAt), StaleAfterSeconds: d.StaleAfterSeconds}
 	if n.ImageRefs == nil {
 		n.ImageRefs = []string{}
@@ -578,9 +583,10 @@ func toAction(d dbAction) *Action {
 		Payload:    d.Payload,
 		ProposedBy: d.ProposedBy, ApprovedBy: d.ApprovedBy,
 		ClaimedBy: d.ClaimedBy,
-		Result: d.Result, Error: d.Error,
+		Result:    d.Result, Error: d.Error,
 		LinkedPinIDs: []uuid.UUID{},
 		Ticket:       d.Ticket,
+		AuthoredBy:   d.AuthoredBy,
 		CreatedAt:    parseTime(d.CreatedAt), UpdatedAt: parseTime(d.UpdatedAt),
 	}
 	if d.ClaimedAt != nil && *d.ClaimedAt != "" {
@@ -1922,6 +1928,30 @@ func (s *supabaseStore) LeaveWelcomeIfNeeded(ctx context.Context, canvasID uuid.
 
 // ── Documents (migration 0024) ────────────────────────────────────────────────
 
+// backfillNullKey levels a bulk-INSERT payload: if ANY row carries key, every
+// row gets it (nil where it was absent). PostgREST rejects a bulk insert whose
+// JSON objects don't all share the same key set (PGRST102), which is otherwise
+// exactly what a conditionally-added column like authored_by produces on a
+// mixed batch. No-op when no row has the key — which is what keeps an API
+// deployed ahead of its migration from naming a column that doesn't exist yet.
+func backfillNullKey(rows []map[string]any, key string) {
+	present := false
+	for _, r := range rows {
+		if _, ok := r[key]; ok {
+			present = true
+			break
+		}
+	}
+	if !present {
+		return
+	}
+	for _, r := range rows {
+		if _, ok := r[key]; !ok {
+			r[key] = nil
+		}
+	}
+}
+
 // documentRow shapes a Document into its DB row. Shared by the single- and
 // bulk-insert paths (and by CreateCharts, which mints each chart's backing
 // 'chart' document in one bulk documents INSERT rather than one CreateDocument
@@ -1935,7 +1965,7 @@ func documentRow(canvasID uuid.UUID, d *Document, now time.Time) (map[string]any
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{
+	row := map[string]any{
 		"id":         d.ID.String(),
 		"canvas_id":  canvasID.String(),
 		"type":       d.Type,
@@ -1949,7 +1979,15 @@ func documentRow(canvasID uuid.UUID, d *Document, now time.Time) (map[string]any
 		// set — PostgREST rejects mismatched keys (PGRST102).
 		"verified_at":         timePtrStr(d.VerifiedAt),
 		"stale_after_seconds": intPtr(d.StaleAfterSeconds),
-	}, nil
+	}
+	// authored_by (migration 0039) follows the `ticket` precedent: the key is
+	// added only when provenance was actually derived, so an API deployed ahead
+	// of the migration still inserts cleanly instead of 400ing on an unknown
+	// column. Bulk callers backfill the key to keep key sets identical (PGRST102).
+	if d.AuthoredBy != nil {
+		row["authored_by"] = *d.AuthoredBy
+	}
+	return row, nil
 }
 
 func (s *supabaseStore) CreateDocument(ctx context.Context, canvasID uuid.UUID, d *Document) (int, error) {
@@ -1982,6 +2020,9 @@ func (s *supabaseStore) CreateDocuments(ctx context.Context, canvasID uuid.UUID,
 		}
 		rows = append(rows, row)
 	}
+	// PGRST102: documentRow omits authored_by when provenance wasn't derived
+	// (migration 0039) — level the key set before a bulk insert.
+	backfillNullKey(rows, "authored_by")
 	if err := s.exec(s.client.From("documents").Insert(rows, false, "", "minimal", "")); err != nil {
 		return 0, err
 	}
@@ -2369,7 +2410,7 @@ func noteRow(canvasID uuid.UUID, n *Note, now time.Time) map[string]any {
 	if n.ParentID != nil {
 		parentID = n.ParentID.String()
 	}
-	return map[string]any{
+	row := map[string]any{
 		"id": n.ID.String(), "canvas_id": canvasID.String(),
 		"document_id": uuidPtrStr(n.DocumentID),
 		"body":        n.Body, "image_refs": refs,
@@ -2382,6 +2423,13 @@ func noteRow(canvasID uuid.UUID, n *Note, now time.Time) map[string]any {
 		"verified_at":         timePtrStr(n.VerifiedAt),
 		"stale_after_seconds": intPtr(n.StaleAfterSeconds),
 	}
+	// authored_by (migration 0039) — conditional for the same reason as
+	// documentRow/actionRow: survive an API deploy that lands before the
+	// migration does. CreateNotes backfills the key across a mixed batch.
+	if n.AuthoredBy != nil {
+		row["authored_by"] = *n.AuthoredBy
+	}
+	return row
 }
 
 func (s *supabaseStore) CreateNote(ctx context.Context, canvasID uuid.UUID, n *Note) (int, error) {
@@ -2432,6 +2480,9 @@ func (s *supabaseStore) CreateNotes(ctx context.Context, canvasID uuid.UUID, not
 		nextSort[key] = start + 1
 		rows = append(rows, noteRow(canvasID, n, now))
 	}
+	// PGRST102: every row in a bulk INSERT must share an identical key set, and
+	// noteRow omits authored_by when provenance wasn't derived (migration 0039).
+	backfillNullKey(rows, "authored_by")
 	if err := s.exec(s.client.From("notes").Insert(rows, false, "", "minimal", "")); err != nil {
 		return 0, err
 	}
@@ -2871,6 +2922,11 @@ func actionRow(canvasID uuid.UUID, a *Action, now time.Time) (map[string]any, er
 	if a.Ticket != nil {
 		row["ticket"] = *a.Ticket
 	}
+	// authored_by (migration 0039) — server-derived provenance, same
+	// deploy-ahead-of-migration guard as `ticket` above.
+	if a.AuthoredBy != nil {
+		row["authored_by"] = *a.AuthoredBy
+	}
 	return row, nil
 }
 
@@ -2922,11 +2978,13 @@ func (s *supabaseStore) CreateActions(ctx context.Context, canvasID uuid.UUID, a
 	// PGRST102: every row in a bulk INSERT must share an identical key set, so
 	// when any action carries a ticket (tasks in a mixed batch), the ticket key
 	// is backfilled as NULL on the rows that don't.
-	anyTicket := false
+	anyTicket, anyAuthor := false, false
 	for _, a := range actions {
 		if a.Ticket != nil {
 			anyTicket = true
-			break
+		}
+		if a.AuthoredBy != nil {
+			anyAuthor = true
 		}
 	}
 	rows := make([]map[string]any, 0, len(actions))
@@ -2938,6 +2996,10 @@ func (s *supabaseStore) CreateActions(ctx context.Context, canvasID uuid.UUID, a
 		}
 		if anyTicket && a.Ticket == nil {
 			row["ticket"] = nil
+		}
+		// Same PGRST102 rule for authored_by (migration 0039).
+		if anyAuthor && a.AuthoredBy == nil {
+			row["authored_by"] = nil
 		}
 		rows = append(rows, row)
 	}
@@ -3267,17 +3329,78 @@ func (s *supabaseStore) RequeueAction(ctx context.Context, canvasID, id uuid.UUI
 	return nil, 0, fmt.Errorf("%w: cannot re-queue task in state %q", ErrIllegalActionState, existing.State)
 }
 
-// UpdateActionPayload replaces an action's payload without touching its state —
-// the edit path for task content (title / body / links / assignee).
-func (s *supabaseStore) UpdateActionPayload(ctx context.Context, canvasID, id uuid.UUID, payload json.RawMessage) (int, error) {
-	err := s.exec(s.client.From("actions").
-		Update(map[string]any{"payload": payload}, "minimal", "").
-		Eq("id", id.String()).
-		Eq("canvas_id", canvasID.String()))
+// UpdateActionPayload replaces an action's payload — and enforces the
+// content-mutation gate (TDM-41) while doing it. DecideContentUpdate in
+// content_gate.go IS the rule (with the full table and its rationale); this
+// function is only the read, the write, and the concurrency guard.
+//
+// Two write shapes come out of the decision:
+//
+//   - ordinary — the payload lands as before. Every CI progress report, every
+//     evidence link and every edit to a proposed task takes this path.
+//   - reverting — ONE conditional UPDATE writes the new payload AND drops the
+//     action back to 'proposed' with its claim and approved_by cleared. One
+//     statement, so there is never an instant where rewritten content sits on a
+//     still-approved (still-claimable) row. The `state` predicate is the
+//     optimistic-concurrency guard, the idiom ClaimAction uses: if the action
+//     moved between the read and the write, zero rows match and the caller is
+//     told to retry instead of silently clobbering.
+func (s *supabaseStore) UpdateActionPayload(ctx context.Context, canvasID, id uuid.UUID, payload json.RawMessage, actor string) (*ContentUpdate, error) {
+	current, err := s.GetAction(ctx, canvasID, id)
 	if err != nil {
-		return 0, err
+		return nil, ErrActionNotFound
 	}
-	return s.bumpVersion(ctx, canvasID)
+	next, out, err := DecideContentUpdate(current, payload, actor, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+
+	if !out.Reverted {
+		if err := s.exec(s.client.From("actions").
+			Update(map[string]any{"payload": next}, "minimal", "").
+			Eq("id", id.String()).
+			Eq("canvas_id", canvasID.String())); err != nil {
+			return nil, err
+		}
+		if out.Version, err = s.bumpVersion(ctx, canvasID); err != nil {
+			return nil, err
+		}
+		return out, nil
+	}
+
+	var rows []dbAction
+	if _, err = s.client.From("actions").
+		Update(map[string]any{
+			"payload": next,
+			"state":   "proposed",
+			// The claim goes with the approval: whoever was executing this was
+			// executing the OLD content, and must not keep working under a claim
+			// for instructions that no longer exist.
+			"claimed_by": nil,
+			"claimed_at": nil,
+			// approved_by named who blessed content that is now gone. Leaving it
+			// would render a proposed task as "approved by jaxon".
+			"approved_by": nil,
+		}, "representation", "").
+		Eq("id", id.String()).
+		Eq("canvas_id", canvasID.String()).
+		Eq("state", current.State).
+		ExecuteTo(&rows); err != nil {
+		return nil, err
+	}
+	if len(rows) != 1 {
+		now := "another state"
+		if fresh, gerr := s.GetAction(ctx, canvasID, id); gerr == nil {
+			now = fmt.Sprintf("%q", fresh.State)
+		}
+		return nil, fmt.Errorf("%w: the task moved to %s while the edit was in flight — re-read it and retry",
+			ErrIllegalActionState, now)
+	}
+	if out.Version, err = s.bumpVersion(ctx, canvasID); err != nil {
+		return nil, err
+	}
+	out.Action = toAction(rows[0])
+	return out, nil
 }
 
 // DeleteAction removes an action row (e.g. deleting a task from the queue).
