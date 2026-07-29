@@ -39,14 +39,14 @@ interface TermLine {
 
 // Terminal A — session-A. Wins the contested claim.
 const LINES_A: TermLine[] = [
-  { start: 500, kind: "cmd", text: "canvas_task_start TDM-7", dur: 900 },
+  { start: 500, kind: "cmd", text: "task_claim TDM-7", dur: 900 },
   { start: 1_600, kind: "ok", text: '{ claimed: true }  # TDM-7' },
   { start: 2_100, kind: "dim", text: "→ working: ticket prefix check" },
-  { start: 6_200, kind: "cmd", text: "canvas_task_complete TDM-7", dur: 900 },
+  { start: 6_200, kind: "cmd", text: "task_complete TDM-7", dur: 900 },
   { start: 7_400, kind: "ok", text: "✓ done · TDM-7: prefix check · a3f8c21" },
-  { start: 8_300, kind: "cmd", text: "canvas_task_start TDM-9", dur: 900 },
+  { start: 8_300, kind: "cmd", text: "task_claim TDM-9", dur: 900 },
   { start: 9_400, kind: "ok", text: '{ claimed: true }  # TDM-9' },
-  { start: 13_900, kind: "cmd", text: "canvas_task_complete TDM-9", dur: 950 },
+  { start: 13_900, kind: "cmd", text: "task_complete TDM-9", dur: 950 },
   { start: 15_000, kind: "ok", text: "✓ done · TDM-9: claim age · c76d1b4" },
   { start: 17_600, kind: "dim", text: "queue empty — 4/4 done" },
 ];
@@ -55,17 +55,17 @@ const LINES_A: TermLine[] = [
 // rejection wording mirrors the real gateway result (apps/mcp-gateway/src/
 // tools.ts → `already claimed by "session-A"`).
 const LINES_B: TermLine[] = [
-  { start: 1_200, kind: "cmd", text: "canvas_task_start TDM-7", dur: 900 },
+  { start: 1_200, kind: "cmd", text: "task_claim TDM-7", dur: 900 },
   { start: 2_700, kind: "warn", text: "claimed: false" },
   { start: 2_750, kind: "warn", text: '→ already claimed by "session-A"' },
   { start: 3_800, kind: "dim", text: "→ claiming TDM-8 instead" },
-  { start: 4_700, kind: "cmd", text: "canvas_task_start TDM-8", dur: 900 },
+  { start: 4_700, kind: "cmd", text: "task_claim TDM-8", dur: 900 },
   { start: 5_800, kind: "ok", text: '{ claimed: true }  # TDM-8' },
-  { start: 10_300, kind: "cmd", text: "canvas_task_complete TDM-8", dur: 950 },
+  { start: 10_300, kind: "cmd", text: "task_complete TDM-8", dur: 950 },
   { start: 11_500, kind: "ok", text: "✓ done · TDM-8: queue sort · 9d41e07" },
-  { start: 12_300, kind: "cmd", text: "canvas_task_start TDM-10", dur: 950 },
+  { start: 12_300, kind: "cmd", text: "task_claim TDM-10", dur: 950 },
   { start: 13_400, kind: "ok", text: '{ claimed: true }  # TDM-10' },
-  { start: 15_700, kind: "cmd", text: "canvas_task_complete TDM-10", dur: 950 },
+  { start: 15_700, kind: "cmd", text: "task_complete TDM-10", dur: 950 },
   { start: 16_900, kind: "ok", text: "✓ done · TDM-10: sort tests · 5b2fa9c" },
 ];
 

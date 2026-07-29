@@ -23,11 +23,13 @@ const CLAUDE_MD_SNIPPET = `## Tandem task queue
 Shared work queue for this repo: Tandem canvas \`AB3XK9QZ\`.
 
 1. \`canvas_connect\` with code \`AB3XK9QZ\` (once per session).
-2. \`canvas_task_list\` with \`state: "approved"\` — the ready-to-work queue.
-3. \`canvas_task_start\` to claim one. If it returns \`{ claimed: false }\`,
-   another session won — take the next task instead.
+2. \`context_get\` for the current briefing. If it comes back \`stale\`,
+   say so before acting on it.
+3. \`queue_next\` for the next approved task, then \`task_claim\` to take it.
+   If the claim returns \`{ claimed: false }\`, another agent won — take
+   the next task instead.
 4. Do the work. Start commit messages with the ticket id (\`TDM-7: …\`).
-5. \`canvas_task_complete\` with a result — always include the commit hash.`;
+5. \`task_complete\` with a result — always include the commit hash.`;
 
 const HOSTED_ENDPOINT = "https://tandemcanvas.com/api/mcp";
 
@@ -152,8 +154,9 @@ export default function QuickstartSection() {
             Two minutes to your first shared queue.
           </h2>
           <p className="mt-3 leading-relaxed text-ink/65">
-            One command to register the MCP server, one paste to teach your sessions the loop.
-            Create a canvas at tandemcanvas.com, swap in its code, and open two terminals.
+            One command to register the MCP server, one paste to teach your agents the loop.
+            Create a canvas at tandemcanvas.com, then point every machine you run agents on at the
+            same code.
           </p>
         </div>
 
