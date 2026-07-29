@@ -294,6 +294,41 @@ export async function copyCanvas(code: string): Promise<CanvasMeta> {
   return (await res.json()) as CanvasMeta;
 }
 
+// ── Briefing (TDM-30) ────────────────────────────────────────────────────────
+// The briefing is the document GET /api/canvas/context hands every agent on
+// connect. Importing an AGENTS.md is one call: it creates (or reuses, by name) a
+// notes document, writes the file into it, and designates it — so the human
+// never assembles those three steps by hand.
+
+export type BriefingImport = {
+  // Pasted text. When empty, the SERVER fetches sourceUrl instead — the browser
+  // can't read raw.githubusercontent.com itself (CORS).
+  content?: string;
+  // Optional document name; the API defaults to "Briefing".
+  name?: string;
+  sourceUrl?: string;
+};
+
+export type BriefingImportResult = {
+  briefingDocId: string;
+  noteId: string;
+  createdDocument: boolean;
+  bytes: number;
+};
+
+export async function importBriefing(
+  code: string,
+  body: BriefingImport,
+): Promise<BriefingImportResult> {
+  const res = await authedFetch(
+    code,
+    "/api/canvas/briefing/import",
+    { method: "POST", body },
+    "Could not import the briefing",
+  );
+  return (await res.json()) as BriefingImportResult;
+}
+
 // ── Sharing (owner-only; Google-Docs access model, migration 0021) ───────────
 
 export type CanvasAccessEntry = {

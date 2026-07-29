@@ -1,4 +1,4 @@
-import { X } from "lucide-react";
+import { FileDown, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
@@ -27,12 +27,16 @@ import { imageUrl } from "../lib/api";
 import { sendOp } from "../lib/ws";
 import { htmlToMarkdown } from "../lib/paste";
 import EmptyState from "../components/EmptyState";
+import ImportBriefingModal from "../components/ImportBriefingModal";
 import { noteTitle, sortNotes } from "../lib/docOutline";
 
 interface Props {
   canvasId: string;
+  canvasCode: string;
   state: CanvasState;
   readOnly: boolean;
+  /** Opens (and focuses) a document tab — used after a briefing import. */
+  onOpenDoc: (docId: string) => void;
 }
 
 // Below this the outline is noise — a rail listing one or two notes tells you
@@ -65,8 +69,9 @@ function markdownToHtml(md: string): string {
   );
 }
 
-export default function DocsMode({ canvasId, state, readOnly }: Props) {
+export default function DocsMode({ canvasId, canvasCode, state, readOnly, onOpenDoc }: Props) {
   const notes = useMemo(() => sortNotes(Object.values(state.notes)), [state.notes]);
+  const [importOpen, setImportOpen] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   // Live map of note id → card element, populated by each card's ref callback.
@@ -154,14 +159,29 @@ export default function DocsMode({ canvasId, state, readOnly }: Props) {
         )}
 
         <div className="mx-auto w-full min-w-0 max-w-3xl">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between gap-3 mb-4">
             <h1 className="text-xl font-semibold tracking-tight text-ink">Docs</h1>
-            <button
-              onClick={handleAddNote}
-              className="rounded-md bg-accent px-3.5 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            >
-              + New note
-            </button>
+            <div className="flex shrink-0 items-center gap-2">
+              {/* Import sits beside "New note" as its quieter sibling: same row,
+                  outline instead of filled. Writing a note is the everyday act;
+                  designating the canvas's briefing is a once-a-project one. */}
+              {!readOnly && (
+                <button
+                  onClick={() => setImportOpen(true)}
+                  title="Import a repo's AGENTS.md or CLAUDE.md as this canvas's briefing"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-ink/15 bg-surface px-3 py-1.5 text-sm font-medium text-ink/70 transition-colors hover:border-ink/30 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                >
+                  <FileDown size={14} strokeWidth={1.75} />
+                  Import AGENTS.md
+                </button>
+              )}
+              <button
+                onClick={handleAddNote}
+                className="rounded-md bg-accent px-3.5 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              >
+                + New note
+              </button>
+            </div>
           </div>
 
           {notes.length === 0 ? (
@@ -188,6 +208,16 @@ export default function DocsMode({ canvasId, state, readOnly }: Props) {
           )}
         </div>
       </div>
+
+      {importOpen && (
+        <ImportBriefingModal
+          code={canvasCode}
+          onClose={() => setImportOpen(false)}
+          // The import lands as its own document; open its tab so the user sees
+          // what they just brought in instead of being left on this one.
+          onImported={onOpenDoc}
+        />
+      )}
     </div>
   );
 }

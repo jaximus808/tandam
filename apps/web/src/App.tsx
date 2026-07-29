@@ -1495,8 +1495,11 @@ export default function App() {
               {m === "docs" && (
                 <DocsMode
                   canvasId={canvas.id}
+                  canvasCode={canvas.code}
                   state={scopedState}
                   readOnly={canvas.yourRole === "read"}
+                  // AGENTS.md import creates its own document; open that tab.
+                  onOpenDoc={openDoc}
                 />
               )}
               {m === "roadmap" && (
