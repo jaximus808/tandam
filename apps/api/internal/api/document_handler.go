@@ -123,8 +123,14 @@ func ensureDefaultDocInList(ctx context.Context, st store.Store, canvasID uuid.U
 	if name == "" {
 		name = docType
 	}
+	// Provenance (TDM-40) rides the ctx rather than a parameter: this helper sits
+	// under half a dozen create paths (notes, pins, events, roadmap, the WS ops)
+	// and threading an argument through all of them would touch far more code
+	// than the feature is worth. AuthorFromCtx is nil when the caller's route has
+	// no Provenance middleware, which stores as NULL = unknown.
 	doc := &store.Document{ID: uuid.New(), Kind: "document", Type: docType,
-		Name: name, SortOrder: nextDocSortOrder(docs), CreatedBy: createdBy}
+		Name: name, SortOrder: nextDocSortOrder(docs), CreatedBy: createdBy,
+		AuthoredBy: AuthorFromCtx(ctx)}
 	if _, err := st.CreateDocument(ctx, canvasID, doc); err != nil {
 		return uuid.Nil, err
 	}
@@ -270,6 +276,12 @@ func (h *Handler) CreateDocument(w http.ResponseWriter, r *http.Request) {
 
 	// A sheet document is 1:1 with a sheet row — create the sheet and let the
 	// store mint the matching document (keeps the pairing in one place).
+	//
+	// KNOWN GAP (TDM-40): that store-minted document gets authored_by NULL,
+	// because store.CreateSheet builds it from the Sheet and has no request
+	// context. Sheets aren't in the provenance-chip surface, and NULL is the
+	// vocabulary's honest "unknown" — better than stamping the sheet's freeform
+	// createdBy and pretending it was derived.
 	if body.Type == "sheet" {
 		sh := &store.Sheet{ID: uuid.New(), Kind: "sheet", Name: body.Name,
 			Columns: []store.SheetColumn{}, SortOrder: sortOrder, CreatedBy: body.CreatedBy}
@@ -288,7 +300,9 @@ func (h *Handler) CreateDocument(w http.ResponseWriter, r *http.Request) {
 	}
 
 	doc := &store.Document{ID: uuid.New(), Kind: "document", Type: body.Type,
-		Name: body.Name, Config: body.Config, ParentID: parentID, SortOrder: sortOrder, CreatedBy: body.CreatedBy}
+		Name: body.Name, Config: body.Config, ParentID: parentID, SortOrder: sortOrder,
+		// Provenance (TDM-40): derived from the auth context, never from the body.
+		CreatedBy: body.CreatedBy, AuthoredBy: AuthorFromCtx(r.Context())}
 	if _, err := h.store.CreateDocument(r.Context(), canvasID, doc); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -343,6 +357,8 @@ func (h *Handler) CreateDocumentsBatch(w http.ResponseWriter, r *http.Request) {
 		return n
 	}
 
+	// Provenance (TDM-40) is per-request, so one derivation covers the batch.
+	author := AuthorFromCtx(r.Context())
 	docs := make([]*store.Document, 0, len(body.Documents))
 	for i := range body.Documents {
 		item := body.Documents[i]
@@ -385,7 +401,8 @@ func (h *Handler) CreateDocumentsBatch(w http.ResponseWriter, r *http.Request) {
 			sortOrder = nextAutoSort()
 		}
 		docs = append(docs, &store.Document{ID: uuid.New(), Kind: "document", Type: item.Type,
-			Name: item.Name, Config: item.Config, ParentID: parentID, SortOrder: sortOrder, CreatedBy: item.CreatedBy})
+			Name: item.Name, Config: item.Config, ParentID: parentID, SortOrder: sortOrder,
+			CreatedBy: item.CreatedBy, AuthoredBy: author})
 	}
 	if _, err := h.store.CreateDocuments(r.Context(), canvasID, docs); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())

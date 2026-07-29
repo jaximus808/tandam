@@ -47,7 +47,11 @@ export function onStateUpdate(fn: StateHandler): () => void {
 // Stateless agent-presence pulses (e.g. "an agent just read the canvas"),
 // separate from the heavyweight state stream so the UI can animate live
 // activity without a full re-render. Not wired through the mock backend.
-export type AgentActivity = { action: "read" };
+// The verbs the server sends today: "read" (an agent pulled canvas state),
+// "claim_expired" (a lapsed claim was taken over), "reverted" (a content edit
+// cost a task its approval — TDM-41, so a board can call out WHY a card just
+// jumped back to Proposed rather than showing it silently teleport).
+export type AgentActivity = { action: "read" | "claim_expired" | "reverted" };
 type ActivityHandler = (a: AgentActivity) => void;
 let activityHandlers: ActivityHandler[] = [];
 
@@ -55,6 +59,45 @@ export function onAgentActivity(fn: ActivityHandler): () => void {
   activityHandlers.push(fn);
   return () => {
     activityHandlers = activityHandlers.filter((h) => h !== fn);
+  };
+}
+
+// Fleet lifecycle pings (TDM-46): one message per action transition, so a
+// surface can react to "who moved what" without refetching the whole canvas.
+// Shares the `activity` message type with the presence pulse above — the two are
+// told apart by `actionId`, which only the lifecycle form carries.
+export type FleetActivityAction =
+  | "proposed"
+  | "approved"
+  | "rejected"
+  | "claimed"
+  | "completed"
+  | "released"
+  | "requeued"
+  | "claim_expired";
+
+export type FleetActivity = {
+  action: FleetActivityAction;
+  /** Who moved it: an agent name, "human", or "agent" when the surface was anonymous. */
+  actor?: string;
+  at: string;
+  actionId: string;
+  actionType: string;
+  ticketId?: string;
+  title?: string;
+  epicId?: string;
+  /** The action's state AT this fact — not necessarily its state now. */
+  state?: string;
+  result?: string;
+  error?: string;
+};
+type FleetHandler = (a: FleetActivity) => void;
+let fleetHandlers: FleetHandler[] = [];
+
+export function onFleetActivity(fn: FleetHandler): () => void {
+  fleetHandlers.push(fn);
+  return () => {
+    fleetHandlers = fleetHandlers.filter((h) => h !== fn);
   };
 }
 
@@ -190,7 +233,15 @@ function connect(code: string) {
           )
         );
       } else if (msg.type === "activity") {
-        activityHandlers.forEach((h) => h({ action: msg.action as "read" }));
+        // Two shapes share this type: the lightweight pulse ({action:"read"} /
+        // lean claim_expired / reverted pings) and the action-lifecycle fact,
+        // which is the one carrying an actionId. Route each to its own
+        // subscribers.
+        if (msg.actionId) {
+          fleetHandlers.forEach((h) => h(msg as FleetActivity));
+        } else {
+          activityHandlers.forEach((h) => h({ action: msg.action as AgentActivity["action"] }));
+        }
       } else if (msg.type === "access") {
         // The owner changed sharing while we're connected.
         const role = msg.role as "write" | "read" | "none";

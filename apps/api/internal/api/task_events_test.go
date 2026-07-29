@@ -190,13 +190,28 @@ func (f *eventFakeStore) UpdateActionState(_ context.Context, _ uuid.UUID, id uu
 	return 1, nil
 }
 
-func (f *eventFakeStore) UpdateActionPayload(_ context.Context, _ uuid.UUID, id uuid.UUID, payload json.RawMessage) (int, error) {
+// UpdateActionPayload runs the REAL content gate (store.DecideContentUpdate) so
+// the handler tests exercise the shipped rule rather than a fake's idea of it,
+// then applies the same row effects the supabase write does.
+func (f *eventFakeStore) UpdateActionPayload(_ context.Context, _ uuid.UUID, id uuid.UUID, payload json.RawMessage, actor string) (*store.ContentUpdate, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if a, ok := f.actions[id]; ok {
-		a.Payload = payload
+	a, ok := f.actions[id]
+	if !ok {
+		return nil, store.ErrActionNotFound
 	}
-	return 1, nil
+	next, out, err := store.DecideContentUpdate(a, payload, actor, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	a.Payload = next
+	if out.Reverted {
+		a.State = "proposed"
+		a.ClaimedBy, a.ClaimedAt, a.ApprovedBy = nil, nil, nil
+		out.Action = a
+	}
+	out.Version = 1
+	return out, nil
 }
 
 func (f *eventFakeStore) DeleteAction(_ context.Context, _ uuid.UUID, id uuid.UUID) (int, error) {

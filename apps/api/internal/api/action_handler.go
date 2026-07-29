@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/agentcanvas/api/internal/store"
@@ -266,6 +267,10 @@ func (h *Handler) ProposeAction(w http.ResponseWriter, r *http.Request) {
 		Type: body.Type, State: body.State,
 		Payload:    body.Payload,
 		ProposedBy: body.ProposedBy,
+		// Provenance (TDM-40): derived from the auth context by the Provenance
+		// middleware, NOT from the body — note there is no authoredBy field on
+		// the struct above, so a client that sends one is silently ignored.
+		AuthoredBy:   AuthorFromCtx(r.Context()),
 		LinkedPinIDs: body.LinkedPinIDs,
 	}
 	if body.State == "approved" {
@@ -294,6 +299,7 @@ func (h *Handler) ProposeAction(w http.ResponseWriter, r *http.Request) {
 		h.emitTaskEvent(canvasID, webhooks.EventTaskApproved, action)
 	}
 	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
+	broadcastProposeActivity(h.hub, canvasID, action) // TDM-46 live fleet feed
 	writeJSON(w, http.StatusCreated, action)
 }
 
@@ -326,6 +332,10 @@ func (h *Handler) ProposeActionsBatch(w http.ResponseWriter, r *http.Request) {
 	// One resolver for the whole batch — the canvas policy and each epic's state
 	// load at most once no matter how many tasks reference them.
 	pr := &policyResolver{h: h, ctx: r.Context(), canvasID: canvasID}
+	// Provenance (TDM-40) is a property of the REQUEST, so it's derived once and
+	// stamped on every action in the batch — a caller can't mix authorship by
+	// varying the body, because no body field feeds it.
+	author := AuthorFromCtx(r.Context())
 	actions := make([]*store.Action, 0, len(body.Actions))
 	for i := range body.Actions {
 		item := body.Actions[i]
@@ -364,6 +374,7 @@ func (h *Handler) ProposeActionsBatch(w http.ResponseWriter, r *http.Request) {
 			Type: item.Type, State: item.State,
 			Payload:      item.Payload,
 			ProposedBy:   item.ProposedBy,
+			AuthoredBy:   author,
 			LinkedPinIDs: item.LinkedPinIDs,
 		}
 		if item.State == "approved" {
@@ -394,6 +405,7 @@ func (h *Handler) ProposeActionsBatch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
+	broadcastProposeActivity(h.hub, canvasID, actions...) // TDM-46 live fleet feed
 	writeJSON(w, http.StatusCreated, map[string]any{"actions": actions})
 }
 
@@ -488,6 +500,28 @@ func (h *Handler) transitionAction(w http.ResponseWriter, r *http.Request, to st
 		writeError(w, http.StatusBadRequest, "illegal transition: "+current.State+" → "+to)
 		return nil, false
 	}
+	// The content gate's other door (TDM-41). ActionStatePatch can carry a
+	// payload — legitimately, for the additive bookkeeping the status API writes
+	// alongside a completion (evidence links) and for the navigate executor's
+	// computed waypoints. But that makes `PATCH {state:"done", payload:{title:…}}`
+	// a way to rewrite approved content in the same breath as ending the task,
+	// which would walk straight past updateActionPayload's gate. Content changes
+	// simply do not ride transitions: they belong on the payload-only path, where
+	// they are audited and (on an approved/executing task) revert the approval.
+	//
+	// This check sits here rather than in the callers because transitionAction is
+	// the single funnel every transition goes through — the MCP/web PATCH, the
+	// status API's completed/failed, approve and reject alike.
+	if len(patch.Payload) > 0 {
+		if changed := store.ContentDiff(current.Payload, patch.Payload); len(changed) > 0 {
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"error": "content_locked",
+				"message": "a state change cannot also rewrite the task's " + strings.Join(changed, " and ") +
+					" — edit content with a payload-only PATCH, which re-enters the approval gate",
+			})
+			return nil, false
+		}
+	}
 	patch.State = to
 	if _, err := h.store.UpdateActionState(r.Context(), canvasID, id, patch); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -513,6 +547,10 @@ func (h *Handler) transitionAction(w http.ResponseWriter, r *http.Request, to st
 	}
 	fresh.UpdatedAt = time.Now().UTC()
 	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
+	// TDM-46 live fleet feed. ONE line covers approve / reject / complete on
+	// every surface — the MCP PATCH and the CI status API both funnel through
+	// here — and activityVerbFor returns "" (no-op) for anything else.
+	broadcastActionActivity(h.hub, canvasID, activityVerbFor(to), &fresh)
 	writeJSON(w, http.StatusOK, map[string]any{"action": &fresh})
 	return &fresh, true
 }
@@ -573,6 +611,7 @@ func (h *Handler) ApproveAction(w http.ResponseWriter, r *http.Request) {
 				// entered the queue and each is separately claimable.
 				h.emitTaskApprovedEach(canvasID, tasks)
 				broadcastStateAsync(ctx, h.store, h.hub, canvasID)
+				broadcastActionActivity(h.hub, canvasID, activityApproved, tasks...) // TDM-46
 			}
 		}()
 	}
@@ -631,6 +670,7 @@ func (h *Handler) ApproveActionsBatch(w http.ResponseWriter, r *http.Request) {
 		// nothing. Non-task rows (epics) are filtered inside emitTaskEvent.
 		h.emitTaskApprovedEach(canvasID, rows)
 		broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
+		broadcastActionActivity(h.hub, canvasID, activityApproved, rows...) // TDM-46
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"approved": approved, "skipped": skipped})
 
@@ -679,6 +719,7 @@ func (h *Handler) ApproveActionsBatch(w http.ResponseWriter, r *http.Request) {
 			// Per-task events, emitted per epic as each cascade commits — a
 			// later epic failing must not swallow the earlier ones' events.
 			h.emitTaskApprovedEach(canvasID, tasks)
+			broadcastActionActivity(h.hub, canvasID, activityApproved, tasks...) // TDM-46
 			total += len(tasks)
 		}
 		// One extra broadcast for the whole cascade, only if any task flipped.
@@ -850,6 +891,10 @@ func (h *Handler) claimTask(ctx context.Context, canvasID, id uuid.UUID, agentNa
 			log.Printf("claim %s: touching agent last_seen (%s): %v", id, agentName, err)
 		}
 	}()
+	// TDM-46 live fleet feed: a claim is the transition the presence UI most
+	// needs pushed (who just picked up what), and it is the one the webhook
+	// vocabulary deliberately stays silent on.
+	broadcastActionActivity(h.hub, canvasID, activityClaimed, action)
 	// Claim expiry is LAZY — there is no sweeper (see store.DefaultClaimTTL), so
 	// the takeover inside ClaimAction is the one and only moment a lapsed claim
 	// becomes observable. A non-empty ExpiredClaimBy means THIS claim expired
@@ -860,9 +905,11 @@ func (h *Handler) claimTask(ctx context.Context, canvasID, id uuid.UUID, agentNa
 		h.emitTaskEvent(canvasID, webhooks.EventTaskClaimExpired, action, withExpiredClaim(outcome))
 		// The caller's full-state broadcast already reconciles the board, but it
 		// says nothing about WHY the claimant changed. This is the lightweight
-		// signal the Tasks panel can surface as activity ("a claim lapsed"),
-		// matching the read-pulse path.
-		broadcastActivity(h.hub, canvasID, "claim_expired")
+		// signal the Tasks panel can surface as activity ("a claim lapsed").
+		// The actor is passed explicitly (TDM-46): `action` has ALREADY been
+		// restamped to the new claimant, so the agent that went dark — the
+		// subject of this event — is only knowable from the outcome.
+		broadcastActionActivityAs(h.hub, canvasID, activityClaimExpired, action, outcome.ExpiredClaimBy)
 	}
 	return action, nil
 }
@@ -899,6 +946,7 @@ func (h *Handler) ReleaseAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
+	broadcastActionActivity(h.hub, canvasID, activityReleased, action) // TDM-46
 	writeJSON(w, http.StatusOK, map[string]any{"action": action})
 }
 
@@ -933,6 +981,7 @@ func (h *Handler) RequeueAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
+	broadcastActionActivity(h.hub, canvasID, activityRequeued, action) // TDM-46
 	writeJSON(w, http.StatusOK, map[string]any{"action": action})
 }
 
@@ -953,7 +1002,16 @@ func (h *Handler) DeleteAction(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
 }
 
-// updateActionPayload is the payload-only PATCH path (task content edits).
+// updateActionPayload is the payload-only PATCH path (task content edits) — and
+// the surface of the content-mutation gate (TDM-41). The RULE lives in
+// store.UpdateActionPayload (see store/content_gate.go); everything here is
+// translation: canonicalize, call, map the outcome onto HTTP.
+//
+// The response deliberately TELLS the caller when its edit cost the approval
+// (`reverted: true` plus what changed and the state it fell from). An agent
+// that rewrites an approved task and gets a bare 200 would carry on believing
+// the task is queued; being told it must be re-approved is the difference
+// between a gate and a trap.
 func (h *Handler) updateActionPayload(w http.ResponseWriter, r *http.Request, payload json.RawMessage) {
 	canvasID := CanvasIDFromCtx(r.Context())
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
@@ -982,9 +1040,43 @@ func (h *Handler) updateActionPayload(w http.ResponseWriter, r *http.Request, pa
 		}
 		payload = canonical
 	}
-	if _, err := h.store.UpdateActionPayload(r.Context(), canvasID, id, payload); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	// The actor is the SERVER's conclusion about who is calling (E4.1), never
+	// anything the body said — an audit trail whose actor is self-reported is
+	// decoration. nil (no Provenance middleware on the route) records "unknown".
+	actor := ""
+	if a := AuthorFromCtx(r.Context()); a != nil {
+		actor = *a
+	}
+	outcome, err := h.store.UpdateActionPayload(r.Context(), canvasID, id, payload, actor)
+	if err != nil {
+		switch {
+		case errors.Is(err, store.ErrContentLocked):
+			// 409, not 403: the edit isn't forbidden to this caller, it conflicts
+			// with the task's state. A different task, or this one before it
+			// finished, would have taken it.
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"error":   "content_locked",
+				"message": err.Error(),
+				"state":   current.State,
+			})
+		case errors.Is(err, store.ErrIllegalActionState):
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"error":   "state_changed",
+				"message": err.Error(),
+			})
+		case errors.Is(err, store.ErrActionNotFound):
+			writeError(w, http.StatusNotFound, "action not found")
+		default:
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
 		return
+	}
+	if outcome.Reverted {
+		// The board must not keep showing this task in Ready/Working while a
+		// human hasn't re-approved it. The full-state broadcast below moves the
+		// card; this lightweight signal says WHY, so the activity surfaces can
+		// call it out rather than showing a card that silently teleported.
+		broadcastActivity(h.hub, canvasID, "reverted")
 	}
 	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
 	fresh, err := h.store.GetAction(r.Context(), canvasID, id)
@@ -992,5 +1084,14 @@ func (h *Handler) updateActionPayload(w http.ResponseWriter, r *http.Request, pa
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"action": fresh})
+	resp := map[string]any{"action": fresh}
+	if outcome.Reverted {
+		resp["reverted"] = true
+		resp["changed"] = outcome.Changed
+		resp["fromState"] = outcome.FromState
+		resp["message"] = "editing an approved task's " + strings.Join(outcome.Changed, " and ") +
+			" sends it back through the approval gate — it is now 'proposed' and its claim was released. " +
+			"A human must approve it again before any agent works it."
+	}
+	writeJSON(w, http.StatusOK, resp)
 }

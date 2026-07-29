@@ -367,7 +367,12 @@ func (h *Handler) applyStatusPayload(r *http.Request, canvasID, id uuid.UUID, ac
 	if err != nil || !changed {
 		return err == nil
 	}
-	if _, err := h.store.UpdateActionPayload(r.Context(), canvasID, id, merged); err != nil {
+	// Additive by construction (see mergeTaskStatusPayload), so the content gate
+	// this write passes through never fires: a progress note or an evidence link
+	// leaves title/body untouched and an executing task stays executing. The
+	// actor is "" because this route carries no Provenance middleware — it would
+	// only ever be recorded on a content change, which cannot happen here.
+	if _, err := h.store.UpdateActionPayload(r.Context(), canvasID, id, merged, ""); err != nil {
 		return false
 	}
 	action.Payload = merged

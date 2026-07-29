@@ -79,9 +79,14 @@ func (wh *WSHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 	// closure simply mutes their inbound writes (see handleOp). The gate is read
 	// from the client each op (not captured) so a live sharing change can flip it
 	// without reconnecting — see reevaluateAccess.
+	// Provenance for everything this socket writes (TDM-40). The WS is the
+	// browser's channel and has no agent path at all, so the connection's
+	// resolved user id IS the derivation: signed in ⇒ "human", not ⇒ "anonymous".
+	// Fixed for the life of the connection — the cookie was checked at upgrade.
+	author := AuthorForSession(uid)
 	var client *ws.Client
 	client = ws.NewClient(wh.hub, canvasID, conn, func(cid uuid.UUID, raw []byte) {
-		wh.handleOp(cid, raw, client.CanWrite())
+		wh.handleOp(cid, raw, client.CanWrite(), author)
 	})
 	client.SetIdentity(uid, canWrite)
 	wh.hub.Register(client)
@@ -102,14 +107,17 @@ func (wh *WSHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 	client.ReadPump() // blocks until disconnect
 }
 
-func (wh *WSHandler) handleOp(canvasID uuid.UUID, raw []byte, canWrite bool) {
+func (wh *WSHandler) handleOp(canvasID uuid.UUID, raw []byte, canWrite bool, author string) {
 	// Every inbound WS op is a mutation. Read-only viewers are dropped silently —
 	// the gate lives here (not just in the UI) so a crafted client can't write.
 	if !canWrite {
 		return
 	}
 
-	ctx := context.Background()
+	// The ops below run on a background context (they outlive the read pump), so
+	// the derived author is stamped onto it here — that's what applyOp and the
+	// shared ensureDefaultDocument helper read.
+	ctx := WithAuthor(context.Background(), author)
 
 	// Peek at the op name (and, for a batch envelope, the sub-op list) before
 	// fully decoding — the per-op struct below is filled out by applyOp for
@@ -289,6 +297,7 @@ func (wh *WSHandler) applyOp(ctx context.Context, canvasID uuid.UUID, raw []byte
 			ParentID:   data.ParentID,
 			ParentKind: data.ParentKind,
 			CreatedBy:  "user",
+			AuthoredBy: AuthorFromCtx(ctx), // TDM-40; "human" or "anonymous" here
 		}
 		// Land the note in the canvas's default notes document (creating one if
 		// needed) so it belongs to a tab, matching the agent/REST path.
@@ -416,7 +425,8 @@ func (wh *WSHandler) applyOp(ctx context.Context, canvasID uuid.UUID, raw []byte
 			}
 		} else {
 			doc := &store.Document{ID: uuid.New(), Kind: "document", Type: data.Type,
-				Name: data.Name, Config: data.Config, ParentID: data.ParentID, SortOrder: data.SortOrder, CreatedBy: "user"}
+				Name: data.Name, Config: data.Config, ParentID: data.ParentID, SortOrder: data.SortOrder,
+				CreatedBy: "user", AuthoredBy: AuthorFromCtx(ctx)} // TDM-40
 			_, mutErr = wh.store.CreateDocument(ctx, canvasID, doc)
 		}
 

@@ -103,6 +103,24 @@ func (h *Hub) Broadcast(canvasID uuid.UUID, data []byte) {
 func (h *Hub) Register(c *Client)   { h.register <- c }
 func (h *Hub) Unregister(c *Client) { h.unregister <- c }
 
+// DrainBroadcasts pops every payload queued on the broadcast channel and
+// returns it, oldest first. It exists for TESTS: a handler test can hand a
+// hub that is not Run()ing to a Handler, exercise a mutation, and assert on
+// exactly what the canvas was pinged with — no WebSocket, no client, no
+// goroutine. With Run() going this is racy by construction (the loop consumes
+// the same channel), so production code must never call it.
+func (h *Hub) DrainBroadcasts() [][]byte {
+	out := [][]byte{}
+	for {
+		select {
+		case msg := <-h.broadcast:
+			out = append(out, msg.data)
+		default:
+			return out
+		}
+	}
+}
+
 // ClientsFor returns a snapshot of the clients currently connected to a canvas,
 // so a sharing change can re-evaluate each one's access live. The slice is a
 // copy — safe to range after the lock is dropped.
