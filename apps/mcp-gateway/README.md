@@ -10,6 +10,33 @@ When you connect, you bind the MCP session to one canvas. From then on, every to
 
 The core loop is the **task queue**: one session proposes work as tasks (grouped into epics), a human approves it once in the web UI, and any number of parallel sessions pull the approved queue, claim tasks atomically (exactly one winner per task — losers are told who won and move on), and complete them with results. Every task carries a per-canvas ticket ID (`TDM-7`) for commit messages, and every claim shows the claimant's name on the live board.
 
+## Quick start
+
+From inside your project directory:
+
+```bash
+npx @jaximus/tandem-mcp init
+```
+
+One command takes you from nothing to a wired-up project. It:
+
+1. creates a canvas (named after the folder, or `--name "My board"`),
+2. merges a `tandem` entry into the project's `.mcp.json` — other MCP servers are left exactly as they were — pinning the canvas code as `TANDEM_CANVAS_CODE`,
+3. prints the share code, the board URL, and (for a canvas it just created) the private claim link that makes it yours,
+4. prints an `AGENTS.md` / `CLAUDE.md` snippet teaching agents the queue-first loop — `--write` appends it for you.
+
+Then restart your agent CLI so it picks up the new server.
+
+| Flag           | Effect                                                            |
+| -------------- | ----------------------------------------------------------------- |
+| `--name <name>` | Name for the new canvas. Default: the folder's name.              |
+| `--code <CODE>` | Wire up an **existing** canvas instead of creating one.           |
+| `--write`       | Append the queue snippet to `AGENTS.md` / `CLAUDE.md`.            |
+| `--force`       | Create a new canvas even if this project is already wired.        |
+| `--dir <path>`  | Project directory to configure. Default: cwd.                     |
+
+**Re-running is safe.** If `.mcp.json` already points the `tandem` server at a canvas, `init` prints that code and URL, changes nothing, and exits `0`. Use `--force` to create a fresh canvas, or `--code` to repoint.
+
 ## Install
 
 ### npx (recommended)
@@ -35,7 +62,11 @@ This connects to the hosted backend at `https://tandemcanvas.com` out of the box
 npm install -g @jaximus/tandem-mcp
 # then in MCP config:
 #   "command": "tandem-mcp"
+# and on the CLI, `tandem` is an alias for the same binary:
+#   tandem init
 ```
+
+(`npx tandem init` will **not** work — `tandem` is an unrelated package on npm. Use the scoped name with npx, or install globally for the short `tandem` command.)
 
 ### From source
 
@@ -49,10 +80,12 @@ pnpm --filter @jaximus/tandem-mcp build
 
 ## Configuration
 
-| Env var        | Default                    | Purpose                                                                                                                                             |
-| -------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `API_URL`      | `https://tandemcanvas.com` | Tandem HTTP API base URL. Only set this to override the default.                                                                                    |
-| `TANDEM_TOKEN` | _(unset)_                  | Personal access token — lets the agent act as **you** on your private and shared canvases. Mint one at `/me`. Without it, only public canvases work. |
+| Env var             | Default                    | Purpose                                                                                                                                             |
+| ------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `API_URL`           | `https://tandemcanvas.com` | Tandem HTTP API base URL. Only set this to override the default.                                                                                    |
+| `TANDEM_TOKEN`      | _(unset)_                  | Personal access token — lets the agent act as **you** on your private and shared canvases. Mint one at `/me`. Without it, only public canvases work. |
+| `TANDEM_FULL_TOOLS` | _(unset)_                  | Set to `1` to also advertise the full CRUD surface (maps, sheets, charts, forms, …) alongside the default 10-tool facade. Same as `--full-tools`.    |
+| `TANDEM_CANVAS_CODE` | _(unset)_                 | This project's canvas code, written by `init`. Named in the `canvas_connect` tool description so the agent knows which canvas it belongs to, and used as the default when it calls `canvas_connect` without one. |
 
 To connect as yourself, mint a token under **Access tokens** at [tandemcanvas.com/me](https://tandemcanvas.com/me) and add it to your MCP client config:
 
@@ -70,41 +103,50 @@ To connect as yourself, mint a token under **Access tokens** at [tandemcanvas.co
 
 ## Tools
 
-The task-queue core:
+The default surface is a **10-tool intent facade** shaped like the work loop, not like the API:
 
-| Tool                              | Purpose                                                                                     |
-| --------------------------------- | ------------------------------------------------------------------------------------------- |
-| `canvas_connect`                  | Bind the session to a canvas by 8-char code. Required first.                                |
-| `canvas_create`                   | Create a new canvas and bind to it in one step.                                             |
-| `agent_register`                  | Register this session's identity (name, role; `parentAgentId` groups a swarm's executors under their orchestrator). Returns an updated `session` handle — pass it on every later call. |
-| `canvas_epic_add`                 | Propose a named batch of tasks approved as one unit. Human approves once; tasks under it fan out to approved. |
-| `canvas_task_add` / `_add_batch`  | Propose tasks (land as `proposed`; born approved under an already-approved epic).           |
-| `canvas_task_list`                | The queue, compact: pass `state: "approved"` for ready-to-work tasks.                       |
-| `canvas_task_get`                 | One task with its linked context hydrated — all a session needs to start.                   |
-| `canvas_task_start`               | Atomic claim (`approved` → `executing`). Losers get `{ claimed: false, claimedBy }`.        |
-| `canvas_task_complete`            | Finish with a `result` (include commit hashes), or `status: "failed"` + `error`.            |
+| Tool             | Purpose                                                                                                     |
+| ---------------- | ----------------------------------------------------------------------------------------------------------- |
+| `canvas_connect` | Bind the session to a canvas by 8-char code. Required first; returns the `session` handle and the share URL. |
+| `context_get`    | The canvas briefing in one cheap call — identity, mode, document tabs, per-kind counts, queue state.        |
+| `queue_next`     | The approved tasks ready to work, compact. The entry point for work.                                        |
+| `task_get`       | One task with its linked context hydrated — all a session needs to start.                                   |
+| `task_claim`     | Atomic claim (`approved` → `executing`). Losers get `{ claimed: false, claimedBy }` and move on.             |
+| `task_progress`  | Mid-flight progress on a task you claimed; stored on the task, returned by `task_get`.                       |
+| `task_complete`  | Finish with a `result` (include commit hashes), or `status: "failed"` + `error`.                             |
+| `task_propose`   | Propose one task or a whole plan (`tasks: [...]`). Lands as `proposed` for human approval.                   |
+| `doc_write`      | Leave context behind as a markdown note; names a tab and creates it if new.                                  |
+| `board_status`   | Board-shaped overview — counts by state, in-flight claims, epics — without dumping the canvas.               |
 
-Plus the full canvas surface — documents, notes, roadmap items, sheets, charts, forms, map pins, timed events — each with `add` / `update` / `delete` and `_batch` variants, and `canvas_state_read` for a summary snapshot. Full schemas are returned by the MCP `tools/list` request, or visible in [`src/tools.ts`](https://github.com/jaximus808/tandam/blob/main/apps/mcp-gateway/src/tools.ts).
+The loop: `canvas_connect` → `queue_next` → `task_get` → `task_claim` → work (`task_progress`, `doc_write`) → `task_complete`.
+
+Every tool but `canvas_connect` takes the `session` handle — pass it on every call, since the hosted connection can reset between calls.
+
+### The full CRUD surface
+
+Behind `TANDEM_FULL_TOOLS=1` (or `tandem-mcp --full-tools`) the gateway **also** advertises the ~80-tool CRUD surface — documents, notes, roadmap items, sheets, charts, forms, map pins, timed events, agent registration, epics — each with `add` / `update` / `delete` and `_batch` variants, plus `canvas_state_read`. It is additive: you get the facade *and* CRUD. Full schemas come back from the MCP `tools/list` request, or see [`src/tools.ts`](https://github.com/jaximus808/tandam/blob/main/apps/mcp-gateway/src/tools.ts).
+
+Those tools stay **callable** either way — the flag decides what's *advertised*, so existing prompts that name `canvas_task_list` keep working against the default manifest.
 
 ## Example session
 
 ```text
 agent: canvas_connect { "code": "AB3XK9QZ" }
-  → { connected: true, canvasName: "acme-api", url: "https://tandemcanvas.com/c/AB3XK9QZ" }
+  → { connected: true, canvasName: "acme-api", url: "https://tandemcanvas.com/c/AB3XK9QZ", session: "…" }
 
-agent: agent_register { "role": "executor", "name": "exec-1" }
-  → { agentId: "…", session: "…" }        # use the returned session handle from here on
-
-agent: canvas_task_list { "state": "approved" }
+agent: queue_next { "session": "…" }
   → [{ id: "…", ticketId: "TDM-7", title: "Add rate limiter", state: "approved" }, …]
 
-agent: canvas_task_start { "id": "…" }
+agent: task_get { "id": "…", "session": "…" }
+  → { action: {…}, linked: [ …notes / roadmap items with the real brief… ] }
+
+agent: task_claim { "id": "…", "session": "…" }
   → { claimed: true, action: { ticketId: "TDM-7", … } }
     # another session got { claimed: false, claimedBy: "exec-1" } and took the next task
 
   …work happens; commits start with "TDM-7: …"…
 
-agent: canvas_task_complete { "id": "…", "result": "Rate limiter added — commit a1b2c3d" }
+agent: task_complete { "id": "…", "result": "Rate limiter added — commit a1b2c3d", "session": "…" }
 ```
 
 The human watches the board move in the browser — cards flip to *executing* with the claimant's name, results land as tasks complete — in real time, no refresh.

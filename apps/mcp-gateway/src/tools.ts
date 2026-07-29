@@ -33,6 +33,30 @@ function withUpdateFanOutHint<T>(result: T, hint: string | undefined): T | (T & 
   return { ...(result as object), hint } as T & { hint: string };
 }
 
+/**
+ * Model-carried binding. The hosted HTTP connector (claude.ai) does not keep
+ * one MCP session alive across an idle gap, so the per-session gateway binding
+ * can be gone by the time a later tool call lands — the classic "not connected"
+ * between calls. To make each call self-sufficient, canvas_connect/create hand
+ * the model an opaque `session` handle and every other tool accepts it back;
+ * adopt it here (before dispatch) so the call targets the right canvas even on
+ * a brand-new gateway. Then strip it so it never leaks into per-tool args.
+ *
+ * Shared with the intent facade (facade.ts), whose tools take the same handle.
+ */
+export function adoptCarriedSession(gateway: Gateway, toolName: string, args: Args): void {
+  const carried = args.session;
+  if (
+    typeof carried === "string" &&
+    carried &&
+    toolName !== "canvas_connect" &&
+    toolName !== "canvas_create"
+  ) {
+    gateway.adoptSession(carried);
+  }
+  delete args.session;
+}
+
 export async function handleTool(
   gateway: Gateway,
   toolName: string,
@@ -45,32 +69,25 @@ export async function handleTool(
   // normalize the incoming name before routing.
   toolName = toolName.replace(/\./g, "_");
 
-  // Model-carried binding. The hosted HTTP connector (claude.ai) does not keep
-  // one MCP session alive across an idle gap, so the per-session gateway binding
-  // can be gone by the time a later tool call lands — the classic "not connected"
-  // between calls. To make each call self-sufficient, canvas_connect/create hand
-  // the model an opaque `session` handle and every other tool accepts it back;
-  // adopt it here (before dispatch) so the call targets the right canvas even on
-  // a brand-new gateway. Then strip it so it never leaks into per-tool args.
-  const carried = args.session;
-  if (
-    typeof carried === "string" &&
-    carried &&
-    toolName !== "canvas_connect" &&
-    toolName !== "canvas_create"
-  ) {
-    gateway.adoptSession(carried);
-  }
-  delete args.session;
+  adoptCarriedSession(gateway, toolName, args);
 
   switch (toolName) {
     // ── Connection ─────────────────────────────────────────────────────────────
     case "canvas_connect": {
-      const code = args.code;
-      if (typeof code !== "string" || !code.trim()) {
-        throw new Error("`code` (string) is required");
+      // The project's canvas code may be pinned in the MCP config's env by
+      // `tandem-mcp init` (TDM-33). Treat it as the default so a session that
+      // forgets to pass one still lands on the right canvas instead of erroring.
+      const code =
+        typeof args.code === "string" && args.code.trim()
+          ? args.code.trim()
+          : process.env.TANDEM_CANVAS_CODE?.trim();
+      if (!code) {
+        throw new Error(
+          "`code` (string) is required — ask the human for the canvas code, or run " +
+            "`npx @jaximus/tandem-mcp init` in the project to create one and pin it."
+        );
       }
-      const session = await gateway.connectWithCode(code.trim());
+      const session = await gateway.connectWithCode(code);
       return {
         connected: true,
         canvasId: session.canvasId,
@@ -2980,6 +2997,11 @@ const SESSION_ARG = {
 
 const CONNECTORS = new Set(["canvas_connect", "canvas_create"]);
 
+// Read-only tools whose NAME doesn't end in _read/_list/_get. The intent facade
+// (facade.ts) names tools by intent, not by CRUD verb, so the regex below can't
+// classify them — list them explicitly rather than renaming for the regex's sake.
+const READ_ONLY_TOOLS = new Set(["queue_next", "board_status", "context_get"]);
+
 /**
  * MCP tool annotations (behaviour hints). Clients — notably the Claude.ai web
  * connector — use these to decide how to gate a call for user consent: a
@@ -2997,7 +3019,7 @@ function annotationsFor(name: string): {
   destructiveHint: boolean;
   openWorldHint: boolean;
 } {
-  const readOnly = /_(read|list|get)$/.test(name);
+  const readOnly = /_(read|list|get)$/.test(name) || READ_ONLY_TOOLS.has(name);
   const destructive = /_delete(_batch)?$/.test(name);
   return {
     readOnlyHint: readOnly,
@@ -3008,19 +3030,43 @@ function annotationsFor(name: string): {
   };
 }
 
-// Advertise `session` on every tool except the two that establish the binding,
-// and attach behaviour annotations to every tool.
-export const TOOLS = RAW_TOOLS.map((tool) => {
-  const annotations = annotationsFor(tool.name);
-  if (CONNECTORS.has(tool.name)) {
-    return { ...tool, annotations };
-  }
-  return {
-    ...tool,
-    annotations,
-    inputSchema: {
-      ...tool.inputSchema,
-      properties: { ...tool.inputSchema.properties, session: SESSION_ARG },
-    },
+/** The shape every raw tool definition (CRUD or facade) shares. */
+export interface RawTool {
+  name: string;
+  description: string;
+  inputSchema: {
+    type: "object";
+    properties?: Record<string, unknown>;
+    required?: string[];
   };
-});
+}
+
+/**
+ * Advertise `session` on every tool except the ones that establish the binding,
+ * and attach behaviour annotations. Shared by the CRUD surface below and the
+ * intent facade so both are decorated identically.
+ */
+export function decorateTools(raw: readonly RawTool[]) {
+  return raw.map((tool) => {
+    const annotations = annotationsFor(tool.name);
+    if (CONNECTORS.has(tool.name)) {
+      return { ...tool, annotations };
+    }
+    return {
+      ...tool,
+      annotations,
+      inputSchema: {
+        ...tool.inputSchema,
+        properties: { ...tool.inputSchema.properties, session: SESSION_ARG },
+      },
+    };
+  });
+}
+
+/** Raw CRUD definitions by name — lets the facade reuse an input schema verbatim. */
+export const RAW_TOOL_BY_NAME = new Map<string, RawTool>(
+  (RAW_TOOLS as readonly RawTool[]).map((t) => [t.name, t])
+);
+
+/** The full CRUD surface. Advertised only when TANDEM_FULL_TOOLS is set. */
+export const TOOLS = decorateTools(RAW_TOOLS as readonly RawTool[]);

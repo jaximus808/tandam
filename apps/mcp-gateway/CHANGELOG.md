@@ -1,5 +1,56 @@
 # Changelog — @jaximus/tandem-mcp
 
+## Unreleased
+
+### `init` — one command from nothing to a connected canvas (TDM-33)
+
+- **`npx @jaximus/tandem-mcp init`** creates a canvas, registers the MCP server
+  in the project's `.mcp.json`, prints the share code + board URL (+ the
+  private claim link for a canvas it just created), and prints an
+  `AGENTS.md`/`CLAUDE.md` snippet that teaches the queue-first loop in the
+  facade's vocabulary. `--write` appends the snippet; `--name`, `--code`,
+  `--force`, `--dir` for the rest.
+- **The `.mcp.json` write is a merge, never a clobber**: other MCP servers and
+  unknown top-level keys survive verbatim, and an existing `tandem` entry keeps
+  its own `command`/`args`/`env` (a local-dev entry pointing at `node
+  dist/index.js` isn't overwritten) — only the canvas code is authoritative.
+- **Re-running is a no-op**: if `.mcp.json` already pins a canvas code, `init`
+  reprints it, touches neither disk nor network, and exits `0`. `--force`
+  creates a fresh canvas; `--code` repoints at an existing one.
+- New env var **`TANDEM_CANVAS_CODE`** (what `init` writes): named inside the
+  `canvas_connect` tool description so the agent knows which canvas the project
+  belongs to without the human repeating the code, and used as the default when
+  `canvas_connect` is called without one.
+- `tandem` is now a bin alias for `tandem-mcp`, so a global install gets
+  `tandem init`. (`npx tandem` still resolves to an unrelated npm package — use
+  the scoped name with npx.)
+- No change to the default behaviour: no args (or any flag) still starts the
+  stdio MCP server; `init` is the only subcommand.
+
+### Intent facade replaces CRUD as the default manifest (TDM-32)
+
+- **The default surface is now 10 tools**, shaped like the work loop instead
+  of the API: `canvas_connect`, `context_get`, `queue_next`, `task_get`,
+  `task_claim`, `task_progress`, `task_complete`, `task_propose`, `doc_write`,
+  `board_status`. The ~80-tool CRUD manifest cost a large slice of a session's
+  context window before it did anything, and left the model to invent the
+  workflow; the facade encodes it — connect → queue_next → task_get →
+  task_claim → work → task_complete.
+- **The full CRUD surface is one opt-in away**: `TANDEM_FULL_TOOLS=1` (or
+  `tandem-mcp --full-tools`) advertises it *alongside* the facade. The flag
+  only controls what's **advertised** — every CRUD tool stays callable by name
+  either way, so existing prompts and older clients don't break.
+- New composed behaviour, not just renames: `context_get` returns a canvas
+  briefing in one call (identity + tabs + counts + queue state, never the full
+  board); `doc_write` creates the notes tab you name if it doesn't exist yet;
+  `board_status` answers "where does this stand" without a canvas read;
+  `task_progress` records mid-flight progress on the task itself, so
+  `task_get` returns it.
+- No webhook tool exists in any manifest, and none may be added — an
+  agent-facing tool that configures outbound HTTP turns attacker-influenced
+  canvas content into a data-exfiltration channel. Webhooks are configured by a
+  human in the web UI only. Pinned by a test.
+
 ## 2.3.0 — 2026-07-28
 
 The pivot release: Tandem is the shared state layer for parallel agent
