@@ -799,7 +799,7 @@ func (h *Handler) claimAction(w http.ResponseWriter, r *http.Request, agentName 
 	if agentName == "" {
 		agentName = "agent"
 	}
-	action, outcome, err := h.store.ClaimAction(r.Context(), canvasID, id, agentName)
+	action, err := h.claimTask(r.Context(), canvasID, id, agentName)
 	if err != nil {
 		var claimed *store.AlreadyClaimedError
 		switch {
@@ -817,16 +817,34 @@ func (h *Handler) claimAction(w http.ResponseWriter, r *http.Request, agentName 
 		}
 		return
 	}
+	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
+	writeJSON(w, http.StatusOK, map[string]any{"action": action})
+}
+
+// claimTask is THE claim — the atomic store call plus the two side effects every
+// claim owes the rest of the system, with no HTTP in it. Both surfaces that can
+// start a task go through here: the MCP/web PATCH (claimAction, above) and the
+// inbound status API a CI job curls (statusStarted, TDM-38). That's the point —
+// a curl from GitHub Actions and an MCP task_start must leave the board, the
+// presence view and the webhook stream in states nobody can tell apart.
+//
+// The caller maps the error onto a status code and broadcasts state; everything
+// that must happen REGARDLESS of surface lives here.
+func (h *Handler) claimTask(ctx context.Context, canvasID, id uuid.UUID, agentName string) (*store.Action, error) {
+	action, outcome, err := h.store.ClaimAction(ctx, canvasID, id, agentName)
+	if err != nil {
+		return nil, err
+	}
 	// Liveness heartbeat: a claim proves the agent is alive — refresh its
 	// last_seen_at so the swarm view's staleness threshold stays honest.
 	// Touch-or-create ("when an agent takes a task it should still be
 	// connected"): a claimant that never called agent_register gets a minimal
 	// executor row on this canvas, so any session that takes a task appears in
 	// presence/swarm views labelled with its task (the web side already matches
-	// claimedBy → agent name). Best-effort and DETACHED: presence must never
-	// add a round-trip to the claim path (the exact latency the loadtest
-	// measures).
-	touchCtx := context.WithoutCancel(r.Context())
+	// claimedBy → agent name). This is also what puts a CI job on the board as a
+	// named member. Best-effort and DETACHED: presence must never add a
+	// round-trip to the claim path (the exact latency the loadtest measures).
+	touchCtx := context.WithoutCancel(ctx)
 	go func() {
 		if err := h.store.TouchOrCreateAgent(touchCtx, canvasID, agentName); err != nil {
 			log.Printf("claim %s: touching agent last_seen (%s): %v", id, agentName, err)
@@ -840,14 +858,13 @@ func (h *Handler) claimAction(w http.ResponseWriter, r *http.Request, agentName 
 	if outcome.ExpiredClaimBy != "" {
 		log.Printf("claim %s: expired claim held by %q, taken over by %q", id, outcome.ExpiredClaimBy, agentName)
 		h.emitTaskEvent(canvasID, webhooks.EventTaskClaimExpired, action, withExpiredClaim(outcome))
-		// The full-state broadcast below already reconciles the board, but it
+		// The caller's full-state broadcast already reconciles the board, but it
 		// says nothing about WHY the claimant changed. This is the lightweight
 		// signal the Tasks panel can surface as activity ("a claim lapsed"),
 		// matching the read-pulse path.
 		broadcastActivity(h.hub, canvasID, "claim_expired")
 	}
-	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
-	writeJSON(w, http.StatusOK, map[string]any{"action": action})
+	return action, nil
 }
 
 // POST /api/canvas/actions/{id}/release — stuck-claim escape hatch: an

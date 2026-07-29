@@ -138,6 +138,20 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 	// subscription URL (Google / Apple / Outlook poll it to stay in sync).
 	r.Get("/api/canvas/{code}/itinerary.ics", h.ExportItineraryICS)
 
+	// ── Inbound status API (TDM-38) ────────────────────────────────────────────
+	// A fleet member with no MCP client — a CI job, a Modal function, a cron
+	// script — reports task status with one curl. Canvas is addressed by CODE
+	// here (not by the token's embedded id) because the URL is the thing a human
+	// pastes into a workflow file; RequireCanvasByCode makes the two agree.
+	// RequireWrite applies as it does to every other mutation: a read-only
+	// credential can watch the board, not move it.
+	r.Group(func(r chi.Router) {
+		r.Use(RequireCanvasByCode(authSvc, s))
+		r.Use(RequireLiveGrant(s))
+		r.Use(RequireWrite)
+		r.Post("/api/canvas/{code}/tasks/{id}/status", h.ReportTaskStatus)
+	})
+
 	// Image upload is intentionally disabled for v1 — needs a real storage
 	// story (durable disk + backups) before we offer it. The read path below
 	// stays so any imageRefs left from dev still render instead of 404'ing
