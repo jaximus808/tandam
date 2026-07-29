@@ -11,13 +11,20 @@ import (
 	"github.com/agentcanvas/api/internal/maps"
 	"github.com/agentcanvas/api/internal/metrics"
 	"github.com/agentcanvas/api/internal/store"
+	"github.com/agentcanvas/api/internal/webhooks"
 	"github.com/agentcanvas/api/internal/ws"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 )
 
-func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier *auth.GoogleVerifier, cookieSecure bool, mapsReg *maps.Registry, webDistPath string, imageDir string, publicBaseURL string, metricsEnabled bool) http.Handler {
+// NewRouter builds the whole HTTP surface. emitter is the outbound-webhook
+// emitter (TDM-37) and is OPTIONAL — pass nil when webhooks are disabled and
+// every task-lifecycle emit becomes a no-op. It is threaded as a nilable
+// *webhooks.Emitter rather than the TaskEventEmitter interface precisely so a nil
+// here stays a nil: a typed-nil pointer boxed into an interface would be
+// non-nil and panic on first emit.
+func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier *auth.GoogleVerifier, cookieSecure bool, mapsReg *maps.Registry, webDistPath string, imageDir string, publicBaseURL string, metricsEnabled bool, emitter *webhooks.Emitter) http.Handler {
 	r := chi.NewRouter()
 
 	metricsReg := metrics.NewRegistry()
@@ -31,7 +38,11 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 		AllowCredentials: false,
 	}))
 
-	h := NewHandler(s, hub, mapsReg)
+	var hOpts []HandlerOption
+	if emitter != nil {
+		hOpts = append(hOpts, WithTaskEvents(emitter))
+	}
+	h := NewHandler(s, hub, mapsReg, hOpts...)
 	wsH := NewWSHandler(s, hub, authSvc, mapsReg)
 	mapsH := NewMapsHandler(mapsReg)
 	authH := NewAuthHandler(s, authSvc, googleVerifier, cookieSecure)

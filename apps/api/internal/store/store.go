@@ -49,6 +49,32 @@ func (e *AlreadyClaimedError) Error() string {
 	return "task already claimed by " + e.ClaimedBy
 }
 
+// ClaimOutcome describes HOW a successful ClaimAction was won, beyond the
+// action itself. It exists because claim expiry in this system is LAZY: there is
+// no sweeper that walks stale claims (see DefaultClaimTTL), so the only moment a
+// lapsed claim is observable is the instant a rival claimer takes it over inside
+// ClaimAction. Without this the API layer cannot distinguish "claimed a queued
+// task" from "expired someone's claim and took the task", and the
+// task.claim_expired webhook (TDM-37) would have nothing to fire on.
+//
+// It replaces the bare version int the claim used to return — every caller
+// ignored that value, so folding it into a named struct costs nothing and gives
+// the takeover facts a place to live.
+type ClaimOutcome struct {
+	// Version is the canvas version after the claim (0 when nothing bumped).
+	Version int
+	// ExpiredClaimBy names the holder whose claim had lapsed and was taken over
+	// by this claim. Empty on an ordinary claim of an 'approved' task.
+	//
+	// Deliberately empty for a SELF-takeover (the same named agent restamping
+	// its own expired claim): the TTL lapsed, but the task never changed hands
+	// and the agent is demonstrably alive, so there is no handoff to report.
+	ExpiredClaimBy string
+	// ExpiredClaimAt is when the lapsed claim was originally taken. Zero unless
+	// ExpiredClaimBy is set.
+	ExpiredClaimAt time.Time
+}
+
 // ── Domain types ──────────────────────────────────────────────────────────────
 
 type Canvas struct {
@@ -347,6 +373,12 @@ type Action struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
+// TicketID renders a stored ticket integer as the display form humans and
+// webhook receivers see. One definition, because the string is an identifier
+// people paste around ("TDM-37") — an API response and a webhook payload
+// disagreeing on its spelling would be a quiet, confusing bug.
+func TicketID(n int) string { return fmt.Sprintf("TDM-%d", n) }
+
 // MarshalJSON adds the ticket's display form ("TDM-<n>", as ticketId) to every
 // serialization of an Action — REST responses and WS state broadcasts alike —
 // while the DB stores only the integer.
@@ -357,7 +389,7 @@ func (a *Action) MarshalJSON() ([]byte, error) {
 		TicketID string `json:"ticketId,omitempty"`
 	}{actionAlias: (*actionAlias)(a)}
 	if a.Ticket != nil {
-		out.TicketID = fmt.Sprintf("TDM-%d", *a.Ticket)
+		out.TicketID = TicketID(*a.Ticket)
 	}
 	return json.Marshal(out)
 }
@@ -951,11 +983,12 @@ type Store interface {
 	// than the claim TTL (lazy expiry, no sweeper; see store.DefaultClaimTTL /
 	// WithClaimTTL, 0 disables) is atomically taken over by a second conditional
 	// UPDATE (… WHERE state='executing' AND claimed_at < cutoff), restamping
-	// claimed_by/claimed_at. Returns the claimed action + new canvas version,
+	// claimed_by/claimed_at. Returns the claimed action + a ClaimOutcome (new
+	// canvas version, and whether this claim expired a previous holder),
 	// ErrActionNotFound, *AlreadyClaimedError (with the current holder — the
 	// NEW one if a takeover race was lost), or an ErrIllegalActionState-wrapped
 	// error for other states.
-	ClaimAction(ctx context.Context, canvasID, id uuid.UUID, claimedBy string) (*Action, int, error)
+	ClaimAction(ctx context.Context, canvasID, id uuid.UUID, claimedBy string) (*Action, ClaimOutcome, error)
 	// ReleaseAction frees a stuck claim: executing → approved, clearing
 	// claimed_by/claimed_at, via the same conditional-UPDATE pattern. Human-only —
 	// the gate lives at the route surface (see api.ReleaseAction).
@@ -971,9 +1004,10 @@ type Store interface {
 	// (actions rows with type='task', state='proposed', payload epicId = epicID)
 	// in ONE bulk UPDATE, stamping approved_by (the 'policy:epic' provenance).
 	// Tasks self-flagged requiresApproval:true are skipped — they keep their
-	// individual human gate. Returns the number of tasks approved; the canvas
-	// version is bumped only when that count is non-zero.
-	ApproveEpicTasks(ctx context.Context, canvasID, epicID uuid.UUID, approvedBy string) (int, error)
+	// individual human gate. Returns the tasks that actually flipped (so the
+	// caller can fan one task.approved webhook out per task — TDM-37); the
+	// canvas version is bumped only when that slice is non-empty.
+	ApproveEpicTasks(ctx context.Context, canvasID, epicID uuid.UUID, approvedBy string) ([]*Action, error)
 	// ApproveActionsBatch flips every listed action still in 'proposed' to
 	// approved in ONE bulk conditional UPDATE (id IN ids AND canvas_id AND
 	// state='proposed'), stamping approved_by. Ids that don't match (missing,

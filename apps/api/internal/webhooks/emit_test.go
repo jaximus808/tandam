@@ -2,6 +2,7 @@ package webhooks
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -166,5 +167,68 @@ func TestEventConstantsMatchSchema(t *testing.T) {
 	if len(store.KnownWebhookEvents) != 3 {
 		t.Errorf("KnownWebhookEvents has %d entries, want 3 — widen the CHECK in a migration first",
 			len(store.KnownWebhookEvents))
+	}
+}
+
+// TDM-37: the caller supplies the event id so the SAME id can be both the
+// fan-out key on the delivery rows and a field inside the payload. If Emit
+// minted its own, one logical event would carry two ids and nothing could join a
+// receiver's report back to the delivery log.
+func TestEmitWithEventIDUsesTheCallersID(t *testing.T) {
+	clock := time.Unix(vectorTimestamp, 0).UTC()
+	f := newFakeStore(func() time.Time { return clock })
+	canvasID := uuid.New()
+	f.addHook(&store.Webhook{CanvasID: canvasID, URL: "https://a.example/hook", Secret: "s1",
+		Events: []string{EventTaskApproved}, Enabled: true})
+	f.addHook(&store.Webhook{CanvasID: canvasID, URL: "https://b.example/hook", Secret: "s2",
+		Events: []string{EventTaskApproved}, Enabled: true})
+
+	eventID := uuid.New()
+	n, err := NewEmitter(f).EmitWithEventID(context.Background(), canvasID, eventID, EventTaskApproved,
+		map[string]any{"event_id": eventID.String(), "type": EventTaskApproved})
+	if err != nil {
+		t.Fatalf("EmitWithEventID: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("enqueued %d, want 2", n)
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, d := range f.deliveries {
+		if d.EventID != eventID {
+			t.Errorf("delivery event_id = %s, want the caller's %s", d.EventID, eventID)
+		}
+		// The payload a receiver sees must name the same event.
+		var body map[string]any
+		if err := json.Unmarshal(d.Payload, &body); err != nil {
+			t.Fatalf("payload: %v", err)
+		}
+		if body["event_id"] != eventID.String() {
+			t.Errorf("payload event_id = %v, want %s", body["event_id"], eventID)
+		}
+	}
+}
+
+// Re-emitting with the SAME event id is a genuine no-op — the stronger
+// idempotency a caller gets by owning the id (UNIQUE(webhook_id, event_id)).
+func TestEmitWithEventIDIsIdempotent(t *testing.T) {
+	clock := time.Unix(vectorTimestamp, 0).UTC()
+	f := newFakeStore(func() time.Time { return clock })
+	canvasID := uuid.New()
+	f.addHook(&store.Webhook{CanvasID: canvasID, URL: "https://a.example/hook", Secret: "s1",
+		Events: []string{EventTaskCompleted}, Enabled: true})
+
+	em := NewEmitter(f)
+	eventID := uuid.New()
+	for i := 0; i < 2; i++ {
+		if _, err := em.EmitWithEventID(context.Background(), canvasID, eventID, EventTaskCompleted, nil); err != nil {
+			t.Fatalf("emit #%d: %v", i, err)
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.deliveries) != 1 {
+		t.Fatalf("stored %d delivery rows for one event id, want 1", len(f.deliveries))
 	}
 }

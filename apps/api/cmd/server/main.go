@@ -62,9 +62,15 @@ func main() {
 	// context during graceful shutdown. It owns all outbound HTTP for webhooks —
 	// request handlers only ever enqueue (webhooks.Emitter), so a slow or dead
 	// receiver can never slow a canvas mutation.
+	// The Emitter is the request-path half: handlers hand it task-lifecycle
+	// events (TDM-37) and it enqueues one delivery row per subscribed webhook.
+	// It stays nil when webhooks are off, which makes every emit in the handlers
+	// a no-op — nothing is enqueued that no worker would ever drain.
 	webhookCtx, stopWebhooks := context.WithCancel(context.Background())
 	defer stopWebhooks()
+	var emitter *webhooks.Emitter
 	if cfg.WebhooksEnabled {
+		emitter = webhooks.NewEmitter(db)
 		go webhooks.NewWorker(db).Run(webhookCtx)
 	} else {
 		log.Printf("WEBHOOKS_ENABLED=false — outbound webhook delivery worker disabled")
@@ -81,7 +87,7 @@ func main() {
 	}
 	log.Printf("loaded %d map presets: %v", len(mapsReg.IDs()), mapsReg.IDs())
 
-	router := api.NewRouter(db, hub, authSvc, googleVerifier, cfg.CookieSecure, mapsReg, cfg.WebDistPath, cfg.ImageDir, cfg.PublicBaseURL, cfg.MetricsEnabled)
+	router := api.NewRouter(db, hub, authSvc, googleVerifier, cfg.CookieSecure, mapsReg, cfg.WebDistPath, cfg.ImageDir, cfg.PublicBaseURL, cfg.MetricsEnabled, emitter)
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%s", cfg.Port),

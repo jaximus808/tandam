@@ -67,9 +67,12 @@ func NewEmitter(st EmitStore) *Emitter {
 // enqueued (0 is the common, entirely normal case — most canvases have no
 // webhooks).
 //
-// This is the call site TDM-37 wires up. Signature:
+// Signature:
 //
 //	emitter.Emit(ctx, canvasID, webhooks.EventTaskApproved, payload)
+//
+// TDM-37's handlers do NOT call this one — they call EmitAsyncWithEventID, so
+// the id in the row and the id in the payload are the same id. See below.
 //
 // payload is marshaled once and stored verbatim; it becomes the REQUEST BODY of
 // every delivery, byte for byte, and is what the signature covers. It is
@@ -85,6 +88,29 @@ func NewEmitter(st EmitStore) *Emitter {
 // call site (emit from the one place the transition happens), not here — the
 // store has no way to tell a duplicate emit from a legitimate re-approval.
 func (e *Emitter) Emit(ctx context.Context, canvasID uuid.UUID, eventType string, payload any) (int, error) {
+	// ONE freshly-minted event id for the whole fan-out — the "who did we tell
+	// about this approval" key, and the idempotency key of the insert.
+	return e.EmitWithEventID(ctx, canvasID, uuid.New(), eventType, payload)
+}
+
+// EmitWithEventID is Emit with the event id supplied by the caller instead of
+// minted here.
+//
+// Why the seam exists (TDM-37): the delivery row's event_id is the only handle
+// an operator has on "one logical event, fanned out to N endpoints" — but a
+// receiver never sees that column. It sees the PAYLOAD (plus the delivery-id and
+// event-type headers). For a receiver to correlate two notifications as the same
+// event, the id has to be INSIDE the payload — and the payload is marshaled by
+// the caller, before Emit runs. Minting inside Emit would therefore give one
+// event two different ids: one in the row, a different one in the bytes, and no
+// way to join a receiver's report back to the delivery log.
+//
+// So the caller mints once, stamps it into the payload it builds, and passes the
+// same id here. Everything else is identical to Emit — including the
+// UNIQUE(webhook_id, event_id) idempotency guarantee, which this makes *stronger*
+// for callers that derive a stable id: re-emitting with the same id is a genuine
+// no-op rather than a second notification.
+func (e *Emitter) EmitWithEventID(ctx context.Context, canvasID, eventID uuid.UUID, eventType string, payload any) (int, error) {
 	if !store.IsKnownWebhookEvent(eventType) {
 		return 0, fmt.Errorf("unknown webhook event %q", eventType)
 	}
@@ -102,9 +128,6 @@ func (e *Emitter) Emit(ctx context.Context, canvasID uuid.UUID, eventType string
 		return 0, fmt.Errorf("marshal payload: %w", err)
 	}
 
-	// ONE event id for the whole fan-out — the "who did we tell about this
-	// approval" key, and the idempotency key of the insert.
-	eventID := uuid.New()
 	deliveries := make([]*store.WebhookDelivery, 0, len(hooks))
 	for _, h := range hooks {
 		deliveries = append(deliveries, &store.WebhookDelivery{
@@ -136,10 +159,18 @@ func (e *Emitter) Emit(ctx context.Context, canvasID uuid.UUID, eventType string
 // cancelled the moment the HTTP response is written, which would abort the
 // enqueue it is racing.
 func (e *Emitter) EmitAsync(canvasID uuid.UUID, eventType string, payload any) {
+	e.EmitAsyncWithEventID(canvasID, uuid.New(), eventType, payload)
+}
+
+// EmitAsyncWithEventID is EmitAsync over EmitWithEventID — the handler-side
+// call. Every task-lifecycle emit in internal/api goes through this one: the
+// handler mints the event id, stamps it into the payload envelope, and hands
+// both here. See EmitWithEventID for why the id is the caller's to mint.
+func (e *Emitter) EmitAsyncWithEventID(canvasID, eventID uuid.UUID, eventType string, payload any) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), e.asyncTimeout)
 		defer cancel()
-		if _, err := e.Emit(ctx, canvasID, eventType, payload); err != nil {
+		if _, err := e.EmitWithEventID(ctx, canvasID, eventID, eventType, payload); err != nil {
 			e.logf("webhooks: emit %s for canvas %s: %v", eventType, canvasID, err)
 		}
 	}()
