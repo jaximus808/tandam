@@ -47,6 +47,10 @@ type Handler struct {
 	// makes every counter increment a no-op (the methods are nil-receiver safe),
 	// which is what handler tests and a METRICS_ENABLED=false deployment get.
 	metrics *metrics.Registry
+	// github is the READ-ONLY GitHub status proxy (TDM-45). Lazily defaulted by
+	// githubClient(), so a Handler built without it still answers; tests replace
+	// it with one pointed at an httptest server (nothing calls real GitHub).
+	github *githubClient
 }
 
 // HandlerOption customizes NewHandler. Optional dependencies go here rather than

@@ -173,7 +173,7 @@ The default surface is a **10-tool intent facade** shaped like the work loop, no
 | `task_get`       | One task with its linked context hydrated — all a session needs to start.                                   |
 | `task_claim`     | Atomic claim (`approved` → `executing`). Losers get `{ claimed: false, claimedBy }` and move on.             |
 | `task_progress`  | Mid-flight progress on a task you claimed; stored on the task, returned by `task_get`.                       |
-| `task_complete`  | Finish with a `result` (include commit hashes), or `status: "failed"` + `error`.                             |
+| `task_complete`  | Finish with a `result` (include commit hashes) plus `links` (commit / PR / branch URLs), or `status: "failed"` + `error`. |
 | `task_propose`   | Propose one task or a whole plan (`tasks: [...]`). Lands as `proposed` for human approval.                   |
 | `doc_write`      | Leave context behind as a markdown note; names a tab and creates it if new.                                  |
 | `board_status`   | Board-shaped overview — counts by state, in-flight claims, epics — without dumping the canvas.               |
@@ -206,10 +206,11 @@ agent: task_claim { "id": "…", "session": "…" }
 
   …work happens; commits start with "TDM-7: …"…
 
-agent: task_complete { "id": "…", "result": "Rate limiter added — commit a1b2c3d", "session": "…" }
+agent: task_complete { "id": "…", "result": "Rate limiter added — commit a1b2c3d",
+                       "links": ["https://github.com/acme/api/pull/214"], "session": "…" }
 ```
 
-The human watches the board move in the browser — cards flip to *executing* with the claimant's name, results land as tasks complete — in real time, no refresh.
+The human watches the board move in the browser — cards flip to *executing* with the claimant's name, results land as tasks complete — in real time, no refresh. GitHub links passed to `task_complete` show a live status on the card (merged, open, checks failing), read straight from GitHub.
 
 ## Multi-agent
 

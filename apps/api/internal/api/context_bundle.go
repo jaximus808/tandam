@@ -62,6 +62,11 @@ type contextTaskPayload struct {
 	EpicID    string      `json:"epicId"`
 	Assignee  string      `json:"assignee"`
 	LinkedIDs []uuid.UUID `json:"linkedIds"`
+	// Links is completion EVIDENCE (TDM-45) — commit / PR / branch URLs left by
+	// whoever worked this task before. Worth rendering because a task that comes
+	// back round (re-queued, or a follow-up) reads better with the previous
+	// attempt's artefacts named than without them.
+	Links []string `json:"links"`
 }
 
 func decodeTaskPayload(raw json.RawMessage) contextTaskPayload {
@@ -175,6 +180,15 @@ func renderTaskSection(sb *strings.Builder, b contextBundle, now time.Time) {
 
 	if body := strings.TrimSpace(p.Body); body != "" {
 		fmt.Fprintf(sb, "\n%s\n", body)
+	}
+
+	// Evidence from earlier work on this task, if any. One line each — the URL
+	// is the fact; anything more would be this renderer guessing.
+	if links := trimmedLinks(p.Links); len(links) > 0 {
+		sb.WriteString("\n### Evidence\n\n")
+		for _, l := range links {
+			fmt.Fprintf(sb, "- %s\n", l)
+		}
 	}
 
 	sb.WriteString("\n### Linked context\n\n")
@@ -351,4 +365,15 @@ func plural(n int, one, many string) string {
 		return fmt.Sprintf("%d %s", n, one)
 	}
 	return fmt.Sprintf("%d %s", n, many)
+}
+
+// trimmedLinks drops blanks from a payload's links[] without reordering it.
+func trimmedLinks(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, l := range in {
+		if l = strings.TrimSpace(l); l != "" {
+			out = append(out, l)
+		}
+	}
+	return out
 }

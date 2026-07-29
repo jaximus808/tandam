@@ -174,21 +174,35 @@ func (b *taskStatusBody) normalize() (string, []string, error) {
 	if len(b.Summary) > maxStatusSummary || len(b.Error) > maxStatusSummary {
 		return "", nil, fmt.Errorf("summary/error must be at most %d characters", maxStatusSummary)
 	}
-	if len(b.Links) > maxStatusLinks {
-		return "", nil, fmt.Errorf("at most %d links per report", maxStatusLinks)
+	links, err := normalizeStatusLinks(b.Links)
+	if err != nil {
+		return "", nil, err
 	}
-	links := make([]string, 0, len(b.Links))
-	for _, l := range b.Links {
+	return agent, links, nil
+}
+
+// normalizeStatusLinks validates and trims an evidence links[].
+//
+// Shared with the MCP/web completion PATCH (UpdateActionState), so evidence has
+// ONE set of rules whichever surface reports it: same caps, same errors, same
+// additive merge downstream. The board's GitHub lookup (TDM-45) reads whatever
+// lands here, so the two paths must agree on what a link is.
+func normalizeStatusLinks(in []string) ([]string, error) {
+	if len(in) > maxStatusLinks {
+		return nil, fmt.Errorf("at most %d links per report", maxStatusLinks)
+	}
+	links := make([]string, 0, len(in))
+	for _, l := range in {
 		l = strings.TrimSpace(l)
 		if l == "" {
-			return "", nil, fmt.Errorf("links must be non-empty strings (commit / PR / run URLs)")
+			return nil, fmt.Errorf("links must be non-empty strings (commit / PR / run URLs)")
 		}
 		if len(l) > maxStatusLinkLen {
-			return "", nil, fmt.Errorf("each link must be at most %d characters", maxStatusLinkLen)
+			return nil, fmt.Errorf("each link must be at most %d characters", maxStatusLinkLen)
 		}
 		links = append(links, l)
 	}
-	return agent, links, nil
+	return links, nil
 }
 
 // statusStarted claims the task through the SAME atomic path as the MCP

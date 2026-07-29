@@ -756,6 +756,12 @@ func (h *Handler) UpdateActionState(w http.ResponseWriter, r *http.Request) {
 		// Canvas JWTs carry no per-agent identity, so the gateway passes the
 		// registered agent name/id here; empty falls back to the generic "agent".
 		AgentName string `json:"agentName"`
+		// Links is completion EVIDENCE (TDM-45): commit / PR / branch URLs the
+		// board resolves against GitHub. Same field, same additive merge, and the
+		// same caps as the inbound status API's links[] — one shape for evidence
+		// whether the report arrives by MCP or by curl. Only read on a terminal
+		// transition; see the merge below.
+		Links []string `json:"links"`
 	}
 	if err := decode(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -812,9 +818,44 @@ func (h *Handler) UpdateActionState(w http.ResponseWriter, r *http.Request) {
 			}
 		}()
 	}
-	fresh, moved := h.transitionAction(w, r, body.State, store.ActionStatePatch{
-		Result: body.Result, Error: body.Error, Payload: body.Payload,
-	})
+	patch := store.ActionStatePatch{Result: body.Result, Error: body.Error, Payload: body.Payload}
+	// Evidence rides the SAME write as the transition — one round trip, and no
+	// window where a task is done but the commit that finished it hasn't landed.
+	// Merged ADDITIVELY through the status API's own merge (append, dedupe, cap),
+	// because this PATCH otherwise REPLACES the payload wholesale and a caller
+	// sending only links must not blank the task's title.
+	if len(body.Links) > 0 {
+		links, lerr := normalizeStatusLinks(body.Links)
+		if lerr != nil {
+			writeError(w, http.StatusBadRequest, lerr.Error())
+			return
+		}
+		base, haveBase := body.Payload, len(body.Payload) > 0
+		if !haveBase {
+			// No payload in the body (the task_complete shape): read the stored one
+			// so the merge appends rather than replaces. If the read fails, the
+			// links are DROPPED rather than written onto an empty object — losing
+			// evidence beats erasing a task's content.
+			if id, perr := uuid.Parse(chi.URLParam(r, "id")); perr == nil {
+				if current, gerr := h.store.GetAction(r.Context(), CanvasIDFromCtx(r.Context()), id); gerr == nil {
+					base, haveBase = current.Payload, true
+				} else {
+					log.Printf("complete: links dropped, could not read task %s: %v", id, gerr)
+				}
+			}
+		}
+		if haveBase {
+			merged, changed, merr := mergeTaskStatusPayload(base, "", "", links, time.Now().UTC())
+			if merr != nil {
+				writeError(w, http.StatusBadRequest, merr.Error())
+				return
+			}
+			if changed {
+				patch.Payload = merged
+			}
+		}
+	}
+	fresh, moved := h.transitionAction(w, r, body.State, patch)
 	// Terminal transition → task.completed, for 'done' AND 'failed' alike; the
 	// payload's task.state says which, and task.error carries the failure reason.
 	// (Rationale for folding 'failed' in here rather than staying silent: see the

@@ -512,7 +512,10 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
       "FINISH a task with a result summary — the last step of every task you claim; leaving one " +
       "'executing' blocks the queue. `result` is a short human-readable account of what was done " +
       "and where: files, commit hashes, PR. It shows on the board, so it is the human's whole view " +
-      "of your work. Failed? pass status:'failed' with `error` rather than leaving it hanging. " +
+      "of your work. Back it with `links`: the GitHub URLs the work produced (commit / pull " +
+      "request / branch). The board resolves those live — merged, open, checks failing — so the " +
+      "human reads what HAPPENED, not just what you said. " +
+      "Failed? pass status:'failed' with `error` rather than leaving it hanging. " +
       "Complete under the SAME identity you claimed with. " +
       SESSION_CONVENTION,
     inputSchema: schemaOf("canvas_task_complete"),

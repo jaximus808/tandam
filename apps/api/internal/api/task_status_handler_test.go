@@ -881,3 +881,109 @@ func TestStatusRouteBindsBothPathParams(t *testing.T) {
 		t.Fatalf("bound code=%q id=%q, want %q / %q", gotCode, gotID, statusCanvasCode, id)
 	}
 }
+
+// ── Completion evidence over the MCP/web PATCH (TDM-45) ──────────────────────
+//
+// The status API has carried links[] since TDM-38; task_complete goes through
+// UpdateActionState instead. The two must write evidence the SAME way — appended
+// to payload.links, deduped, and with every other payload key untouched — or a
+// board that renders GitHub status would show it for CI completions and not for
+// agent ones.
+
+// completionPatch drives PATCH /api/canvas/actions/{id} straight at the handler.
+func completionPatch(t *testing.T, h *Handler, canvasID, id uuid.UUID, body map[string]any) *httptest.ResponseRecorder {
+	t.Helper()
+	w := httptest.NewRecorder()
+	h.UpdateActionState(w, canvasRequest(t, "PATCH", "/api/canvas/actions/"+id.String(), body, canvasID, id.String()))
+	return w
+}
+
+func payloadOf(t *testing.T, a *store.Action) map[string]any {
+	t.Helper()
+	out := map[string]any{}
+	if err := json.Unmarshal(a.Payload, &out); err != nil {
+		t.Fatalf("stored payload is not JSON: %s", a.Payload)
+	}
+	return out
+}
+
+func TestCompleteWithLinksMergesAdditively(t *testing.T) {
+	task := statusTask("executing", "coder-1")
+	task.Payload = json.RawMessage(`{"title":"ship the thing","assignee":"agent","links":["https://github.com/o/r/pull/12"]}`)
+	h, fake, _, canvasID := newStatusHarness(t, task)
+
+	w := completionPatch(t, h, canvasID, task.ID, map[string]any{
+		"state":  "done",
+		"result": "merged as #12",
+		"links": []string{
+			"https://github.com/o/r/pull/12", // already there — must not duplicate
+			"https://github.com/o/r/commit/b7f1a2c",
+		},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("PATCH done+links = %d, want 200: %s", w.Code, w.Body)
+	}
+	stored := fake.stored(task.ID)
+	if stored.State != "done" {
+		t.Fatalf("state = %q, want done", stored.State)
+	}
+	p := payloadOf(t, stored)
+	// The content the task was approved with survives an evidence write.
+	if p["title"] != "ship the thing" || p["assignee"] != "agent" {
+		t.Fatalf("completion links overwrote task content: %v", p)
+	}
+	links, _ := p["links"].([]any)
+	if len(links) != 2 || links[0] != "https://github.com/o/r/pull/12" || links[1] != "https://github.com/o/r/commit/b7f1a2c" {
+		t.Fatalf("links = %v, want the existing one plus the new one, deduped", links)
+	}
+}
+
+// A task whose payload has no links yet gets one — without losing its content,
+// which is the failure mode a wholesale payload PATCH would produce.
+func TestCompleteWithLinksOnATaskThatHadNone(t *testing.T) {
+	task := statusTask("executing", "coder-1")
+	h, fake, _, canvasID := newStatusHarness(t, task)
+
+	w := completionPatch(t, h, canvasID, task.ID, map[string]any{
+		"state": "done", "result": "done", "links": []string{" https://github.com/o/r/pull/9 "},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("= %d, want 200: %s", w.Code, w.Body)
+	}
+	p := payloadOf(t, fake.stored(task.ID))
+	if p["title"] != "ship the thing" {
+		t.Fatalf("title lost: %v", p)
+	}
+	links, _ := p["links"].([]any)
+	if len(links) != 1 || links[0] != "https://github.com/o/r/pull/9" {
+		t.Fatalf("links = %v, want the trimmed URL", links)
+	}
+}
+
+// Same caps as the status API — one set of rules for evidence, whichever
+// surface reports it.
+func TestCompleteRejectsMalformedLinks(t *testing.T) {
+	tests := []struct {
+		name  string
+		links []string
+	}{
+		{"too many", make([]string, maxStatusLinks+1)},
+		{"empty string", []string{"   "}},
+		{"over-long", []string{strings.Repeat("x", maxStatusLinkLen+1)}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			task := statusTask("executing", "coder-1")
+			h, fake, _, canvasID := newStatusHarness(t, task)
+			w := completionPatch(t, h, canvasID, task.ID, map[string]any{
+				"state": "done", "result": "done", "links": tt.links,
+			})
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("= %d, want 400: %s", w.Code, w.Body)
+			}
+			if fake.stored(task.ID).State != "executing" {
+				t.Fatal("a rejected evidence list must not transition the task")
+			}
+		})
+	}
+}
