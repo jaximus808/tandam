@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### `init` — one command from nothing to a connected canvas (TDM-33)
+
+- **`npx @jaximus/tandem-mcp init`** creates a canvas, registers the MCP server
+  in the project's `.mcp.json`, prints the share code + board URL (+ the
+  private claim link for a canvas it just created), and prints an
+  `AGENTS.md`/`CLAUDE.md` snippet that teaches the queue-first loop in the
+  facade's vocabulary. `--write` appends the snippet; `--name`, `--code`,
+  `--force`, `--dir` for the rest.
+- **The `.mcp.json` write is a merge, never a clobber**: other MCP servers and
+  unknown top-level keys survive verbatim, and an existing `tandem` entry keeps
+  its own `command`/`args`/`env` (a local-dev entry pointing at `node
+  dist/index.js` isn't overwritten) — only the canvas code is authoritative.
+- **Re-running is a no-op**: if `.mcp.json` already pins a canvas code, `init`
+  reprints it, touches neither disk nor network, and exits `0`. `--force`
+  creates a fresh canvas; `--code` repoints at an existing one.
+- New env var **`TANDEM_CANVAS_CODE`** (what `init` writes): named inside the
+  `canvas_connect` tool description so the agent knows which canvas the project
+  belongs to without the human repeating the code, and used as the default when
+  `canvas_connect` is called without one.
+- `tandem` is now a bin alias for `tandem-mcp`, so a global install gets
+  `tandem init`. (`npx tandem` still resolves to an unrelated npm package — use
+  the scoped name with npx.)
+- No change to the default behaviour: no args (or any flag) still starts the
+  stdio MCP server; `init` is the only subcommand.
+
 ### Intent facade replaces CRUD as the default manifest (TDM-32)
 
 - **The default surface is now 10 tools**, shaped like the work loop instead

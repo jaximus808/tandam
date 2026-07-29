@@ -6,7 +6,8 @@
   "type": "module",
   "main": "./dist/index.js",
   "bin": {
-    "tandem-mcp": "./dist/index.js"
+    "tandem-mcp": "./dist/index.js",
+    "tandem": "./dist/index.js"
   },
   "files": [
     "dist",

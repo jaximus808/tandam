@@ -71,6 +71,31 @@ export function manifestFor(fullTools: boolean) {
 }
 
 /**
+ * When the MCP config pins a canvas code (env TANDEM_CANVAS_CODE, written by
+ * `tandem-mcp init`), say so IN the canvas_connect description: the model reads
+ * the manifest, not the process env, so this is the only way it learns which
+ * canvas this project belongs to without the human repeating the code. Pure and
+ * non-mutating — returns a new array; every other tool passes through.
+ */
+export function withConfiguredCanvasCode<T extends { name: string; description: string }>(
+  tools: T[],
+  code?: string
+): T[] {
+  const pinned = code?.trim();
+  if (!pinned) return tools;
+  return tools.map((tool) =>
+    tool.name === "canvas_connect"
+      ? {
+          ...tool,
+          description:
+            `THIS PROJECT'S CANVAS IS \`${pinned}\` — call this with that code, first thing. ` +
+            tool.description,
+        }
+      : tool
+  );
+}
+
+/**
  * Build an MCP Server bound to `gateway`. One Gateway (and therefore one
  * Server) per session — for stdio that's the whole process; for HTTP it's one
  * per connected client.
@@ -89,7 +114,10 @@ export function createTandemServer(
   );
 
   const fullTools = fullToolsEnabled(options?.fullTools);
-  const tools = manifestFor(fullTools);
+  const tools = withConfiguredCanvasCode(
+    manifestFor(fullTools),
+    process.env.TANDEM_CANVAS_CODE
+  );
   process.stderr.write(
     `[tandem] tool manifest: ${fullTools ? "facade + full CRUD" : "intent facade"} (${tools.length} tools)\n`
   );

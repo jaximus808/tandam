@@ -74,11 +74,20 @@ export async function handleTool(
   switch (toolName) {
     // ── Connection ─────────────────────────────────────────────────────────────
     case "canvas_connect": {
-      const code = args.code;
-      if (typeof code !== "string" || !code.trim()) {
-        throw new Error("`code` (string) is required");
+      // The project's canvas code may be pinned in the MCP config's env by
+      // `tandem-mcp init` (TDM-33). Treat it as the default so a session that
+      // forgets to pass one still lands on the right canvas instead of erroring.
+      const code =
+        typeof args.code === "string" && args.code.trim()
+          ? args.code.trim()
+          : process.env.TANDEM_CANVAS_CODE?.trim();
+      if (!code) {
+        throw new Error(
+          "`code` (string) is required — ask the human for the canvas code, or run " +
+            "`npx @jaximus/tandem-mcp init` in the project to create one and pin it."
+        );
       }
-      const session = await gateway.connectWithCode(code.trim());
+      const session = await gateway.connectWithCode(code);
       return {
         connected: true,
         canvasId: session.canvasId,

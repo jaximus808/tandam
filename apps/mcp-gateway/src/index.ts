@@ -24,6 +24,14 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { Gateway } from "./gateway.js";
 import { createTandemServer, VERSION, DEFAULT_API_URL } from "./server.js";
+import {
+  CANVAS_CODE_ENV,
+  fsDeps,
+  InitUsageError,
+  parseInitArgs,
+  runInit,
+  type CanvasHandle,
+} from "./init.js";
 
 function printHelp() {
   process.stdout.write(
@@ -31,6 +39,9 @@ function printHelp() {
       `\n` +
       `Usage:\n` +
       `  tandem-mcp                 Run as an MCP stdio server (default).\n` +
+      `  tandem-mcp init            Set up this project: create a canvas, write\n` +
+      `                             .mcp.json, print the agent snippet.\n` +
+      `                             (\`tandem-mcp init --help\` for its options.)\n` +
       `  tandem-mcp --full-tools    Also advertise the full CRUD tool surface\n` +
       `                             (maps, sheets, charts, forms, …) alongside\n` +
       `                             the default 10-tool intent facade.\n` +
@@ -40,6 +51,8 @@ function printHelp() {
       `Environment:\n` +
       `  API_URL                    Tandem API base URL.\n` +
       `                             Default: ${DEFAULT_API_URL}\n` +
+      `  ${CANVAS_CODE_ENV}       This project's canvas code (written by\n` +
+      `                             \`init\`). Used as the default for canvas_connect.\n` +
       `  TANDEM_FULL_TOOLS          Set to 1 for the same effect as --full-tools.\n` +
       `  TANDEM_TOKEN               Personal access token — lets Claude act as you\n` +
       `                             on your private / shared canvases. Mint one at\n` +
@@ -53,11 +66,14 @@ function printHelp() {
 }
 
 const cliArgs = process.argv.slice(2);
-if (cliArgs.includes("--version") || cliArgs.includes("-v")) {
+// `init` is the only subcommand; everything else (including no args at all)
+// keeps the stdio-MCP-server default untouched.
+const INIT_MODE = cliArgs[0] === "init";
+if (!INIT_MODE && (cliArgs.includes("--version") || cliArgs.includes("-v"))) {
   process.stdout.write(`@jaximus/tandem-mcp ${VERSION}\n`);
   process.exit(0);
 }
-if (cliArgs.includes("--help") || cliArgs.includes("-h")) {
+if (!INIT_MODE && (cliArgs.includes("--help") || cliArgs.includes("-h"))) {
   printHelp();
   process.exit(0);
 }
@@ -90,13 +106,52 @@ const gateway = new Gateway({
   requestTimeoutMs: REQUEST_TIMEOUT_MS,
 });
 
+/**
+ * `init` (TDM-33): one command from nothing to a wired-up project. Uses the
+ * same Gateway plumbing as the server path, so it inherits API_URL, the
+ * personal access token, and the claim-link behaviour of canvas_create.
+ */
+async function runInitCommand(): Promise<number> {
+  const toHandle = (
+    s: { canvasCode: string; canvasName: string; claimToken?: string }
+  ): CanvasHandle => ({
+    code: s.canvasCode,
+    name: s.canvasName,
+    url: gateway.canvasUrl(s.canvasCode),
+    claimUrl: s.claimToken ? gateway.canvasClaimUrl(s.canvasCode, s.claimToken) : undefined,
+  });
+
+  const opts = parseInitArgs(cliArgs.slice(1), process.cwd());
+  return runInit(opts, {
+    ...fsDeps(),
+    webUrl: WEB_URL,
+    // Only pin API_URL into .mcp.json when it isn't the package default —
+    // a local/self-hosted setup needs it, the hosted one must stay unpinned.
+    apiUrl: API_URL === DEFAULT_API_URL ? undefined : API_URL,
+    createCanvas: async (name) => toHandle(await gateway.createCanvas(name)),
+    connectCanvas: async (code) => toHandle(await gateway.connectWithCode(code)),
+  });
+}
+
 async function main() {
+  if (INIT_MODE) {
+    process.exit(await runInitCommand());
+  }
   const server = createTandemServer(gateway, VERSION, { fullTools: FULL_TOOLS });
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
 
 main().catch((err) => {
+  if (INIT_MODE) {
+    // A CLI failure: a clean one-liner, not a stack, and usage help when the
+    // flags were wrong.
+    process.stderr.write(`\ntandem init: ${err instanceof Error ? err.message : err}\n`);
+    if (err instanceof InitUsageError) {
+      process.stderr.write(`Run \`tandem-mcp init --help\` for options.\n`);
+    }
+    process.exit(1);
+  }
   process.stderr.write(`[tandem] Fatal: ${err}\n`);
   process.exit(1);
 });
