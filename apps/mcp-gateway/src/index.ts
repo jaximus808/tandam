@@ -24,6 +24,7 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { Gateway } from "./gateway.js";
 import { createTandemServer, VERSION, DEFAULT_API_URL } from "./server.js";
+import { installSessionSummary } from "./trace.js";
 import {
   CANVAS_CODE_ENV,
   fsDeps,
@@ -58,6 +59,9 @@ function printHelp() {
       `                             on your private / shared canvases. Mint one at\n` +
       `                             ${DEFAULT_API_URL}/me. Optional; without it the\n` +
       `                             gateway can only reach public canvases.\n` +
+      `  MCP_TRACE                  Per-tool-call timing on stderr plus a session\n` +
+      `                             summary on exit. 1 = human-readable, json =\n` +
+      `                             one JSON object per line. Off by default.\n` +
       `\n` +
       `This binary is normally spawned by an MCP client (Claude Code, Cursor,\n` +
       `Codex, OpenAI Agents SDK, …) over stdio. See:\n` +
@@ -138,6 +142,10 @@ async function main() {
     process.exit(await runInitCommand());
   }
   const server = createTandemServer(gateway, VERSION, { fullTools: FULL_TOOLS });
+  // MCP_TRACE only: prints the session summary when the client goes away
+  // (stdin close) or the process is signalled. No-op — and no signal handlers
+  // installed at all — when tracing is off.
+  installSessionSummary();
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

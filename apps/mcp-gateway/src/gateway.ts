@@ -7,6 +7,8 @@
  * fail with a "not connected" error.
  */
 
+import { recordApiCall } from "./trace.js";
+
 export interface GatewayConfig {
   // Base URL the gateway makes API calls against. For the hosted HTTP sidecar
   // this is the internal docker address (http://tandem:7891).
@@ -286,6 +288,12 @@ export class Gateway {
    * `TypeError: fetch failed` with no context. Also enforces a request
    * timeout via AbortController and logs latency for every call — this is
    * the single choke point every get/getPublic/post/patch/del goes through.
+   *
+   * Because it IS the choke point, it is also where MCP_TRACE attributes API
+   * time to the enclosing tool call (see trace.ts): every exit path — 2xx,
+   * non-2xx, timeout, transport failure — reports its round-trip, so a slow
+   * call that failed still shows where the time went. `recordApiCall` is a
+   * single boolean check when tracing is off.
    */
   private async safeFetch(path: string, init?: RequestInit): Promise<Response> {
     const method = init?.method ?? "GET";
@@ -299,10 +307,12 @@ export class Gateway {
         signal: controller.signal,
       });
       const ms = Date.now() - start;
+      recordApiCall(ms);
       process.stderr.write(`[tandem] ${method} ${path} -> ${res.status} (${ms}ms)\n`);
       return res;
     } catch (err) {
       const ms = Date.now() - start;
+      recordApiCall(ms);
       if (err instanceof Error && err.name === "AbortError") {
         process.stderr.write(`[tandem] ${method} ${path} -> timeout (${ms}ms)\n`);
         // The abort is CLIENT-side: the API may still be processing the request

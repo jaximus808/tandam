@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### `MCP_TRACE` — per-tool-call latency and a session summary (TDM-43)
+
+- **One stderr line per tool call**: tool name, total handler duration, the API
+  time inside it, how many HTTP requests it made, and ok/error. `MCP_TRACE=1`
+  for human-readable `key=value` lines, `MCP_TRACE=json` for one JSON object per
+  line (scrapeable). Never stdout — that's the MCP wire.
+- **Session summary on exit** (SIGINT / SIGTERM / stdin close): total calls and
+  errors, session length, total API time vs handler overhead, and per-tool
+  total/avg/max for the top 5 tools by total time. Prefixed
+  `[tandem-mcp] summary` so the block greps out of an interleaved log.
+- API time is attributed at `Gateway.safeFetch`, the single choke point every
+  request goes through, via an `AsyncLocalStorage` accumulator — so a call's
+  round-trips are counted even when tool dispatch overlaps.
+- **Free when off**: no accumulators, no clock reads and no signal handlers are
+  installed unless tracing is enabled. `TANDEM_MCP_TIMING` remains as an alias
+  for `MCP_TRACE=1` (its old `[timing] <tool> <ms>ms` line is now the richer
+  `[tandem-mcp] call …` line).
+- The sidecar's existing `MCP_TRACE` per-request routing trace is unchanged (on
+  by default, off with `MCP_TRACE=0`), and now also accepts `off`/`false`/`no`.
+
 ### `init` — one command from nothing to a connected canvas (TDM-33)
 
 - **`npx @jaximus/tandem-mcp init`** creates a canvas, registers the MCP server

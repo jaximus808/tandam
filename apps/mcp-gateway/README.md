@@ -86,6 +86,8 @@ pnpm --filter @jaximus/tandem-mcp build
 | `TANDEM_TOKEN`      | _(unset)_                  | Personal access token — lets the agent act as **you** on your private and shared canvases. Mint one at `/me`. Without it, only public canvases work. |
 | `TANDEM_FULL_TOOLS` | _(unset)_                  | Set to `1` to also advertise the full CRUD surface (maps, sheets, charts, forms, …) alongside the default 10-tool facade. Same as `--full-tools`.    |
 | `TANDEM_CANVAS_CODE` | _(unset)_                 | This project's canvas code, written by `init`. Named in the `canvas_connect` tool description so the agent knows which canvas it belongs to, and used as the default when it calls `canvas_connect` without one. |
+| `MCP_TRACE`         | _(unset)_                  | Per-tool-call timing on stderr, plus a session summary on exit. `1` for human-readable lines, `json` for one JSON object per line. See [Tracing](#tracing). |
+| `REQUEST_TIMEOUT_MS` | `15000`                   | Per-request timeout for calls to the Tandem API.                                                                                                    |
 
 To connect as yourself, mint a token under **Access tokens** at [tandemcanvas.com/me](https://tandemcanvas.com/me) and add it to your MCP client config:
 
@@ -100,6 +102,64 @@ To connect as yourself, mint a token under **Access tokens** at [tandemcanvas.co
   }
 }
 ```
+
+## Tracing
+
+When a session feels slow, `MCP_TRACE` answers *which tool, and was it us or the network*. Everything it emits goes to **stderr** — stdout carries the MCP protocol frames — so it is safe to leave on and read from your client's MCP log.
+
+```json
+{
+  "mcpServers": {
+    "tandem": {
+      "command": "npx",
+      "args": ["-y", "@jaximus/tandem-mcp"],
+      "env": { "MCP_TRACE": "1" }
+    }
+  }
+}
+```
+
+### `MCP_TRACE=1` — human-readable
+
+One line per tool call, then a summary block when the session ends:
+
+```text
+[tandem-mcp] call tool=canvas_connect ms=312.4 api=298.1 api_calls=1 ok
+[tandem-mcp] call tool=queue_next ms=141.7 api=132.9 api_calls=1 ok
+[tandem-mcp] call tool=task_claim ms=96.2 api=88.0 api_calls=1 error
+[tandem-mcp] summary session=94.2s calls=3 errors=1 handler=550.3ms api=519.0ms(94%) overhead=31.3ms http=3
+[tandem-mcp] summary tool=canvas_connect calls=1 total=312.4ms avg=312.4ms max=312.4ms api=298.1ms errors=0
+[tandem-mcp] summary tool=queue_next calls=1 total=141.7ms avg=141.7ms max=141.7ms api=132.9ms errors=0
+[tandem-mcp] summary tool=task_claim calls=1 total=96.2ms avg=96.2ms max=96.2ms api=88.0ms errors=1
+```
+
+| Field       | Meaning                                                                                  |
+| ----------- | ---------------------------------------------------------------------------------------- |
+| `ms`        | Total time inside the tool handler.                                                        |
+| `api`       | Sum of the HTTP round-trips to the Tandem API made during that call.                       |
+| `api_calls` | How many HTTP requests the call made — a `2` on a "single" operation is worth a look.      |
+| `ok`/`error`| Whether the tool returned a result or an error payload.                                    |
+| `overhead`  | (summary) `handler − api`: everything that wasn't waiting on the API.                      |
+| `session`   | (summary) Wall-clock length of the whole session.                                          |
+
+The summary shows the **top 5 tools by total time**; anything past that collapses into a `+N more tools` line. Every line is prefixed `[tandem-mcp] summary`, so `grep 'tandem-mcp. summary'` pulls the whole block out of an interleaved log.
+
+### `MCP_TRACE=json` — machine-readable
+
+Same fields, one JSON object per line, so the numbers can be scraped straight out of the log:
+
+```text
+{"t":"call","ts":"2026-07-29T05:25:47.373Z","tool":"canvas_connect","ms":312.4,"apiMs":298.1,"apiCalls":1,"overheadMs":14.3,"ok":true}
+{"t":"call","ts":"2026-07-29T05:25:52.118Z","tool":"queue_next","ms":141.7,"apiMs":132.9,"apiCalls":1,"overheadMs":8.8,"ok":true}
+{"t":"summary","sessionMs":94200,"calls":2,"errors":0,"handlerMs":454.1,"apiMs":431,"overheadMs":23.1,"apiPct":95,"apiCalls":2,"tools":[{"tool":"canvas_connect","calls":1,"errors":0,"totalMs":312.4,"avgMs":312.4,"maxMs":312.4,"apiMs":298.1,"apiCalls":1},{"tool":"queue_next","calls":1,"errors":0,"totalMs":141.7,"avgMs":141.7,"maxMs":141.7,"apiMs":132.9,"apiCalls":1}],"hiddenTools":0,"hiddenMs":0}
+```
+
+### Notes
+
+- **Off by default, and free when off.** Unset (or `0` / `off` / `false`) allocates no timers, no accumulators and no clock reads, and installs no signal handlers. `TANDEM_MCP_TIMING` still works as an alias for `MCP_TRACE=1`.
+- **`api` measures the round-trip**, request sent → response headers received (including the full wait on a timeout or a connection failure). Reading and parsing the JSON body happens in the handler, so it lands in `overhead`.
+- **The summary prints on the way out**: `SIGINT`, `SIGTERM`, or the client closing stdin — the normal end of an MCP stdio session. A session that made no tool calls prints nothing.
+- The hosted HTTP sidecar honours the same variable; it also keeps its own per-request routing trace, which is on by default there and silenced with `MCP_TRACE=0`.
 
 ## Tools
 
