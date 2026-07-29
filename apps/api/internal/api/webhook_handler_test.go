@@ -302,7 +302,7 @@ func newWebhookHarness(t *testing.T) *webhookHarness {
 		role:       "write",
 	}
 	authSvc := auth.NewService("test-secret-for-tdm-39", time.Hour)
-	r := NewRouter(fake, nil, authSvc, nil, false, nil, "", t.TempDir(), "", false, nil)
+	r := NewRouter(fake, nil, authSvc, nil, false, nil, "", t.TempDir(), "", nil, nil)
 	mux, ok := r.(*chi.Mux)
 	if !ok {
 		t.Fatalf("NewRouter no longer returns a *chi.Mux; the route-walk test needs updating")

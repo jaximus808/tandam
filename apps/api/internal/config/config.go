@@ -49,10 +49,17 @@ type Config struct {
 	// applied, or on a second process that shouldn't also drain the queue.
 	WebhooksEnabled bool
 
-	// MetricsEnabled registers GET /api/metrics (in-memory per-route latency
-	// aggregates; no canvas data). Defaults to enabled — set
-	// METRICS_ENABLED=false to hide the endpoint. Latencies are recorded either
-	// way; only registration of the read endpoint is gated.
+	// MetricsEnabled registers GET /api/metrics — in-memory per-route and
+	// per-op latency percentiles, task-queue counters (claims, claim conflicts,
+	// TTL takeovers), webhook delivery outcomes and the connected-client gauge.
+	// Aggregates only: no canvas ids, names or payloads, which is why the
+	// endpoint is open.
+	//
+	// Defaults to enabled. METRICS_ENABLED=false switches the whole subsystem
+	// off, not just the endpoint: the registry is never created, the latency
+	// middleware becomes a pass-through, and every counter call in the hub, the
+	// webhook worker and the handlers is a nil-receiver no-op. Nothing is
+	// recorded-but-hidden.
 	MetricsEnabled bool
 }
 

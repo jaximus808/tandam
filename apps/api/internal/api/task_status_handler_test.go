@@ -665,7 +665,7 @@ func newStatusRouter(t *testing.T, task *store.Action) (http.Handler, *statusFak
 		patUsers: map[string]uuid.UUID{},
 	}
 	authSvc := auth.NewService("test-secret-for-tdm-38", time.Hour)
-	r := NewRouter(fake, nil, authSvc, nil, false, nil, "", t.TempDir(), "", false, nil)
+	r := NewRouter(fake, nil, authSvc, nil, false, nil, "", t.TempDir(), "", nil, nil)
 	return r, fake, authSvc, canvasID
 }
 

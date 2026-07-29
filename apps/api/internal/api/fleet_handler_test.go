@@ -611,7 +611,7 @@ func TestFleetReadsReachableWithReadOnlyToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("issue token: %v", err)
 	}
-	r := NewRouter(&fleetFakeStore{}, nil, authSvc, nil, false, nil, "", t.TempDir(), "", false, nil)
+	r := NewRouter(&fleetFakeStore{}, nil, authSvc, nil, false, nil, "", t.TempDir(), "", nil, nil)
 
 	for _, path := range []string{"/api/canvas/agents", "/api/canvas/activity"} {
 		req := httptest.NewRequest("GET", path, nil)

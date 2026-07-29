@@ -24,10 +24,15 @@ import (
 // *webhooks.Emitter rather than the TaskEventEmitter interface precisely so a nil
 // here stays a nil: a typed-nil pointer boxed into an interface would be
 // non-nil and panic on first emit.
-func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier *auth.GoogleVerifier, cookieSecure bool, mapsReg *maps.Registry, webDistPath string, imageDir string, publicBaseURL string, metricsEnabled bool, emitter *webhooks.Emitter) http.Handler {
+// metricsReg is the operational registry (TDM-42) and is OPTIONAL in exactly
+// the same way as emitter: nil means metrics are off, the endpoint is not
+// registered, the middleware becomes a pass-through, and every counter call in
+// the handlers is a no-op. It is created by the CALLER (cmd/server) rather than
+// here because the hub and the webhook delivery worker are built before the
+// router and need the same registry — one process, one set of numbers.
+func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier *auth.GoogleVerifier, cookieSecure bool, mapsReg *maps.Registry, webDistPath string, imageDir string, publicBaseURL string, metricsReg *metrics.Registry, emitter *webhooks.Emitter) http.Handler {
 	r := chi.NewRouter()
 
-	metricsReg := metrics.NewRegistry()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(metricsReg.Middleware) // per-route latency, keyed by chi RoutePattern
@@ -44,6 +49,13 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 	var hOpts []HandlerOption
 	if emitter != nil {
 		hOpts = append(hOpts, WithTaskEvents(emitter))
+	}
+	if metricsReg != nil {
+		hOpts = append(hOpts, WithMetrics(metricsReg))
+		// ws_clients is pulled from the hub at scrape time (see Hub.ClientCount).
+		if hub != nil {
+			metricsReg.RegisterGauge("ws_clients", hub.ClientCount)
+		}
 	}
 	h := NewHandler(s, hub, mapsReg, hOpts...)
 	wsH := NewWSHandler(s, hub, authSvc, mapsReg)
@@ -64,8 +76,8 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 	r.Get("/api/maps", mapsH.List)
 	r.Get("/api/maps/{id}", mapsH.Get)
 	r.Get("/api/stats", h.Stats)
-	if metricsEnabled {
-		// Latency aggregates only (no canvas data) — open by design.
+	if metricsReg != nil {
+		// Aggregates only (no canvas data) — open by design.
 		r.Get("/api/metrics", metricsReg.Handler)
 	}
 

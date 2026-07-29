@@ -2,14 +2,29 @@ package ws
 
 import (
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 )
+
+// Observer is the optional metrics seam (TDM-42). The hub reports how long each
+// broadcast's fan-out took; whoever wires it decides what that means. Declared
+// here, rather than importing the metrics package, so ws keeps no dependency on
+// observability — and so a nil observer is simply "nobody is watching".
+//
+// Implementations must be cheap and non-blocking: this runs inside the single
+// hub goroutine, so anything slow here delays every canvas on the process.
+type Observer interface {
+	ObserveBroadcast(d time.Duration)
+}
 
 // Hub maintains the set of active clients per canvas and broadcasts messages.
 type Hub struct {
 	mu    sync.RWMutex
 	rooms map[uuid.UUID]map[*Client]bool
+	// observer is read under mu in the broadcast path, so SetObserver is safe
+	// on a hub that is already Run()ing.
+	observer Observer
 
 	register   chan *Client
 	unregister chan *Client
@@ -75,8 +90,10 @@ func (h *Hub) Run() {
 			c.Close()
 
 		case msg := <-h.broadcast:
+			start := time.Now()
 			h.mu.RLock()
 			room := h.rooms[msg.canvasID]
+			obs := h.observer
 			h.mu.RUnlock()
 			for c := range room {
 				select {
@@ -91,8 +108,36 @@ func (h *Hub) Run() {
 					}
 				}
 			}
+			// Fan-out cost is the number that decides whether a busy canvas feels
+			// live: it grows with room size and with how many clients are slow.
+			// Measured around the whole dispatch, room lookup included.
+			if obs != nil {
+				obs.ObserveBroadcast(time.Since(start))
+			}
 		}
 	}
+}
+
+// SetObserver attaches (or clears, with nil) the metrics seam. Safe to call at
+// any time, including on a running hub.
+func (h *Hub) SetObserver(o Observer) {
+	h.mu.Lock()
+	h.observer = o
+	h.mu.Unlock()
+}
+
+// ClientCount returns how many clients are connected across every canvas — the
+// ws_clients gauge. Pulled at scrape time rather than maintained as a counter:
+// the rooms map is the authoritative answer, and a pushed counter would drift
+// on every dropped-client path.
+func (h *Hub) ClientCount() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	n := 0
+	for _, room := range h.rooms {
+		n += len(room)
+	}
+	return n
 }
 
 // Broadcast sends data to every client connected to the given canvas.
