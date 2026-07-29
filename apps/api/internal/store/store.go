@@ -33,6 +33,11 @@ var (
 	// row because the action is in a state the transition doesn't apply to
 	// (e.g. claiming a task still in 'proposed').
 	ErrIllegalActionState = errors.New("illegal action state transition")
+	// ErrContentLocked wraps a content edit (title/body) refused because the
+	// action is terminal — done or failed. See content_gate.go: an approved task
+	// that is edited re-enters the gate, but a FINISHED one is history, and
+	// history is not rewritten.
+	ErrContentLocked = errors.New("task content is locked")
 )
 
 // AlreadyClaimedError is returned by ClaimAction when the conditional claim
@@ -1015,7 +1020,25 @@ type Store interface {
 	// pattern. Human-only — the gate lives at the route surface (see
 	// api.RequeueAction); agents must not requeue their own failures.
 	RequeueAction(ctx context.Context, canvasID, id uuid.UUID) (*Action, int, error)
-	UpdateActionPayload(ctx context.Context, canvasID, id uuid.UUID, payload json.RawMessage) (int, error)
+	// UpdateActionPayload is the ONE write path for an action's payload, and
+	// therefore the place the content gate lives (TDM-41 — see content_gate.go
+	// for the full rule table and its rationale). Every payload write goes
+	// through it precisely so there is no ungated back door:
+	//
+	//   - a non-content write (progress[], links[], assignee, linkedIds …)
+	//     stores as before, in any state;
+	//   - a content write (title/body) on an approved/executing action REVERTS
+	//     it to 'proposed', clears the claim and approved_by, and appends a
+	//     server-owned audit entry — the edit re-enters the human gate;
+	//   - a content write on a done/failed action returns ErrContentLocked;
+	//   - a content write on proposed/rejected is allowed and audited.
+	//
+	// `actor` is the server-derived provenance string (api.AuthorFromCtx —
+	// "human" | "agent:<id>" | "anonymous"); "" records as "unknown". The
+	// revert is a conditional UPDATE predicated on the state that was read, so
+	// an action that moves under an in-flight edit yields
+	// ErrIllegalActionState rather than a lost update.
+	UpdateActionPayload(ctx context.Context, canvasID, id uuid.UUID, payload json.RawMessage, actor string) (*ContentUpdate, error)
 	DeleteAction(ctx context.Context, canvasID, id uuid.UUID) (int, error)
 	// ApproveEpicTasks batch-approves every currently-proposed task under an epic
 	// (actions rows with type='task', state='proposed', payload epicId = epicID)

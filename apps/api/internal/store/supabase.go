@@ -3214,17 +3214,78 @@ func (s *supabaseStore) RequeueAction(ctx context.Context, canvasID, id uuid.UUI
 	return nil, 0, fmt.Errorf("%w: cannot re-queue task in state %q", ErrIllegalActionState, existing.State)
 }
 
-// UpdateActionPayload replaces an action's payload without touching its state —
-// the edit path for task content (title / body / links / assignee).
-func (s *supabaseStore) UpdateActionPayload(ctx context.Context, canvasID, id uuid.UUID, payload json.RawMessage) (int, error) {
-	err := s.exec(s.client.From("actions").
-		Update(map[string]any{"payload": payload}, "minimal", "").
-		Eq("id", id.String()).
-		Eq("canvas_id", canvasID.String()))
+// UpdateActionPayload replaces an action's payload — and enforces the
+// content-mutation gate (TDM-41) while doing it. DecideContentUpdate in
+// content_gate.go IS the rule (with the full table and its rationale); this
+// function is only the read, the write, and the concurrency guard.
+//
+// Two write shapes come out of the decision:
+//
+//   - ordinary — the payload lands as before. Every CI progress report, every
+//     evidence link and every edit to a proposed task takes this path.
+//   - reverting — ONE conditional UPDATE writes the new payload AND drops the
+//     action back to 'proposed' with its claim and approved_by cleared. One
+//     statement, so there is never an instant where rewritten content sits on a
+//     still-approved (still-claimable) row. The `state` predicate is the
+//     optimistic-concurrency guard, the idiom ClaimAction uses: if the action
+//     moved between the read and the write, zero rows match and the caller is
+//     told to retry instead of silently clobbering.
+func (s *supabaseStore) UpdateActionPayload(ctx context.Context, canvasID, id uuid.UUID, payload json.RawMessage, actor string) (*ContentUpdate, error) {
+	current, err := s.GetAction(ctx, canvasID, id)
 	if err != nil {
-		return 0, err
+		return nil, ErrActionNotFound
 	}
-	return s.bumpVersion(ctx, canvasID)
+	next, out, err := DecideContentUpdate(current, payload, actor, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+
+	if !out.Reverted {
+		if err := s.exec(s.client.From("actions").
+			Update(map[string]any{"payload": next}, "minimal", "").
+			Eq("id", id.String()).
+			Eq("canvas_id", canvasID.String())); err != nil {
+			return nil, err
+		}
+		if out.Version, err = s.bumpVersion(ctx, canvasID); err != nil {
+			return nil, err
+		}
+		return out, nil
+	}
+
+	var rows []dbAction
+	if _, err = s.client.From("actions").
+		Update(map[string]any{
+			"payload": next,
+			"state":   "proposed",
+			// The claim goes with the approval: whoever was executing this was
+			// executing the OLD content, and must not keep working under a claim
+			// for instructions that no longer exist.
+			"claimed_by": nil,
+			"claimed_at": nil,
+			// approved_by named who blessed content that is now gone. Leaving it
+			// would render a proposed task as "approved by jaxon".
+			"approved_by": nil,
+		}, "representation", "").
+		Eq("id", id.String()).
+		Eq("canvas_id", canvasID.String()).
+		Eq("state", current.State).
+		ExecuteTo(&rows); err != nil {
+		return nil, err
+	}
+	if len(rows) != 1 {
+		now := "another state"
+		if fresh, gerr := s.GetAction(ctx, canvasID, id); gerr == nil {
+			now = fmt.Sprintf("%q", fresh.State)
+		}
+		return nil, fmt.Errorf("%w: the task moved to %s while the edit was in flight — re-read it and retry",
+			ErrIllegalActionState, now)
+	}
+	if out.Version, err = s.bumpVersion(ctx, canvasID); err != nil {
+		return nil, err
+	}
+	out.Action = toAction(rows[0])
+	return out, nil
 }
 
 // DeleteAction removes an action row (e.g. deleting a task from the queue).

@@ -186,11 +186,35 @@ export interface NavigatePayload {
 // assignee says who the work is FOR: "agent" tasks are what agent sessions
 // pull from the queue; "human" tasks are the human's own todos. Defaults to
 // "agent" server-side.
+// One entry in an action payload's `audit` log (TDM-41). SERVER-OWNED: the API
+// re-attaches its own copy on every payload write and discards whatever the
+// caller sent under this key, so an agent can neither forge an entry nor erase
+// the one recording its own edit. Capped at the 20 most recent.
+//
+// `reverted: true` marks the entries that cost an approval — a content edit on
+// an approved or executing task sends it back to 'proposed' with its claim
+// released, and this is the record of why. See apps/api/internal/store/
+// content_gate.go for the full rule.
+export interface ContentAuditEntry {
+  at: string;
+  /** Server-derived provenance, same vocabulary as `authoredBy`. */
+  actor: string;
+  /** Which approval-relevant fields moved. */
+  change: ("title" | "body")[];
+  fromState: ActionState;
+  toState: ActionState;
+  reverted: boolean;
+  /** Compact old→new hint, e.g. `title: "Ship it" → "Ship it and rm -rf /"`. */
+  summary: string;
+}
+
 export interface TaskPayload {
   title: string;
   body?: string;
   linkedIds?: EntityId[];
   assignee?: "agent" | "human";
+  /** Server-owned edit log — see ContentAuditEntry. Never write this. */
+  audit?: ContentAuditEntry[];
   // The epic (Action of type "epic") this task belongs to. Under the "epic"
   // approval policy, a task created under an APPROVED epic is born approved
   // (approved_by = "policy:epic").
@@ -207,6 +231,8 @@ export interface EpicPayload {
   title: string;
   body?: string;
   linkedIds?: EntityId[];
+  /** Server-owned edit log — see ContentAuditEntry. Never write this. */
+  audit?: ContentAuditEntry[];
 }
 
 export interface Action {
