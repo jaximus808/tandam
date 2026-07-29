@@ -294,6 +294,58 @@ export async function copyCanvas(code: string): Promise<CanvasMeta> {
   return (await res.json()) as CanvasMeta;
 }
 
+// ── Briefing (TDM-30) ────────────────────────────────────────────────────────
+// The briefing is the document GET /api/canvas/context hands every agent on
+// connect. Importing an AGENTS.md is one call: it creates (or reuses, by name) a
+// notes document, writes the file into it, and designates it — so the human
+// never assembles those three steps by hand.
+
+export type BriefingImport = {
+  // Pasted text. When empty, the SERVER fetches sourceUrl instead — the browser
+  // can't read raw.githubusercontent.com itself (CORS).
+  content?: string;
+  // Optional document name; the API defaults to "Briefing".
+  name?: string;
+  sourceUrl?: string;
+};
+
+export type BriefingImportResult = {
+  briefingDocId: string;
+  noteId: string;
+  createdDocument: boolean;
+  bytes: number;
+};
+
+export async function importBriefing(
+  code: string,
+  body: BriefingImport,
+): Promise<BriefingImportResult> {
+  const res = await authedFetch(
+    code,
+    "/api/canvas/briefing/import",
+    { method: "POST", body },
+    "Could not import the briefing",
+  );
+  return (await res.json()) as BriefingImportResult;
+}
+
+// Designate (or clear) this canvas's briefing document — the bare act, for a
+// document that already exists and holds the right words. Import is the
+// three-steps-in-one path; this is the one-step path for "actually, THIS doc is
+// the briefing". Pass null to clear: a canvas with no briefing is a normal
+// state, not an error to be avoided.
+//
+// The server broadcasts fresh canvas state, so every open board (and the tab
+// strip's briefing marker) follows without the caller updating anything.
+export async function setBriefing(code: string, docId: string | null): Promise<void> {
+  await authedFetch(
+    code,
+    "/api/canvas/briefing",
+    { method: "PUT", body: { docId } },
+    docId === null ? "Could not clear the briefing" : "Could not set the briefing",
+  );
+}
+
 // ── Sharing (owner-only; Google-Docs access model, migration 0021) ───────────
 
 export type CanvasAccessEntry = {

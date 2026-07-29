@@ -34,6 +34,7 @@ import type {
   Action,
   CanvasState,
   EpicPayload,
+  FreshnessPatchFields,
   RoadmapItem,
   RoadmapStatus,
   TaskPayload,
@@ -41,6 +42,8 @@ import type {
 import { sendOp } from "../lib/ws";
 import { createEpic, createTask } from "../lib/api";
 import EmptyState from "../components/EmptyState";
+import { FreshnessChip, VerifyControl, useFreshnessNow } from "../components/Freshness";
+import { deriveFreshness, needsReview } from "../lib/freshness";
 
 const INDENT_PX = 20;
 
@@ -85,6 +88,10 @@ interface LinkedEpic {
 interface RoadmapTaskCtx {
   code: string;
   readOnly: boolean;
+  // One ticking clock for the whole tree. Freshness is derived from `now`, and
+  // a board can hold hundreds of rows — each running its own interval would be
+  // hundreds of timers to render the same minute.
+  now: number;
   linkedTasks: Map<string, LinkedTask[]>;
   linkedEpics: Map<string, LinkedEpic[]>;
   openCreateTask: (item: RoadmapItem) => void;
@@ -274,17 +281,19 @@ export default function RoadmapMode({ state, code, readOnly, onOpenBoardForEpic 
   const [taskFor, setTaskFor] = useState<RoadmapItem | null>(null);
   const [epicFor, setEpicFor] = useState<RoadmapItem | null>(null);
 
+  const now = useFreshnessNow();
   const taskCtx = useMemo<RoadmapTaskCtx>(
     () => ({
       code,
       readOnly,
+      now,
       linkedTasks,
       linkedEpics,
       openCreateTask: setTaskFor,
       openCreateEpic: setEpicFor,
       openBoardForEpic: onOpenBoardForEpic,
     }),
-    [code, readOnly, linkedTasks, linkedEpics, onOpenBoardForEpic],
+    [code, readOnly, now, linkedTasks, linkedEpics, onOpenBoardForEpic],
   );
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -855,6 +864,8 @@ function Row({
         </span>
       )}
 
+      <ItemFreshness item={item} />
+
       <AgentControls item={item} />
 
       {depth === 0 && (
@@ -1207,6 +1218,7 @@ function BoardRow({
           status === "done" ? "line-through decoration-ink/40 text-ink/40" : "text-ink/70"
         }`}
       />
+      <ItemFreshness item={item} compact />
       <AgentControls item={item} size="xs" />
       <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
         <button
@@ -1306,6 +1318,33 @@ function AgentTaskToggle({ item, size = "sm" }: { item: RoadmapItem; size?: "sm"
 // flips to a "✓ Task" marker; once a live epic links it the epic button yields
 // to the TDM-10 chip. Epic chips themselves render on ANY linked item (they're
 // read-only status, not an agent affordance).
+/* Freshness on a roadmap item: the status chip, plus the act of vouching.
+   A goal rots the same way a note does — "ship the gateway by June" was true
+   when it was written — and the roadmap is read back to agents as context, so
+   this is the same claim in the same words as everywhere else.
+
+   The verify control keeps out of the way until you hover the row, unless the
+   item has actually aged out, which is the one case where the row should be
+   asking you for something. */
+function ItemFreshness({ item, compact = false }: { item: RoadmapItem; compact?: boolean }) {
+  const ctx = useContext(RoadmapTaskContext);
+  const now = ctx?.now ?? Date.now();
+  const readOnly = ctx?.readOnly ?? true;
+
+  function patch(p: FreshnessPatchFields) {
+    sendOp({ op: "roadmap.update", id: item.id, partial: p });
+  }
+
+  const stale = needsReview(deriveFreshness(item, now));
+
+  return (
+    <span className="flex shrink-0 items-center gap-1">
+      <FreshnessChip item={item} now={now} variant={compact ? "dot" : "chip"} />
+      {!readOnly && <VerifyControl item={item} onPatch={patch} compact alwaysVisible={stale} />}
+    </span>
+  );
+}
+
 function AgentControls({
   item,
   size = "sm",

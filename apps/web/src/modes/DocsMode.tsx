@@ -1,4 +1,4 @@
-import { X } from "lucide-react";
+import { BookMarked, FileDown, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
@@ -22,17 +22,29 @@ import { CSS } from "@dnd-kit/utilities";
 import ReactMarkdown from "react-markdown";
 import { renderToStaticMarkup } from "react-dom/server";
 import remarkGfm from "remark-gfm";
-import type { CanvasState, Note } from "../types";
-import { imageUrl } from "../lib/api";
+import type { CanvasState, Document, FreshnessPatchFields, Note } from "../types";
+import { imageUrl, setBriefing } from "../lib/api";
 import { sendOp } from "../lib/ws";
 import { htmlToMarkdown } from "../lib/paste";
 import EmptyState from "../components/EmptyState";
+import ImportBriefingModal from "../components/ImportBriefingModal";
+import { FreshnessChip, VerifyControl, useFreshnessNow } from "../components/Freshness";
+import { deriveFreshness, needsReview } from "../lib/freshness";
 import { noteTitle, sortNotes } from "../lib/docOutline";
 
 interface Props {
   canvasId: string;
+  canvasCode: string;
   state: CanvasState;
   readOnly: boolean;
+  /** The notes document on screen — this view is one document's slice of the
+   *  canvas, and freshness / briefing designation are properties OF that
+   *  document, not of the mode. Absent on an empty canvas. */
+  doc?: Document;
+  /** The document this canvas hands every agent on connect, if any. */
+  briefingDocId?: string | null;
+  /** Opens (and focuses) a document tab — used after a briefing import. */
+  onOpenDoc: (docId: string) => void;
 }
 
 // Below this the outline is noise — a rail listing one or two notes tells you
@@ -65,8 +77,37 @@ function markdownToHtml(md: string): string {
   );
 }
 
-export default function DocsMode({ canvasId, state, readOnly }: Props) {
-  const notes = useMemo(() => sortNotes(Object.values(state.notes)), [state.notes]);
+export default function DocsMode({
+  canvasId,
+  canvasCode,
+  state,
+  readOnly,
+  doc,
+  briefingDocId,
+  onOpenDoc,
+}: Props) {
+  const allNotes = useMemo(() => sortNotes(Object.values(state.notes)), [state.notes]);
+  const [importOpen, setImportOpen] = useState(false);
+  const now = useFreshnessNow();
+
+  // The review pass: how many notes on this page have aged out of their
+  // declared shelf life (or are on their way). Counted over the whole document
+  // so the number doesn't change when the filter narrows the page.
+  const [reviewOnly, setReviewOnly] = useState(false);
+  const reviewCount = useMemo(
+    () => allNotes.filter((n) => needsReview(deriveFreshness(n, now))).length,
+    [allNotes, now],
+  );
+  const notes = useMemo(
+    () => (reviewOnly ? allNotes.filter((n) => needsReview(deriveFreshness(n, now))) : allNotes),
+    [allNotes, reviewOnly, now],
+  );
+
+  // Leave the filter the moment there's nothing left to review — a filter that
+  // survives its own emptiness reads as a broken page.
+  useEffect(() => {
+    if (reviewOnly && reviewCount === 0) setReviewOnly(false);
+  }, [reviewOnly, reviewCount]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   // Live map of note id → card element, populated by each card's ref callback.
@@ -147,21 +188,54 @@ export default function DocsMode({ canvasId, state, readOnly }: Props) {
           <Outline
             notes={notes}
             activeId={activeId}
-            readOnly={readOnly}
+            // Reordering a FILTERED list would renumber sortOrder across the
+            // notes on screen and silently reshuffle the ones hidden behind the
+            // review filter. Navigation stays; the drag handles step aside.
+            readOnly={readOnly || reviewOnly}
             onJump={handleJump}
             onMove={handleMove}
           />
         )}
 
         <div className="mx-auto w-full min-w-0 max-w-3xl">
-          <div className="flex items-center justify-between mb-4">
-            <h1 className="text-xl font-semibold tracking-tight text-ink">Docs</h1>
-            <button
-              onClick={handleAddNote}
-              className="rounded-md bg-accent px-3.5 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            >
-              + New note
-            </button>
+          <div className="mb-4">
+            <div className="flex items-center justify-between gap-3">
+              <h1 className="text-xl font-semibold tracking-tight text-ink">Docs</h1>
+              <div className="flex shrink-0 items-center gap-2">
+                {/* Import sits beside "New note" as its quieter sibling: same row,
+                    outline instead of filled. Writing a note is the everyday act;
+                    designating the canvas's briefing is a once-a-project one. */}
+                {!readOnly && (
+                  <button
+                    onClick={() => setImportOpen(true)}
+                    title="Import a repo's AGENTS.md or CLAUDE.md as this canvas's briefing"
+                    className="inline-flex items-center gap-1.5 rounded-md border border-ink/15 bg-surface px-3 py-1.5 text-sm font-medium text-ink/70 transition-colors hover:border-ink/30 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                  >
+                    <FileDown size={14} strokeWidth={1.75} />
+                    Import AGENTS.md
+                  </button>
+                )}
+                <button
+                  onClick={handleAddNote}
+                  className="rounded-md bg-accent px-3.5 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                >
+                  + New note
+                </button>
+              </div>
+            </div>
+
+            {doc && (
+              <DocumentTrustRow
+                doc={doc}
+                code={canvasCode}
+                isBriefing={briefingDocId === doc.id}
+                readOnly={readOnly}
+                now={now}
+                reviewCount={reviewCount}
+                reviewOnly={reviewOnly}
+                onToggleReview={() => setReviewOnly((v) => !v)}
+              />
+            )}
           </div>
 
           {notes.length === 0 ? (
@@ -177,6 +251,8 @@ export default function DocsMode({ canvasId, state, readOnly }: Props) {
                   note={note}
                   canvasId={canvasId}
                   state={state}
+                  readOnly={readOnly}
+                  now={now}
                   highlighted={highlightId === note.id}
                   cardRef={(el) => {
                     if (el) cardsRef.current.set(note.id, el);
@@ -188,6 +264,136 @@ export default function DocsMode({ canvasId, state, readOnly }: Props) {
           )}
         </div>
       </div>
+
+      {importOpen && (
+        <ImportBriefingModal
+          code={canvasCode}
+          onClose={() => setImportOpen(false)}
+          // The import lands as its own document; open its tab so the user sees
+          // what they just brought in instead of being left on this one.
+          onImported={onOpenDoc}
+        />
+      )}
+    </div>
+  );
+}
+
+/* One quiet line under the page title answering the only two questions a reader
+   has about the DOCUMENT (rather than about any one note): is this the briefing
+   every agent reads, and can what's on this page still be trusted?
+
+   It sits below the title rather than in the tab strip because it's about
+   standing, not navigation — and because the answers change as you work, which
+   is not something a tab should be doing. Hairline top border, 11px, no fills:
+   at rest it should read as a caption. */
+function DocumentTrustRow({
+  doc,
+  code,
+  isBriefing,
+  readOnly,
+  now,
+  reviewCount,
+  reviewOnly,
+  onToggleReview,
+}: {
+  doc: Document;
+  code: string;
+  isBriefing: boolean;
+  readOnly: boolean;
+  now: number;
+  reviewCount: number;
+  reviewOnly: boolean;
+  onToggleReview: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function designate(next: string | null) {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      // No optimistic write: the server broadcasts fresh canvas state, and the
+      // briefing lives on the canvas (one per canvas, by construction), so the
+      // marker here and in the tab strip both follow that one push.
+      await setBriefing(code, next);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not update the briefing");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function patchDoc(patch: FreshnessPatchFields) {
+    sendOp({ op: "document.update", id: doc.id, partial: patch });
+  }
+
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-ink/10 pt-2 text-[11px]">
+      {isBriefing ? (
+        <span
+          className="inline-flex items-center gap-1 rounded-[4px] bg-accent/[0.08] py-0.5 pl-1.5 pr-1 font-medium text-accent"
+          title="Every agent reads this document the moment it connects"
+        >
+          <BookMarked size={11} strokeWidth={2} />
+          Briefing
+          {!readOnly && (
+            <button
+              type="button"
+              onClick={() => void designate(null)}
+              disabled={busy}
+              title="Stop handing this document to agents on connect"
+              aria-label="Clear the briefing designation"
+              className="ml-0.5 flex h-3.5 w-3.5 items-center justify-center rounded text-accent/60 hover:bg-accent/15 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40"
+            >
+              <X size={10} strokeWidth={2.5} />
+            </button>
+          )}
+        </span>
+      ) : (
+        !readOnly &&
+        doc.type === "notes" && (
+          <button
+            type="button"
+            onClick={() => void designate(doc.id)}
+            disabled={busy}
+            title="Hand this document to every agent that connects to this canvas"
+            className="rounded font-medium text-ink/45 underline decoration-ink/20 underline-offset-2 transition-colors hover:text-ink hover:decoration-ink/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40"
+          >
+            Set as briefing
+          </button>
+        )
+      )}
+
+      <span className="inline-flex items-center gap-1.5">
+        <FreshnessChip item={doc} now={now} />
+        {!readOnly && <VerifyControl item={doc} onPatch={patchDoc} alwaysVisible />}
+      </span>
+
+      {error && <span className="text-rose-600 dark:text-rose-400">{error}</span>}
+
+      {reviewCount > 0 && (
+        <button
+          type="button"
+          onClick={onToggleReview}
+          aria-pressed={reviewOnly}
+          title={
+            reviewOnly
+              ? "Show every note in this document again"
+              : "Show only the notes that have aged past their shelf life"
+          }
+          className={[
+            "ml-auto inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 font-medium transition-colors",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
+            reviewOnly
+              ? "bg-accent/[0.08] text-accent"
+              : "text-ink/45 hover:bg-ink/5 hover:text-ink/70",
+          ].join(" ")}
+        >
+          <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+          {reviewOnly ? `Showing ${reviewCount} to review` : `${reviewCount} to review`}
+        </button>
+      )}
     </div>
   );
 }
@@ -382,12 +588,16 @@ function NoteCard({
   note,
   canvasId,
   state,
+  readOnly,
+  now,
   highlighted,
   cardRef,
 }: {
   note: Note;
   canvasId: string;
   state: CanvasState;
+  readOnly: boolean;
+  now: number;
   highlighted: boolean;
   cardRef: (el: HTMLElement | null) => void;
 }) {
@@ -475,6 +685,17 @@ function NoteCard({
     sendOp({ op: "note.delete", id: note.id });
   }
 
+  // Vouching is its own op, never bundled with the body: a note.update carrying
+  // only the freshness pair is exactly the claim "I read this and it still
+  // holds", with no edit attached.
+  function handleVerify(patch: FreshnessPatchFields) {
+    sendOp({ op: "note.update", id: note.id, partial: patch });
+  }
+
+  // The verify control hides until you reach for it — except on a note that has
+  // aged out, where the whole point is to be asking.
+  const stale = needsReview(deriveFreshness(note, now));
+
   return (
     <div
       ref={cardRef}
@@ -486,16 +707,20 @@ function NoteCard({
           : "border-ink/10 hover:border-ink/20",
       ].join(" ")}
     >
-      <div className="flex items-center justify-between px-4 pt-3">
-        {parent ? (
+      {/* Card header: where the note CAME FROM on the left, what can be done to
+          it on the right. Freshness joins the left — it's a fact about the
+          note, not an action. */}
+      <div className="flex items-center gap-2 px-4 pt-3">
+        {parent && (
           <span className="text-xs bg-ink/10 text-ink/60 rounded-full px-2 py-0.5">
             {parent.kind === "pin"
               ? `Pin · ${parent.label ?? "Unnamed"}`
               : `Event · ${"title" in parent ? parent.title : ""}`}
           </span>
-        ) : (
-          <span />
         )}
+        <FreshnessChip item={note} now={now} />
+        <span className="flex-1" />
+        {!readOnly && <VerifyControl item={note} onPatch={handleVerify} alwaysVisible={stale} />}
         <button
           onClick={handleDelete}
           className="rounded p-0.5 text-ink/40 hover:text-rose-600 dark:hover:text-rose-400 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 transition-opacity"

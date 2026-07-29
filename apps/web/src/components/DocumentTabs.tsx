@@ -1,12 +1,17 @@
 import { useRef, useState } from "react";
-import { X, Plus } from "lucide-react";
+import { X, Plus, BookMarked } from "lucide-react";
 import type { Document, DocumentType } from "../types";
 import { sendOp } from "../lib/ws";
 import { DOC_TYPE_LABEL, CREATABLE_DOC_TYPES } from "../lib/docTypes";
+import { FreshnessChip, useFreshnessNow } from "./Freshness";
+import { deriveFreshness, needsReview } from "../lib/freshness";
 
 interface Props {
   /** Open documents, in display (sortOrder) order. */
   docs: Document[];
+  /** The canvas's briefing document, if one is designated — marked in the strip
+   *  because "which of these is the one agents read" is navigational. */
+  briefingDocId?: string | null;
   activeDocId: string | null;
   onSelect: (id: string) => void;
   /** Close = hide this tab locally (non-destructive; the document still exists). */
@@ -27,12 +32,14 @@ interface Props {
    inside (nested buttons are invalid HTML) and dragging stays on the row. */
 export default function DocumentTabs({
   docs,
+  briefingDocId,
   activeDocId,
   onSelect,
   onClose,
   onCreate,
   readOnly,
 }: Props) {
+  const now = useFreshnessNow();
   const [addOpen, setAddOpen] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -80,6 +87,11 @@ export default function DocumentTabs({
       {docs.map((doc) => {
         const active = doc.id === activeDocId;
         const renaming = renamingId === doc.id;
+        const isBriefing = doc.id === briefingDocId;
+        // A tab is navigation, so freshness appears here only as an EXCEPTION:
+        // a document nobody has re-verified past its shelf life. Showing the
+        // healthy case too would put a dot on every tab and mean nothing.
+        const stale = needsReview(deriveFreshness(doc, now));
         return (
           <div
             key={doc.id}
@@ -105,9 +117,21 @@ export default function DocumentTabs({
               "group flex items-center gap-1.5 rounded-md pl-2.5 pr-1.5 py-1 text-[13px] font-medium shrink-0 cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
               active ? "bg-accent/[0.08] text-accent" : "text-ink/55 hover:bg-ink/5 hover:text-ink/80",
             ].join(" ")}
-            title={DOC_TYPE_LABEL[doc.type]}
+            title={isBriefing ? `${DOC_TYPE_LABEL[doc.type]} · this canvas's briefing` : DOC_TYPE_LABEL[doc.type]}
           >
-            <span className={["h-2 w-2 rounded-full shrink-0 bg-current", active ? "" : "opacity-40"].join(" ")} />
+            {isBriefing ? (
+              // The briefing replaces the type dot rather than sitting beside
+              // it: one document per canvas holds this role, and swapping the
+              // marker says so without adding a fourth thing to the tab.
+              <BookMarked
+                size={11}
+                strokeWidth={2}
+                aria-hidden
+                className={["shrink-0", active ? "" : "opacity-60"].join(" ")}
+              />
+            ) : (
+              <span className={["h-2 w-2 rounded-full shrink-0 bg-current", active ? "" : "opacity-40"].join(" ")} />
+            )}
             {renaming ? (
               <input
                 autoFocus
@@ -129,6 +153,7 @@ export default function DocumentTabs({
                 {doc.name || DOC_TYPE_LABEL[doc.type]}
               </span>
             )}
+            {stale && !renaming && <FreshnessChip item={doc} now={now} variant="dot" />}
             {!readOnly && (
               <button
                 onClick={(e) => {

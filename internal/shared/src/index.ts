@@ -36,6 +36,11 @@ export interface CanvasMeta {
   visibility?: "public" | "private"; // access posture (migration 0021); absent treated as public
   publicRole?: "read" | "write";     // when public, what the code grants
   approvalPolicy?: ApprovalPolicy;   // agent-task gating (migration 0033); absent treated as "epic"
+  // The document designated as this canvas's briefing — the read-me-first an
+  // agent is handed on connect (migration 0037). At most one per canvas by
+  // construction (it's a column on the canvas, not a flag on documents).
+  // Absent = no briefing designated.
+  briefingDocId?: EntityId;
   yourRole?: "write" | "read" | "none"; // requester's resolved role; set per-connection on the state push
   version: number;
   createdAt: string; // ISO timestamp (Go API returns strings)
@@ -90,7 +95,32 @@ export interface CanvasEvent {
   updatedAt: number;
 }
 
-export interface Note {
+/* Freshness (migration 0037) — the stored half of "can this still be trusted?".
+   Carried by every kind that holds durable canvas context: notes, roadmap items,
+   and documents. Only the PAIR is stored; the status (unknown/fresh/aging/stale)
+   is derived at read time from the pair plus the current instant, so it can
+   never itself be stale. Go's DeriveFreshness is the canonical derivation; the
+   web mirrors it in lib/freshness.ts. */
+export interface FreshnessFields {
+  // When someone last asserted this content is still TRUE — deliberately NOT
+  // when the bytes last changed (that's updatedAt). ISO timestamp; the Go API
+  // returns strings. Absent = never verified, which is "unknown", not "stale".
+  verifiedAt?: string;
+  // How long a verification stays good, in seconds. Absent = no shelf life
+  // declared, which reads as verified-and-not-ageing rather than fresh-forever
+  // by fiat: the author vouched and declined to say it would expire.
+  staleAfterSeconds?: number;
+}
+
+/* The write side of the freshness pair. A null-able column can't tell "leave it
+   alone" from "null it out" through an absent field, so clearing rides an
+   explicit flag — the same shape event.update uses for clearEnd/clearCost. */
+export interface FreshnessPatchFields extends FreshnessFields {
+  clearVerifiedAt?: boolean;
+  clearStaleAfterSeconds?: boolean;
+}
+
+export interface Note extends FreshnessFields {
   id: EntityId;
   kind: "note";
   documentId?: EntityId; // the notes document this note belongs to
@@ -104,7 +134,7 @@ export interface Note {
   updatedAt: number;
 }
 
-export interface RoadmapItem {
+export interface RoadmapItem extends FreshnessFields {
   id: EntityId;
   kind: "roadmap";
   documentId?: EntityId; // the roadmap document this item belongs to
@@ -289,7 +319,7 @@ export interface Form {
 // content; it exists only to group other documents (and nested folders).
 export type DocumentType = "map" | "notes" | "itinerary" | "roadmap" | "sheet" | "chart" | "folder";
 
-export interface Document {
+export interface Document extends FreshnessFields {
   id: EntityId;
   kind: "document";
   type: DocumentType;
@@ -349,10 +379,21 @@ export type WSClientMessage =
     }
   | { op: "event.delete"; id: EntityId }
   | { op: "note.add"; data: Omit<Note, "id" | "kind" | "createdBy" | "updatedAt" | "sortOrder"> }
-  | { op: "note.update"; id: EntityId; partial: Partial<Omit<Note, "id" | "kind">> }
+  // The freshness half of the partial rides FreshnessPatchFields: setting
+  // verifiedAt is VOUCHING, a separate act from editing, so a body-only patch
+  // never re-certifies content nobody re-read.
+  | {
+      op: "note.update";
+      id: EntityId;
+      partial: Partial<Omit<Note, "id" | "kind">> & FreshnessPatchFields;
+    }
   | { op: "note.delete"; id: EntityId }
   | { op: "roadmap.add"; data: Omit<RoadmapItem, "id" | "kind" | "createdBy" | "updatedAt"> }
-  | { op: "roadmap.update"; id: EntityId; partial: Partial<Omit<RoadmapItem, "id" | "kind">> }
+  | {
+      op: "roadmap.update";
+      id: EntityId;
+      partial: Partial<Omit<RoadmapItem, "id" | "kind">> & FreshnessPatchFields;
+    }
   | { op: "roadmap.delete"; id: EntityId }
   | {
       op: "roadmap.reorder";
@@ -402,7 +443,11 @@ export type WSClientMessage =
   | {
       op: "document.update";
       id: EntityId;
-      partial: { name?: string; sortOrder?: number; config?: Record<string, unknown> };
+      partial: {
+        name?: string;
+        sortOrder?: number;
+        config?: Record<string, unknown>;
+      } & FreshnessPatchFields;
     }
   | { op: "document.delete"; id: EntityId }
   // Reorder AND re-parent in one op (mirrors roadmap.reorder): parentId is always

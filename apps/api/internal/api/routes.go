@@ -26,7 +26,7 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 	r.Use(metricsReg.Middleware) // per-route latency, keyed by chi RoutePattern
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"*"},
-		AllowedMethods:   []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
 		AllowCredentials: false,
 	}))
@@ -154,6 +154,9 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 
 		// Reads — any valid role.
 		r.Get("/api/canvas/state", h.GetState)
+		// One-call connect bundle: briefing + approved queue (+ ?taskId= for one
+		// hydrated task) as AGENTS.md-shaped markdown. See context_handler.go.
+		r.Get("/api/canvas/context", h.GetContext)
 		r.Get("/api/canvas/pending-edits", h.ListPendingEdits)
 		r.Post("/api/canvas/forms/scaffold", h.ScaffoldForm) // computes a spec; no mutation
 		r.Get("/api/canvas/actions", h.ListActions)
@@ -166,6 +169,13 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 			r.Use(RequireWrite)
 
 			r.Post("/api/canvas/mode", h.SetMode)
+
+			// Briefing designation (migration 0037). Import creates/reuses a notes
+			// doc, writes the file into it, and designates it in one call; the PUT
+			// is the bare designation for "set as briefing" on an existing doc.
+			// Both mutate the canvas, so both sit behind RequireWrite.
+			r.Post("/api/canvas/briefing/import", h.ImportBriefing)
+			r.Put("/api/canvas/briefing", h.SetBriefing)
 
 			r.Post("/api/canvas/documents", h.CreateDocument)
 			r.Post("/api/canvas/documents/batch", h.CreateDocumentsBatch)
