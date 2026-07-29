@@ -6,10 +6,14 @@ import {
   GitCommitHorizontal,
   Layers,
   Link2,
+  Milestone,
   PanelLeft,
   Pencil,
+  Plus,
   RotateCcw,
   Search,
+  SquareKanban,
+  Trash2,
   User,
   X,
   Zap,
@@ -17,17 +21,23 @@ import {
 import type { Action, ActionState, CanvasState, EpicPayload, TaskPayload } from "../types";
 import {
   approveAction,
+  approveBatch,
+  createTask,
+  deleteTask,
   rejectAction,
   releaseTask,
   requeueTask,
   updateTask,
 } from "../lib/api";
 import posthog from "../lib/posthog";
+import TaskComposer, { linkTargets } from "./TaskComposer";
 import { epicLifecycle, TERMINAL_STATES } from "../lib/epicLifecycle";
 import { CHIP_BASE, STATE_CHIP } from "../lib/stateChips";
 
 /* ─────────────────────────────────────────────────────────────────────────────
-   TaskBoard — the full-page task surface, opened from the pinned "Board" tab.
+   TaskBoard — the Board surface: the one home for tasks on a canvas. Humans
+   author tasks here (the toolbar's "New task" composer), triage agent-proposed
+   work, and watch cards move as agent sessions claim and finish them.
 
    Epics are the NAVIGATION LENS, not items on the board. A left sidebar lists
    the epic timeline in creation order (oldest first — it reads as the
@@ -293,10 +303,20 @@ export default function TaskBoard({
   onFocusHandled,
   focusEpicId,
   onScopeHandled,
+  onOpenConnect,
+  onOpenDocuments,
+  onOpenRoadmapDoc,
 }: {
   code: string;
   state: CanvasState;
   readOnly: boolean;
+  /** First-run empty state: open the agent connect dialog. */
+  onOpenConnect?: () => void;
+  /** First-run empty state: switch to the Documents surface. */
+  onOpenDocuments?: () => void;
+  /** Scoped-epic header's plan chip: open the roadmap document an epic's
+      linked goal lives in (switches to the Documents surface). */
+  onOpenRoadmapDoc?: (docId: string) => void;
   // TDM-14 one-shot focus handoff (from the header agent presence): when a
   // task id arrives, scope to its epic, scroll its card into view, open its
   // detail — then hand the token back via onFocusHandled.
@@ -330,6 +350,11 @@ export default function TaskBoard({
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The "New task" composer (toolbar button / empty-state CTA) — humans author
+  // tasks HERE; the Board is the one home for task work.
+  const [composing, setComposing] = useState(false);
+  // One in-flight "Approve all" batch (the Proposed column header button).
+  const [batchBusy, setBatchBusy] = useState(false);
 
   // Filter state — deliberately not persisted; every visit starts unfiltered.
   const [searchInput, setSearchInput] = useState("");
@@ -416,6 +441,30 @@ export default function TaskBoard({
     () => new Map(epics.map((e) => [e.id, epicPayload(e).title || "Untitled epic"])),
     [epics],
   );
+  // Epics are the bridge between the plans and the queue: an epic that links a
+  // roadmap goal (payload.linkedIds, TDM-10) belongs to that goal's roadmap
+  // DOCUMENT — one plan per stream, one Board running them all. Attribution is
+  // best-effort: the first linked id that still resolves to a roadmap item
+  // whose document still exists wins; dangling ids (deleted goals, deleted
+  // docs) are skipped, and an epic with nothing resolvable stays unlinked.
+  const epicPlan = useMemo(() => {
+    const m = new Map<string, { goalTitle: string; docId: string; docName: string }>();
+    for (const e of epics) {
+      for (const id of epicPayload(e).linkedIds ?? []) {
+        const item = (state.roadmapItems ?? {})[id];
+        if (!item) continue;
+        const doc = (state.documents ?? {})[item.documentId ?? ""];
+        if (!doc) continue;
+        m.set(e.id, {
+          goalTitle: item.title || "Untitled goal",
+          docId: doc.id,
+          docName: doc.name || "Roadmap",
+        });
+        break;
+      }
+    }
+    return m;
+  }, [epics, state.roadmapItems, state.documents]);
   // Everyone who has ever held a claim — done/failed rows keep claimed_by, so
   // this doubles as the "browse one agent's history" axis.
   const claimants = useMemo(() => {
@@ -489,6 +538,28 @@ export default function TaskBoard({
     return { activeEpics: act, agedEpics: aged };
   }, [epics, tasksByEpic, pinnedActiveId]);
 
+  // Sidebar grouping: the ACTIVE timeline splits into one group per roadmap
+  // document with linked epics (plans, in the docs' sortOrder) plus the
+  // unlinked rest. Age-out wins — a finished epic files under the Done bucket,
+  // never under its plan. A canvas with no plan-linked epics gets zero groups
+  // and renders the flat timeline exactly as before.
+  const planGroups = useMemo(() => {
+    const byDoc = new Map<string, Action[]>();
+    const unlinked: Action[] = [];
+    for (const e of activeEpics) {
+      const plan = epicPlan.get(e.id);
+      if (plan) byDoc.set(plan.docId, [...(byDoc.get(plan.docId) ?? []), e]);
+      else unlinked.push(e);
+    }
+    const groups = [...byDoc.entries()]
+      .map(([docId, list]) => {
+        const doc = (state.documents ?? {})[docId];
+        return { docId, name: doc?.name || "Roadmap", sortOrder: doc?.sortOrder ?? 0, list };
+      })
+      .sort((a, b) => a.sortOrder - b.sortOrder);
+    return { groups, unlinked };
+  }, [activeEpics, epicPlan, state.documents]);
+
   // One predicate, AND-composed — applied WITHIN the selected scope.
   function taskMatches(t: Action): boolean {
     const p = taskPayload(t);
@@ -509,6 +580,9 @@ export default function TaskBoard({
     [scopedTasks, filtering, query, filters],
   );
 
+  // Link targets for the composer (roadmap items + notes on this canvas).
+  const targets = useMemo(() => linkTargets(state), [state]);
+
   async function run(id: string, fn: () => Promise<void>) {
     setBusyId(id);
     setError(null);
@@ -518,6 +592,28 @@ export default function TaskBoard({
       setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
       setBusyId(null);
+    }
+  }
+
+  // ONE approve-batch call for every proposed task in the current scope (the
+  // Proposed column header's "Approve all"). No optimistic overlay — the WS
+  // broadcast moves the cards, and batchBusy labels the in-flight window.
+  async function approveAllProposed(ids: string[]) {
+    if (ids.length === 0 || batchBusy || readOnly) return;
+    setBatchBusy(true);
+    setError(null);
+    try {
+      const { approved } = await approveBatch(code, ids);
+      posthog.capture("agent_tasks_batch_approved", {
+        canvas_code: code,
+        requested: ids.length,
+        approved: approved.length,
+        surface: "board",
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not approve tasks");
+    } finally {
+      setBatchBusy(false);
     }
   }
 
@@ -614,6 +710,9 @@ export default function TaskBoard({
   });
 
   const empty = tasks.length === 0 && epics.length === 0;
+  // Whether the canvas has any real documents (folders only nest them) — the
+  // teaching empty state only points at Documents when there's something there.
+  const hasDocs = Object.values(state.documents ?? {}).some((d) => d.type !== "folder");
 
   function renderApproveReject(a: Action, approveLabel?: string) {
     if (readOnly || a.state !== "proposed") return null;
@@ -763,6 +862,7 @@ export default function TaskBoard({
     const { list, total, done, working, drain } = epicStats(e);
     const lifecycle = epicLifecycle(e, list);
     const selected = effectiveScope === e.id;
+    const plan = epicPlan.get(e.id);
     return (
       <div
         key={e.id}
@@ -783,6 +883,13 @@ export default function TaskBoard({
           </span>
           <StateChip state={lifecycle === "finished" ? "done" : e.state} />
         </div>
+        {/* The goal this epic delivers — quiet provenance, not a control (the
+            plan chip in the scoped header is the interactive route). */}
+        {plan && (
+          <div className="mt-0.5 truncate pl-[18px] text-[11px] text-ink/45" title={plan.goalTitle}>
+            {plan.goalTitle}
+          </div>
+        )}
         <ProgressBar done={done} working={working} total={total} className="mt-1.5 h-1.5" />
         <div className="mt-1 flex items-center justify-between font-code text-[10px] text-ink/50">
           <span>
@@ -803,6 +910,7 @@ export default function TaskBoard({
     // Finished epics read as history: Done chip, full emerald bar, prominent
     // drained-in — no approve-era chrome.
     const finished = epicLifecycle(e, list) === "finished";
+    const plan = epicPlan.get(e.id);
     return (
       <div className="shrink-0 border-b border-ink/10 px-4 py-2.5">
         <div className="flex items-center gap-2">
@@ -815,6 +923,22 @@ export default function TaskBoard({
             {p.title || "Untitled epic"}
           </button>
           <StateChip state={finished ? "done" : e.state} />
+          {/* The plan this epic delivers: goal + roadmap doc. Clicking jumps to
+              the roadmap on the Documents surface — the reverse of the roadmap's
+              epic chips pointing here. */}
+          {plan && onOpenRoadmapDoc && (
+            <button
+              onClick={() => onOpenRoadmapDoc(plan.docId)}
+              title="Open the roadmap this epic belongs to"
+              aria-label="Open the roadmap this epic belongs to"
+              className="inline-flex min-w-0 shrink items-center gap-1 rounded-[4px] border border-ink/10 bg-ink/[0.03] px-1.5 py-px text-[10px] text-ink/50 transition-colors hover:border-ink/30 hover:text-ink/75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            >
+              <Milestone size={9} className="shrink-0" />
+              <span className="truncate">
+                {plan.goalTitle} · {plan.docName}
+              </span>
+            </button>
+          )}
           {finished && drain && (
             <span className="shrink-0 text-[12px] font-semibold text-emerald-600 dark:text-emerald-400">
               {drain}
@@ -863,7 +987,35 @@ export default function TaskBoard({
             {epics.length > 0 && ` · ${epics.length} epic${epics.length === 1 ? "" : "s"}`}
           </span>
         )}
+        {!readOnly && !empty && (
+          <button
+            onClick={() => setComposing((v) => !v)}
+            aria-expanded={composing}
+            className="ml-auto flex h-7 shrink-0 items-center gap-1 rounded-md bg-accent pl-2 pr-2.5 text-xs font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          >
+            <Plus size={13} /> New task
+          </button>
+        )}
       </div>
+
+      {/* The composer — task authoring lives on the Board. Human-authored tasks
+          are born approved; agent sessions pull "For the agent" ones from the
+          queue. A new task files under the scoped epic, if one is selected. */}
+      {composing && !readOnly && (
+        <div className="shrink-0 border-b border-ink/10 px-4 py-3">
+          <div className="max-w-xl">
+            <TaskComposer
+              targets={targets}
+              onCancel={() => setComposing(false)}
+              onSubmit={async (draft) => {
+                await createTask(code, scopedEpic ? { ...draft, epicId: scopedEpic.id } : draft);
+                posthog.capture("agent_task_created", { canvas_code: code, surface: "board" });
+                setComposing(false);
+              }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Filter bar: search + chip filters, AND-composed. Horizontal scroll on
           narrow screens rather than wrapping into the board. */}
@@ -948,12 +1100,65 @@ export default function TaskBoard({
         </div>
       )}
 
-      {empty ? (
-        <div className="flex flex-1 items-center justify-center p-8">
-          <p className="max-w-sm text-center text-[13px] leading-relaxed text-ink/45">
-            No tasks yet. Write one in the Tasks panel for an agent session to pick up, or ask
-            your agent to draft a plan — proposed work lands here for your approval.
-          </p>
+      {empty && !composing ? (
+        /* First-run teaching state: the loop this product is built around —
+           write a task, an agent claims it, you review. ONE primary action. */
+        <div className="tandem-scroll flex flex-1 items-center justify-center overflow-y-auto p-8">
+          <div className="w-full max-w-md text-center">
+            <span className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-ink/10 bg-surface">
+              <SquareKanban size={20} className="text-ink/45" />
+            </span>
+            <h2 className="mt-4 text-xl font-semibold tracking-tight text-ink">
+              This is where the work happens
+            </h2>
+            <p className="mx-auto mt-2 max-w-sm text-[13px] leading-relaxed text-ink/55">
+              Tasks move across this board as agent sessions pick them up and finish them —
+              with you approving what runs.
+            </p>
+            <ol className="mx-auto mt-5 flex max-w-xs flex-col gap-2.5 text-left">
+              {[
+                "Write a task — or ask a connected agent to propose a plan.",
+                "Approve it so an agent session can claim it from the queue.",
+                "Review the result when the card lands in Done.",
+              ].map((step, i) => (
+                <li key={i} className="flex items-start gap-2.5 text-[12.5px] leading-relaxed text-ink/60">
+                  <span className="mt-px flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[5px] border border-ink/15 bg-surface font-code text-[10px] font-medium text-ink/55">
+                    {i + 1}
+                  </span>
+                  {step}
+                </li>
+              ))}
+            </ol>
+            {readOnly ? (
+              <p className="mt-6 font-code text-[11px] text-ink/40">
+                view only — tasks will appear here as they're written
+              </p>
+            ) : (
+              <>
+                <button
+                  onClick={() => setComposing(true)}
+                  className="mt-6 inline-flex items-center gap-1.5 rounded-md bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
+                >
+                  <Plus size={15} /> Write the first task
+                </button>
+                {(onOpenConnect || (onOpenDocuments && hasDocs)) && (
+                  <p className="mt-4 font-code text-[11px] text-ink/40">
+                    {onOpenConnect && (
+                      <button onClick={onOpenConnect} className="font-medium text-accent hover:underline">
+                        open the connect dialog
+                      </button>
+                    )}
+                    {onOpenConnect && onOpenDocuments && hasDocs && <span aria-hidden> · </span>}
+                    {onOpenDocuments && hasDocs && (
+                      <button onClick={onOpenDocuments} className="font-medium text-accent hover:underline">
+                        browse the documents
+                      </button>
+                    )}
+                  </p>
+                )}
+              </>
+            )}
+          </div>
         </div>
       ) : (
         <div className="flex min-h-0 min-w-0 flex-1">
@@ -967,10 +1172,25 @@ export default function TaskBoard({
                 {renderPseudoEntry("all", "All tasks", tasks.length)}
                 {renderPseudoEntry("none", "No epic", epiclessAll.length)}
               </div>
-              <div className="px-3 pb-0.5 pt-2.5 text-[10px] font-medium uppercase tracking-wide text-ink/50">
-                Epic timeline
-              </div>
-              {activeEpics.map((e) => renderEpicEntry(e))}
+              {/* Roadmaps are the plans, one per stream; the Board is the single
+                  execution queue; epics are the bridge. Plan-linked epics group
+                  under their roadmap doc's name; the rest keep the plain
+                  timeline (which is ALL of them on a canvas with no links —
+                  zero visual change there). */}
+              {planGroups.groups.map((g) => (
+                <div key={g.docId}>
+                  <div className="px-3 pb-0.5 pt-2.5 text-[10px] font-medium uppercase tracking-wide text-ink/50">
+                    {g.name}
+                  </div>
+                  {g.list.map((e) => renderEpicEntry(e))}
+                </div>
+              ))}
+              {(planGroups.groups.length === 0 || planGroups.unlinked.length > 0) && (
+                <div className="px-3 pb-0.5 pt-2.5 text-[10px] font-medium uppercase tracking-wide text-ink/50">
+                  Epic timeline
+                </div>
+              )}
+              {planGroups.unlinked.map((e) => renderEpicEntry(e))}
               {epics.length === 0 && (
                 <p className="px-3 py-1.5 text-[11px] leading-relaxed text-ink/50">
                   No epics yet — agents propose them as named batches of tasks.
@@ -1035,6 +1255,18 @@ export default function TaskBoard({
                         <span className="shrink-0 font-code text-[10px] text-ink/50">
                           {filtering ? `${colTasks.length}/${colAll.length}` : colTasks.length}
                         </span>
+                        {/* Bulk triage: one approve-batch call for the whole
+                            proposed column (within the current scope). */}
+                        {col.key === "proposed" && !readOnly && colAll.length > 1 && (
+                          <button
+                            onClick={() => approveAllProposed(colAll.map((t) => t.id))}
+                            disabled={batchBusy}
+                            title="Approve every proposed task in this scope in one batch"
+                            className="ml-auto shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold text-ink/50 transition-colors hover:bg-ink/5 hover:text-ink/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50"
+                          >
+                            {batchBusy ? "Approving…" : `Approve all ${colAll.length}`}
+                          </button>
+                        )}
                       </div>
                       {slim ? (
                         <div className="flex-1 rounded-lg border border-dashed border-ink/10" />
@@ -1080,7 +1312,7 @@ export default function TaskBoard({
    Destructive moves (reject / release / re-queue) confirm inline, two-step.
    ──────────────────────────────────────────────────────────────────────────── */
 
-type DetailConfirm = "reject" | "release" | "requeue" | null;
+type DetailConfirm = "reject" | "release" | "requeue" | "delete" | null;
 
 // Resolve a linked entity id to a human label using the same canvas state the
 // board already receives — roadmap items by title, notes by first line.
@@ -1231,6 +1463,14 @@ function TaskDetail({
       await requeueTask(code, action.id);
       posthog.capture("agent_task_requeued", { canvas_code: code });
       setConfirm(null);
+    });
+  }
+
+  function doDelete() {
+    void run(async () => {
+      await deleteTask(code, action.id);
+      posthog.capture("agent_task_deleted", { canvas_code: code });
+      onClose();
     });
   }
 
@@ -1555,6 +1795,22 @@ function TaskDetail({
                   className={`${quietBtn} w-full`}
                 >
                   <RotateCcw size={13} /> Re-queue for another attempt
+                </button>
+              ))}
+            {/* Delete — available in every state. Quiet by default, two-step
+                like the other destructive moves. */}
+            {isTask &&
+              (confirm === "delete" ? (
+                <div className="mt-2">
+                  {confirmStrip("delete", "Delete this task for everyone?", "Delete", doDelete)}
+                </div>
+              ) : (
+                <button
+                  onClick={() => setConfirm("delete")}
+                  disabled={busy}
+                  className="mt-2 flex w-full items-center justify-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium text-ink/40 transition-colors hover:bg-rose-500/10 hover:text-rose-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40 dark:hover:text-rose-400"
+                >
+                  <Trash2 size={12} /> Delete task
                 </button>
               ))}
           </div>

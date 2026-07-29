@@ -13,14 +13,12 @@ interface Props {
   onClose: (id: string) => void;
   /** Create a new document of this type and open it. */
   onCreate: (type: DocumentType) => void;
-  /** The pinned client-side Board pseudo-tab (full-page task board). It is NOT
-      a document — always present, never closable, purely local navigation. */
-  boardActive: boolean;
-  onSelectBoard: () => void;
   readOnly: boolean;
 }
 
-/* The canvas tab strip — one tab per OPEN document (migration 0024). Double-click
+/* The Documents surface's tab strip — one tab per OPEN document (migration
+   0024). Content-local navigation only: every tab here IS a document (the task
+   Board is a sibling surface in the workspace nav, never a tab). Double-click
    to rename, drag to reorder, X to close, + to create any doc type. Rename and
    reorder are shared mutations (document.update / document.reorder); open/close/
    active-tab are local to this viewer (like switching tabs in a Google Doc).
@@ -33,8 +31,6 @@ export default function DocumentTabs({
   onSelect,
   onClose,
   onCreate,
-  boardActive,
-  onSelectBoard,
   readOnly,
 }: Props) {
   const [addOpen, setAddOpen] = useState(false);
@@ -76,25 +72,6 @@ export default function DocumentTabs({
 
   return (
     <div className="flex items-center gap-0.5 min-w-0">
-      {/* Pinned Board pseudo-tab — outside the scrollable doc-tab list so it's
-          always reachable, styled like a tab (it's product chrome, not a
-          document). Active/selected = accent, like every tab. */}
-      <button
-        onClick={onSelectBoard}
-        className={[
-          "flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[13px] font-medium shrink-0 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
-          boardActive ? "bg-accent/[0.08] text-accent" : "text-ink/55 hover:bg-ink/5 hover:text-ink/80",
-        ].join(" ")}
-        title="Task board — every task and epic on this canvas"
-        aria-pressed={boardActive}
-      >
-        <span
-          className={["h-2 w-2 rounded-full shrink-0 bg-current", boardActive ? "" : "opacity-40"].join(" ")}
-        />
-        Board
-      </button>
-      <span aria-hidden="true" className="mx-1 h-4 w-px shrink-0 bg-ink/10" />
-
       {/* Only the tab list scrolls. The "+" and its menu live OUTSIDE this
           overflow container — a dropdown rendered inside an `overflow-x-auto`
           box gets clipped vertically (overflow-y computes to auto too), which

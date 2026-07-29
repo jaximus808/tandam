@@ -1,33 +1,49 @@
 import type { LucideIcon } from "lucide-react";
-import { Files, ClipboardList, Settings } from "lucide-react";
+import { Files, SquareKanban } from "lucide-react";
 
 /* ─────────────────────────────────────────────────────────────────────────────
-   The left activity-bar registry (VS Code style).
+   Workspace navigation registry.
 
-   The activity bar is a thin icon rail on the far left; clicking an icon opens
-   that view in the shared side panel (and clicking the active one collapses it).
-   This is the extension point: a new "extension" panel attaches by adding one
-   entry here + rendering its body in App.tsx keyed on the same `id`. Nothing
-   else in the shell needs to change.
+   A canvas has two TOP-LEVEL SURFACES — different kinds of workspace, not
+   tabs of one another:
+
+     · Board      — the task kanban (epics + Proposed/Ready/Working/Done).
+                    THE canonical home for tasks and agent work.
+     · Documents  — the tabbed document worksurface (maps, docs, sheets, …).
+
+   They're switched from the labeled left nav (WorkspaceNav). Everything
+   surface-local — the document tab strip, the explorer panel — lives INSIDE
+   its surface, never at this level. Settings is secondary chrome (a side
+   panel), reachable from the nav's bottom slot but not a surface.
    ──────────────────────────────────────────────────────────────────────────── */
 
-export type SidebarView = "documents" | "tasks" | "settings";
+export type Surface = "board" | "documents";
 
-export interface SidebarItem {
-  id: SidebarView;
+export interface SurfaceItem {
+  id: Surface;
   icon: LucideIcon;
   label: string;
-  /** "top" = pinned to the top group; "bottom" = pinned to the base (the gear). */
-  slot: "top" | "bottom";
 }
 
-export const SIDEBAR_ITEMS: SidebarItem[] = [
-  { id: "documents", icon: Files, label: "Documents", slot: "top" },
-  { id: "tasks", icon: ClipboardList, label: "Agent tasks", slot: "top" },
-  { id: "settings", icon: Settings, label: "Settings", slot: "bottom" },
+export const SURFACE_ITEMS: SurfaceItem[] = [
+  { id: "board", icon: SquareKanban, label: "Board" },
+  { id: "documents", icon: Files, label: "Documents" },
 ];
+
+// Guard a persisted string back into a valid surface (unknown → null).
+export function parseSurface(v: unknown): Surface | null {
+  return v === "board" || v === "documents" ? v : null;
+}
+
+/* The side panel views. "documents" is the explorer (belongs to the Documents
+   surface — toggled from its tab strip); "settings" is the canvas settings
+   panel (toggled from the nav's gear). The old "tasks" view is gone — the
+   Board surface is the one home for tasks; parseSidebarView maps any legacy
+   persisted "tasks" value to null so stale localStorage degrades gracefully. */
+
+export type SidebarView = "documents" | "settings";
 
 // Guard a persisted string back into a valid view (or null = collapsed).
 export function parseSidebarView(v: string | null): SidebarView | null {
-  return v === "documents" || v === "tasks" || v === "settings" ? v : null;
+  return v === "documents" || v === "settings" ? v : null;
 }

@@ -627,11 +627,14 @@ function ViewToggle({
         <button
           key={v}
           onClick={() => onChange(v)}
-          className={`px-2.5 py-1 capitalize transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${
+          className={`px-2.5 py-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${
             view === v ? "bg-accent text-white" : "bg-surface text-ink/60 hover:bg-ink/5"
           }`}
         >
-          {v}
+          {/* "Board" names the top-level task surface exclusively; this
+              roadmap-internal column layout reads as "Columns". The stored
+              value stays "board" so saved view preferences keep working. */}
+          {v === "board" ? "Columns" : "List"}
         </button>
       ))}
     </div>
@@ -1132,7 +1135,7 @@ function RoadmapColumn({
             }`}
           />
           <div className="flex shrink-0 items-center gap-1">
-            <AgentControls item={root} />
+            <AgentControls item={root} showEpicChips={false} />
             <button
               onClick={deleteGoal}
               title="Delete goal"
@@ -1145,6 +1148,7 @@ function RoadmapColumn({
             </button>
           </div>
         </div>
+        <GoalEpicChips item={root} />
         <div className="mt-2">
           <StageSelect item={root} stages={stages} />
         </div>
@@ -1302,7 +1306,18 @@ function AgentTaskToggle({ item, size = "sm" }: { item: RoadmapItem; size?: "sm"
 // flips to a "✓ Task" marker; once a live epic links it the epic button yields
 // to the TDM-10 chip. Epic chips themselves render on ANY linked item (they're
 // read-only status, not an agent affordance).
-function AgentControls({ item, size = "sm" }: { item: RoadmapItem; size?: "sm" | "xs" }) {
+function AgentControls({
+  item,
+  size = "sm",
+  showEpicChips = true,
+}: {
+  item: RoadmapItem;
+  size?: "sm" | "xs";
+  /** The goal-card header renders chips on their own row (the card is a fixed
+      narrow column, and a wide chip inline would starve the title down to
+      word-per-line wrapping) — it passes false and mounts GoalEpicChips. */
+  showEpicChips?: boolean;
+}) {
   const ctx = useContext(RoadmapTaskContext);
   const isAgent = item.assignee === "agent";
   const linked = ctx?.linkedTasks.get(item.id) ?? [];
@@ -1313,7 +1328,7 @@ function AgentControls({ item, size = "sm" }: { item: RoadmapItem; size?: "sm" |
 
   return (
     <span className="flex min-w-0 shrink-0 items-center gap-1">
-      <EpicChips epics={epics} size={size} onOpen={ctx?.openBoardForEpic} />
+      {showEpicChips && <EpicChips epics={epics} size={size} onOpen={ctx?.openBoardForEpic} />}
       <AgentTaskToggle item={item} size={size} />
       {isAgent && ctx && !ctx.readOnly && (
         <>
@@ -1354,6 +1369,20 @@ function AgentControls({ item, size = "sm" }: { item: RoadmapItem; size?: "sm" |
         </>
       )}
     </span>
+  );
+}
+
+// The goal-card header's epic-chip row: chips get the card's full width under
+// the title instead of competing with it inline (AgentControls passes
+// showEpicChips={false} there). Renders nothing when the goal has no epics.
+function GoalEpicChips({ item }: { item: RoadmapItem }) {
+  const ctx = useContext(RoadmapTaskContext);
+  const epics = ctx?.linkedEpics.get(item.id) ?? [];
+  if (epics.length === 0) return null;
+  return (
+    <div className="mt-1.5 flex min-w-0">
+      <EpicChips epics={epics} onOpen={ctx?.openBoardForEpic} />
+    </div>
   );
 }
 

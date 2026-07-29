@@ -215,7 +215,8 @@ export default function WelcomeMode({
         </div>
 
         <p className="pt-2 text-center text-[11px] text-ink/40">
-          Tabs open as your agent builds · the “+” in the strip above starts a new document
+          Tabs open as your agent builds · the “+” in the strip above starts a new document ·
+          tasks live on the Board, in the left nav
         </p>
       </div>
     </div>

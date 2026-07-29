@@ -3,8 +3,8 @@
 // The closed six-hue semantic state set (see /DESIGN.md §Tokens):
 //   proposed amber · ready sky · working violet · done emerald · failed rose ·
 //   rejected zinc — backgrounds at /10 alpha, text at 600 (light) / 400 (dark).
-// This is the ONE definition; TaskBoard and TasksPanel (and any future task
-// surface) import it rather than carrying their own hex tables. No new hues.
+// This is the ONE definition; TaskBoard (and any future task surface) imports
+// it rather than carrying its own hex tables. No new hues.
 
 export interface StateChipDef {
   label: string;

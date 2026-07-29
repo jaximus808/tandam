@@ -2,10 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CanvasMeta, CanvasMode, CanvasState, Document, DocumentType } from "./types";
 import { connectToCanvas, disconnectFromCanvas, onStateUpdate, onAccessError, onRoleChange, sendOp, setCanvasReadOnly, type AccessStatus, type ChangeActor } from "./lib/ws";
 import { ModeNavContext } from "./lib/modeNav";
-import { type SidebarView } from "./lib/sidebar";
-import { Menu } from "lucide-react";
+import { type SidebarView, type Surface } from "./lib/sidebar";
+import { Menu, PanelLeft } from "lucide-react";
 import DocumentTabs from "./components/DocumentTabs";
-import ActivityBar from "./components/ActivityBar";
+import WorkspaceNav from "./components/WorkspaceNav";
 import SidePanel, { SidePanelReopenHandle, SIDE_PANEL_MIN, SIDE_PANEL_MAX, SIDE_PANEL_DEFAULT } from "./components/SidePanel";
 import MobileNavDrawer from "./components/MobileNavDrawer";
 import DocumentExplorer from "./components/DocumentExplorer";
@@ -39,7 +39,6 @@ import AgentPresence from "./components/AgentPresence";
 import NotificationBell from "./components/NotificationBell";
 import AgentToasts from "./components/AgentToasts";
 import QuickLog from "./components/QuickLog";
-import TasksPanel from "./components/TasksPanel";
 import TaskBoard from "./components/TaskBoard";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { useAgentActivity } from "./lib/useAgentActivity";
@@ -175,25 +174,29 @@ export default function App() {
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [connectOpen, setConnectOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
-  // Left activity-bar dock (VS Code style). The SELECTED view (Documents / Agent
-  // tasks / Settings) and whether the panel is OPEN are tracked separately: the
-  // selection is what the rail highlights, and it survives a close — so collapsing
-  // keeps the icon lit and clicking it again re-opens the same view. The activity
-  // bar (lib/sidebar) is the holder future "extension" panels attach to.
+  // ── Workspace navigation ────────────────────────────────────────────────────
+  // The canvas has two top-level SURFACES, switched from the labeled left nav
+  // (WorkspaceNav): the task Board and the tabbed Documents worksurface. The
+  // side-panel state is tracked separately: which panel view is selected
+  // (the document explorer — toggled from the Documents tab strip — or
+  // Settings, from the nav's gear) and whether it's OPEN. The selection
+  // survives a close so the same view re-opens on the next toggle.
   //
-  // Both are PER-CANVAS position (lib/sidebarState), keyed by code — each canvas is
-  // its own playground, so collapsing the panel on one board never touches another.
-  // Restored on mount for the URL's canvas; a GENUINE first visit (nothing saved,
-  // or lapsed) defaults to the Documents explorer open so the tabs are immediately
-  // discoverable. Switching canvases re-hydrates via hydrateSidebarFor; edits are
+  // All of it is PER-CANVAS position (lib/sidebarState), keyed by code — each
+  // canvas is its own playground, so collapsing the panel on one board never
+  // touches another. Restored on mount for the URL's canvas; a GENUINE first
+  // visit (nothing saved, or lapsed) lands on the BOARD — the product's front
+  // door — with the explorer pre-selected for when the viewer first opens
+  // Documents. Switching canvases re-hydrates via hydrateSidebarFor; edits are
   // written back by the save effect below.
   const initialSidebar = useMemo(() => loadSidebarState(getCodeFromURL()), []);
+  const [surface, setSurface] = useState<Surface>(() => initialSidebar?.surface ?? "board");
   const [sidebarView, setSidebarView] = useState<SidebarView | null>(
     () => initialSidebar?.view ?? "documents",
   );
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(() => initialSidebar?.open ?? true);
   // Mobile-only: the off-canvas nav drawer (the desktop left dock has no phone
-  // home — ActivityBar + SidePanel are `hidden sm:flex`). It reuses `sidebarView`
+  // home — WorkspaceNav + SidePanel are `hidden sm:flex`). It reuses `sidebarView`
   // for which panel shows, so the view choice is continuous across breakpoints.
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   // The drawer always shows a concrete view (the desktop panel can be collapsed
@@ -276,13 +279,14 @@ export default function App() {
   // re-constructing Leaflet, re-parsing markdown, and losing useMemo caches.
   const [visitedModes, setVisitedModes] = useState<Set<CanvasMode>>(new Set());
 
-  // The pinned Board pseudo-tab (full-page task board). Client-side only — NOT
-  // a document type: no server row, never broadcast, purely local navigation.
-  // When open it takes over the content area; selecting any document tab (or
-  // opening one from the explorer) hands the surface back. `boardVisited`
-  // mirrors visitedModes' keep-alive so toggling away keeps scroll positions.
-  const [boardOpen, setBoardOpen] = useState(false);
+  // Board keep-alive: mirrors visitedModes — once the Board surface has been
+  // shown, keep it mounted and toggle with CSS so scroll positions and scope
+  // survive surface switches. (The Board is client-side navigation only: no
+  // server row, never broadcast.)
   const [boardVisited, setBoardVisited] = useState(false);
+  useEffect(() => {
+    if (surface === "board") setBoardVisited(true);
+  }, [surface]);
   // TDM-14: one-shot focus handoff — clicking an agent's task in the header
   // presence (avatar / mini-chip / swarm tree) opens the Board centred on that
   // task. TaskBoard consumes it (scope → the task's epic, card scrolled into
@@ -373,8 +377,8 @@ export default function App() {
     if (activateNextNewDocRef.current && newIds.length > 0) {
       activateNextNewDocRef.current = false;
       // Creating a document is an explicit "show me that" — it wins over the
-      // Board pseudo-tab if that's what's currently covering the surface.
-      setBoardOpen(false);
+      // Board if that's the surface currently showing.
+      setSurface("documents");
       setActiveDocId(newIds[newIds.length - 1]);
     }
   }, [documents, closedDocIds, canvasState]);
@@ -413,13 +417,14 @@ export default function App() {
     });
   }, [loadedCode, openDocIds, closedDocIds, effectiveDocId, following]);
 
-  // Persist this viewer's sidebar position per canvas, mirroring the tab-state save
-  // above — so a reload (and re-entry) restores the same view + open/closed state
-  // for THIS canvas, and marks it "visited" so the first-visit force fires only once.
+  // Persist this viewer's workspace position per canvas, mirroring the tab-state
+  // save above — so a reload (and re-entry) restores the same surface + panel
+  // state for THIS canvas, and marks it "visited" so the first-visit default
+  // (landing on the Board) fires only once.
   useEffect(() => {
     if (!loadedCode) return;
-    saveSidebarState(loadedCode, { view: sidebarView, open: sidebarOpen });
-  }, [loadedCode, sidebarView, sidebarOpen]);
+    saveSidebarState(loadedCode, { surface, view: sidebarView, open: sidebarOpen });
+  }, [loadedCode, surface, sidebarView, sidebarOpen]);
 
   useEffect(() => {
     if (!canvasCode) return;
@@ -495,15 +500,23 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [me, canvasCode]);
 
-  // Auto-open the connect modal the first time we see a given canvas in this browser.
+  // Auto-open the connect modal the first time we see a given canvas in this
+  // browser — but ONLY when the canvas is effectively empty (no documents, no
+  // tasks). A first visit to a canvas that already has content must land on the
+  // Board unobstructed — a modal over a content-bearing board buries the very
+  // thing the visitor came to see; the Board's empty state and the header's
+  // Connect button keep the connect path reachable.
   useEffect(() => {
-    if (!canvas) return;
+    if (!canvas || !canvasState) return;
     if (autoOpenedFor === canvas.code) return;
-    if (!hasDismissedConnect(canvas.code)) {
+    const hasContent =
+      documents.length > 0 ||
+      Object.values(canvasState.actions ?? {}).some((a) => a.type === "task");
+    if (!hasContent && !hasDismissedConnect(canvas.code)) {
       setConnectOpen(true);
     }
     setAutoOpenedFor(canvas.code);
-  }, [canvas, autoOpenedFor]);
+  }, [canvas, canvasState, documents, autoOpenedFor]);
 
   // Remember recently opened canvases so Landing can offer quick re-entry.
   useEffect(() => {
@@ -520,7 +533,7 @@ export default function App() {
     setSelectedPinId(null);
     setSelectedEventId(null);
     setVisitedModes(new Set());
-    setBoardOpen(false);
+    setSurface("board");
     setBoardVisited(false);
     setActiveDocId(null);
     setFollowDocId(null);
@@ -554,16 +567,19 @@ export default function App() {
     }
   }
 
-  // Restore this viewer's saved sidebar position for a canvas we're entering, or —
-  // on a genuine first visit (nothing saved / lapsed) — reveal the Documents
-  // explorer so the tabs are discoverable. Mirrors hydrateTabsFor: each canvas is
-  // its own playground, so a collapse on one board doesn't follow you to another.
+  // Restore this viewer's saved workspace position for a canvas we're entering,
+  // or — on a genuine first visit (nothing saved / lapsed) — land on the BOARD
+  // with the explorer pre-selected for the first trip into Documents. Mirrors
+  // hydrateTabsFor: each canvas is its own playground, so a collapse on one
+  // board doesn't follow you to another.
   function hydrateSidebarFor(code: string) {
     const saved = loadSidebarState(code);
     if (saved) {
+      setSurface(saved.surface);
       setSidebarView(saved.view);
       setSidebarOpen(saved.open);
     } else {
+      setSurface("board");
       setSidebarView("documents");
       setSidebarOpen(true);
     }
@@ -997,17 +1013,15 @@ export default function App() {
   const setMode = (mode: CanvasMode) => {
     const d = openDocs.find((o) => DOC_TYPE_TO_MODE[o.type] === mode);
     if (d) {
-      setBoardOpen(false);
+      setSurface("documents");
       setActiveDocId(d.id);
     }
   };
 
-  // Open the pinned Board pseudo-tab — takes over the content area without
-  // touching the document tab state, so closing it lands you exactly where
-  // you were.
+  // Switch to the Board surface — never touches the document tab state, so
+  // coming back to Documents lands you exactly where you were.
   function openBoard() {
-    setBoardOpen(true);
-    setBoardVisited(true);
+    setSurface("board");
   }
 
   // Follow an agent to its task: open the Board with a one-shot focus on the
@@ -1028,14 +1042,17 @@ export default function App() {
   // Following is armed even before any agent shows up — distinguish "an agent is
   // here" from "on, waiting for one" so the button reads as live, not dead.
   const agentPresent = agentList.length > 0;
-  // The homepage shows iff the canvas has zero open tabs.
-  const inWelcome = !hasTabs;
   // Toggling off pins the view to the current tab; on resumes following.
   const toggleFollow = () => setActiveDocId(following ? effectiveDocId : null);
+  // Whether the selected side-panel view applies right now: Settings rides
+  // along with any surface; the document explorer belongs to Documents only
+  // (the selection persists — switch back and it's still there).
+  const panelRelevant =
+    sidebarView === "settings" || (sidebarView === "documents" && surface === "documents");
 
   // ── Document tab actions ────────────────────────────────────────────────────
   function selectDoc(id: string) {
-    setBoardOpen(false);
+    setSurface("documents");
     setActiveDocId(id);
   }
   // Close = hide locally + remember it's closed so the sync won't reopen it.
@@ -1076,7 +1093,7 @@ export default function App() {
       return next;
     });
     setOpenDocIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
-    setBoardOpen(false);
+    setSurface("documents");
     setActiveDocId(id);
   }
   // Explorer → delete a document for everyone. The doc (and its child entities,
@@ -1157,7 +1174,18 @@ export default function App() {
         />
 
         <div className="ml-auto flex items-center gap-2 shrink-0">
-          <AgentPresence agents={agentList} edit={agentEdit} reading={agentReading} onJump={() => setActiveDocId(null)} onOpenTask={openBoardTask} />
+          <AgentPresence
+            agents={agentList}
+            edit={agentEdit}
+            reading={agentReading}
+            // Jumping to the agent means watching it edit documents — make
+            // sure the Documents surface is showing, then resume following.
+            onJump={() => {
+              setSurface("documents");
+              setActiveDocId(null);
+            }}
+            onOpenTask={openBoardTask}
+          />
           <button
             onClick={toggleFollow}
             className={[
@@ -1281,21 +1309,22 @@ export default function App() {
       {/* Live agent op-feed popups. Muting is controlled from the header bell. */}
       <AgentToasts toasts={notify.toasts} onDismiss={notify.dismissToast} />
 
-      {/* Main row, flush under the header: the left dock (activity rail + one
+      {/* Main row, flush under the header: the left dock (workspace nav + one
           swappable panel) rises the full height beside the header, and the tab
           strip lives in the RIGHT column above the mode content — so tabs sit
           only over the document they switch, not over the sidebar. */}
       <div className="relative flex flex-1 min-h-0">
-        {/* VS Code-style left dock: an always-present icon rail (ActivityBar)
-            plus ONE swappable side panel. Documents, Agent tasks, and Settings
-            share the slot — selecting an icon opens its panel; the active one
-            toggles closed. */}
-        <ActivityBar
-          active={sidebarView}
-          onSelect={selectSidebarView}
-          badges={{ tasks: proposedTaskCount }}
+        {/* Primary navigation: the labeled workspace rail. Board and Documents
+            are top-level surfaces (icon + label, one always active); Settings
+            sits at the bottom as secondary chrome, toggling its side panel. */}
+        <WorkspaceNav
+          surface={surface}
+          onSelectSurface={setSurface}
+          boardBadge={proposedTaskCount}
+          settingsOpen={sidebarView === "settings" && sidebarOpen}
+          onToggleSettings={() => selectSidebarView("settings")}
         />
-        {sidebarView && sidebarOpen && (
+        {panelRelevant && sidebarOpen && (
           <SidePanel width={panelWidth} onWidthChange={setPanelWidthPersist} onClose={closeSidebar}>
             {sidebarView === "documents" && (
               <DocumentExplorer
@@ -1307,14 +1336,6 @@ export default function App() {
                 onDelete={deleteDoc}
                 onCreateFolder={createFolder}
                 onMove={moveDoc}
-                readOnly={canvas.yourRole === "read"}
-                onClose={closeSidebar}
-              />
-            )}
-            {sidebarView === "tasks" && (
-              <TasksPanel
-                code={canvas.code}
-                state={canvasState}
                 readOnly={canvas.yourRole === "read"}
                 onClose={closeSidebar}
               />
@@ -1331,29 +1352,45 @@ export default function App() {
         )}
         {/* Collapsed but a view is still selected → a grab strip at the dock edge
             so you can drag (or click) the boundary to reopen that view. */}
-        {sidebarView && !sidebarOpen && (
+        {panelRelevant && !sidebarOpen && (
           <SidePanelReopenHandle defaultWidth={panelWidth} onOpen={openSidebar} />
         )}
 
         {/* Right column: tab strip + view-only banner on top, mode content below. */}
         <div className="flex min-w-0 flex-1 flex-col">
-        {/* Tab strip — VS Code-style, above the mode content. One tab per OPEN
-            document; the "+" creates new ones. Always present once a canvas is
-            loaded, so even on the empty homepage (zero tabs) the "+" is there to
-            start one. z-[75] keeps its add-menu above the mode content but below
-            the header (z-[80]). */}
+        {/* Tab strip — belongs to the DOCUMENTS surface only (the Board is a
+            sibling surface in the workspace nav, never a tab). One tab per OPEN
+            document; the "+" creates new ones — present even at zero tabs so
+            there's always a way to start one. z-[75] keeps its add-menu above
+            the mode content but below the header (z-[80]). */}
+        {surface === "documents" && (
         <div className="relative z-[75] flex items-center px-3 py-1 bg-paper border-b border-ink/10 shrink-0 sm:px-4">
+          {/* The document explorer lives with its surface: its toggle sits at
+              the head of the tab strip (desktop only, like the panel itself). */}
+          <button
+            onClick={() => selectSidebarView("documents")}
+            title={sidebarView === "documents" && sidebarOpen ? "Hide the document list" : "Show the document list"}
+            aria-label="Toggle document list"
+            aria-pressed={sidebarView === "documents" && sidebarOpen}
+            className={[
+              "mr-1.5 hidden h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:flex",
+              sidebarView === "documents" && sidebarOpen
+                ? "bg-accent/[0.08] text-accent"
+                : "text-ink/40 hover:bg-ink/5 hover:text-ink/70",
+            ].join(" ")}
+          >
+            <PanelLeft size={15} strokeWidth={1.75} />
+          </button>
           <DocumentTabs
             docs={openDocs}
-            activeDocId={boardOpen ? null : effectiveDocId}
+            activeDocId={effectiveDocId}
             onSelect={selectDoc}
             onClose={closeDoc}
             onCreate={createDocument}
-            boardActive={boardOpen}
-            onSelectBoard={openBoard}
             readOnly={canvas.yourRole === "read"}
           />
         </div>
+        )}
 
         {canvas.yourRole === "read" && (
           <div className="flex items-center justify-center gap-2 border-b border-ink/10 bg-paper px-4 py-1.5 text-center text-xs text-ink/55">
@@ -1369,13 +1406,13 @@ export default function App() {
             annotation pills stay light (a light map framed by dark chrome),
             while its toolbar, sidebar, and popups follow the theme. */}
         <div className="relative flex flex-1 min-h-0 bg-paper text-ink">
-        <ErrorBoundary resetKey={`${canvas.id}:${boardOpen ? "board" : effectiveMode}`}>
-        {/* The Board pseudo-tab's full-page view. Mounted on first open, then
+        <ErrorBoundary resetKey={`${canvas.id}:${surface === "board" ? "board" : effectiveMode}`}>
+        {/* The Board surface's full-page view. Mounted on first visit, then
             kept alive and toggled with CSS like the modes below. It renders
             from the same canvas-state props as every other view, so WS pushes
             (claims, completions) move cards live — no polling. */}
-        {(boardOpen || boardVisited) && (
-          <div className={boardOpen ? "relative isolate flex flex-1 min-h-0 min-w-0" : "hidden"}>
+        {(surface === "board" || boardVisited) && (
+          <div className={surface === "board" ? "relative isolate flex flex-1 min-h-0 min-w-0" : "hidden"}>
             <TaskBoard
               code={canvas.code}
               state={canvasState}
@@ -1384,11 +1421,16 @@ export default function App() {
               focusEpicId={boardFocusEpicId}
               onScopeHandled={() => setBoardFocusEpicId(null)}
               onFocusHandled={() => setBoardFocusTaskId(null)}
+              onOpenConnect={() => setConnectOpen(true)}
+              onOpenDocuments={() => setSurface("documents")}
+              // Plan chip on a scoped epic → the roadmap doc it delivers.
+              // openDoc switches to the Documents surface and focuses the tab.
+              onOpenRoadmapDoc={openDoc}
             />
           </div>
         )}
         {(["welcome", "map", "itinerary", "docs", "roadmap", "sheets", "charts"] as CanvasMode[]).map((m) => {
-          const active = !boardOpen && effectiveMode === m;
+          const active = surface === "documents" && effectiveMode === m;
           // Lazy-mount: only render a mode after the user has visited it at
           // least once. After that, keep it mounted and hide with CSS.
           if (!active && !visitedModes.has(m)) return null;
@@ -1481,15 +1523,18 @@ export default function App() {
         </div>
       </div>
 
-      {/* Mobile nav drawer — the desktop left dock (explorer / tasks / settings)
-          as an off-canvas panel, reusing the exact same view components. Purely
-          additive (`sm:hidden`); opening a document closes the drawer. */}
+      {/* Mobile nav drawer — the workspace nav (Board / Documents) plus the
+          explorer and settings panels as an off-canvas sheet, reusing the exact
+          same view components. Purely additive (`sm:hidden`); switching surface
+          or opening a document closes the drawer. */}
       <MobileNavDrawer
         open={mobileNavOpen}
+        surface={surface}
+        onSelectSurface={setSurface}
         view={mobileNavView}
         onSelectView={setSidebarView}
         onClose={() => setMobileNavOpen(false)}
-        badges={{ tasks: proposedTaskCount }}
+        boardBadge={proposedTaskCount}
       >
         {mobileNavView === "documents" && (
           <DocumentExplorer
@@ -1504,14 +1549,6 @@ export default function App() {
             onDelete={deleteDoc}
             onCreateFolder={createFolder}
             onMove={moveDoc}
-            readOnly={canvas.yourRole === "read"}
-            onClose={() => setMobileNavOpen(false)}
-          />
-        )}
-        {mobileNavView === "tasks" && (
-          <TasksPanel
-            code={canvas.code}
-            state={canvasState}
             readOnly={canvas.yourRole === "read"}
             onClose={() => setMobileNavOpen(false)}
           />

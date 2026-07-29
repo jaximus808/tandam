@@ -1,42 +1,54 @@
 import { useEffect, type ReactNode } from "react";
-import { X } from "lucide-react";
-import type { SidebarView } from "../lib/sidebar";
-import { SIDEBAR_ITEMS } from "../lib/sidebar";
+import { FolderTree, Settings, X } from "lucide-react";
+import { SURFACE_ITEMS, type SidebarView, type Surface } from "../lib/sidebar";
 
 /* ─────────────────────────────────────────────────────────────────────────────
-   MobileNavDrawer — the phone-width home for the left dock.
+   MobileNavDrawer — the phone-width mirror of the workspace nav.
 
-   On desktop the sidebar is an always-present icon rail (ActivityBar) plus one
-   swappable SidePanel; both are `hidden sm:flex`, so on a phone there's no way to
-   reach the document explorer, agent tasks, or settings. This is that dock as an
-   off-canvas drawer: a segmented switcher (the same SIDEBAR_ITEMS registry) over
-   the SELECTED view's panel body, which the caller renders as `children` — so the
-   drawer reuses the exact DocumentExplorer / TasksPanel / SettingsPanel
-   components, not mobile copies of them.
+   Desktop has the labeled WorkspaceNav rail (Board / Documents) plus side
+   panels; both are `hidden sm:flex`, so this drawer is a phone's only way to
+   switch surfaces, browse the document tree, or reach settings. Two rows:
 
-   Purely additive: `sm:hidden`, so desktop layout is untouched. The panel bodies
-   already speak the paper/surface/ink theme tokens, so the drawer follows dark
-   mode for free. Closing on selection (opening a document) is the caller's job —
-   it wraps the panel's onOpen to also call onClose.
+   · Primary surfaces (Board / Documents) — icon + label, mirroring the rail.
+     Tapping one switches the content surface and CLOSES the drawer (it's
+     navigation, not panel browsing).
+   · Panels (Files / Settings) — a segmented switcher over the selected panel
+     body, which the caller renders as `children` — the drawer reuses the exact
+     DocumentExplorer / SettingsPanel components, not mobile copies.
+
+   Purely additive: `sm:hidden`, so desktop layout is untouched. The panel
+   bodies speak the paper/surface/ink tokens, so dark mode comes free. Closing
+   on document-open is the caller's job (it wraps onOpen to also close).
    ──────────────────────────────────────────────────────────────────────────── */
+
+const PANEL_ITEMS: { id: SidebarView; icon: typeof FolderTree; label: string }[] = [
+  { id: "documents", icon: FolderTree, label: "Files" },
+  { id: "settings", icon: Settings, label: "Settings" },
+];
 
 export default function MobileNavDrawer({
   open,
+  surface,
+  onSelectSurface,
   view,
   onSelectView,
   onClose,
-  badges,
+  boardBadge = 0,
   children,
 }: {
   open: boolean;
-  /** Which view's panel is showing; also lights the matching segment. */
+  /** The active content surface — lights the matching primary row item. */
+  surface: Surface;
+  /** Switch the content surface (the drawer closes itself after). */
+  onSelectSurface: (s: Surface) => void;
+  /** Which panel body is showing; also lights the matching segment. */
   view: SidebarView;
-  /** Switch the drawer to another view (does NOT close the drawer). */
+  /** Switch the drawer to another panel (does NOT close the drawer). */
   onSelectView: (view: SidebarView) => void;
   onClose: () => void;
-  /** Per-view count badges (e.g. tasks awaiting approval). */
-  badges?: Partial<Record<SidebarView, number>>;
-  /** The selected view's panel body (rendered by the caller). */
+  /** Count bubble on Board (tasks awaiting approval). */
+  boardBadge?: number;
+  /** The selected panel body (rendered by the caller). */
   children: ReactNode;
 }) {
   // Close on Escape — a hardware keyboard (tablet) or a11y affordance.
@@ -65,40 +77,44 @@ export default function MobileNavDrawer({
         aria-modal="true"
         aria-label="Canvas navigation"
       >
-        {/* Segmented switcher — one icon per registered view, mirroring the
-            desktop ActivityBar. Tapping a segment swaps the panel; the drawer
-            stays open (that's navigation within the dock, not a selection). */}
-        <div className="flex items-center gap-1 border-b border-ink/10 p-2">
-          {SIDEBAR_ITEMS.map((item) => {
+        {/* Primary surfaces — the mobile mirror of the desktop rail. */}
+        <div className="flex items-center gap-1.5 border-b border-ink/10 p-2">
+          {SURFACE_ITEMS.map((item) => {
             const Icon = item.icon;
-            const isActive = view === item.id;
-            const badge = badges?.[item.id] ?? 0;
+            const isActive = surface === item.id;
+            const badge = item.id === "board" ? boardBadge : 0;
             return (
               <button
                 key={item.id}
-                onClick={() => onSelectView(item.id)}
+                onClick={() => {
+                  onSelectSurface(item.id);
+                  onClose();
+                }}
+                aria-current={isActive ? "page" : undefined}
                 className={[
-                  "relative flex h-9 flex-1 items-center justify-center rounded-md transition-colors",
+                  "relative flex h-12 flex-1 flex-col items-center justify-center gap-0.5 rounded-md transition-colors",
                   isActive
                     ? "bg-accent/[0.08] text-accent"
-                    : "text-ink/40 hover:bg-ink/5 hover:text-ink/70",
+                    : "text-ink/45 hover:bg-ink/5 hover:text-ink/70",
                 ].join(" ")}
-                title={item.label}
-                aria-label={item.label}
-                aria-pressed={isActive}
               >
-                <Icon size={19} strokeWidth={1.75} />
-                {badge > 0 && (
-                  <span className="absolute right-2 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-agent px-1 text-[9px] font-bold text-white">
-                    {badge}
-                  </span>
-                )}
+                <span className="relative">
+                  <Icon size={18} strokeWidth={isActive ? 2 : 1.75} />
+                  {badge > 0 && (
+                    <span className="absolute -right-2 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-agent px-1 text-[9px] font-bold text-white">
+                      {badge}
+                    </span>
+                  )}
+                </span>
+                <span className={`text-[10px] leading-none ${isActive ? "font-semibold" : "font-medium"}`}>
+                  {item.label}
+                </span>
               </button>
             );
           })}
           <button
             onClick={onClose}
-            className="ml-1 flex h-9 w-9 items-center justify-center rounded-md text-ink/40 transition-colors hover:bg-ink/5 hover:text-ink/70"
+            className="flex h-12 w-10 shrink-0 items-center justify-center rounded-md text-ink/40 transition-colors hover:bg-ink/5 hover:text-ink/70"
             title="Close"
             aria-label="Close navigation"
           >
@@ -106,7 +122,31 @@ export default function MobileNavDrawer({
           </button>
         </div>
 
-        {/* The selected view's panel body — reused verbatim from the desktop dock. */}
+        {/* Panel switcher — the drawer's secondary row (file tree / settings). */}
+        <div className="flex items-center gap-1 border-b border-ink/10 px-2 py-1.5">
+          {PANEL_ITEMS.map((item) => {
+            const Icon = item.icon;
+            const isActive = view === item.id;
+            return (
+              <button
+                key={item.id}
+                onClick={() => onSelectView(item.id)}
+                aria-pressed={isActive}
+                className={[
+                  "flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[11.5px] font-medium transition-colors",
+                  isActive
+                    ? "bg-accent/[0.08] text-accent"
+                    : "text-ink/40 hover:bg-ink/5 hover:text-ink/70",
+                ].join(" ")}
+              >
+                <Icon size={14} strokeWidth={1.75} />
+                {item.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* The selected panel body — reused verbatim from the desktop dock. */}
         <div className="flex min-h-0 flex-1 flex-col">{children}</div>
       </aside>
 
