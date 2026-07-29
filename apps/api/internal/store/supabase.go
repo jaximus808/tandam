@@ -96,6 +96,8 @@ type dbCanvas struct {
 	PublicRole   string          `json:"public_role"`
 	// approval_policy (migration 0033); empty until the migration is applied.
 	ApprovalPolicy string          `json:"approval_policy"`
+	// briefing_doc_id (migration 0037); null until a briefing is designated.
+	BriefingDocID  *string         `json:"briefing_doc_id"`
 	EnabledModes   json.RawMessage `json:"enabled_modes"`
 	Version      int             `json:"version"`
 	CreatedAt    string          `json:"created_at"`
@@ -143,6 +145,9 @@ type dbNote struct {
 	SortOrder  int      `json:"sort_order"`
 	CreatedBy  string   `json:"created_by"`
 	UpdatedAt  string   `json:"updated_at"`
+	// Freshness pair (migration 0037); both null on rows written before it.
+	VerifiedAt        *string `json:"verified_at"`
+	StaleAfterSeconds *int    `json:"stale_after_seconds"`
 }
 
 type dbRoadmapItem struct {
@@ -157,6 +162,9 @@ type dbRoadmapItem struct {
 	SortOrder  int     `json:"sort_order"`
 	CreatedBy  string  `json:"created_by"`
 	UpdatedAt  string  `json:"updated_at"`
+	// Freshness pair (migration 0037); both null on rows written before it.
+	VerifiedAt        *string `json:"verified_at"`
+	StaleAfterSeconds *int    `json:"stale_after_seconds"`
 }
 
 type dbSheet struct {
@@ -270,6 +278,9 @@ type dbDocument struct {
 	Config    json.RawMessage `json:"config"`
 	CreatedBy string          `json:"created_by"`
 	UpdatedAt string          `json:"updated_at"`
+	// Freshness pair (migration 0037); both null on rows written before it.
+	VerifiedAt        *string `json:"verified_at"`
+	StaleAfterSeconds *int    `json:"stale_after_seconds"`
 }
 
 // Used for GetCanvasState — one request with embedded child tables.
@@ -322,12 +333,63 @@ func uuidPtrStr(id *uuid.UUID) any {
 	return id.String()
 }
 
+// parseTimePtr turns a nullable db timestamp into *time.Time. nil, empty, and
+// unparseable all become nil — an unreadable verified_at must read as "never
+// verified", never as a zero time (which would date to year 1 and look stale).
+func parseTimePtr(s *string) *time.Time {
+	if s == nil || *s == "" {
+		return nil
+	}
+	t := parseTime(*s)
+	if t.IsZero() {
+		return nil
+	}
+	return &t
+}
+
+// timePtrStr renders a nullable timestamp for an insert/update map: nil stays
+// SQL NULL, a set value becomes RFC3339 UTC (matching every other timestamp
+// this store writes).
+func timePtrStr(t *time.Time) any {
+	if t == nil {
+		return nil
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
+// intPtr renders a nullable int for an insert/update map: nil stays SQL NULL.
+func intPtr(n *int) any {
+	if n == nil {
+		return nil
+	}
+	return *n
+}
+
+// applyFreshnessPatch folds a FreshnessPatch into an update map. A Clear flag
+// wins over a value, so "clear and set" can't half-apply; absent both, the
+// column is left out of the map entirely and keeps its stored value.
+func applyFreshnessPatch(m map[string]any, f FreshnessPatch) {
+	switch {
+	case f.ClearVerifiedAt:
+		m["verified_at"] = nil
+	case f.VerifiedAt != nil:
+		m["verified_at"] = timePtrStr(f.VerifiedAt)
+	}
+	switch {
+	case f.ClearStaleAfterSeconds:
+		m["stale_after_seconds"] = nil
+	case f.StaleAfterSeconds != nil:
+		m["stale_after_seconds"] = *f.StaleAfterSeconds
+	}
+}
+
 func toDocument(d dbDocument) *Document {
 	id, _ := uuid.Parse(d.ID)
 	doc := &Document{ID: id, Kind: "document",
 		Type: d.Type, Name: d.Name, SortOrder: d.SortOrder,
 		ParentID:  parseUUIDPtr(d.ParentID),
 		CreatedBy: d.CreatedBy, UpdatedAt: parseTime(d.UpdatedAt),
+		VerifiedAt: parseTimePtr(d.VerifiedAt), StaleAfterSeconds: d.StaleAfterSeconds,
 		Config: map[string]any{},
 	}
 	if len(d.Config) > 0 {
@@ -356,7 +418,8 @@ func toCanvas(d dbCanvas) *Canvas {
 	return &Canvas{ID: id, Code: d.Code, Name: d.Name, Mode: d.Mode,
 		EnabledModes: parseEnabledModes(d.EnabledModes), MapID: d.MapID, OwnerUserID: owner,
 		Visibility: d.Visibility, PublicRole: d.PublicRole,
-		ApprovalPolicy: d.ApprovalPolicy, Version: d.Version,
+		ApprovalPolicy: d.ApprovalPolicy, BriefingDocID: parseUUIDPtr(d.BriefingDocID),
+		Version: d.Version,
 		CreatedAt: parseTime(d.CreatedAt), UpdatedAt: parseTime(d.UpdatedAt)}
 }
 
@@ -429,7 +492,8 @@ func toNote(d dbNote) *Note {
 		Body:      d.Body,
 		ImageRefs: d.ImageRefs, ParentKind: d.ParentKind,
 		SortOrder: d.SortOrder,
-		CreatedBy: d.CreatedBy, UpdatedAt: parseTime(d.UpdatedAt)}
+		CreatedBy: d.CreatedBy, UpdatedAt: parseTime(d.UpdatedAt),
+		VerifiedAt: parseTimePtr(d.VerifiedAt), StaleAfterSeconds: d.StaleAfterSeconds}
 	if n.ImageRefs == nil {
 		n.ImageRefs = []string{}
 	}
@@ -446,7 +510,8 @@ func toRoadmapItem(d dbRoadmapItem) *RoadmapItem {
 	id, _ := uuid.Parse(d.ID)
 	r := &RoadmapItem{ID: id, Kind: "roadmap", DocumentID: parseUUIDPtr(d.DocumentID),
 		Title: d.Title, Body: d.Body, Status: d.Status, SortOrder: d.SortOrder,
-		CreatedBy: d.CreatedBy, UpdatedAt: parseTime(d.UpdatedAt)}
+		CreatedBy: d.CreatedBy, UpdatedAt: parseTime(d.UpdatedAt),
+		VerifiedAt: parseTimePtr(d.VerifiedAt), StaleAfterSeconds: d.StaleAfterSeconds}
 	if d.Stage != nil {
 		r.Stage = *d.Stage
 	}
@@ -1028,6 +1093,21 @@ func (s *supabaseStore) SetCanvasApprovalPolicy(ctx context.Context, canvasID uu
 		return 0, err
 	}
 	// Bump version so connected boards re-fetch state and pick up the new policy.
+	return s.bumpVersion(ctx, canvasID)
+}
+
+// SetCanvasBriefingDoc designates docID as the canvas's briefing document, or
+// un-designates it when docID is nil (migration 0037). One nullable FK on the
+// canvas, so re-designating is a single write and two briefings are
+// unrepresentable — no clear-then-set dance, no invariant to defend here.
+func (s *supabaseStore) SetCanvasBriefingDoc(ctx context.Context, canvasID uuid.UUID, docID *uuid.UUID) (int, error) {
+	err := s.exec(s.client.From("canvases").
+		Update(map[string]any{"briefing_doc_id": uuidPtrStr(docID)}, "minimal", "").
+		Eq("id", canvasID.String()))
+	if err != nil {
+		return 0, err
+	}
+	// Bump version so connected boards re-fetch and pick up the new briefing.
 	return s.bumpVersion(ctx, canvasID)
 }
 
@@ -1865,6 +1945,10 @@ func documentRow(canvasID uuid.UUID, d *Document, now time.Time) (map[string]any
 		"config":     json.RawMessage(cfgJSON),
 		"created_by": d.CreatedBy,
 		"updated_at": now.Format(time.RFC3339),
+		// Always present (nil when unset) so a bulk INSERT's rows share one key
+		// set — PostgREST rejects mismatched keys (PGRST102).
+		"verified_at":         timePtrStr(d.VerifiedAt),
+		"stale_after_seconds": intPtr(d.StaleAfterSeconds),
 	}, nil
 }
 
@@ -1922,6 +2006,7 @@ func (s *supabaseStore) UpdateDocument(ctx context.Context, canvasID uuid.UUID, 
 	if patch.SetParent {
 		m["parent_id"] = uuidPtrStr(patch.ParentID) // nil → NULL (move to root)
 	}
+	applyFreshnessPatch(m, patch.FreshnessPatch)
 	if len(m) == 0 {
 		return 0, nil
 	}
@@ -2292,6 +2377,10 @@ func noteRow(canvasID uuid.UUID, n *Note, now time.Time) map[string]any {
 		"parent_id":  parentID,
 		"sort_order": n.SortOrder,
 		"updated_at": now.Format(time.RFC3339),
+		// Always present (nil when unset) so a bulk INSERT's rows share one key
+		// set — PostgREST rejects mismatched keys (PGRST102).
+		"verified_at":         timePtrStr(n.VerifiedAt),
+		"stale_after_seconds": intPtr(n.StaleAfterSeconds),
 	}
 }
 
@@ -2367,6 +2456,7 @@ func (s *supabaseStore) UpdateNote(ctx context.Context, canvasID uuid.UUID, id u
 	if patch.SortOrder != nil {
 		m["sort_order"] = *patch.SortOrder
 	}
+	applyFreshnessPatch(m, patch.FreshnessPatch)
 	if len(m) == 0 {
 		return 0, nil
 	}
@@ -2421,6 +2511,9 @@ func roadmapItemRow(canvasID uuid.UUID, r *RoadmapItem, now time.Time) map[strin
 		"stage":      stage,
 		"assignee":   assignee,
 		"updated_at": now.Format(time.RFC3339),
+		// Always present (nil when unset) — same PGRST102 key-set rule as above.
+		"verified_at":         timePtrStr(r.VerifiedAt),
+		"stale_after_seconds": intPtr(r.StaleAfterSeconds),
 	}
 }
 
@@ -2490,6 +2583,7 @@ func (s *supabaseStore) UpdateRoadmapItem(ctx context.Context, canvasID uuid.UUI
 			m["assignee"] = nil
 		}
 	}
+	applyFreshnessPatch(m, patch.FreshnessPatch)
 	if len(m) == 0 {
 		return 0, nil
 	}

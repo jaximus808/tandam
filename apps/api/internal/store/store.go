@@ -77,6 +77,10 @@ type Canvas struct {
 	// gating agent-proposed tasks get. Empty (legacy row) is treated as 'epic',
 	// the DB default. Enforced in the action create/approve handlers.
 	ApprovalPolicy string `json:"approvalPolicy,omitempty"`
+	// BriefingDocID is the document designated as this canvas's briefing — the
+	// read-me-first context an agent pulls on connect (migration 0037). At most
+	// one per canvas by construction. nil = no briefing designated.
+	BriefingDocID *uuid.UUID `json:"briefingDocId,omitempty"`
 	Version    int       `json:"version"`
 	CreatedAt  time.Time `json:"createdAt"`
 	UpdatedAt  time.Time `json:"updatedAt"`
@@ -169,6 +173,12 @@ type Note struct {
 	SortOrder  int        `json:"sortOrder"`
 	CreatedBy  string     `json:"createdBy"`
 	UpdatedAt  time.Time  `json:"updatedAt"`
+	// Freshness pair (migration 0037). VerifiedAt is when someone last asserted
+	// this content is still TRUE — not when the bytes last changed (that's
+	// UpdatedAt). StaleAfterSeconds is how long that assertion stays good. Both
+	// nil-able; status is derived, never stored — see DeriveFreshness.
+	VerifiedAt        *time.Time `json:"verifiedAt,omitempty"`
+	StaleAfterSeconds *int       `json:"staleAfterSeconds,omitempty"`
 }
 
 type RoadmapItem struct {
@@ -188,6 +198,9 @@ type RoadmapItem struct {
 	SortOrder int       `json:"sortOrder"`
 	CreatedBy string    `json:"createdBy"`
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Freshness pair (migration 0037) — see Note.VerifiedAt.
+	VerifiedAt        *time.Time `json:"verifiedAt,omitempty"`
+	StaleAfterSeconds *int       `json:"staleAfterSeconds,omitempty"`
 }
 
 type SheetColumn struct {
@@ -504,6 +517,10 @@ type Document struct {
 	Config    map[string]any `json:"config"`
 	CreatedBy string         `json:"createdBy"`
 	UpdatedAt time.Time      `json:"updatedAt"`
+	// Freshness pair (migration 0037) — see Note.VerifiedAt. On a document this
+	// vouches for the doc as a whole (the briefing doc is the motivating case).
+	VerifiedAt        *time.Time `json:"verifiedAt,omitempty"`
+	StaleAfterSeconds *int       `json:"staleAfterSeconds,omitempty"`
 }
 
 // CanvasState is the full snapshot sent to clients.
@@ -578,6 +595,24 @@ type NotePatch struct {
 	ParentID   *uuid.UUID `json:"parentId"`
 	ParentKind *string    `json:"parentKind"`
 	SortOrder  *int       `json:"sortOrder"`
+	FreshnessPatch
+}
+
+// FreshnessPatch is the freshness half of an update, shared verbatim by the
+// note / roadmap-item / document patches (migration 0037). nil value + false
+// clear = column untouched; the explicit Clear flags exist because a nil
+// pointer can't distinguish "leave it" from "null it out" — same reason
+// EventPatch carries ClearEnd/ClearCost. Embedded rather than repeated so the
+// three patches can't drift, and so applyFreshnessPatch has one shape to apply.
+//
+// Verifying is deliberately its own act, separate from editing: a patch that
+// only changes Body leaves VerifiedAt alone, so fixing a typo never
+// re-certifies content nobody re-read.
+type FreshnessPatch struct {
+	VerifiedAt             *time.Time `json:"verifiedAt"`
+	StaleAfterSeconds      *int       `json:"staleAfterSeconds"`
+	ClearVerifiedAt        bool       `json:"clearVerifiedAt"`
+	ClearStaleAfterSeconds bool       `json:"clearStaleAfterSeconds"`
 }
 
 type RoadmapItemPatch struct {
@@ -591,6 +626,7 @@ type RoadmapItemPatch struct {
 	// mark back to a human goal. nil = leave unchanged.
 	Assignee  *string `json:"assignee"`
 	SortOrder *int    `json:"sortOrder"`
+	FreshnessPatch
 }
 
 // RoadmapReorder is one entry in a bulk reorder. ParentID is always interpreted
@@ -617,6 +653,7 @@ type DocumentPatch struct {
 	// it unchanged. (The REST handler resolves a folder ref into ParentID.)
 	ParentID  *uuid.UUID
 	SetParent bool
+	FreshnessPatch
 }
 
 // DocumentReorder is one entry in a bulk tab reorder (drag-and-drop). ParentID is
@@ -713,6 +750,10 @@ type Store interface {
 	// SetCanvasApprovalPolicy sets the canvas approval policy
 	// ('strict'|'epic'|'auto', migration 0033). Validation is the caller's job.
 	SetCanvasApprovalPolicy(ctx context.Context, canvasID uuid.UUID, policy string) (int, error)
+	// SetCanvasBriefingDoc designates (or, with a nil docID, un-designates) the
+	// canvas's briefing document (migration 0037). The FK enforces that the id
+	// is a real document; the caller checks it belongs to THIS canvas.
+	SetCanvasBriefingDoc(ctx context.Context, canvasID uuid.UUID, docID *uuid.UUID) (int, error)
 	ListCanvasAccess(ctx context.Context, canvasID uuid.UUID) ([]*CanvasAccess, error)
 	UpsertCanvasAccess(ctx context.Context, canvasID, userID uuid.UUID, role string) error
 	DeleteCanvasAccess(ctx context.Context, canvasID, userID uuid.UUID) error
