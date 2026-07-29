@@ -366,10 +366,19 @@ func (a *Action) MarshalJSON() ([]byte, error) {
 		*actionAlias
 		TicketID string `json:"ticketId,omitempty"`
 	}{actionAlias: (*actionAlias)(a)}
-	if a.Ticket != nil {
-		out.TicketID = fmt.Sprintf("TDM-%d", *a.Ticket)
-	}
+	out.TicketID = a.TicketID()
 	return json.Marshal(out)
+}
+
+// TicketID is the display form of the stored ticket integer ("TDM-<n>"), or ""
+// when the action has no ticket (non-task types, and tasks created before
+// migration 0034). The one place the prefix lives, so the wire format and any
+// server-side rendering (context_get's markdown) can't drift apart.
+func (a *Action) TicketID() string {
+	if a == nil || a.Ticket == nil {
+		return ""
+	}
+	return fmt.Sprintf("TDM-%d", *a.Ticket)
 }
 
 // TaskLink is a linked entity resolved from a task action's payload.linkedIds —
@@ -381,6 +390,12 @@ type TaskLink struct {
 	Title  string    `json:"title,omitempty"`
 	Body   string    `json:"body"`
 	Status string    `json:"status,omitempty"`
+	// Freshness pair (migration 0037), carried through from the source row so a
+	// hydrated link can be annotated with its derived freshness. Linked context is
+	// exactly the material an agent cites verbatim, so it is the last place rot
+	// should be invisible — see DeriveFreshness.
+	VerifiedAt        *time.Time `json:"verifiedAt,omitempty"`
+	StaleAfterSeconds *int       `json:"staleAfterSeconds,omitempty"`
 }
 
 // Agent is minimal identity so the canvas knows who is writing (provenance) and
@@ -820,6 +835,12 @@ type Store interface {
 	CreateNotes(ctx context.Context, canvasID uuid.UUID, notes []*Note) (int, error)
 	UpdateNote(ctx context.Context, canvasID uuid.UUID, id uuid.UUID, patch NotePatch) (int, error)
 	DeleteNote(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error)
+	// ListNotesByDocument returns one document's notes in sort order — the
+	// document's body, in reading order. Exists so context_get (E1.3) can render
+	// the designated briefing document without loading every note on the canvas:
+	// the alternative (GetCanvasKinds with "notes") pulls the whole board's notes
+	// plus a canvas row and pending edits to answer a question about one document.
+	ListNotesByDocument(ctx context.Context, canvasID, documentID uuid.UUID) ([]*Note, error)
 
 	// Roadmap items
 	CreateRoadmapItem(ctx context.Context, canvasID uuid.UUID, r *RoadmapItem) (int, error)

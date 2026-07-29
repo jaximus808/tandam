@@ -2481,6 +2481,27 @@ func (s *supabaseStore) DeleteNote(ctx context.Context, canvasID uuid.UUID, id u
 	return s.bumpVersion(ctx, canvasID)
 }
 
+// ListNotesByDocument returns one document's notes ordered by sort_order — the
+// document read in the order a human sees it. canvas_id is matched as well as
+// document_id so a document id from another canvas can't be used to read across
+// the tenancy boundary (the same belt-and-braces every other scoped read uses).
+func (s *supabaseStore) ListNotesByDocument(_ context.Context, canvasID, documentID uuid.UUID) ([]*Note, error) {
+	var rows []dbNote
+	if _, err := s.client.From("notes").
+		Select("*", "", false).
+		Eq("canvas_id", canvasID.String()).
+		Eq("document_id", documentID.String()).
+		Order("sort_order", nil).
+		ExecuteTo(&rows); err != nil {
+		return nil, err
+	}
+	out := make([]*Note, 0, len(rows))
+	for _, d := range rows {
+		out = append(out, toNote(d))
+	}
+	return out, nil
+}
+
 // ── Roadmap items ─────────────────────────────────────────────────────────────
 
 // roadmapItemRow shapes a RoadmapItem into its DB row. Shared by the single-
@@ -3357,14 +3378,16 @@ func (s *supabaseStore) GetLinkedEntities(_ context.Context, canvasID uuid.UUID,
 		if err != nil {
 			continue
 		}
-		links = append(links, TaskLink{ID: id, Kind: "roadmap", Title: it.Title, Body: it.Body, Status: it.Status})
+		links = append(links, TaskLink{ID: id, Kind: "roadmap", Title: it.Title, Body: it.Body, Status: it.Status,
+			VerifiedAt: parseTimePtr(it.VerifiedAt), StaleAfterSeconds: it.StaleAfterSeconds})
 	}
 	for _, n := range notes {
 		id, err := uuid.Parse(n.ID)
 		if err != nil {
 			continue
 		}
-		links = append(links, TaskLink{ID: id, Kind: "note", Body: n.Body})
+		links = append(links, TaskLink{ID: id, Kind: "note", Body: n.Body,
+			VerifiedAt: parseTimePtr(n.VerifiedAt), StaleAfterSeconds: n.StaleAfterSeconds})
 	}
 	return links, nil
 }
