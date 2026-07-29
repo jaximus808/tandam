@@ -26,6 +26,9 @@ var (
 	// ErrActionNotFound is returned by ClaimAction/ReleaseAction when the id
 	// doesn't resolve to an action in the canvas.
 	ErrActionNotFound = errors.New("action not found")
+	// ErrWebhookNotFound is returned by the webhook config reads/mutations when
+	// the id doesn't resolve to a webhook on the canvas (migration 0038).
+	ErrWebhookNotFound = errors.New("webhook not found")
 	// ErrIllegalActionState wraps a ClaimAction/ReleaseAction that matched no
 	// row because the action is in a state the transition doesn't apply to
 	// (e.g. claiming a task still in 'proposed').
@@ -475,6 +478,97 @@ type OAuthConnection struct {
 	ClientName string     `json:"clientName"`
 	CreatedAt  time.Time  `json:"createdAt"`
 	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
+}
+
+// ── Outbound webhooks (migration 0038) ───────────────────────────────────────
+
+// Webhook is one per-canvas outbound endpoint config. Human-set from the web UI
+// only — there is deliberately no MCP surface, so an agent can't point a canvas
+// at an endpoint it controls.
+//
+// Secret is the HMAC-SHA256 key, stored in plaintext (it has to be: signing
+// needs the key material, so there is nothing to compare a hash against). It is
+// `json:"-"` so it can NEVER ride an API response by accident — the read paths
+// that back the UI (ListWebhooks/GetWebhook) don't even select the column, and
+// SecretLastFour is what the config list shows instead. Only
+// ListWebhooksForEvent — the emit/deliver path — populates it.
+type Webhook struct {
+	ID       uuid.UUID `json:"id"`
+	CanvasID uuid.UUID `json:"canvasId"`
+	URL      string    `json:"url"`
+	Secret   string    `json:"-"`
+	// SecretLastFour is the trailing 4 chars of the secret, the only part of it
+	// any read path exposes (enough to tell two configs apart in the UI).
+	SecretLastFour string    `json:"secretLastFour,omitempty"`
+	Events         []string  `json:"events"`
+	Enabled        bool      `json:"enabled"`
+	Name           string    `json:"name"`
+	Description    string    `json:"description"`
+	CreatedBy      string    `json:"createdBy"`
+	CreatedAt      time.Time `json:"createdAt"`
+	UpdatedAt      time.Time `json:"updatedAt"`
+}
+
+// WantsEvent reports whether this webhook's event filter selects eventType.
+// The DB-side equivalent is `events @> ARRAY[eventType]`; this is the in-Go
+// mirror used by tests and by any caller holding an already-loaded config.
+func (w *Webhook) WantsEvent(eventType string) bool {
+	for _, e := range w.Events {
+		if e == eventType {
+			return true
+		}
+	}
+	return false
+}
+
+// WebhookPatch is a partial update of a webhook config. nil fields are left
+// unchanged; a non-nil Secret rotates the key (a plain column UPDATE — the
+// receiver briefly sees signatures it can't verify, which migration 0038
+// accepts at this scale).
+type WebhookPatch struct {
+	URL         *string   `json:"url"`
+	Secret      *string   `json:"-"`
+	Events      *[]string `json:"events"`
+	Enabled     *bool     `json:"enabled"`
+	Name        *string   `json:"name"`
+	Description *string   `json:"description"`
+}
+
+// WebhookDelivery is one attemptable delivery: the row a worker leases, sends,
+// and retries in place. See migration 0038 for the identifier contract —
+// briefly: ID is the DELIVERY id (stable across retries, sent as
+// Tandem-Delivery-Id so a receiver can dedupe), EventID is the SOURCE-EVENT id
+// shared by every row fanned out from one canvas event.
+//
+// LastAttemptAt is stamped when an attempt STARTS (at lease time), so it also
+// serves as the lease clock: a 'delivering' row older than the lease timeout was
+// abandoned by a crashed worker and is reaped back to 'failed'.
+type WebhookDelivery struct {
+	ID        uuid.UUID       `json:"id"`
+	WebhookID uuid.UUID       `json:"webhookId"`
+	CanvasID  uuid.UUID       `json:"canvasId"`
+	EventID   uuid.UUID       `json:"eventId"`
+	EventType string          `json:"eventType"`
+	Payload   json.RawMessage `json:"payload"`
+	// Status ∈ pending | delivering | ok | failed | dead. 'ok' and 'dead' are
+	// terminal; 'dead' IS the dead letter.
+	Status         string     `json:"status"`
+	AttemptCount   int        `json:"attemptCount"`
+	LastAttemptAt  *time.Time `json:"lastAttemptAt,omitempty"`
+	NextAttemptAt  time.Time  `json:"nextAttemptAt"`
+	ResponseStatus *int       `json:"responseStatus,omitempty"`
+	ResponseBody   string     `json:"responseBody,omitempty"`
+	Error          string     `json:"error,omitempty"`
+	CreatedAt      time.Time  `json:"createdAt"`
+}
+
+// WebhookDeliveryResult is the outcome of one attempt, written back by the
+// worker. ResponseStatus is nil when the request never got a response (DNS,
+// TLS, timeout, or a blocked SSRF target).
+type WebhookDeliveryResult struct {
+	ResponseStatus *int
+	ResponseBody   string
+	Error          string
 }
 
 type PendingEdit struct {
@@ -962,6 +1056,56 @@ type Store interface {
 	// RevokeOAuthConnection revokes every live token the user holds for a client
 	// (disconnect). Returns ErrInvalidGrant if there was nothing to revoke.
 	RevokeOAuthConnection(ctx context.Context, userID uuid.UUID, clientID string) error
+
+	// ── Outbound webhooks (migration 0038) ────────────────────────────────────
+	// Config CRUD. The read paths deliberately do NOT select the `secret`
+	// column, so a config can never leak its key through a list/read response;
+	// only ListWebhooksForEvent (the emit path) loads it.
+	CreateWebhook(ctx context.Context, canvasID uuid.UUID, w *Webhook) (*Webhook, error)
+	ListWebhooks(ctx context.Context, canvasID uuid.UUID) ([]*Webhook, error)
+	GetWebhook(ctx context.Context, canvasID, id uuid.UUID) (*Webhook, error)
+	UpdateWebhook(ctx context.Context, canvasID, id uuid.UUID, patch WebhookPatch) (*Webhook, error)
+	DeleteWebhook(ctx context.Context, canvasID, id uuid.UUID) error
+	// CountWebhooks backs the app-enforced per-canvas cap (migration 0038
+	// deliberately has no DB-level limit).
+	CountWebhooks(ctx context.Context, canvasID uuid.UUID) (int, error)
+	// ListWebhooksForEvent returns the ENABLED webhooks on a canvas whose event
+	// filter contains eventType (`events @> ARRAY[eventType]`), WITH their
+	// secrets — the fan-out read behind Emit. The only method that loads a
+	// secret; never hand its results to a response writer.
+	ListWebhooksForEvent(ctx context.Context, canvasID uuid.UUID, eventType string) ([]*Webhook, error)
+	// GetWebhookWithSecret loads one config by id, WITH its secret — the
+	// delivery worker's lookup (a leased delivery row carries neither the target
+	// URL nor the key). Not canvas-scoped, because the worker leases across
+	// canvases; authorization for it is "you are the worker". Same warning as
+	// ListWebhooksForEvent: never hand the result to a response writer.
+	GetWebhookWithSecret(ctx context.Context, id uuid.UUID) (*Webhook, error)
+
+	// Delivery queue. CreateWebhookDeliveries is the fan-out insert: one row per
+	// matching webhook, all carrying the SAME event_id, which combined with
+	// UNIQUE(webhook_id, event_id) makes a re-run of the same source event a
+	// no-op instead of a duplicate notification. Returns how many rows were new.
+	CreateWebhookDeliveries(ctx context.Context, deliveries []*WebhookDelivery) (int, error)
+	// LeaseWebhookDeliveries atomically claims up to limit due deliveries
+	// (status pending|failed AND next_attempt_at <= now), flipping them to
+	// 'delivering', stamping last_attempt_at = now (the lease clock) and
+	// incrementing attempt_count. Rows come back with attempt_count ALREADY
+	// including the attempt about to be made.
+	LeaseWebhookDeliveries(ctx context.Context, limit int) ([]*WebhookDelivery, error)
+	// MarkWebhookDeliveryOK / Failed / Dead close out a leased attempt. Failed
+	// schedules the retry (status 'failed' + next_attempt_at); Dead is terminal
+	// (budget spent, or a non-retryable rejection).
+	MarkWebhookDeliveryOK(ctx context.Context, id uuid.UUID, res WebhookDeliveryResult) error
+	MarkWebhookDeliveryFailed(ctx context.Context, id uuid.UUID, nextAttemptAt time.Time, res WebhookDeliveryResult) error
+	MarkWebhookDeliveryDead(ctx context.Context, id uuid.UUID, res WebhookDeliveryResult) error
+	// ReapStuckWebhookDeliveries pushes 'delivering' rows whose lease clock
+	// (last_attempt_at) is older than olderThan back to 'failed' so they retry —
+	// the recovery path for a worker that died mid-flight. Returns the count.
+	ReapStuckWebhookDeliveries(ctx context.Context, olderThan time.Duration) (int, error)
+	// ListWebhookDeliveries backs the UI history + dead-letter lists: newest
+	// first, optionally narrowed to one webhook and/or one status ("dead" for
+	// the dead-letter list; "" for all).
+	ListWebhookDeliveries(ctx context.Context, canvasID uuid.UUID, webhookID *uuid.UUID, status string, limit int) ([]*WebhookDelivery, error)
 
 	// Pending edits
 	CreatePendingEdit(ctx context.Context, canvasID uuid.UUID, entityID uuid.UUID, instruction string) (*PendingEdit, error)

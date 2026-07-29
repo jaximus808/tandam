@@ -21,6 +21,7 @@ import (
 	"github.com/agentcanvas/api/internal/config"
 	"github.com/agentcanvas/api/internal/maps"
 	"github.com/agentcanvas/api/internal/store"
+	"github.com/agentcanvas/api/internal/webhooks"
 	"github.com/agentcanvas/api/internal/ws"
 )
 
@@ -55,6 +56,19 @@ func main() {
 
 	hub := ws.NewHub()
 	go hub.Run()
+
+	// Outbound-webhook delivery worker (TDM-36 / migration 0038). Same shape as
+	// the hub above: a goroutine started at boot, stopped by cancelling its
+	// context during graceful shutdown. It owns all outbound HTTP for webhooks —
+	// request handlers only ever enqueue (webhooks.Emitter), so a slow or dead
+	// receiver can never slow a canvas mutation.
+	webhookCtx, stopWebhooks := context.WithCancel(context.Background())
+	defer stopWebhooks()
+	if cfg.WebhooksEnabled {
+		go webhooks.NewWorker(db).Run(webhookCtx)
+	} else {
+		log.Printf("WEBHOOKS_ENABLED=false — outbound webhook delivery worker disabled")
+	}
 
 	var mapsReg *maps.Registry
 	if dir := os.Getenv("MAPS_DIR"); dir != "" {
@@ -106,6 +120,7 @@ func main() {
 	defer cancel()
 
 	hub.Shutdown()
+	stopWebhooks()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Printf("graceful shutdown: %v (forcing close)", err)
 		_ = srv.Close()

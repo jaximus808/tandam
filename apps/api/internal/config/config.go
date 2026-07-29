@@ -43,6 +43,12 @@ type Config struct {
 	// 0 disables expiry (claims are held until released/completed).
 	ClaimTTL time.Duration
 
+	// WebhooksEnabled starts the outbound-webhook delivery worker (migration
+	// 0038 / internal/webhooks). Defaults to enabled — set
+	// WEBHOOKS_ENABLED=false to keep the loop off, e.g. before 0038 has been
+	// applied, or on a second process that shouldn't also drain the queue.
+	WebhooksEnabled bool
+
 	// MetricsEnabled registers GET /api/metrics (in-memory per-route latency
 	// aggregates; no canvas data). Defaults to enabled — set
 	// METRICS_ENABLED=false to hide the endpoint. Latencies are recorded either
@@ -106,17 +112,18 @@ func Load() (*Config, error) {
 	}
 
 	return &Config{
-		SupabaseURL:    supabaseURL,
-		SupabaseKey:    supabaseKey,
-		JWTSecret:      jwtSecret,
-		JWTTokenTTL:    jwtTTL,
-		ClaimTTL:       claimTTL,
-		Port:           port,
-		WebDistPath:    webDist,
-		ImageDir:       imageDir,
-		GoogleClientID: os.Getenv("GOOGLE_CLIENT_ID"),
-		CookieSecure:   os.Getenv("COOKIE_SECURE") == "true",
-		PublicBaseURL:  strings.TrimRight(os.Getenv("PUBLIC_BASE_URL"), "/"),
-		MetricsEnabled: os.Getenv("METRICS_ENABLED") != "false",
+		SupabaseURL:     supabaseURL,
+		SupabaseKey:     supabaseKey,
+		JWTSecret:       jwtSecret,
+		JWTTokenTTL:     jwtTTL,
+		ClaimTTL:        claimTTL,
+		Port:            port,
+		WebDistPath:     webDist,
+		ImageDir:        imageDir,
+		GoogleClientID:  os.Getenv("GOOGLE_CLIENT_ID"),
+		CookieSecure:    os.Getenv("COOKIE_SECURE") == "true",
+		PublicBaseURL:   strings.TrimRight(os.Getenv("PUBLIC_BASE_URL"), "/"),
+		MetricsEnabled:  os.Getenv("METRICS_ENABLED") != "false",
+		WebhooksEnabled: os.Getenv("WEBHOOKS_ENABLED") != "false",
 	}, nil
 }
