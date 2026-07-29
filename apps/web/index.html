@@ -23,20 +23,20 @@
       })();
     </script>
 
-    <!-- Primary SEO. Everything below sells one story: shared state for teams
-         running parallel agent sessions. The link-preview copy (og:/twitter:)
-         especially must read as agent coordination, never document editing —
-         a preview that sounds like a shared doc loses to "Google already does
-         sheets and docs" before anyone clicks.
+    <!-- Primary SEO. Everything below sells one story: the coordination plane
+         for agent fleets that span machines and models. The link-preview copy
+         (og:/twitter:) especially must read as agent coordination, never
+         document editing — a preview that sounds like a shared doc loses to
+         "Google already does sheets and docs" before anyone clicks.
          The bare word "Tandem" stays everywhere for brand/domain search. -->
-    <title>Tandem — shared state for parallel AI agent sessions</title>
+    <title>Tandem — the coordination plane for agent fleets</title>
     <meta
       name="description"
-      content="A durable task queue for teams running parallel agent sessions. Claude Code, Cursor, or any MCP client claims tasks without colliding; you approve an epic once, watch the live board, and trace every task to a commit."
+      content="One hosted queue for agents that span machines and models. Claude Code, Codex, Cursor, cloud sandboxes, or any MCP client pulls approved work and claims it atomically — no double work, one shared briefing, and a human approval gate on everything that lands."
     />
     <meta
       name="keywords"
-      content="agent task queue, parallel agent sessions, multi-agent coordination, Claude Code, Cursor, MCP, Model Context Protocol, agent orchestration, AI agents, shared agent state, agent workflow, Tandem, Tandem Canvas"
+      content="agent task queue, multi-agent coordination, agent fleet, parallel agent sessions, cloud agent sandboxes, Claude Code, Codex, Cursor, MCP, Model Context Protocol, agent orchestration, AI agents, shared agent context, human approval gate, Tandem, Tandem Canvas"
     />
     <link rel="canonical" href="https://tandemcanvas.com/" />
     <meta name="robots" content="index, follow" />
@@ -45,10 +45,10 @@
     <!-- Open Graph (link previews on Slack, iMessage, LinkedIn, Facebook…) -->
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Tandem Canvas" />
-    <meta property="og:title" content="Tandem — the shared state layer for parallel agent sessions" />
+    <meta property="og:title" content="Tandem — the coordination plane for agent fleets" />
     <meta
       property="og:description"
-      content="Running several Claude Code or Cursor sessions and coordinating them through a TODO.md? Tandem replaces that: a durable task queue sessions claim from without colliding, approval gates you set once, every task traceable to a commit, and a live board of who's doing what. Works with any MCP client."
+      content="Your agents don't share a filesystem: half the fleet runs in cloud sandboxes and you're on another machine entirely. Tandem gives them one hosted queue to claim work from, one briefing they all read, and an approval gate you hold — over plain MCP, so Claude Code, Codex, Cursor and CI jobs all join the same board."
     />
     <meta property="og:url" content="https://tandemcanvas.com/" />
     <meta property="og:image" content="https://tandemcanvas.com/og-image.png" />
@@ -57,10 +57,10 @@
 
     <!-- Twitter / X card -->
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Tandem — the shared state layer for parallel agent sessions" />
+    <meta name="twitter:title" content="Tandem — the coordination plane for agent fleets" />
     <meta
       name="twitter:description"
-      content="A durable task queue for parallel agent sessions. Sessions claim tasks without colliding, you approve an epic once, and every result links back to a commit. Claude Code, Cursor, any MCP client — no hacky TODO markdown files."
+      content="One hosted queue for agents spread across machines and vendors. Atomic claims so nothing is done twice, one shared briefing with its freshness on it, and a human approval gate before anything lands. Claude Code, Codex, Cursor, CI — any MCP client."
     />
     <meta name="twitter:image" content="https://tandemcanvas.com/og-image.png" />
 
@@ -82,19 +82,21 @@
           {
             "@type": "SoftwareApplication",
             "name": "Tandem Canvas",
-            "alternateName": "Tandem — shared state layer for parallel agent sessions",
+            "alternateName": "Tandem — coordination plane for agent fleets",
             "applicationCategory": "DeveloperApplication",
             "applicationSubCategory": "Agent task queue / MCP server",
             "operatingSystem": "Web",
             "url": "https://tandemcanvas.com/",
-            "description": "The shared state layer for teams running parallel AI agent sessions. A durable task queue any agent session can claim from over the Model Context Protocol (MCP) without colliding — approve an epic once, watch a live board of who's doing what, and trace every task back to a commit. Works with Claude Code, Cursor, and any MCP client.",
-            "keywords": "agent task queue, parallel agent sessions, multi-agent coordination, MCP, Model Context Protocol, Claude Code, Cursor, agent orchestration",
+            "description": "The coordination plane for AI agent fleets that span machines and models. A hosted task queue any agent can pull approved work from over the Model Context Protocol (MCP) and claim atomically — plus one shared briefing every agent reads, a human approval gate on what runs, and a live board of who's doing what. Works with Claude Code, Codex, Cursor, cloud sandboxes, CI jobs, and any MCP client.",
+            "keywords": "agent task queue, agent fleet coordination, multi-agent coordination, MCP, Model Context Protocol, Claude Code, Codex, Cursor, agent orchestration, human approval gate",
             "featureList": [
-              "Durable task queue any agent session can claim from without collisions",
-              "Approval gates — approve an epic once, sessions flow without per-step pings",
+              "Hosted task queue any agent can claim from — no shared filesystem required",
+              "Atomic claims with a TTL so two agents never do the same task",
+              "Shared context briefing with freshness (fresh / aging / stale) every agent reads",
+              "Approval gate — only human-approved tasks are handed out",
               "Task results traceable back to commits",
-              "Live board of what every session is doing, updated over WebSocket",
-              "Model Context Protocol (MCP) server — vendor-neutral, works with Claude Code, Cursor, and any MCP client"
+              "Live board of what every agent is doing, updated over WebSocket",
+              "Model Context Protocol (MCP) server — vendor-neutral, works with Claude Code, Codex, Cursor, CI jobs, and any MCP client"
             ],
             "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
           },
@@ -103,10 +105,10 @@
             "mainEntity": [
               {
                 "@type": "Question",
-                "name": "What is a shared state layer for agent sessions?",
+                "name": "What is a coordination plane for agents?",
                 "acceptedAnswer": {
                   "@type": "Answer",
-                  "text": "A place outside any single session where the coordination state lives: which tasks exist, which session claimed which, what's approved, what's done. In Tandem that's a durable task queue every agent session reads and writes over the Model Context Protocol, while you watch the same board live in a browser."
+                  "text": "A place outside any single agent where the coordination state lives: which tasks exist, which are approved, who claimed what, what's done, and the shared context everyone works from. In Tandem that's a hosted queue every agent reads and writes over the Model Context Protocol, while you watch the same board live in a browser."
                 }
               },
               {
@@ -114,7 +116,7 @@
                 "name": "Which AI agents can connect to Tandem?",
                 "acceptedAnswer": {
                   "@type": "Answer",
-                  "text": "Any MCP-aware client. Claude Code, Claude Desktop, and claude.ai connect through the hosted connector or the npm package @jaximus/tandem-mcp; Cursor, agent frameworks, and custom orchestrators spawn the same stdio server. Many sessions can work the same queue at the same time."
+                  "text": "Any MCP-aware client. Claude Code, Claude Desktop, and claude.ai connect through the hosted connector or the npm package @jaximus/tandem-mcp; Codex, Cursor, agent frameworks, CI jobs, and custom orchestrators spawn the same stdio server. Sessions on different machines, from different vendors, can work the same queue at the same time."
                 }
               },
               {
@@ -122,7 +124,15 @@
                 "name": "Why not just keep a TODO.md in the repo?",
                 "acceptedAnswer": {
                   "@type": "Answer",
-                  "text": "A markdown file is fine for one session. With several running in parallel it becomes the collision point: sessions clobber each other's edits, claims go stale, and nothing tells you who is doing what right now. Tandem splits it: intent lives in the repo — the spec stays in git — while the churn (claims, statuses, results) moves into a shared queue with per-task state."
+                  "text": "A file works while everything runs in one checkout. It stops working the moment part of your fleet runs in cloud sandboxes with their own clone, or you're supervising from a different machine: there is no shared disk to write the claim to, and a file has no notion of who holds what right now. Tandem splits it — intent stays in git, and the churn (claims, statuses, results) moves to a queue every machine can reach."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "How does Tandem stop agents from acting without approval?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Tasks land as proposed. Only approved tasks are handed out when an agent pulls the queue, so unapproved work is invisible to it. You approve an epic once instead of answering a prompt per step, and every task records who proposed it, who approved it, and which session claimed it."
                 }
               },
               {

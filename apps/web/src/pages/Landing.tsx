@@ -10,6 +10,8 @@ import SignInModal from "../components/SignInModal";
 import HeroBoardDemo from "../components/landing/HeroBoardDemo";
 import VillainSection from "../components/landing/VillainSection";
 import HowItWorksSection from "../components/landing/HowItWorksSection";
+import AudienceSection from "../components/landing/AudienceSection";
+import SolvesSection from "../components/landing/SolvesSection";
 import DogfoodProofSection from "../components/landing/DogfoodProofSection";
 import ReceiptsSection from "../components/landing/ReceiptsSection";
 import QuickstartSection from "../components/landing/QuickstartSection";
@@ -23,11 +25,14 @@ interface Props {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
-   The page is one story, top to bottom:
+   The page is one story, top to bottom — why / how / who / what it solves:
 
-     hero proof (HeroBoardDemo: two sessions drain one queue, a claim bounces)
-     → the pain (VillainSection: agents fighting over TODO.md)
-     → the mechanism (HowItWorksSection: the five-step loop, real tool names)
+     hero (the claim + HeroBoardDemo: two sessions drain one queue, a claim
+       bounces — the product's whole argument, running)
+     → WHY (VillainSection: a fleet spanning machines has no shared filesystem)
+     → HOW (HowItWorksSection: the loop, step by step, in real tool names)
+     → WHO (AudienceSection: the fleet shapes this is built for)
+     → WHAT IT SOLVES (SolvesSection: four failure modes → four mechanisms)
      → live proof (DogfoodProofSection: Tandem is built on its own queue)
      → receipts (ReceiptsSection: every task traced to a commit)
      → try it (QuickstartSection: copy-paste setup)
@@ -40,12 +45,10 @@ interface Props {
    Inter everywhere, one indigo accent, hairline borders, no decoration.
    ───────────────────────────────────────────────────────────────────────────── */
 
-// The cycling headline word. Rotating Claude → ChatGPT → Cursor → Codex SHOWS
-// agent-agnosticism instead of telling it. Any one entry is a single-line edit
-// if a client stops working. Rendered as plain accent-colored text — no box.
-const HERO_AGENTS: string[] = ["Claude", "ChatGPT", "Cursor", "Codex"];
-
-const HERO_WORD_MS = 4200;
+// Clients that speak MCP, named under the hero CTAs. Static, not cycling: "any
+// model, any machine" is a claim better made by showing the names at once than
+// by animating one. Any entry is a single-line edit if a client stops working.
+const HERO_CLIENTS: string[] = ["Claude Code", "claude.ai", "Codex", "Cursor"];
 
 // Only show the public "N canvases created" counter once it's real social
 // proof — a tiny number reads as anti-proof. Bump down as adoption grows.
@@ -65,21 +68,6 @@ function relativeTime(ts: number): string {
   const day = Math.floor(hr / 24);
   if (day < 7) return `${day}d ago`;
   return new Date(ts).toLocaleDateString();
-}
-
-function usePrefersReducedMotion(): boolean {
-  const [reduced, setReduced] = useState(
-    () =>
-      typeof window !== "undefined" &&
-      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches,
-  );
-  useEffect(() => {
-    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const onChange = () => setReduced(mq.matches);
-    mq.addEventListener?.("change", onChange);
-    return () => mq.removeEventListener?.("change", onChange);
-  }, []);
-  return reduced;
 }
 
 /* ── small inline icon set (no lucide dependency, so nothing to version-match) ── */
@@ -160,12 +148,12 @@ function Eyebrow({ children, className = "" }: { children: React.ReactNode; clas
 // and the ones in the <head> are the same sentences.
 const FAQS: { q: string; a: React.ReactNode }[] = [
   {
-    q: "What is a shared state layer for agent sessions?",
+    q: "What is a coordination plane for agents?",
     a: (
       <>
-        A place outside any single session where the coordination state lives: which tasks exist,
-        which session claimed which, what's approved, what's done. In Tandem that's a durable task
-        queue every agent session reads and writes over the{" "}
+        A place outside any single agent where the coordination state lives: which tasks exist,
+        which are approved, who claimed what, what's done, and the shared context everyone works
+        from. In Tandem that's a hosted queue every agent reads and writes over the{" "}
         <a
           href="https://modelcontextprotocol.io"
           target="_blank"
@@ -184,8 +172,9 @@ const FAQS: { q: string; a: React.ReactNode }[] = [
       <>
         Any MCP-aware client. Claude Code, Claude Desktop, and claude.ai connect through the hosted
         connector or the npm package <span className="font-code text-[13px]">@jaximus/tandem-mcp</span>;
-        Cursor, agent frameworks, and custom orchestrators spawn the same stdio server. Many
-        sessions can work the same queue at the same time.
+        Codex, Cursor, agent frameworks, CI jobs, and custom orchestrators spawn the same stdio
+        server. Sessions on different machines, from different vendors, can work the same queue at
+        the same time.
       </>
     ),
   },
@@ -193,11 +182,22 @@ const FAQS: { q: string; a: React.ReactNode }[] = [
     q: "Why not just keep a TODO.md in the repo?",
     a: (
       <>
-        A markdown file is fine for one session. With several running in parallel it becomes the
-        collision point: sessions clobber each other's edits, claims go stale, and nothing tells
-        you who is doing what right now. Tandem splits it: intent lives in the repo — the spec
-        stays in git — while the churn (claims, statuses, results) moves into a shared queue with
-        per-task state.
+        A file works while everything runs in one checkout. It stops working the moment part of
+        your fleet runs in cloud sandboxes with their own clone, or you're supervising from a
+        different machine: there is no shared disk to write the claim to, and a file has no notion
+        of who holds what right now. Tandem splits it — intent stays in git, and the churn
+        (claims, statuses, results) moves to a queue every machine can reach.
+      </>
+    ),
+  },
+  {
+    q: "How does Tandem stop agents from acting without approval?",
+    a: (
+      <>
+        Tasks land as proposed. Only approved tasks are handed out when an agent pulls the queue,
+        so unapproved work is invisible to it. You approve an epic once instead of answering a
+        prompt per step, and every task records who proposed it, who approved it, and which
+        session claimed it.
       </>
     ),
   },
@@ -234,8 +234,6 @@ const ACCOUNT_PERKS: { icon: string; title: string; desc: string }[] = [
 /* ── the page ────────────────────────────────────────────────────────────────── */
 
 export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSettings, onAbout }: Props) {
-  const reduced = usePrefersReducedMotion();
-  const [wordIdx, setWordIdx] = useState(0);
   const [launcher, setLauncher] = useState<null | "create" | "join">(null);
   const [recents, setRecents] = useState(() => listRecent());
   const [user, setUser] = useState<User | null>(getCachedUser);
@@ -273,13 +271,6 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
     };
   }, []);
 
-  // Auto-advance the cycling headline word (and with it the accent colour).
-  useEffect(() => {
-    if (reduced) return;
-    const t = setTimeout(() => setWordIdx((wordIdx + 1) % HERO_AGENTS.length), HERO_WORD_MS);
-    return () => clearTimeout(t);
-  }, [wordIdx, reduced]);
-
   function handleForgetRecent(c: string) {
     removeRecent(c);
     setRecents(listRecent());
@@ -310,40 +301,24 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
           {/* Left: copy + actions */}
           <div className="min-w-0 max-w-xl lg:pt-4">
             <div>
-              <Eyebrow>One queue · every session · no collisions</Eyebrow>
+              <Eyebrow>The coordination plane for agent fleets</Eyebrow>
             </div>
 
             <div className="mt-5">
-              {/* All four headline variants render stacked in one grid cell, the
-                  inactive ones invisible — so this block is always as tall as
-                  the tallest phrase and the page below never shifts when the
-                  cycling word changes line count. */}
-              <h1 className="grid text-[2.75rem] font-semibold leading-[1.08] tracking-tight text-ink sm:text-[3.5rem] sm:leading-[1.06]">
-                {HERO_AGENTS.map((name, i) => {
-                  const active = i === wordIdx;
-                  return (
-                    <span
-                      key={name}
-                      aria-hidden={!active}
-                      className={`col-start-1 row-start-1 block ${active ? "" : "invisible"}`}
-                    >
-                      <span
-                        key={active ? `${name}-on` : name}
-                        className={`inline-block text-accent ${active ? "tandem-word-in" : ""}`}
-                      >
-                        {name}
-                      </span>{" "}
-                      in parallel. Nothing collides.
-                    </span>
-                  );
-                })}
+              <h1 className="text-[2.75rem] font-semibold leading-[1.08] tracking-tight text-ink sm:text-[3.5rem] sm:leading-[1.06]">
+                One queue.
+                <br />
+                Every agent.
+                <br />
+                <span className="text-accent">Any machine.</span>
               </h1>
             </div>
 
             <p className="mt-6 text-base leading-relaxed text-ink/65">
-              A shared task queue for parallel agent sessions. Every session claims its own work,
-              you approve once per epic, and a live board shows who's doing what. The spec stays
-              in git — the churn moves here.
+              Your fleet spans machines and models — laptop terminals, cloud sandboxes, CI jobs
+              that share no filesystem with each other or with you. Tandem gives them one hosted
+              queue to claim work from, one briefing they all read, and one approval gate you
+              hold.
             </p>
 
             {/* Primary actions — the create / join forms live in the launcher modal.
@@ -384,6 +359,11 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
                 </>
               )}
             </div>
+
+            <p className="mt-6 text-[13px] leading-relaxed text-ink/50">
+              Any MCP client: {HERO_CLIENTS.join(", ")}, or your own CI script. No SDK, no adapter
+              per vendor.
+            </p>
 
             <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-ink/50">
               {/* anchor, not a button — the hero link to /mcp is the strongest
@@ -468,13 +448,20 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
         </section>
       )}
 
-      {/* The pain: two sessions colliding on TODO.md (full-bleed surface band) */}
+      {/* WHY: a fleet spanning machines has no shared filesystem (surface band) */}
       <VillainSection />
 
-      {/* The mechanism: the five-step loop, real MCP tool names (plain paper) */}
+      {/* HOW: the loop, call by call, in real MCP tool names (plain paper) */}
       <div id="how-it-works">
         <HowItWorksSection />
       </div>
+
+      {/* WHO: the fleet manifest — four places work happens, none of them
+          aware of the others (surface band) */}
+      <AudienceSection />
+
+      {/* WHAT IT SOLVES: four failure modes → four mechanisms (plain paper) */}
+      <SolvesSection />
 
       {/* Live proof: Tandem is planned and built on its own public queue (band) */}
       <DogfoodProofSection />
@@ -496,9 +483,9 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
             The board is a full workspace.
           </h2>
           <p className="mt-3 leading-relaxed text-ink/65">
-            Everything your sessions write lands as structured state you can actually read — the
-            epic as a roadmap, results as a sheet, findings as a doc. Same data the agents see,
-            rendered for humans.
+            Everything your agents write lands as structured state you can actually read — the
+            epic as a roadmap, results as a sheet, findings as a doc. Same data they see, rendered
+            for the human who has to review it.
           </p>
           <div className="mt-5 flex flex-wrap gap-1.5">
             {MODE_NAMES.map((m) => (
@@ -572,11 +559,11 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
         <div className="mx-auto max-w-3xl px-6 py-24">
           <Eyebrow>Questions</Eyebrow>
           <h2 className="mt-3 text-2xl font-semibold tracking-tight text-ink sm:text-[2rem]">
-            Shared state for humans and agent sessions
+            Coordination for agents that don't share a machine
           </h2>
           <p className="mt-3 leading-relaxed text-ink/65">
-            Tandem is a durable task queue your agent sessions work over MCP while you watch and
-            steer from the browser. The short version, in plain terms:
+            Tandem is a hosted queue your agents work over MCP while you watch and steer from the
+            browser. The short version, in plain terms:
           </p>
 
           <dl className="mt-12 space-y-9">
@@ -595,13 +582,13 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
         <div className="relative mx-auto max-w-3xl px-6 py-28 text-center">
           <TandemLogo size={44} />
           <h2 className="mt-8 text-2xl font-semibold leading-tight tracking-tight text-ink sm:text-[2rem]">
-            Every session on the same queue,{" "}
-            <em className="not-italic text-accent">every task traced to a commit.</em>
+            Every agent on the same queue,{" "}
+            <em className="not-italic text-accent">every write behind your approval.</em>
           </h2>
           <p className="mx-auto mt-6 max-w-xl leading-relaxed text-ink/65">
-            Stop coordinating parallel sessions through a markdown file they all fight over. Keep
-            the spec in git, put the queue where every session and every teammate can see it, and
-            watch the work move.
+            Your fleet already spans machines and models. Give it one place to find the work, claim
+            it without collisions, and hand it back with receipts — while you stay the one who says
+            go.
           </p>
           <div className="mt-9 flex flex-wrap items-center justify-center gap-3">
             <button
