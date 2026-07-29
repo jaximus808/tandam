@@ -101,6 +101,8 @@ export interface Note {
   // the server appends new notes at max+1 so writing never reorders the page.
   sortOrder: number;
   createdBy: "agent" | "user";
+  // Server-derived provenance (migration 0039) — see Action.authoredBy.
+  authoredBy?: string;
   updatedAt: number;
 }
 
@@ -213,7 +215,7 @@ export interface Action {
   type: ActionType;
   state: ActionState;
   payload: NavigatePayload | TaskPayload | EpicPayload;
-  proposedBy: string;        // agent id (provenance)
+  proposedBy: string;        // freeform label the CALLER sent — see authoredBy
   approvedBy?: string;       // human/agent id that approved
   claimedBy?: string;        // agent holding the executing claim (task_start)
   claimedAt?: string;        // when the claim was taken
@@ -222,6 +224,11 @@ export interface Action {
   linkedPinIds: EntityId[];  // pins this action references
   ticket?: number;           // per-canvas sequential task number (type "task" only)
   ticketId?: string;         // display form, "TDM-<n>" — built server-side from `ticket`
+  // Server-derived provenance (migration 0039): "human" | "agent:<identity>" |
+  // "anonymous". Stamped from the request's auth context on create and never
+  // read off the body, so unlike proposedBy it can't be spoofed. Absent = the
+  // row predates provenance; render nothing for it.
+  authoredBy?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -300,6 +307,9 @@ export interface Document {
   sortOrder: number;
   config: Record<string, unknown>;
   createdBy: "agent" | "user";
+  // Server-derived provenance (migration 0039) — see Action.authoredBy. Absent
+  // on the document a sheet mints for itself (store-side; no request context).
+  authoredBy?: string;
   updatedAt: number;
 }
 

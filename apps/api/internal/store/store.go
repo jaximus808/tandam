@@ -197,7 +197,12 @@ type Note struct {
 	ParentKind *string    `json:"parentKind,omitempty"`
 	SortOrder  int        `json:"sortOrder"`
 	CreatedBy  string     `json:"createdBy"`
-	UpdatedAt  time.Time  `json:"updatedAt"`
+	// AuthoredBy is server-derived provenance (migration 0039): "human" |
+	// "agent:<identity>" | "anonymous", stamped on INSERT from the request's
+	// auth context and NEVER read off the request body. nil = the row predates
+	// provenance. Unlike CreatedBy, a client cannot set or change it.
+	AuthoredBy *string   `json:"authoredBy,omitempty"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
 type RoadmapItem struct {
@@ -368,9 +373,15 @@ type Action struct {
 	// Ticket is the per-canvas sequential task number (type "task" only; nil
 	// for other action types). Only the integer is stored — the "TDM-<n>"
 	// display form is added at serialization time (see MarshalJSON).
-	Ticket    *int      `json:"ticket,omitempty"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	Ticket *int `json:"ticket,omitempty"`
+	// AuthoredBy is server-derived provenance (migration 0039): "human" |
+	// "agent:<identity>" | "anonymous", stamped on INSERT from the request's
+	// auth context and NEVER read off the request body. nil = the row predates
+	// provenance. Unlike ProposedBy — a freeform label the caller sends — this
+	// one cannot be spoofed into claiming a human wrote the task.
+	AuthoredBy *string   `json:"authoredBy,omitempty"`
+	CreatedAt  time.Time `json:"createdAt"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
 // TicketID renders a stored ticket integer as the display form humans and
@@ -629,7 +640,13 @@ type Document struct {
 	SortOrder int            `json:"sortOrder"`
 	Config    map[string]any `json:"config"`
 	CreatedBy string         `json:"createdBy"`
-	UpdatedAt time.Time      `json:"updatedAt"`
+	// AuthoredBy is server-derived provenance (migration 0039): "human" |
+	// "agent:<identity>" | "anonymous", stamped on INSERT from the request's
+	// auth context and NEVER read off the request body. nil = the row predates
+	// provenance (or, today, was minted as the backing document of a sheet —
+	// see CreateSheet).
+	AuthoredBy *string   `json:"authoredBy,omitempty"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
 // CanvasState is the full snapshot sent to clients.

@@ -142,6 +142,7 @@ type dbNote struct {
 	ParentKind *string  `json:"parent_kind"`
 	SortOrder  int      `json:"sort_order"`
 	CreatedBy  string   `json:"created_by"`
+	AuthoredBy *string  `json:"authored_by"`
 	UpdatedAt  string   `json:"updated_at"`
 }
 
@@ -218,6 +219,7 @@ type dbAction struct {
 	Error        *string         `json:"error"`
 	LinkedPinIDs json.RawMessage `json:"linked_pin_ids"`
 	Ticket       *int            `json:"ticket"`
+	AuthoredBy   *string         `json:"authored_by"`
 	CreatedAt    string          `json:"created_at"`
 	UpdatedAt    string          `json:"updated_at"`
 }
@@ -267,9 +269,10 @@ type dbDocument struct {
 	Name      string          `json:"name"`
 	ParentID  *string         `json:"parent_id"`
 	SortOrder int             `json:"sort_order"`
-	Config    json.RawMessage `json:"config"`
-	CreatedBy string          `json:"created_by"`
-	UpdatedAt string          `json:"updated_at"`
+	Config     json.RawMessage `json:"config"`
+	CreatedBy  string          `json:"created_by"`
+	AuthoredBy *string         `json:"authored_by"`
+	UpdatedAt  string          `json:"updated_at"`
 }
 
 // Used for GetCanvasState — one request with embedded child tables.
@@ -327,8 +330,9 @@ func toDocument(d dbDocument) *Document {
 	doc := &Document{ID: id, Kind: "document",
 		Type: d.Type, Name: d.Name, SortOrder: d.SortOrder,
 		ParentID:  parseUUIDPtr(d.ParentID),
-		CreatedBy: d.CreatedBy, UpdatedAt: parseTime(d.UpdatedAt),
-		Config: map[string]any{},
+		CreatedBy: d.CreatedBy, AuthoredBy: d.AuthoredBy,
+		UpdatedAt: parseTime(d.UpdatedAt),
+		Config:    map[string]any{},
 	}
 	if len(d.Config) > 0 {
 		_ = json.Unmarshal(d.Config, &doc.Config)
@@ -429,7 +433,8 @@ func toNote(d dbNote) *Note {
 		Body:      d.Body,
 		ImageRefs: d.ImageRefs, ParentKind: d.ParentKind,
 		SortOrder: d.SortOrder,
-		CreatedBy: d.CreatedBy, UpdatedAt: parseTime(d.UpdatedAt)}
+		CreatedBy: d.CreatedBy, AuthoredBy: d.AuthoredBy,
+		UpdatedAt: parseTime(d.UpdatedAt)}
 	if n.ImageRefs == nil {
 		n.ImageRefs = []string{}
 	}
@@ -516,6 +521,7 @@ func toAction(d dbAction) *Action {
 		Result: d.Result, Error: d.Error,
 		LinkedPinIDs: []uuid.UUID{},
 		Ticket:       d.Ticket,
+		AuthoredBy:   d.AuthoredBy,
 		CreatedAt:    parseTime(d.CreatedAt), UpdatedAt: parseTime(d.UpdatedAt),
 	}
 	if d.ClaimedAt != nil && *d.ClaimedAt != "" {
@@ -1842,6 +1848,30 @@ func (s *supabaseStore) LeaveWelcomeIfNeeded(ctx context.Context, canvasID uuid.
 
 // ── Documents (migration 0024) ────────────────────────────────────────────────
 
+// backfillNullKey levels a bulk-INSERT payload: if ANY row carries key, every
+// row gets it (nil where it was absent). PostgREST rejects a bulk insert whose
+// JSON objects don't all share the same key set (PGRST102), which is otherwise
+// exactly what a conditionally-added column like authored_by produces on a
+// mixed batch. No-op when no row has the key — which is what keeps an API
+// deployed ahead of its migration from naming a column that doesn't exist yet.
+func backfillNullKey(rows []map[string]any, key string) {
+	present := false
+	for _, r := range rows {
+		if _, ok := r[key]; ok {
+			present = true
+			break
+		}
+	}
+	if !present {
+		return
+	}
+	for _, r := range rows {
+		if _, ok := r[key]; !ok {
+			r[key] = nil
+		}
+	}
+}
+
 // documentRow shapes a Document into its DB row. Shared by the single- and
 // bulk-insert paths (and by CreateCharts, which mints each chart's backing
 // 'chart' document in one bulk documents INSERT rather than one CreateDocument
@@ -1855,7 +1885,7 @@ func documentRow(canvasID uuid.UUID, d *Document, now time.Time) (map[string]any
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{
+	row := map[string]any{
 		"id":         d.ID.String(),
 		"canvas_id":  canvasID.String(),
 		"type":       d.Type,
@@ -1865,7 +1895,15 @@ func documentRow(canvasID uuid.UUID, d *Document, now time.Time) (map[string]any
 		"config":     json.RawMessage(cfgJSON),
 		"created_by": d.CreatedBy,
 		"updated_at": now.Format(time.RFC3339),
-	}, nil
+	}
+	// authored_by (migration 0039) follows the `ticket` precedent: the key is
+	// added only when provenance was actually derived, so an API deployed ahead
+	// of the migration still inserts cleanly instead of 400ing on an unknown
+	// column. Bulk callers backfill the key to keep key sets identical (PGRST102).
+	if d.AuthoredBy != nil {
+		row["authored_by"] = *d.AuthoredBy
+	}
+	return row, nil
 }
 
 func (s *supabaseStore) CreateDocument(ctx context.Context, canvasID uuid.UUID, d *Document) (int, error) {
@@ -1898,6 +1936,9 @@ func (s *supabaseStore) CreateDocuments(ctx context.Context, canvasID uuid.UUID,
 		}
 		rows = append(rows, row)
 	}
+	// PGRST102: documentRow omits authored_by when provenance wasn't derived
+	// (migration 0039) — level the key set before a bulk insert.
+	backfillNullKey(rows, "authored_by")
 	if err := s.exec(s.client.From("documents").Insert(rows, false, "", "minimal", "")); err != nil {
 		return 0, err
 	}
@@ -2284,7 +2325,7 @@ func noteRow(canvasID uuid.UUID, n *Note, now time.Time) map[string]any {
 	if n.ParentID != nil {
 		parentID = n.ParentID.String()
 	}
-	return map[string]any{
+	row := map[string]any{
 		"id": n.ID.String(), "canvas_id": canvasID.String(),
 		"document_id": uuidPtrStr(n.DocumentID),
 		"body":        n.Body, "image_refs": refs,
@@ -2293,6 +2334,13 @@ func noteRow(canvasID uuid.UUID, n *Note, now time.Time) map[string]any {
 		"sort_order": n.SortOrder,
 		"updated_at": now.Format(time.RFC3339),
 	}
+	// authored_by (migration 0039) — conditional for the same reason as
+	// documentRow/actionRow: survive an API deploy that lands before the
+	// migration does. CreateNotes backfills the key across a mixed batch.
+	if n.AuthoredBy != nil {
+		row["authored_by"] = *n.AuthoredBy
+	}
+	return row
 }
 
 func (s *supabaseStore) CreateNote(ctx context.Context, canvasID uuid.UUID, n *Note) (int, error) {
@@ -2343,6 +2391,9 @@ func (s *supabaseStore) CreateNotes(ctx context.Context, canvasID uuid.UUID, not
 		nextSort[key] = start + 1
 		rows = append(rows, noteRow(canvasID, n, now))
 	}
+	// PGRST102: every row in a bulk INSERT must share an identical key set, and
+	// noteRow omits authored_by when provenance wasn't derived (migration 0039).
+	backfillNullKey(rows, "authored_by")
 	if err := s.exec(s.client.From("notes").Insert(rows, false, "", "minimal", "")); err != nil {
 		return 0, err
 	}
@@ -2756,6 +2807,11 @@ func actionRow(canvasID uuid.UUID, a *Action, now time.Time) (map[string]any, er
 	if a.Ticket != nil {
 		row["ticket"] = *a.Ticket
 	}
+	// authored_by (migration 0039) — server-derived provenance, same
+	// deploy-ahead-of-migration guard as `ticket` above.
+	if a.AuthoredBy != nil {
+		row["authored_by"] = *a.AuthoredBy
+	}
 	return row, nil
 }
 
@@ -2807,11 +2863,13 @@ func (s *supabaseStore) CreateActions(ctx context.Context, canvasID uuid.UUID, a
 	// PGRST102: every row in a bulk INSERT must share an identical key set, so
 	// when any action carries a ticket (tasks in a mixed batch), the ticket key
 	// is backfilled as NULL on the rows that don't.
-	anyTicket := false
+	anyTicket, anyAuthor := false, false
 	for _, a := range actions {
 		if a.Ticket != nil {
 			anyTicket = true
-			break
+		}
+		if a.AuthoredBy != nil {
+			anyAuthor = true
 		}
 	}
 	rows := make([]map[string]any, 0, len(actions))
@@ -2823,6 +2881,10 @@ func (s *supabaseStore) CreateActions(ctx context.Context, canvasID uuid.UUID, a
 		}
 		if anyTicket && a.Ticket == nil {
 			row["ticket"] = nil
+		}
+		// Same PGRST102 rule for authored_by (migration 0039).
+		if anyAuthor && a.AuthoredBy == nil {
+			row["authored_by"] = nil
 		}
 		rows = append(rows, row)
 	}

@@ -266,6 +266,10 @@ func (h *Handler) ProposeAction(w http.ResponseWriter, r *http.Request) {
 		Type: body.Type, State: body.State,
 		Payload:    body.Payload,
 		ProposedBy: body.ProposedBy,
+		// Provenance (TDM-40): derived from the auth context by the Provenance
+		// middleware, NOT from the body — note there is no authoredBy field on
+		// the struct above, so a client that sends one is silently ignored.
+		AuthoredBy:   AuthorFromCtx(r.Context()),
 		LinkedPinIDs: body.LinkedPinIDs,
 	}
 	if body.State == "approved" {
@@ -326,6 +330,10 @@ func (h *Handler) ProposeActionsBatch(w http.ResponseWriter, r *http.Request) {
 	// One resolver for the whole batch — the canvas policy and each epic's state
 	// load at most once no matter how many tasks reference them.
 	pr := &policyResolver{h: h, ctx: r.Context(), canvasID: canvasID}
+	// Provenance (TDM-40) is a property of the REQUEST, so it's derived once and
+	// stamped on every action in the batch — a caller can't mix authorship by
+	// varying the body, because no body field feeds it.
+	author := AuthorFromCtx(r.Context())
 	actions := make([]*store.Action, 0, len(body.Actions))
 	for i := range body.Actions {
 		item := body.Actions[i]
@@ -364,6 +372,7 @@ func (h *Handler) ProposeActionsBatch(w http.ResponseWriter, r *http.Request) {
 			Type: item.Type, State: item.State,
 			Payload:      item.Payload,
 			ProposedBy:   item.ProposedBy,
+			AuthoredBy:   author,
 			LinkedPinIDs: item.LinkedPinIDs,
 		}
 		if item.State == "approved" {

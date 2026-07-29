@@ -3,12 +3,14 @@ import {
   Bot,
   Check,
   ChevronRight,
+  CircleDashed,
   GitCommitHorizontal,
   Layers,
   Link2,
   Milestone,
   PanelLeft,
   Pencil,
+  PenLine,
   Plus,
   RotateCcw,
   Search,
@@ -33,6 +35,7 @@ import posthog from "../lib/posthog";
 import TaskComposer, { linkTargets } from "./TaskComposer";
 import { epicLifecycle, TERMINAL_STATES } from "../lib/epicLifecycle";
 import { CHIP_BASE, STATE_CHIP } from "../lib/stateChips";
+import { parseAuthoredBy, provenanceTitle } from "../lib/provenance";
 
 /* ─────────────────────────────────────────────────────────────────────────────
    TaskBoard — the Board surface: the one home for tasks on a canvas. Humans
@@ -213,6 +216,58 @@ function ClaimantChip({ name, className = "" }: { name: string; className?: stri
     >
       <Zap size={11} className="shrink-0" />
       <span className="truncate">{name}</span>
+    </span>
+  );
+}
+
+// Provenance (TDM-40): who the SERVER concluded wrote this, next to `proposedBy`
+// — which is only what the caller called itself.
+//
+// This is the quietest mark on a card, on purpose. The six semantic hues belong
+// to STATE; authorship is a record fact, so it sits in dim ink alongside the age
+// readout with no fill and no border. The agent case is the only one that spends
+// width on a label, because it's the only one carrying something the glyph can't
+// say: WHICH agent. human and anonymous are one bit each — glyph plus a title,
+// with the bit preserved for screen readers via aria-label.
+//
+// No provenance at all renders NOTHING. A row that predates migration 0039 is
+// genuinely unknown, and an "unknown" chip on every old task would be noise
+// standing in for information.
+function ProvenanceChip({
+  authoredBy,
+  verbose = false,
+  className = "",
+}: {
+  authoredBy?: string;
+  /** Detail-panel mode: spell the authorship out instead of leaning on a glyph. */
+  verbose?: boolean;
+  className?: string;
+}) {
+  const p = parseAuthoredBy(authoredBy);
+  if (!p) return null;
+
+  // Verbose lives in the detail footer, a strip of plain-text facts ("proposed
+  // by …", "created 2h ago") that already opens with a Bot glyph. A second glyph
+  // there is an accessory, not information — the words do the work instead.
+  if (verbose) {
+    return (
+      <span className={`text-[11px] text-ink/50 ${className}`} title={provenanceTitle(p)}>
+        authored by {p.label}
+      </span>
+    );
+  }
+
+  const Glyph = p.kind === "agent" ? Bot : p.kind === "human" ? PenLine : CircleDashed;
+  return (
+    <span
+      className={`inline-flex min-w-0 items-center gap-1 text-[10px] text-ink/45 ${className}`}
+      title={provenanceTitle(p)}
+      aria-label={`Authored by ${p.label}`}
+    >
+      <Glyph size={10} className="shrink-0" aria-hidden="true" />
+      {/* Only the agent case spends width on a label — it's the only one whose
+          glyph leaves a real question ("which agent?") unanswered. */}
+      {p.kind === "agent" && <span className="max-w-[7rem] truncate">{p.label}</span>}
     </span>
   );
 }
@@ -791,12 +846,15 @@ export default function TaskBoard({
           {p.assignee === "human" && (
             <User size={11} className="shrink-0 text-ink/40" aria-label="Your own todo" />
           )}
-          <span
-            className="ml-auto shrink-0 font-code text-[10px] text-ink/50"
-            title={fullDate(t.createdAt)}
-          >
-            {ageOf(t.createdAt)}
-          </span>
+          {/* Record metadata, right-aligned as one group: who wrote it, when.
+              Both are facts about the row rather than its status, so they read
+              at the same dim weight. */}
+          <div className="ml-auto flex shrink-0 items-center gap-1.5">
+            <ProvenanceChip authoredBy={t.authoredBy} />
+            <span className="font-code text-[10px] text-ink/50" title={fullDate(t.createdAt)}>
+              {ageOf(t.createdAt)}
+            </span>
+          </div>
         </div>
         {renderApproveReject(t)}
       </div>
@@ -1715,6 +1773,10 @@ function TaskDetail({
               )}
             </span>
             {action.approvedBy && <span>→ approved by {action.approvedBy}</span>}
+            {/* The claimed label above is whatever the caller sent; this is what
+                the server derived from how the request authenticated. Sitting
+                them side by side is the point. */}
+            <ProvenanceChip authoredBy={action.authoredBy} verbose />
             <span className="ml-auto" title={fullDate(action.createdAt)}>
               created {ageOf(action.createdAt)} ago
             </span>
