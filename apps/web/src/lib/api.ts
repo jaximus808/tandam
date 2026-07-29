@@ -329,6 +329,23 @@ export async function importBriefing(
   return (await res.json()) as BriefingImportResult;
 }
 
+// Designate (or clear) this canvas's briefing document — the bare act, for a
+// document that already exists and holds the right words. Import is the
+// three-steps-in-one path; this is the one-step path for "actually, THIS doc is
+// the briefing". Pass null to clear: a canvas with no briefing is a normal
+// state, not an error to be avoided.
+//
+// The server broadcasts fresh canvas state, so every open board (and the tab
+// strip's briefing marker) follows without the caller updating anything.
+export async function setBriefing(code: string, docId: string | null): Promise<void> {
+  await authedFetch(
+    code,
+    "/api/canvas/briefing",
+    { method: "PUT", body: { docId } },
+    docId === null ? "Could not clear the briefing" : "Could not set the briefing",
+  );
+}
+
 // ── Sharing (owner-only; Google-Docs access model, migration 0021) ───────────
 
 export type CanvasAccessEntry = {

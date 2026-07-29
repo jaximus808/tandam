@@ -4,6 +4,8 @@
 import type {
   CanvasMeta,
   CanvasState,
+  FreshnessFields,
+  FreshnessPatchFields,
   PendingEdit,
   WSClientMessage,
   Pin,
@@ -15,6 +17,23 @@ import type {
   SheetRow,
 } from "../types";
 import { mockCanvas, mockState, mockNewId } from "./mockFixture";
+
+/* Merge a patch that may carry the freshness pair (migration 0037). Clearing
+   rides explicit flags, because an absent field means "leave it alone" — so a
+   plain spread would leave a cleared verifiedAt in place and strand the flags
+   on the entity. The API applies exactly this rule server-side; the mock has to
+   agree or "Clear verification" would appear broken in mock mode only. */
+function mergeWithFreshness<T extends FreshnessFields>(
+  entity: T,
+  partial: Partial<T> & FreshnessPatchFields,
+): T {
+  const merged = { ...entity, ...partial } as T & FreshnessPatchFields;
+  if (partial.clearVerifiedAt) delete merged.verifiedAt;
+  if (partial.clearStaleAfterSeconds) delete merged.staleAfterSeconds;
+  delete merged.clearVerifiedAt;
+  delete merged.clearStaleAfterSeconds;
+  return merged;
+}
 
 type StateHandler = (canvas: CanvasMeta, canvases: CanvasMeta[], state: CanvasState, pendingEdits: PendingEdit[]) => void;
 
@@ -148,7 +167,10 @@ function applyOp(s: CanvasState, op: WSClientMessage): CanvasState {
     }
     case "note.update":
       if (next.notes[op.id]) {
-        next.notes[op.id] = { ...next.notes[op.id], ...op.partial, updatedAt: Date.now() };
+        next.notes[op.id] = {
+          ...mergeWithFreshness(next.notes[op.id], op.partial),
+          updatedAt: Date.now(),
+        };
       }
       break;
     case "note.delete":
@@ -173,7 +195,10 @@ function applyOp(s: CanvasState, op: WSClientMessage): CanvasState {
     }
     case "roadmap.update":
       if (next.roadmapItems[op.id]) {
-        next.roadmapItems[op.id] = { ...next.roadmapItems[op.id], ...op.partial, updatedAt: Date.now() };
+        next.roadmapItems[op.id] = {
+          ...mergeWithFreshness(next.roadmapItems[op.id], op.partial),
+          updatedAt: Date.now(),
+        };
       }
       break;
     case "roadmap.delete": {

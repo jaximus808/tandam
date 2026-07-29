@@ -1399,6 +1399,7 @@ export default function App() {
           </button>
           <DocumentTabs
             docs={openDocs}
+            briefingDocId={canvas.briefingDocId ?? null}
             activeDocId={effectiveDocId}
             onSelect={selectDoc}
             onClose={closeDoc}
@@ -1498,6 +1499,11 @@ export default function App() {
                   canvasCode={canvas.code}
                   state={scopedState}
                   readOnly={canvas.yourRole === "read"}
+                  // Freshness + briefing designation are properties of the
+                  // document on screen, so the view needs the document itself,
+                  // not just its slice of the canvas.
+                  doc={docForMode}
+                  briefingDocId={canvas.briefingDocId ?? null}
                   // AGENTS.md import creates its own document; open that tab.
                   onOpenDoc={openDoc}
                 />

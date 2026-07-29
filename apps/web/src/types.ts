@@ -5,6 +5,8 @@ export type {
   Pin,
   CanvasEvent,
   Note,
+  FreshnessFields,
+  FreshnessPatchFields,
   RoadmapItem,
   RoadmapStatus,
   TravelMode,
