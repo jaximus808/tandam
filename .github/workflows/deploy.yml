@@ -59,10 +59,27 @@ jobs:
       # 4. Transfer the codebase to the GCE VM (Fixed hidden files issue)
       - name: Copy files to VM via gcloud scp
         run: |
+          # Clear the deploy dir FIRST. scp only ever adds or overwrites — it
+          # never removes — so a file deleted from the repo lives on forever in
+          # /opt/tandem and still gets compiled. That is a real failure mode,
+          # not a theoretical one: a stale apps/web/src/components/ActivityBar.tsx
+          # (deleted in the UI v2 redesign) broke a deploy, because `tsc`
+          # compiles everything under src/, not just what the app imports. The
+          # same trap applies to orphaned .go files and old migrations.
+          #
+          # Everything under /opt/tandem comes from this checkout and all real
+          # state lives in named Docker volumes (canvas-images, caddy_data),
+          # so wiping it is safe. The ONE exception is Caddyfile: it is
+          # bind-mounted into the running caddy container, so deleting it would
+          # leave that container attached to a dead inode and the `caddy reload`
+          # below would re-read the old config. Keep the file and let scp
+          # truncate-and-overwrite it in place, preserving the inode.
           gcloud compute ssh ${{ secrets.GCP_VM_NAME }} \
             --zone=${{ secrets.GCP_ZONE }} \
             --project=${{ secrets.GCP_PROJECT }} \
-            --command="sudo mkdir -p /opt/tandem && sudo chown -R \$(whoami) /opt/tandem"
+            --command="sudo mkdir -p /opt/tandem \
+              && sudo find /opt/tandem -mindepth 1 -maxdepth 1 ! -name Caddyfile -exec rm -rf {} + \
+              && sudo chown -R \$(whoami) /opt/tandem"
 
           # Use dotglob so that '*' captures hidden files like .dockerignore
           shopt -s dotglob 
