@@ -81,6 +81,13 @@ function verbOf(e: FeedEvent): { label: string; tone: Tone } {
       return { label: "requeued", tone: "amber" };
     case "claim_expired":
       return { label: "expired", tone: "amber" };
+    // A collision (TDM-100): the actor is the agent that was REFUSED, not the one
+    // holding the task. Deliberately quiet ink rather than an attention hue — a
+    // yielded claim is the protocol working, and a feed that flashes amber every
+    // time a busy queue does its job is a feed people stop reading. The detail
+    // (who they lost to, whether a write was fenced) is on the task itself.
+    case "contended":
+      return { label: "raced", tone: "quiet" };
     case "proposed":
     default:
       return { label: "proposed", tone: "quiet" };
@@ -91,6 +98,12 @@ function verbOf(e: FeedEvent): { label: string; tone: Tone } {
 function spoken(e: FeedEvent): string {
   const { label } = verbOf(e);
   const what = e.ticketId ?? (e.title ? `"${e.title}"` : `a ${e.actionType}`);
+  // "raced TDM-7" is a column-shaped fragment, not a sentence — the actor here is
+  // the one that was REFUSED, and a reader who can't see the layout needs that
+  // spelled out or they'd hear the loser being credited with the work.
+  if (e.action === "contended") {
+    return `${e.actor ?? "An agent"} went for ${what} and was refused, ${ageOf(e.at)} ago.`;
+  }
   return `${e.actor ?? "Someone"} ${label} ${what}, ${ageOf(e.at)} ago.`;
 }
 

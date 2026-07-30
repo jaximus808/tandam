@@ -310,7 +310,7 @@ func (h *Handler) statusTerminal(w http.ResponseWriter, r *http.Request, canvasI
 		writeJSON(w, http.StatusOK, map[string]any{"action": current})
 		return
 	}
-	if !h.guardClaimedTask(w, current, caller) {
+	if !h.guardClaimedTask(w, r, current, caller) {
 		return
 	}
 	patch := store.ActionStatePatch{}
@@ -351,7 +351,7 @@ func (h *Handler) loadClaimedTask(w http.ResponseWriter, r *http.Request, canvas
 			"no task with that id on this canvas", nil)
 		return nil, false
 	}
-	if !h.guardClaimedTask(w, current, caller) {
+	if !h.guardClaimedTask(w, r, current, caller) {
 		return nil, false
 	}
 	return current, true
@@ -366,7 +366,7 @@ func (h *Handler) loadClaimedTask(w http.ResponseWriter, r *http.Request, canvas
 // the same body. Since this endpoint always resolves an agent name (defaulting to
 // "external"), the fence is always engaged here — a CI job can never finish
 // another named member's work, nor its own after its lease was reclaimed.
-func (h *Handler) guardClaimedTask(w http.ResponseWriter, current *store.Action, caller claimant) bool {
+func (h *Handler) guardClaimedTask(w http.ResponseWriter, r *http.Request, current *store.Action, caller claimant) bool {
 	if current.Type != "task" {
 		writeTaskStatusError(w, http.StatusBadRequest, "not_a_task",
 			"that id names a "+current.Type+", not a task", nil)
@@ -378,7 +378,7 @@ func (h *Handler) guardClaimedTask(w http.ResponseWriter, current *store.Action,
 			map[string]string{"state": current.State})
 		return false
 	}
-	return h.fenceTaskWriteOrFail(w, current, caller)
+	return h.fenceTaskWriteOrFail(w, r, current, caller)
 }
 
 // rivalClaimHolder names the agent holding an exclusive claim that is NOT

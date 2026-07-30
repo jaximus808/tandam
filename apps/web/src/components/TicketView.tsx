@@ -12,19 +12,23 @@ import {
   Milestone,
   RotateCcw,
   SearchX,
+  Shield,
   StickyNote,
   User,
+  Users,
 } from "lucide-react";
 import type {
   Action,
   CanvasState,
   ContentAuditEntry,
+  ContentionEvent,
   TaskPayload,
   TaskProgressEntry,
 } from "../types";
 import { CHIP_BASE, STATE_CHIP } from "../lib/stateChips";
 import { auditActorLabel, auditChangeLabel, lastReapprovalEdit } from "../lib/taskAudit";
 import { deriveLease, leaseAge } from "../lib/lease";
+import { eventLabel, eventSentence, repeatsOf, tallyContention } from "../lib/contention";
 import TaskLinks from "./TaskLinks";
 import TandemLogo from "./TandemLogo";
 import { useFreshnessNow } from "./Freshness";
@@ -33,6 +37,7 @@ import {
   ClaimantChip,
   extractCommits,
   fullDate,
+  ContentionMark,
   LeaseChip,
   LeaseNotice,
   ProvenanceChip,
@@ -219,6 +224,67 @@ function EditHistory({ trail }: { trail: ContentAuditEntry[] }) {
   );
 }
 
+// ── Contention history ───────────────────────────────────────────────────────
+// Every collision this task saw: who went for it and yielded, and who wrote to it
+// after losing the claim. This is the page's answer to a question the board can
+// only hint at with a chip — and it is the page where the answer belongs, because
+// reading a ticket is the retrospective act, not the deciding one.
+//
+// Typeset as a record list rather than a narrative rail (which is what
+// ProgressLog is): these are not steps in the work, they are things that happened
+// AROUND it. Newest first, like the edit history it sits beside — a person opening
+// a raced ticket wants the most recent race.
+//
+// No hue, following ContentionMark: a collision can be recorded on a task in any
+// state, so amber (which already means "needs approval" and "lease lapsed"
+// elsewhere) is not available. The FENCED entries — the near misses, where a
+// worker came back after its lease had gone — get firmer ink and a filled ground;
+// the routine yields read at record weight.
+function ContentionHistory({ trail }: { trail: ContentionEvent[] }) {
+  return (
+    <ol className="flex flex-col gap-2">
+      {[...trail].reverse().map((e, i) => {
+        const fenced = e.kind === "fenced_write";
+        return (
+          <li
+            key={`${e.at}-${i}`}
+            className={`rounded-md border px-2.5 py-2 ${
+              fenced ? "border-ink/15 bg-ink/[0.04]" : "border-ink/10 bg-ink/[0.02]"
+            }`}
+          >
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span
+                className={`inline-flex shrink-0 items-center gap-1 text-[11px] ${
+                  fenced ? "font-semibold text-ink/75" : "font-medium text-ink/55"
+                }`}
+              >
+                {fenced ? (
+                  <Shield size={11} className="shrink-0" aria-hidden="true" />
+                ) : (
+                  <Users size={11} className="shrink-0" aria-hidden="true" />
+                )}
+                {eventLabel(e)}
+              </span>
+              <span className="font-code text-[11.5px] font-medium text-ink/70">{e.agent}</span>
+              {e.holder && e.holder !== "nobody" && (
+                <span className="font-code text-[10.5px] text-ink/45">
+                  {/* The arrow is the whole shape of the fact: loser → holder. */}
+                  → {e.holder}
+                </span>
+              )}
+              {repeatsOf(e) > 1 && (
+                <span className="font-code text-[10.5px] text-ink/45">×{repeatsOf(e)}</span>
+              )}
+              <Stamp at={e.at} className="ml-auto" />
+            </div>
+            <p className="mt-1 text-[12px] leading-relaxed text-ink/60">{eventSentence(e)}</p>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
 // ── Linked context ───────────────────────────────────────────────────────────
 // What the author handed the executor: roadmap goals, notes, pins. Resolved
 // against the same canvas state everything else renders from, and clickable
@@ -374,6 +440,11 @@ export default function TicketView({
     () => [...(p?.linkedIds ?? []), ...(task?.linkedPinIds ?? [])],
     [p?.linkedIds, task?.linkedPinIds],
   );
+  // Collisions (TDM-100). Stored on the task's payload, so it arrives with the
+  // same canvas-state push everything else on this page reads from — a race
+  // recorded while the page is open appears without a refetch.
+  const contentionEvents = p?.contention ?? [];
+  const contention = tallyContention(contentionEvents);
 
   // Claim lease (TDM-101). This page is where someone lands from a pasted link
   // to find out what is happening with one piece of work — and "the agent
@@ -488,6 +559,10 @@ export default function TicketView({
                       <LeaseChip lease={lease} />
                     </>
                   )}
+                  {/* The marker rides the identity row rather than waiting for the
+                      history section: "other agents went for this" belongs with
+                      "this agent has it", and the section below is the detail. */}
+                  <ContentionMark tally={contention} events={contentionEvents} />
                 </div>
 
                 <h1 className="mt-2 text-[24px] font-semibold leading-tight tracking-tight text-ink sm:text-[28px]">
@@ -579,6 +654,16 @@ export default function TicketView({
                   <Section label="Evidence">
                     {/* Always live here: you opened the ticket to find out. */}
                     <TaskLinks code={code} links={p.links} live boxed />
+                  </Section>
+                )}
+
+                {/* Above the edit history, because it is about the WORK's
+                    coordination rather than about the row's text — and because on
+                    a task that was raced for, it is the more interesting of the
+                    two histories. */}
+                {contentionEvents.length > 0 && (
+                  <Section label={`Contention · ${contention.total}`}>
+                    <ContentionHistory trail={contentionEvents} />
                   </Section>
                 )}
 

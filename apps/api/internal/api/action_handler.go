@@ -513,7 +513,7 @@ func (h *Handler) transitionAction(w http.ResponseWriter, r *http.Request, to st
 	// on purpose — a retry of a transition that already landed is answered like the
 	// first response, and re-fencing it would turn a lost 200 into a scary 409 for
 	// a caller that did nothing wrong.
-	if !h.fenceTaskWriteOrFail(w, current, caller) {
+	if !h.fenceTaskWriteOrFail(w, r, current, caller) {
 		return nil, false
 	}
 	// The content gate's other door (TDM-41). ActionStatePatch can carry a
@@ -537,10 +537,12 @@ func (h *Handler) transitionAction(w http.ResponseWriter, r *http.Request, to st
 			})
 			return nil, false
 		}
-		// The claim record is server-owned, and this is the one payload door that
-		// writes raw (see store.CarryClaimRecord): whatever the caller sent under
-		// `claim`, the stored record is what gets stored again.
+		// The claim record and the contention trail are server-owned, and this is
+		// the one payload door that writes raw (see store.CarryClaimRecord /
+		// store.CarryContention): whatever the caller sent under `claim` or
+		// `contention`, the stored copies are what get stored again.
 		patch.Payload = store.CarryClaimRecord(patch.Payload, current.Payload)
+		patch.Payload = store.CarryContention(patch.Payload, current.Payload)
 	}
 	patch.State = to
 	if _, err := h.store.UpdateActionState(r.Context(), canvasID, id, patch); err != nil {
@@ -960,6 +962,12 @@ func (h *Handler) claimTaskAs(ctx context.Context, canvasID, id uuid.UUID, agent
 		var claimed *store.AlreadyClaimedError
 		if errors.As(err, &claimed) {
 			h.metrics.IncClaimConflict()
+			// …and the same fact as an EVENT, attributed (TDM-100). The counter says
+			// the fleet raced; this says agentName lost THIS task to
+			// claimed.ClaimedBy, at this moment — which is the sentence the board
+			// shows. Detached and best-effort (see contention.go): the contended
+			// claim path pays nothing for it.
+			h.recordLostClaim(ctx, canvasID, id, agentName, claimed.ClaimedBy)
 		}
 		return nil, err
 	}
@@ -1067,7 +1075,7 @@ func (h *Handler) DeleteAction(w http.ResponseWriter, r *http.Request) {
 	}
 	if caller := callerClaim(r, "", 0); caller.presented() {
 		if current, gerr := h.store.GetAction(r.Context(), canvasID, id); gerr == nil {
-			if !h.fenceTaskWriteOrFail(w, current, caller) {
+			if !h.fenceTaskWriteOrFail(w, r, current, caller) {
 				return
 			}
 		}
@@ -1108,7 +1116,7 @@ func (h *Handler) updateActionPayload(w http.ResponseWriter, r *http.Request, pa
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	if !h.fenceTaskWriteOrFail(w, current, caller) {
+	if !h.fenceTaskWriteOrFail(w, r, current, caller) {
 		return
 	}
 	if current.Type == "task" {

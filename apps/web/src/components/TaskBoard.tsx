@@ -16,11 +16,13 @@ import {
   Plus,
   RotateCcw,
   Search,
+  Shield,
   SlidersHorizontal,
   SquareKanban,
   Timer,
   Trash2,
   User,
+  Users,
   X,
   Zap,
 } from "lucide-react";
@@ -49,6 +51,12 @@ import {
   leaseSentence,
   type Lease,
 } from "../lib/lease";
+import {
+  contentionLabel,
+  contentionSentence,
+  tallyContention,
+  type ContentionTally,
+} from "../lib/contention";
 import { useFreshnessNow } from "./Freshness";
 import posthog from "../lib/posthog";
 import TaskComposer, { linkTargets } from "./TaskComposer";
@@ -408,6 +416,69 @@ export function LeaseNotice({
       )}
     </div>
   );
+}
+
+// ── Contention (TDM-100) ─────────────────────────────────────────────────────
+// Somebody else went for this task. The claimant chip says who is on it and the
+// lease chip says whether they're alive; this says whether anyone else TRIED —
+// which is the one thing on a card that shows the coordination protocol doing its
+// job rather than just its result.
+//
+// Hue: NONE. This is the strictest case the closed six-hue rule has produced so
+// far. A collision can be recorded on a task in ANY state — a done task that was
+// raced for while it ran keeps its trail — so the card's attention hue (amber) is
+// unavailable: amber already means "needs approval" on proposed cards and "lease
+// lapsed" on executing ones, and a third meaning that can appear on either would
+// make it mean nothing. So the marker is a RECORD fact in dim ink, exactly like
+// ProvenanceChip, and does its shouting through the glyph and the count.
+//
+// The two kinds are told apart by weight rather than colour, because they are not
+// equally interesting. A lost claim is routine — an agent asked, was told no, went
+// elsewhere; it reads at record weight. A fenced write is a near miss — a worker
+// came back after its lease lapsed and tried to finish work that had moved on —
+// and it gets a filled well and firmer ink, the same "this one is different"
+// treatment the lease chip gives a lapsed lease without borrowing a hue for it.
+export function ContentionMark({
+  tally,
+  events,
+  className = "",
+}: {
+  tally: ContentionTally;
+  /** The trail itself — only for the sentence, which names who collided. */
+  events: Parameters<typeof contentionSentence>[0];
+  className?: string;
+}) {
+  const label = contentionLabel(tally);
+  if (!label) return null;
+  const fenced = tally.fenced > 0;
+  const sentence = contentionSentence(events);
+  const Glyph = fenced ? Shield : Users;
+  return (
+    <span
+      className={`inline-flex shrink-0 items-center gap-1 rounded-[4px] ${
+        fenced ? "bg-ink/[0.06] px-1 py-px text-ink/70" : "text-ink/45"
+      } ${T_META} ${className}`}
+      title={sentence}
+    >
+      <Glyph size={10} className="shrink-0" aria-hidden="true" />
+      <span className={fenced ? "font-medium" : undefined}>{label}</span>
+      <span className="sr-only">{sentence}</span>
+    </span>
+  );
+}
+
+/** The card-level form: reads the trail off the action itself, so a caller that
+ *  has an Action in hand needs one line and cannot get the tally out of step with
+ *  the sentence. */
+export function TaskContentionMark({
+  action,
+  className = "",
+}: {
+  action: Action;
+  className?: string;
+}) {
+  const events = (action.payload as TaskPayload | undefined)?.contention ?? [];
+  return <ContentionMark tally={tallyContention(events)} events={events} className={className} />;
 }
 
 // Provenance (TDM-40): who the SERVER concluded wrote this, next to `proposedBy`
@@ -1446,10 +1517,13 @@ export default function TaskBoard({
           {p.assignee === "human" && (
             <User size={11} className="shrink-0 text-ink/40" aria-label="Your own todo" />
           )}
-          {/* Record metadata, right-aligned as one group: who wrote it, when.
-              Both are facts about the row rather than its status, so they read
-              at the same dim weight. */}
+          {/* Record metadata, right-aligned as one group: who else went for it,
+              who wrote it, when. All three are facts about the row rather than
+              its status, so they read at the same dim weight — and the collision
+              marker leads the group because it is the only one of the three that
+              is ever news. */}
           <div className="ml-auto flex shrink-0 items-center gap-1.5">
+            <TaskContentionMark action={t} />
             <ProvenanceChip authoredBy={t.authoredBy} />
             <span className={`font-code text-ink/50 ${T_META}`} title={fullDate(t.createdAt)}>
               {ageOf(t.createdAt)}
@@ -2313,6 +2387,10 @@ function TaskDetail({
   // The last edit that cost an approval, if any — epics are gated the same way,
   // so this reads through the shared payload shape too.
   const reapproval = lastReapprovalEdit(p);
+  // Collisions on this task (TDM-100). Read off the payload the panel already
+  // holds, so it stays live with the socket like everything else here.
+  const contentionEvents = isTask ? ((p as TaskPayload).contention ?? []) : [];
+  const contention = tallyContention(contentionEvents);
 
   // aria-modal contract: move focus INTO the dialog on open, keep Tab cycling
   // inside it, and hand focus back to the opener on close. The component
@@ -2754,6 +2832,22 @@ function TaskDetail({
                   </span>
                 )
               )}
+            </div>
+          )}
+
+          {/* Who ELSE went for it (TDM-100). Directly under the claim, because
+              "worker-a holds this" and "worker-b tried and yielded" are one story
+              read in order. The panel gets the marker plus a plain-language line;
+              the full event list lives on the ticket page, which is where someone
+              goes to read a task's history rather than to act on it. */}
+          {contention.total > 0 && (
+            <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+              <ContentionMark tally={contention} events={contentionEvents} />
+              <span className="min-w-0 text-[11px] leading-relaxed text-ink/50">
+                {contention.fenced > 0
+                  ? `${contention.fenced} write${contention.fenced === 1 ? "" : "s"} refused — an agent came back after its lease had gone`
+                  : `${contention.raced} agent${contention.raced === 1 ? "" : "s"} asked for this and yielded`}
+              </span>
             </div>
           )}
 

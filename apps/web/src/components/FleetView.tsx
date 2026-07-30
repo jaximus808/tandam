@@ -6,11 +6,12 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
-import { X } from "lucide-react";
+import { Shield, Users, X } from "lucide-react";
 import type { Action } from "../types";
 import type { FleetAgent, FleetTask } from "../lib/api";
 import { useFleetRoster } from "../lib/useFleetRoster";
 import { useActivityFeed } from "../lib/useActivityFeed";
+import { contentionByAgent, type ContentionTally } from "../lib/contention";
 import { ageOf, fullDate } from "../lib/relativeTime";
 import ActivityFeed from "./ActivityFeed";
 import posthog from "../lib/posthog";
@@ -195,6 +196,13 @@ export default function FleetView({
     }
     return out;
   }, [actions]);
+
+  // Collisions per agent (TDM-100). The roster answers "who is working on what";
+  // this adds "and who has been losing races", which is the question a fleet that
+  // is fighting itself makes urgent. Derived from the canvas actions already in
+  // hand — every task's contention trail rides the same state push — so it costs
+  // no fetch and stays live with the board, exactly like `lastDone` above.
+  const contention = useMemo(() => contentionByAgent(actions), [actions]);
 
   // Panel lifecycle: focus in on open, back to the trigger on close, Esc closes.
   const close = useCallback(() => onOpenChange(false), [onOpenChange]);
@@ -488,6 +496,7 @@ export default function FleetView({
                       depth={0}
                       childrenById={childrenById}
                       lastDone={lastDone}
+                      contention={contention}
                       onOpenTask={openTask}
                     />
                   ))}
@@ -516,6 +525,7 @@ export default function FleetView({
                           depth={0}
                           childrenById={childrenById}
                           lastDone={lastDone}
+                          contention={contention}
                           onOpenTask={openTask}
                           dormant
                         />
@@ -588,6 +598,7 @@ function AgentRow({
   depth,
   childrenById,
   lastDone,
+  contention,
   onOpenTask,
   dormant = false,
 }: {
@@ -595,6 +606,8 @@ function AgentRow({
   depth: number;
   childrenById: Map<string, FleetAgent[]>;
   lastDone: Map<string, Action>;
+  /** Collisions per agent name — see contentionByAgent. */
+  contention: Map<string, ContentionTally>;
   onOpenTask: (taskId: string) => void;
   dormant?: boolean;
 }) {
@@ -602,6 +615,10 @@ function AgentRow({
   const kids = depth < MAX_DEPTH ? (agent.id ? (childrenById.get(agent.id) ?? []) : []) : [];
   const done = lastDone.get(agent.name) ?? (agent.id ? lastDone.get(agent.id) : undefined);
   const working = agent.tasks.length > 0;
+  // Matched by NAME first then by id, the same two-step the roster join uses:
+  // `claimed_by` and the contention trail both record the free-text identity, so
+  // the two agree without a lookup table.
+  const raced = contention.get(agent.name) ?? (agent.id ? contention.get(agent.id) : undefined);
 
   return (
     <li>
@@ -620,6 +637,11 @@ function AgentRow({
           {agent.role && agent.role !== "agent" && (
             <span className="shrink-0 text-[10.5px] text-ink/50">{agent.role}</span>
           )}
+          {/* How much this member has collided with the rest of the fleet
+              (TDM-100). Sits with the IDENTITY, not with the status line, because
+              it is a fact about the agent across the whole board rather than about
+              whatever it happens to hold right now. */}
+          {raced && <ContentionCount tally={raced} name={agent.name} />}
           <span
             title={vendor.title}
             className={`ml-auto shrink-0 rounded-[3px] px-1 py-px font-code text-[10px] ${VENDOR_CLS[vendor.kind]}`}
@@ -668,6 +690,7 @@ function AgentRow({
               depth={depth + 1}
               childrenById={childrenById}
               lastDone={lastDone}
+              contention={contention}
               onOpenTask={onOpenTask}
               dormant={dormant}
             />
@@ -675,6 +698,53 @@ function AgentRow({
         </ul>
       )}
     </li>
+  );
+}
+
+/* ContentionCount — how often this member has been refused (TDM-100).
+   Two numbers, never one, because they mean different things:
+
+     ⌾ n  RACED   claims it lost at the door. Routine on a busy queue: it asked,
+                  was told no, and went and took other work. Nothing was wasted.
+     ⛨ n  FENCED  writes of its own that were refused because it no longer held
+                  the claim. That is a worker outliving its lease and coming back
+                  to finish work that had moved on — the near miss the fence exists
+                  to catch, and the only one of the two worth a human's attention.
+
+   Collapsing them into "3 collisions" would hide the distinction the reader acts
+   on, so both are shown, fenced first, and each hides itself at zero.
+
+   No hue, per the marker on the cards: a fenced write can happen to an agent in
+   any state, and this panel's colours are spoken for (violet = working, emerald =
+   just finished, terracotta = the agent token). Weight carries it instead. */
+function ContentionCount({ tally, name }: { tally: ContentionTally; name: string }) {
+  if (tally.total === 0) return null;
+  const title = [
+    tally.fenced > 0
+      ? `${tally.fenced} write${tally.fenced === 1 ? "" : "s"} by ${name} refused because it no longer held the claim — its lease had lapsed and the task had moved on.`
+      : "",
+    tally.raced > 0
+      ? `${tally.raced} time${tally.raced === 1 ? "" : "s"} ${name} asked for a task another agent already held, and yielded.`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return (
+    <span className="flex shrink-0 items-center gap-1.5" title={title}>
+      {tally.fenced > 0 && (
+        <span className="inline-flex items-center gap-0.5 font-code text-[10px] font-medium text-ink/70">
+          <Shield size={9} className="shrink-0" aria-hidden="true" />
+          {tally.fenced}
+        </span>
+      )}
+      {tally.raced > 0 && (
+        <span className="inline-flex items-center gap-0.5 font-code text-[10px] text-ink/45">
+          <Users size={9} className="shrink-0" aria-hidden="true" />
+          {tally.raced}
+        </span>
+      )}
+      <span className="sr-only">{title}</span>
+    </span>
   );
 }
 

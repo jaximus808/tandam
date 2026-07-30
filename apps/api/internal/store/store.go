@@ -1152,6 +1152,13 @@ type Store interface {
 	// after the move has already committed, so a failure here is logged, not
 	// returned to a human who has already seen their card move.
 	AppendActionAudit(ctx context.Context, canvasID, id uuid.UUID, entry ContentAudit) (json.RawMessage, error)
+	// NOTE: contention telemetry (AppendContentionEvent, TDM-100) is deliberately
+	// NOT a method on this interface — see api.contentionStore for why. Short
+	// version: it is written from a DETACHED goroutine, and a method on Store is a
+	// method every test double inherits from its nil embedded Store, which turns a
+	// missing implementation into a panic on a background goroutine instead of a
+	// compile error. Telemetry must not be able to crash a request path, so it is
+	// an optional capability the API type-asserts for.
 	// UpdateActionPayload is the ONE write path for an action's payload, and
 	// therefore the place the content gate lives (TDM-41 — see content_gate.go
 	// for the full rule table and its rationale). Every payload write goes

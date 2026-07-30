@@ -272,6 +272,15 @@ func carryContentAudit(incoming, stored json.RawMessage, entry *ContentAudit) (j
 	} else {
 		delete(p, ClaimRecordKey)
 	}
+	// The contention trail (TDM-100) is the THIRD server-owned key, carried the
+	// same way and for the same reason: it records what agents did to each other,
+	// so no agent's payload write may author or erase it. A task nobody has raced
+	// for must not grow an empty array.
+	if trail := ReadContention(stored); len(trail) > 0 {
+		p[ContentionKey] = trail
+	} else {
+		delete(p, ContentionKey)
+	}
 	history := storedAudit(stored)
 	if entry != nil {
 		history = append(history, *entry)

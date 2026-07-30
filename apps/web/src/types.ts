@@ -27,6 +27,7 @@ export type {
   TaskProgressEntry,
   EpicPayload,
   ContentAuditEntry,
+  ContentionEvent,
   ApprovalPolicy,
   Agent,
   AgentRole,

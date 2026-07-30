@@ -304,6 +304,15 @@ const (
 	activityReleased     = "released"
 	activityRequeued     = "requeued"
 	activityClaimExpired = "claim_expired"
+	// activityContended: two fleet members went for the same task and one was
+	// refused — a claim lost at the door, or a write the claim fence turned away
+	// (TDM-100). The ACTOR is the loser; the task's own row names who holds it.
+	//
+	// Live-only, like claim_expired and for the same reason: deriveActivity reads
+	// history off the action row's own columns, and a collision leaves no trace
+	// there — the loser changed nothing. The durable record is the task's
+	// payload.contention[] trail, which every state push already carries.
+	activityContended = "contended"
 )
 
 // activityEvent is ONE fleet fact, and it is deliberately the SAME struct on

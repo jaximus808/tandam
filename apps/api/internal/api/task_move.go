@@ -261,7 +261,7 @@ func (h *Handler) MoveAction(w http.ResponseWriter, r *http.Request) {
 	// One fence for every move this endpoint makes, before the switch: a claim
 	// (moveKindClaim) is atomic and fences itself in the DB, but a finish and a
 	// rewind are writes onto a task somebody may be holding.
-	if !h.fenceTaskWriteOrFail(w, current, caller) {
+	if !h.fenceTaskWriteOrFail(w, r, current, caller) {
 		return
 	}
 	switch move.kind {
@@ -391,7 +391,7 @@ func (h *Handler) rewindTask(w http.ResponseWriter, r *http.Request, move humanM
 	// are FOR, so a human must always be able to. See claim_fence.go.
 	if caller.presented() {
 		if current, gerr := h.store.GetAction(r.Context(), canvasID, id); gerr == nil {
-			if !h.fenceTaskWriteOrFail(w, current, caller) {
+			if !h.fenceTaskWriteOrFail(w, r, current, caller) {
 				return
 			}
 		}

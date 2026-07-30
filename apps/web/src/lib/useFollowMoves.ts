@@ -53,7 +53,15 @@ export interface FollowMove {
 // Where each transition lands a card, and where it came from. `from` is what the
 // column WAS, used only for narration — the flight animation reads the real
 // before/after positions off the DOM.
-const TRANSITIONS: Record<FleetActivityAction, { from?: BoardColumn; to: BoardColumn; verb: string }> = {
+//
+// PARTIAL, because not every fleet ping is a card MOVE. `contended` (TDM-100) is
+// the one that isn't: a refused claim or a fenced write changes nothing about
+// where the card sits — that is the entire point of refusing it — so there is no
+// lane to fly it to and toMove drops it below. A follow camera that lurched at a
+// card which did not move would be narrating the opposite of what happened.
+const TRANSITIONS: Partial<
+  Record<FleetActivityAction, { from?: BoardColumn; to: BoardColumn; verb: string }>
+> = {
   proposed: { to: "proposed", verb: "Proposed" },
   approved: { from: "proposed", to: "ready", verb: "Approved" },
   rejected: { from: "proposed", to: "closed", verb: "Rejected" },

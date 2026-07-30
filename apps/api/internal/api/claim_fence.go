@@ -226,15 +226,24 @@ func writeFenced(w http.ResponseWriter, f *claimFence) {
 }
 
 // fenceTaskWriteOrFail is the form every handler uses: decide, and on a refusal
-// write it, count it, and report false.
+// write it, count it, RECORD it, and report false.
 //
 // The counter is here rather than in the handlers for the same reason the
 // decision is: one place, so the next surface to grow a write path cannot forget
 // it. A rising fenced_writes is the fleet telling you workers are outliving their
 // leases — see metrics.IncFencedWrite.
-func (h *Handler) fenceTaskWriteOrFail(w http.ResponseWriter, current *store.Action, caller claimant) bool {
+//
+// The trail entry (TDM-100) is here for the same reason again, and it is what
+// makes the counter legible: fenced_writes says the fleet collided N times,
+// recordFencedWrite says worker-b was refused on THIS task under generation 3
+// while worker-a holds generation 7. It is detached and best-effort — see
+// contention.go — so it cannot slow or fail the refusal it describes. `r` is
+// taken solely to reach the canvas id and the caller's derived provenance; the
+// fence decision itself stays a pure function of the action and the claimant.
+func (h *Handler) fenceTaskWriteOrFail(w http.ResponseWriter, r *http.Request, current *store.Action, caller claimant) bool {
 	if f := fenceTaskWrite(current, caller); f != nil {
 		h.metrics.IncFencedWrite()
+		h.recordFencedWrite(r, current, caller, f)
 		writeFenced(w, f)
 		return false
 	}

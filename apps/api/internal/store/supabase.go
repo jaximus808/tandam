@@ -3576,6 +3576,56 @@ func (s *supabaseStore) AppendActionAudit(ctx context.Context, canvasID, id uuid
 	return next, nil
 }
 
+// AppendContentionEvent records one collision on an action's payload: read the
+// row, fold the event in through the shared AppendContention (which coalesces a
+// repeat and caps the trail, taking the prior entries off the STORED payload),
+// write the payload back.
+//
+// Two round trips, exactly like AppendActionAudit — and unlike that one, this
+// runs on a path an AGENT hits, so every caller invokes it detached from the
+// request it belongs to (see api/contention.go). The refusal is already on the
+// wire by then; this is the trail catching up.
+//
+// No version bump: a recorded collision is not board content. The caller
+// broadcasts full state right after, which is what carries the trail to viewers.
+//
+// Returns the FRESH row (return=representation on the write, so no third trip):
+// the caller announces the collision next, and the losing caller does not have
+// the task's ticket or title to announce it with.
+func (s *supabaseStore) AppendContentionEvent(ctx context.Context, canvasID, id uuid.UUID, ev ContentionEvent) (*Action, error) {
+	current, err := s.GetAction(ctx, canvasID, id)
+	if err != nil {
+		return nil, ErrActionNotFound
+	}
+	// The live generation, for the callers that don't have it. A lost CLAIM read
+	// nothing back (that's what losing means), so it cannot know the token it lost
+	// to — and paying a read on the contended claim path to learn it would be
+	// exactly the wrong trade. This read is happening regardless, so the fact comes
+	// along free. A caller that DOES know (the fence, which decided against it)
+	// passes it and is left alone.
+	if ev.Generation == 0 {
+		ev.Generation = ReadClaimRecord(current.Payload).Generation
+	}
+	next, err := AppendContention(current.Payload, ev)
+	if err != nil {
+		return nil, err
+	}
+	var rows []dbAction
+	if _, err := s.client.From("actions").
+		Update(map[string]any{"payload": next}, "representation", "").
+		Eq("id", id.String()).
+		Eq("canvas_id", canvasID.String()).
+		ExecuteTo(&rows); err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		// Deleted between the read and the write. Nothing to report and nothing to
+		// announce — the collision was real, but the task it happened on is gone.
+		return nil, ErrActionNotFound
+	}
+	return toAction(rows[0]), nil
+}
+
 // UpdateActionPayload replaces an action's payload — and enforces the
 // content-mutation gate (TDM-41) while doing it. DecideContentUpdate in
 // content_gate.go IS the rule (with the full table and its rationale); this

@@ -247,6 +247,44 @@ export interface ContentAuditEntry {
   summary: string;
 }
 
+// One collision on a task (TDM-100). SERVER-OWNED like `audit` and for the same
+// reason, only more so: this records what agents did to each OTHER, so an agent
+// that could author or erase entries would make it a record of what agents were
+// willing to admit. The API re-attaches its own copy on every payload write.
+//
+// Two kinds, and the difference matters:
+//
+//   lost_claim    `agent` asked for a task `holder` already had. It never got the
+//                 work — this is the race, and the loser yielding is the protocol
+//                 doing its job.
+//   fenced_write  `agent` wrote to a task it no longer holds and the write was
+//                 REFUSED: either the holder is someone else, or `agent` is the
+//                 recorded name under a lease that has since been superseded
+//                 (presented ≠ generation). This one is a would-be double
+//                 execution that didn't happen.
+//
+// Capped at the 20 most recent, and a repeat of the newest identical collision
+// coalesces onto it as `count` rather than appending — so read max(count, 1).
+export interface ContentionEvent {
+  at: string;
+  kind: "lost_claim" | "fenced_write";
+  /** The LOSER: whose claim or write was refused. */
+  agent: string;
+  /** Who held the task at that moment — the winner. "nobody" when the claim had
+   *  already been cleared out from under a still-writing loser. */
+  holder?: string;
+  /** Fence code for a fenced write; absent on a lost claim, whose reason is its
+   *  kind. */
+  reason?: "claimed_by_other" | "stale_claim_generation";
+  /** The stale fencing token the loser wrote under — the fact holder identity
+   *  alone could not have caught. Absent when none was presented. */
+  presented?: number;
+  /** The live claim generation at the moment of the collision. */
+  generation?: number;
+  /** Repeats coalesced onto this entry. Absent means once. */
+  count?: number;
+}
+
 export interface TaskPayload {
   title: string;
   body?: string;
@@ -254,6 +292,8 @@ export interface TaskPayload {
   assignee?: "agent" | "human";
   /** Server-owned edit log — see ContentAuditEntry. Never write this. */
   audit?: ContentAuditEntry[];
+  /** Server-owned collision trail — see ContentionEvent. Never write this. */
+  contention?: ContentionEvent[];
   // The epic (Action of type "epic") this task belongs to. Under the "epic"
   // approval policy, a task created under an APPROVED epic is born approved
   // (approved_by = "policy:epic").

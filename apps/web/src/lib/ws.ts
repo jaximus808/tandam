@@ -74,7 +74,14 @@ export type FleetActivityAction =
   | "completed"
   | "released"
   | "requeued"
-  | "claim_expired";
+  | "claim_expired"
+  // TDM-100: two fleet members went for the same task and one was refused — a
+  // claim lost at the door, or a write the claim fence turned away. `actor` is the
+  // LOSER; the task's own row says who holds it. Live-only, like claim_expired and
+  // for the same reason: the loser changed nothing, so the derived REST backfill
+  // has no column to read it off. The durable record is the task's
+  // payload.contention[] trail, which rides every state push.
+  | "contended";
 
 export type FleetActivity = {
   action: FleetActivityAction;
