@@ -30,15 +30,16 @@ const EXPECTED_FACADE = [
   "task_progress",
   "task_complete",
   "task_propose",
+  "task_amend",
   "epic_propose",
   "doc_write",
   "board_status",
 ];
 
-test("default manifest is exactly the 12-tool intent facade", () => {
+test("default manifest is exactly the 13-tool intent facade", () => {
   const names = manifestFor(false).map((t) => t.name);
   assert.deepEqual(names, EXPECTED_FACADE);
-  assert.equal(names.length, 12);
+  assert.equal(names.length, 13);
 });
 
 test("TANDEM_FULL_TOOLS adds the CRUD surface without dropping or duplicating", () => {

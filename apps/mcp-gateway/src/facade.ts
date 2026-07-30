@@ -315,6 +315,7 @@ const FACADE_NAMES = new Set([
   "task_progress",
   "task_complete",
   "task_propose",
+  "task_amend",
   "epic_propose",
   "doc_write",
   "board_status",
@@ -620,6 +621,88 @@ export async function handleFacadeTool(
         throw new Error("Pass `title` (one task) or `tasks` (an array of them)");
       }
       return handleTool(gateway, "canvas_task_add", args);
+    }
+
+    case "task_amend": {
+      // Self-correction for a PROPOSAL, deliberately narrow (TDM-117). An agent may
+      // amend or withdraw a task IT proposed — but ONLY while it is still `proposed`
+      // and unclaimed. Once a human approves it, it is theirs (ask, don't edit);
+      // once someone claims it, the claim fence owns it. The three-way guard below
+      // is checked against the SERVER's view of the task, never anything
+      // self-reported: authoredBy is server-derived provenance (TDM-40). This lets
+      // the default surface self-heal a mis-proposed plan without opening a hole to
+      // rewrite approved or in-flight work.
+      const id = requireTaskId(args);
+      const withdraw = args.withdraw === true;
+      const amendable = ["title", "body", "epicId", "linkedIds"] as const;
+      if (!withdraw && !amendable.some((k) => args[k] !== undefined)) {
+        throw new Error(
+          "Nothing to amend — pass at least one of title / body / epicId / linkedIds, or " +
+            "`withdraw: true` to retract the proposal."
+        );
+      }
+
+      const { action } = (await gateway.get(
+        `/api/canvas/actions/${encodeURIComponent(id)}`
+      )) as {
+        action?: {
+          state?: string;
+          claimedBy?: string;
+          authoredBy?: string;
+          type?: string;
+          payload?: Record<string, unknown>;
+        };
+      };
+      if (!action) throw new Error(`No task "${id}" found on this canvas.`);
+
+      // GUARD 1 — still a proposal. Approved / executing / done are off-limits.
+      if (action.state !== "proposed") {
+        throw new Error(
+          `This task is "${action.state}", not "proposed" — you cannot amend it. Once a human ` +
+            `approves a task it is theirs: propose a follow-up, or ask the human to reject this one.`
+        );
+      }
+      // GUARD 2 — unclaimed. A proposed task normally has no holder; refuse if it does.
+      const holder = action.claimedBy;
+      if (holder && holder !== "agent") {
+        throw new Error(
+          `This task is held by "${holder}", so it is not yours to amend. Take a different task.`
+        );
+      }
+      // GUARD 3 — you proposed it. authoredBy is server-derived "agent:<identity>";
+      // compare to this session's claim identity (the same string X-Tandem-Agent
+      // carried when the proposal was created). A task predating provenance has no
+      // authoredBy — allow it rather than strand it (best-effort, matches TDM-40).
+      const me = `agent:${gateway.claimant()}`;
+      if (action.authoredBy && action.authoredBy !== me) {
+        throw new Error(
+          `You did not propose this task (authored by "${action.authoredBy}"), so it is not yours ` +
+            `to amend. Only the agent that proposed a task may correct it.`
+        );
+      }
+
+      // Withdraw: delete the proposal outright (unclaimed + no holder ⇒ unfenced).
+      if (withdraw) {
+        await gateway.del(`/api/canvas/actions/${encodeURIComponent(id)}`);
+        return { withdrawn: true, id, url: canvasBlock(gateway).url };
+      }
+
+      // Amend: merge the changed fields onto the existing payload and PATCH the
+      // whole thing. The payload-only PATCH replaces + canonicalizes (title
+      // required), so carry the existing values forward for anything not changed.
+      const payload: Record<string, unknown> = { ...(action.payload ?? {}) };
+      if (typeof args.title === "string" && args.title.trim()) payload.title = args.title.trim();
+      if (typeof args.body === "string") payload.body = args.body;
+      if (args.epicId !== undefined) payload.epicId = args.epicId;
+      if (args.linkedIds !== undefined) payload.linkedIds = args.linkedIds;
+      if (typeof payload.title !== "string" || !(payload.title as string).trim()) {
+        throw new Error("A task needs a non-empty `title` — pass a new one, or leave the existing.");
+      }
+      await gateway.patch(`/api/canvas/actions/${encodeURIComponent(id)}`, {
+        payload,
+        agentName: gateway.claimant(),
+      });
+      return { amended: true, id, url: canvasBlock(gateway).url };
     }
 
     case "epic_propose": {
@@ -970,6 +1053,48 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
           },
         },
       },
+    },
+  },
+  {
+    name: "task_amend",
+    description:
+      "Correct or retract a task YOU proposed — the self-heal for a mis-proposed plan (wrong " +
+      "epic, typo'd title, a duplicate). Deliberately narrow: it works ONLY while the task is " +
+      "still 'proposed' AND unclaimed AND was authored by you. Pass the fields to change " +
+      "(title / body / epicId / linkedIds) to edit it, or `withdraw: true` to delete it. Once a " +
+      "human has approved a task it is THEIRS — this tool refuses, and the move is to propose a " +
+      "follow-up or ask the human to reject it; once another agent has claimed it, its claim " +
+      "owns it. Use this to re-parent tasks that landed unparented, not to rewrite work already " +
+      "approved or in flight. " +
+      SESSION_CONVENTION,
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        id: {
+          type: "string",
+          description: "The task to amend — its ticket ref (e.g. 'TDM-21') or uuid.",
+        },
+        title: { type: "string", description: "New title. Omit to keep the current one." },
+        body: { type: "string", description: "New brief. Omit to keep the current one." },
+        epicId: {
+          type: "string",
+          description:
+            "Re-parent the task to this epic (from epic_propose / board_status). Omit to leave " +
+            "its parent unchanged.",
+        },
+        linkedIds: {
+          type: "array",
+          items: { type: "string" },
+          description: "Replace the linked context ids. Omit to leave them unchanged.",
+        },
+        withdraw: {
+          type: "boolean",
+          description:
+            "Set true to RETRACT (delete) the proposal instead of editing it — for a task " +
+            "proposed by mistake or a duplicate. Ignores the edit fields.",
+        },
+      },
+      required: ["id"],
     },
   },
   {
