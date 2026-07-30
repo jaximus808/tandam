@@ -644,10 +644,14 @@ func TestMoveAuditActorIsServerDerived(t *testing.T) {
 	h := NewHandler(f, nil, nil)
 
 	w := httptest.NewRecorder()
-	// No WithAuthor: provenance was not derived for this request.
-	h.MoveAction(w, canvasRequest(t, "POST", "/move",
+	// Provenance was NOT derived for this request: clear the author canvasRequest
+	// stamps by default (WithAuthor "" reads back as nil, i.e. no middleware ran),
+	// so MoveAction must record "unknown" rather than trust the body's actor.
+	r := canvasRequest(t, "POST", "/move",
 		map[string]any{"to": "approved", "actor": "human", "authoredBy": "human"},
-		canvasID, task.ID.String()))
+		canvasID, task.ID.String())
+	r = r.WithContext(WithAuthor(r.Context(), ""))
+	h.MoveAction(w, r)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d, want 200 (body %s)", w.Code, w.Body.String())
 	}

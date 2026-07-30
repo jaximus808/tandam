@@ -214,6 +214,12 @@ func canvasRequest(t *testing.T, method, path string, body any, canvasID uuid.UU
 	}
 	r := httptest.NewRequest(method, path, bytes.NewReader(b))
 	ctx := context.WithValue(r.Context(), claimsKey, &auth.Claims{CanvasID: canvasID, Role: "write"})
+	// In production every action route sits behind the Provenance middleware, and
+	// the human board is the caller for approve / reject / born-approved. Stamp a
+	// human author by default so these handler-level tests exercise the same
+	// context (TDM-129 gates approval on AuthorFromCtx==human). Tests that need an
+	// agent or anonymous caller override the author on the returned request.
+	ctx = WithAuthor(ctx, AuthorHuman)
 	if urlID != "" {
 		rctx := chi.NewRouteContext()
 		rctx.URLParams.Add("id", urlID)
@@ -480,7 +486,7 @@ func TestApproveBatchEpicCascadesUnderEpicPolicy(t *testing.T) {
 	h := NewHandler(fake, nil, nil)
 	w := httptest.NewRecorder()
 	h.ApproveActionsBatch(w, canvasRequest(t, "POST", "/api/canvas/actions/approve-batch",
-		map[string]any{"ids": []string{epicID.String(), taskID.String()}, "approvedBy": "jaxon"}, canvasID, ""))
+		map[string]any{"ids": []string{epicID.String(), taskID.String()}}, canvasID, ""))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, body %s", w.Code, w.Body.String())
 	}
@@ -488,8 +494,10 @@ func TestApproveBatchEpicCascadesUnderEpicPolicy(t *testing.T) {
 	if len(approved) != 2 || len(skipped) != 0 {
 		t.Fatalf("approved/skipped = %v / %v, want both ids approved", approved, skipped)
 	}
-	if got := fake.actions[epicID].ApprovedBy; got == nil || *got != "jaxon" {
-		t.Fatalf("epic approvedBy = %v, want jaxon", got)
+	// approvedBy is stamped from server-derived provenance (human), never from the
+	// request body (TDM-129) — canvasRequest stamps a human author.
+	if got := fake.actions[epicID].ApprovedBy; got == nil || *got != AuthorHuman {
+		t.Fatalf("epic approvedBy = %v, want %q", got, AuthorHuman)
 	}
 	waitEpicCalls(t, fake, 1)
 	_, gotID, gotBy := fake.epicCascade()

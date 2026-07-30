@@ -473,8 +473,9 @@ func TestTransitionsBroadcastActivity(t *testing.T) {
 		{
 			name: "approve", id: proposedID,
 			call:     func(h *Handler, w http.ResponseWriter, r *http.Request) { h.ApproveAction(w, r) },
-			body:     map[string]any{"approvedBy": "jaxon"},
-			wantVerb: activityApproved, wantActor: "jaxon", wantState: "approved",
+			// approvedBy is server-derived (human), not read from the body (TDM-129).
+			body:     map[string]any{},
+			wantVerb: activityApproved, wantActor: "human", wantState: "approved",
 		},
 		{
 			name: "claim", id: approvedID,

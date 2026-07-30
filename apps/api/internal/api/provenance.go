@@ -105,6 +105,19 @@ func assertedAgent(r *http.Request) (string, bool) {
 	return name, name != ""
 }
 
+// callerIsHuman reports whether this request's SERVER-DERIVED provenance is a
+// signed-in human. Approval — a born-approved proposal, /approve, /reject — is the
+// human gate at the heart of the product ("agents propose, a human approves"), so
+// whether the caller may approve is decided here from AuthorFromCtx, which no
+// agent credential can forge into "human" (see the file comment). An anonymous
+// canvas-token holder and an agent both fail this check; only a real Google
+// session passes. Returns false on routes without the Provenance middleware
+// (author nil) — the safe failure, since approval must never happen unattested.
+func callerIsHuman(ctx context.Context) bool {
+	a := AuthorFromCtx(ctx)
+	return a != nil && *a == AuthorHuman
+}
+
 // AuthorForSession is the WebSocket counterpart of deriveAuthor. The browser
 // socket has no agent path at all — it is the human channel by construction —
 // so the connection's resolved user id is the whole decision. Nil = anonymous

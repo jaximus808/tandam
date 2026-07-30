@@ -246,6 +246,18 @@ func (h *Handler) ProposeAction(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "state must be 'proposed' or 'approved'")
 		return
 	}
+	// THE APPROVAL GATE, server-enforced (TDM-129). Born-approved — a client asking
+	// for state:"approved" at creation — IS an approval, so it is refused for
+	// anyone the server cannot see as a signed-in human. A plain canvas write-JWT
+	// (an agent, or an anonymous curl holding the 8-char code) proposes; only a
+	// human skips the gate. The 'auto'/'epic' approval POLICY is the separate,
+	// server-decided path by which an agent's task can be born approved, and it
+	// runs below on state:"proposed" — it does not come through this door.
+	if body.State == "approved" && !callerIsHuman(r.Context()) {
+		writeError(w, http.StatusForbidden,
+			"only a signed-in human can create an approved action; agents must propose (state:'proposed') and a human approves on the board")
+		return
+	}
 	if body.Type == "task" {
 		canonical, err := canonicalizeTaskPayload(body.Payload)
 		if err != nil {
@@ -274,7 +286,15 @@ func (h *Handler) ProposeAction(w http.ResponseWriter, r *http.Request) {
 		LinkedPinIDs: body.LinkedPinIDs,
 	}
 	if body.State == "approved" {
-		action.ApprovedBy = &body.ProposedBy
+		// Gated to a human above, so stamp the approver from server-derived
+		// provenance — never from the client-supplied proposedBy, which was the
+		// forgery vector (a task minting itself approvedBy:"evil", or a fabricated
+		// human-looking stamp). AuthorFromCtx is "human" here by construction.
+		approver := AuthorHuman
+		if a := AuthorFromCtx(r.Context()); a != nil {
+			approver = *a
+		}
+		action.ApprovedBy = &approver
 	}
 	// Approval-policy cascade (server-side, never in the gateway): an
 	// agent-proposed task may be born approved under the canvas policy.
@@ -336,6 +356,10 @@ func (h *Handler) ProposeActionsBatch(w http.ResponseWriter, r *http.Request) {
 	// stamped on every action in the batch — a caller can't mix authorship by
 	// varying the body, because no body field feeds it.
 	author := AuthorFromCtx(r.Context())
+	// THE APPROVAL GATE (TDM-129), request-level like provenance: born-approved is
+	// a human act, so if the server can't see a human here NO item in the batch may
+	// be born approved (see ProposeAction for the full argument).
+	human := callerIsHuman(r.Context())
 	actions := make([]*store.Action, 0, len(body.Actions))
 	for i := range body.Actions {
 		item := body.Actions[i]
@@ -351,6 +375,11 @@ func (h *Handler) ProposeActionsBatch(w http.ResponseWriter, r *http.Request) {
 		case "proposed", "approved":
 		default:
 			writeError(w, http.StatusBadRequest, "state must be 'proposed' or 'approved'")
+			return
+		}
+		if item.State == "approved" && !human {
+			writeError(w, http.StatusForbidden,
+				"only a signed-in human can create an approved action; agents must propose (state:'proposed') and a human approves on the board")
 			return
 		}
 		if item.Type == "task" {
@@ -378,7 +407,13 @@ func (h *Handler) ProposeActionsBatch(w http.ResponseWriter, r *http.Request) {
 			LinkedPinIDs: item.LinkedPinIDs,
 		}
 		if item.State == "approved" {
-			action.ApprovedBy = &item.ProposedBy
+			// Stamp from server-derived provenance, not the client's proposedBy —
+			// same reasoning as ProposeAction. `author` is "human" here (gated above).
+			approver := AuthorHuman
+			if author != nil {
+				approver = *author
+			}
+			action.ApprovedBy = &approver
 		}
 		// Approval-policy cascade — same rule as ProposeAction. NOTE: an epic
 		// proposed in this same batch is not yet approved, so its tasks land
@@ -582,13 +617,22 @@ func (h *Handler) transitionAction(w http.ResponseWriter, r *http.Request, to st
 // epicId = the epic's id) with the 'policy:epic' provenance stamp — the
 // one-time gate that lets the whole batch flow.
 func (h *Handler) ApproveAction(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		ApprovedBy string `json:"approvedBy"`
+	// THE APPROVAL GATE, server-enforced (TDM-129): refuse unless the server sees a
+	// signed-in human. A canvas write-JWT on its own — an agent, or an anonymous
+	// curl holding the code — no longer approves. The gateway declining agent
+	// self-approval client-side was the ONLY thing standing here; a raw curl or
+	// TANDEM_FULL_TOOLS walked straight past it. Now the server refuses.
+	if !callerIsHuman(r.Context()) {
+		writeError(w, http.StatusForbidden, "only a signed-in human can approve an action")
+		return
 	}
-	_ = decode(r, &body)
-	approvedBy := body.ApprovedBy
-	if approvedBy == "" {
-		approvedBy = "human"
+	// approvedBy is stamped from server-derived provenance, NEVER from the request
+	// body: defaulting a missing value to "human" was how an agent-driven approve
+	// recorded a fabricated human stamp on the board. It is "human" here by
+	// construction (the gate above).
+	approvedBy := AuthorHuman
+	if a := AuthorFromCtx(r.Context()); a != nil {
+		approvedBy = *a
 	}
 	// No claimant: approve is the human gate on a PROPOSED task, which by
 	// definition has no holder to fence against (see claim_fence.go).
@@ -653,8 +697,7 @@ func (h *Handler) ApproveAction(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ApproveActionsBatch(w http.ResponseWriter, r *http.Request) {
 	canvasID := CanvasIDFromCtx(r.Context())
 	var body struct {
-		IDs        []uuid.UUID `json:"ids"`
-		ApprovedBy string      `json:"approvedBy"`
+		IDs []uuid.UUID `json:"ids"`
 	}
 	if err := decode(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -664,10 +707,17 @@ func (h *Handler) ApproveActionsBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ids: at least one action id is required")
 		return
 	}
-	if body.ApprovedBy == "" {
-		body.ApprovedBy = "human"
+	// THE APPROVAL GATE (TDM-129): bulk approve is still approve — same human-only
+	// rule and same server-stamped approvedBy as the single-approve path.
+	if !callerIsHuman(r.Context()) {
+		writeError(w, http.StatusForbidden, "only a signed-in human can approve actions")
+		return
 	}
-	rows, err := h.store.ApproveActionsBatch(r.Context(), canvasID, body.IDs, body.ApprovedBy)
+	approvedBy := AuthorHuman
+	if a := AuthorFromCtx(r.Context()); a != nil {
+		approvedBy = *a
+	}
+	rows, err := h.store.ApproveActionsBatch(r.Context(), canvasID, body.IDs, approvedBy)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -755,6 +805,13 @@ func (h *Handler) ApproveActionsBatch(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/canvas/actions/{id}/reject  — human gate: proposed → rejected.
 func (h *Handler) RejectAction(w http.ResponseWriter, r *http.Request) {
+	// The other exit from the human gate (TDM-129): rejecting is a human decision
+	// on proposed work, refused for anyone the server can't see as a human — an
+	// agent must not clear a peer's proposal out of the queue.
+	if !callerIsHuman(r.Context()) {
+		writeError(w, http.StatusForbidden, "only a signed-in human can reject an action")
+		return
+	}
 	var body struct {
 		Reason string `json:"reason"`
 	}

@@ -818,8 +818,12 @@ func TestApprovalIsNotFenced(t *testing.T) {
 	fake := newFenceStore(task)
 	h := NewHandler(fake, nil, nil)
 
-	r := byAgent(canvasRequest(t, "POST", "/api/canvas/actions/"+task.ID.String()+"/approve",
-		map[string]any{"approvedBy": "human"}, canvasID, task.ID.String()), "worker-b")
+	// The caller is a human — approval is the human gate (TDM-129); canvasRequest
+	// stamps human provenance. The point here is the CLAIM FENCE: ApproveAction
+	// passes a zero claimant, so approve is never fenced even on a task carrying
+	// claim state.
+	r := canvasRequest(t, "POST", "/api/canvas/actions/"+task.ID.String()+"/approve",
+		nil, canvasID, task.ID.String())
 	w := httptest.NewRecorder()
 	h.ApproveAction(w, r)
 	if w.Code != http.StatusOK {
