@@ -896,6 +896,8 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
   {
     name: "queue_next",
     description:
+      SESSION_CONVENTION +
+      " " +
       "THE ENTRY POINT FOR WORK: the approved tasks ready to be picked up right now, compact " +
       "({id, ticketId, title, state, epicId}) — no bodies. Start here rather than reading the " +
       "canvas. IF YOU HAVE SUBAGENTS, DISPATCH — do NOT claim these yourself: spawn one subagent " +
@@ -907,8 +909,7 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
       "CODE is what travels. WORKING ALONE: pick ONE, task_get it for the full brief, task_claim " +
       "it, then work. Empty means nothing is approved: tasks you propose sit at 'proposed' until " +
       "a human approves them on the board. A task marked `lostByYou: true` carries NO handoff: you " +
-      "raced for it and lost, so it is neither yours to claim nor yours to dispatch — take another. " +
-      SESSION_CONVENTION,
+      "raced for it and lost, so it is neither yours to claim nor yours to dispatch — take another.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -931,6 +932,8 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
   {
     name: "task_claim",
     description:
+      SESSION_CONVENTION +
+      " " +
       "Claim a task you are about to do YOURSELF (approved → executing), so parallel sessions " +
       "skip it. Claim only what you will personally work: if you are dispatching subagents, do " +
       "NOT claim here — hand each worker the task's `handoff` from queue_next and let it claim " +
@@ -941,8 +944,7 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
       "`tapOut: true` with a `reason` and `next: \"queue_next\"` — that flag is the one thing to " +
       "branch on, and it means STOP TOUCHING THIS TASK, not try again. Asking a second time for a " +
       "task you already lost is refused without even reaching the server. On success you get the task's `ticketId` " +
-      "(e.g. 'TDM-142'); put it in your commit messages so the work traces back. " +
-      SESSION_CONVENTION,
+      "(e.g. 'TDM-142'); put it in your commit messages so the work traces back.",
     inputSchema: schemaOf("canvas_task_start"),
   },
   {
@@ -976,6 +978,8 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
   {
     name: "task_complete",
     description:
+      SESSION_CONVENTION +
+      " " +
       "FINISH a task with a result summary — the last step of every task you claim; leaving one " +
       "'executing' blocks the queue. `result` is a short human-readable account of what was done " +
       "and where: files, commit hashes, PR. It shows on the board, so it is the human's whole view " +
@@ -983,21 +987,21 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
       "request / branch). The board resolves those live — merged, open, checks failing — so the " +
       "human reads what HAPPENED, not just what you said. " +
       "Failed? pass status:'failed' with `error` rather than leaving it hanging. " +
-      "Complete under the SAME identity you claimed with. " +
-      SESSION_CONVENTION,
+      "Complete under the SAME identity you claimed with.",
     inputSchema: schemaOf("canvas_task_complete"),
   },
   {
     name: "task_propose",
     description:
+      SESSION_CONVENTION +
+      " " +
       "Propose work for LATER sessions — one task, or a whole plan at once via `tasks` (strongly " +
       "preferred over calling this repeatedly). Proposals land as 'proposed' and a human approves " +
       "them on the board before any session can claim them, so this is how you hand off work " +
       "instead of doing it. Keep `body` a tight brief (what to do, acceptance criteria) and put " +
       "the heavy context in notes/roadmap items referenced by `linkedIds` — task_get hydrates " +
       "those for whoever picks it up. For a whole plan, prefer epic_propose: it creates the epic " +
-      "AND its tasks in one call, so the human approves once instead of task by task. " +
-      SESSION_CONVENTION,
+      "AND its tasks in one call, so the human approves once instead of task by task.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -1100,6 +1104,8 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
   {
     name: "epic_propose",
     description:
+      SESSION_CONVENTION +
+      " " +
       "Propose an EPIC — the named container a plan hangs off — and, in the SAME call, the tasks " +
       "under it via `tasks` (same item shape as task_propose). Use this whenever you're asked to " +
       "'write an epic' or plan a feature: tasks proposed without one are unparented and each need " +
@@ -1110,8 +1116,7 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
       "the returned `epicId` on a backing-off interval, so the human's approval on the board — " +
       "not another prompt — is what starts the work. " +
       "Returns `epicId`: pass it as `epicId` on later task_propose calls to add work to the same " +
-      "batch (once the epic is approved, those tasks are born approved). " +
-      SESSION_CONVENTION,
+      "batch (once the epic is approved, those tasks are born approved).",
     inputSchema: {
       type: "object" as const,
       properties: {

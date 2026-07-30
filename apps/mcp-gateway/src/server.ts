@@ -20,6 +20,40 @@ import { tracer } from "./trace.js";
 
 export const SERVER_NAME = "tandem";
 
+/**
+ * The server-level briefing surfaced to the model at `initialize`
+ * (InitializeResult.instructions, TDM-131). A cold client — or any client
+ * without CLAUDE.md — is otherwise taught ONLY by the tool descriptions, and the
+ * one rule that failed in the field (an orchestrator dispatching subagents BEFORE
+ * the work existed, approved, on the board) lived in none of them. This is the
+ * standard channel every MCP client sees; keep it compact and load-bearing.
+ *
+ * It carries the four things a session must not get wrong:
+ *   1. connect first, then carry the `session` handle on EVERY later call;
+ *   2. the executor loop (queue_next → task_claim → task_progress → task_complete);
+ *   3. the human approval gate (proposals wait; never approve your own);
+ *   4. orchestrator SEQUENCING — propose, WAIT for the human's approval, and only
+ *      then dispatch; dispatch only board handoffs; pass the CODE, never the
+ *      session handle. Nothing else binds those three into a sequence.
+ */
+export const SERVER_INSTRUCTIONS =
+  "Tandem is a shared task board humans and agents co-edit. " +
+  "START by calling canvas_connect with the canvas code; it returns a `session` handle — pass it " +
+  "back as `session` on EVERY later call (the hosted connection resets between calls; the handle " +
+  "re-binds you). " +
+  "EXECUTOR loop: queue_next (the ready, approved queue) → task_claim ONE task (claimed:false " +
+  "means another session won it: take a different one, never work a task you did not claim) → do " +
+  "the work, task_progress as you go (it also heartbeats your claim) → task_complete. task_get " +
+  "hydrates a task's full brief. " +
+  "APPROVAL GATE: anything you propose (task_propose / epic_propose) lands as 'proposed' and a " +
+  "HUMAN approves it on the board before it can be claimed — never work unapproved work, and " +
+  "never try to approve your own. " +
+  "ORCHESTRATOR (dispatching to subagents): propose the epic, then WAIT for the human's approval " +
+  "before dispatching — the approved board queue is the go signal, not your own plan; work must " +
+  "exist, approved, on the board before you dispatch it. Dispatch ONLY tasks queue_next returns " +
+  "with a `handoff` block, one subagent per task, and pass the canvas CODE, never your `session` " +
+  "handle. You claim nothing; the workers claim their own.";
+
 // Keep in sync with package.json `version`. Surfaced via `--version` and the
 // MCP server's self-identification over both transports.
 export const VERSION = "2.3.0";
@@ -105,7 +139,7 @@ export function createTandemServer(
 ): Server {
   const server = new Server(
     { name: SERVER_NAME, version },
-    { capabilities: { tools: {} } }
+    { capabilities: { tools: {} }, instructions: SERVER_INSTRUCTIONS }
   );
 
   const fullTools = fullToolsEnabled(options?.fullTools);
