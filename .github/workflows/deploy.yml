@@ -29,6 +29,10 @@ jobs:
           DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
+          # Public-scope GitHub token for the read-only status proxy (rate-limit
+          # lift only). NOT named GITHUB_* — Actions reserves that prefix for its
+          # built-in token. Optional: absent = proxy runs unauthenticated (60/hr).
+          GH_STATUS_TOKEN: ${{ secrets.GH_STATUS_TOKEN }}
         run: |
           echo "Writing secrets to .env file..."
           cat <<EOF > .env
@@ -39,6 +43,7 @@ jobs:
           DOMAIN_NAME=$DOMAIN_NAME
           GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID
           POSTHOG_KEY=$POSTHOG_KEY
+          GH_STATUS_TOKEN=$GH_STATUS_TOKEN
           EOF
           
       - name: Clean up for transfer
