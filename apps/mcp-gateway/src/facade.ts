@@ -593,7 +593,28 @@ export async function handleFacadeTool(
       // One tool, both shapes: a single task, or a whole plan in one round trip.
       const many = args.tasks;
       if (Array.isArray(many) && many.length > 0) {
-        return handleTool(gateway, "canvas_task_add_batch", { tasks: many });
+        // Spread the CALL-LEVEL defaults onto every item (TDM-116). The batch
+        // branch used to forward only `tasks`, silently dropping a top-level
+        // epicId / assignee / requiresApproval — so a whole plan proposed under an
+        // epic landed unparented and the response still said "created". The
+        // single-task branch below never had this bug (it passes `args` whole), and
+        // epic_propose already merges its epic id this way. Item-level fields WIN,
+        // so a task may still override a call-level default.
+        for (const [i, t] of (many as Args[]).entries()) {
+          if (!t || typeof t.title !== "string" || !t.title.trim()) {
+            throw new Error(`tasks[${i}] needs a \`title\` — one line saying what to do`);
+          }
+        }
+        return handleTool(gateway, "canvas_task_add_batch", {
+          tasks: (many as Args[]).map((t) => ({
+            ...(args.epicId ? { epicId: args.epicId } : {}),
+            ...(args.assignee ? { assignee: args.assignee } : {}),
+            ...(args.requiresApproval !== undefined
+              ? { requiresApproval: args.requiresApproval }
+              : {}),
+            ...t,
+          })),
+        });
       }
       if (typeof args.title !== "string" || !args.title.trim()) {
         throw new Error("Pass `title` (one task) or `tasks` (an array of them)");
@@ -910,7 +931,9 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
             "Epic this task belongs to (from epic_propose, task_get or board_status). Under the " +
             "default approval policy, a task added to an already-approved epic is born approved " +
             "instead of waiting for its own approval; under a still-proposed epic it waits for " +
-            "that epic's single approval. Without one the task is unparented and needs its own.",
+            "that epic's single approval. Without one the task is unparented and needs its own. " +
+            "When you pass `tasks`, a call-level epicId here applies to EVERY item (an item's own " +
+            "epicId still wins), so you can parent a whole plan in one call.",
         },
         assignee: {
           type: "string",
