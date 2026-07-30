@@ -42,6 +42,18 @@ function actionRef(id: unknown): string {
   return encodeURIComponent(String(id ?? ""));
 }
 
+/**
+ * Pull the fencing token out of a successful claim response. A claim answers
+ * `{ action, claim: { generation, holder, claimedAt } }` (see claimBlock in
+ * apps/api/internal/api/claim_fence.go); `generation` is the token this session
+ * must present on every later write to the task (TDM-121). Undefined for an API
+ * that mints none, which keeps writes identity-only (the documented degradation).
+ */
+function readClaimGeneration(data: unknown): number | undefined {
+  const g = (data as { claim?: { generation?: unknown } } | undefined)?.claim?.generation;
+  return typeof g === "number" && g > 0 ? g : undefined;
+}
+
 // Contextual fan-out nudge for single-item updates (mirrors the task fan-out
 // nudge above). A model that's editing several elements of one type tends to
 // call canvas_X_update in a tight burst instead of reaching for
@@ -1015,6 +1027,9 @@ export async function handleTool(
           // its holder guard cannot fire at all — so "move a task another agent
           // holds" quietly succeeded, and there was no rejection to tap out on.
           agentName: (args.agentName as string | undefined) ?? gateway.claimant(),
+          // …and the fencing token, so a move under a superseded lease is refused
+          // by generation and not just by name (TDM-121).
+          ...(gateway.claimGeneration() ? { claimGeneration: gateway.claimGeneration() } : {}),
         }
       );
       if (res.conflict) {
@@ -1206,7 +1221,19 @@ export async function handleTool(
       // Winning clears any stale record of this task — e.g. a loss whose holder
       // released it, re-claimed here rather than through queue_next.
       forgetLoss(gateway, requested);
-      return { claimed: true, ...res.data };
+      // Keep the fencing token this claim minted so later writes can present it
+      // (TDM-121). Re-export the session so the hosted sidecar — which rebuilds a
+      // fresh Gateway per call from the handle the model carries — gets the token
+      // back too; the note tells the model to switch to it, like agent_register.
+      gateway.setClaimGeneration(readClaimGeneration(res.data));
+      return {
+        claimed: true,
+        ...res.data,
+        session: gateway.exportSession(),
+        _session_note:
+          "Claim succeeded. Use THIS updated `session` handle on your later " +
+          "task_progress / task_complete calls — it carries the claim's fencing token.",
+      };
     }
 
     case "canvas_task_complete": {
@@ -1218,10 +1245,14 @@ export async function handleTool(
         action: { state: string; claimedBy?: string };
       };
       if (action.state === "approved") {
-        await gateway.patch(`/api/canvas/actions/${actionRef(args.id)}`, {
+        // Auto-claim mints a fresh fencing token; keep it so the terminal PATCH
+        // below presents it (TDM-121) — a completion that skipped task_start still
+        // writes under a real generation.
+        const claimed = await gateway.patch(`/api/canvas/actions/${actionRef(args.id)}`, {
           state: "executing",
           agentName: claimant,
         });
+        gateway.setClaimGeneration(readClaimGeneration(claimed));
       }
       // Send our identity on the terminal PATCH too — the API rejects completing
       // a task a different named agent still holds, closing the "finish someone
@@ -1235,6 +1266,7 @@ export async function handleTool(
       const links = Array.isArray(args.links)
         ? args.links.filter((l): l is string => typeof l === "string" && l.trim() !== "")
         : undefined;
+      const gen = gateway.claimGeneration();
       const res = await gateway.patchWithConflict<Record<string, unknown>, ConflictBody>(
         `/api/canvas/actions/${actionRef(args.id)}`,
         {
@@ -1242,6 +1274,9 @@ export async function handleTool(
           result: args.result,
           error: args.error,
           agentName: claimant,
+          // Present the fencing token from our claim so a write under a superseded
+          // lease is refused even when the holder NAME came back around (TDM-121).
+          ...(gen ? { claimGeneration: gen } : {}),
           ...(links && links.length > 0 ? { links } : {}),
         }
       );

@@ -790,3 +790,121 @@ test("a planner that never claimed sees both workers and their in-flight tasks",
     );
   });
 });
+
+// ── (5) The gateway presents its fencing token (TDM-121) ──────────────────────
+//
+// The hole the TDM-102 harness measured: the gateway read a claimGeneration out
+// of a refusal but had no field to SEND one, so every write was identity-checked
+// only — and identity cannot catch a lease that came back to the SAME agent name.
+// Now a successful claim's token is kept on the session and presented as
+// claimGeneration on task_progress / task_complete / a state move.
+test("a claim's fencing token is presented on every later write", async () => {
+  const bodies: Array<{ method: string; path: string; body: any }> = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(String(input));
+    const method = init?.method ?? "GET";
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    bodies.push({ method, path: url.pathname, body });
+    if (url.pathname === "/api/mcp/auth") {
+      return new Response(
+        JSON.stringify({ token: "t", canvasId: "canvas-1", canvasName: "C", canvasCode: CODE }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    // The atomic claim: mints generation 7 and hands it back in the claim block.
+    if (method === "PATCH" && body?.state === "executing") {
+      return new Response(
+        JSON.stringify({
+          action: { state: "executing", claimedBy: "worker-a" },
+          claim: { generation: 7, holder: "worker-a" },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    // The read task_complete does before its terminal PATCH.
+    if (method === "GET") {
+      return new Response(
+        JSON.stringify({ action: { state: "executing", claimedBy: "worker-a" } }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    // Progress (POST /status) and the terminal PATCH both succeed.
+    return new Response(
+      JSON.stringify({ action: { state: "done", claimedBy: "worker-a", payload: {} } }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
+  }) as typeof globalThis.fetch;
+  try {
+    const a = await connect({ role: "executor", name: "worker-a" });
+
+    const claim = (await handleFacadeTool(a.gw, "task_claim", { id: "task-1" })) as any;
+    assert.equal(claim.claimed, true);
+    assert.ok(claim.session, "the claim re-exports the session so the sidecar carries the token");
+    assert.equal(
+      parseSession(claim.session).claimGeneration,
+      7,
+      "the fencing token rides inside the session handle, like claimantId"
+    );
+
+    // Progress → POST /status carries the token.
+    await handleFacadeTool(a.gw, "task_progress", { id: "task-1", note: "working" });
+    const status = bodies.find((b) => b.path.endsWith("/status"));
+    assert.ok(status, "task_progress hit the status endpoint");
+    assert.equal(status!.body.claimGeneration, 7, "the heartbeat presents the token");
+
+    // Complete → the terminal PATCH carries the token.
+    await handleFacadeTool(a.gw, "task_complete", { id: "task-1", result: "done" });
+    const done = bodies.find((b) => b.method === "PATCH" && b.body?.state === "done");
+    assert.ok(done, "task_complete made a terminal PATCH");
+    assert.equal(done!.body.claimGeneration, 7, "the completion presents the token");
+  } finally {
+    globalThis.fetch = real;
+  }
+});
+
+// Belt and suspenders: an API that mints NO token (pre-TDM-98) must leave writes
+// tokenless rather than presenting a spurious 0 — the documented degradation.
+test("no token is presented when the claim minted none", async () => {
+  const bodies: Array<{ method: string; body: any }> = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(String(input));
+    const method = init?.method ?? "GET";
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    bodies.push({ method, body });
+    if (url.pathname === "/api/mcp/auth") {
+      return new Response(
+        JSON.stringify({ token: "t", canvasId: "canvas-1", canvasName: "C", canvasCode: CODE }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    if (method === "PATCH" && body?.state === "executing") {
+      // No `claim` block — an API from before the fencing token.
+      return new Response(
+        JSON.stringify({ action: { state: "executing", claimedBy: "worker-a" } }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    if (method === "GET") {
+      return new Response(
+        JSON.stringify({ action: { state: "executing", claimedBy: "worker-a" } }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    return new Response(
+      JSON.stringify({ action: { state: "done", claimedBy: "worker-a", payload: {} } }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
+  }) as typeof globalThis.fetch;
+  try {
+    const a = await connect({ role: "executor", name: "worker-a" });
+    const claim = (await handleFacadeTool(a.gw, "task_claim", { id: "task-1" })) as any;
+    assert.equal(parseSession(claim.session).claimGeneration, undefined);
+    await handleFacadeTool(a.gw, "task_complete", { id: "task-1", result: "done" });
+    const done = bodies.find((b) => b.method === "PATCH" && b.body?.state === "done");
+    assert.equal("claimGeneration" in (done!.body ?? {}), false, "no spurious token on the wire");
+  } finally {
+    globalThis.fetch = real;
+  }
+});

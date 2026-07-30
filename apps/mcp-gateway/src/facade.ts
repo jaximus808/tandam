@@ -488,6 +488,9 @@ export async function handleFacadeTool(
         state: "progress",
         agent: claimant,
         summary,
+        // Present the claim's fencing token (TDM-121) so a heartbeat from a lease
+        // that has been superseded is refused by generation, not just by name.
+        ...(gateway.claimGeneration() ? { claimGeneration: gateway.claimGeneration() } : {}),
       });
 
       // A rejected heartbeat is an ANSWER, not a crash: the model should route on

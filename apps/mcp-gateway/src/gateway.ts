@@ -53,6 +53,16 @@ export interface CanvasSession {
   // API's claim-ownership guard reject a task_complete for a task this same
   // logical session claimed via task_start (TDM-1).
   claimantId?: string;
+  // The fencing token minted by this session's most recent successful claim
+  // (task_start / the auto-claim inside task_complete). Presented as
+  // `claimGeneration` on every later write to a task (progress / complete / move)
+  // so the API can refuse a write from a lease that has been superseded — the case
+  // identity alone cannot see, because a lease can come back to the SAME agent name
+  // (worker-a → worker-b → worker-a) and worker-a's lease-1 writes must still die.
+  // Rides inside the session handle like claimantId so the hosted sidecar's
+  // fresh-Gateway-per-call still presents it. Absent until a claim mints one:
+  // writes are then identity-checked only, the documented degradation. TDM-98/121.
+  claimGeneration?: number;
 }
 
 /**
@@ -277,6 +287,27 @@ export class Gateway {
       s.claimantId = mintClaimantId();
     }
     return s.claimantId;
+  }
+
+  /**
+   * Remember the fencing token from a successful claim (TDM-121). Ignores a
+   * missing / non-positive value so a claim response that carried no token (an
+   * API from before TDM-98) leaves the session tokenless rather than storing 0 —
+   * which a write must never present as if it were a real generation.
+   */
+  setClaimGeneration(generation: number | undefined): void {
+    if (this.session && typeof generation === "number" && generation > 0) {
+      this.session.claimGeneration = generation;
+    }
+  }
+
+  /**
+   * The fencing token to present on writes, if a claim minted one. Undefined
+   * before any claim, or against an API that mints none — both mean "send no
+   * claimGeneration", which the API treats as an identity-only (unfenced) write.
+   */
+  claimGeneration(): number | undefined {
+    return this.session?.claimGeneration;
   }
 
   getSession(): CanvasSession {
