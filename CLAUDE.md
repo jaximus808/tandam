@@ -125,6 +125,10 @@ browser to verify UI. When a change needs a migration, write the numbered SQL in
 `supabase/migrations/` and just tell him to apply it — don't try to run it yourself.
 Report what you changed and what's left for him to do, and stop there.
 
-**Git is Jaxon's too. Do NOT make PRs, and don't commit, branch, or push unless
-he explicitly asks.** Leave the changes in the working tree, report what was
-changed, and he handles everything git-related from there.
+**Git: commit ticket work — one commit per ticket.** When your changes belong to
+a ticket, commit them as `TDM-<n>: <short change summary>` right after builds/
+tests pass and BEFORE `task_complete`, so the result can carry the commit hash.
+Scope the commit to your ticket's files only — never sweep in other sessions'
+uncommitted work. Everything else about git stays Jaxon's: do NOT push, branch,
+or open PRs unless he explicitly asks. Non-ticket work stays uncommitted unless
+he says otherwise.
