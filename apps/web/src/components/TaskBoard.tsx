@@ -720,6 +720,7 @@ export default function TaskBoard({
   spotlightTaskId,
   spotlightNonce,
   active = true,
+  onOverlayOpenChange,
 }: {
   code: string;
   state: CanvasState;
@@ -756,6 +757,12 @@ export default function TaskBoard({
    *  hidden with CSS (keep-alive), and a hidden element measures as a zero rect
    *  — so the flight animation has to re-measure the moment it comes back. */
   active?: boolean;
+  /** TDM-135: reports whether a mobile sheet/modal (filter sheet, epic sheet,
+   *  detail slide-over) is open over the board. App hides the nav FAB while it
+   *  is — the FAB is a fixed z-30 sibling of the board's `relative isolate`
+   *  container, so the isolate cages these overlays BELOW it and it steals taps
+   *  from their bottom-right CTAs. */
+  onOverlayOpenChange?: (open: boolean) => void;
 }) {
   // Sidebar scope — raw as stored; validated against the live epic set below.
   const [scope, setScope] = useState<string>(() => {
@@ -1239,6 +1246,18 @@ export default function TaskBoard({
   useEffect(() => {
     if (detailId && !detail) setDetailId(null);
   }, [detailId, detail]);
+
+  // TDM-135: tell App when a mobile overlay (filter sheet, epic sheet, detail
+  // slide-over) is up so it can hide the nav FAB — the FAB paints over these,
+  // caged as they are by the board's `isolate`, and steals taps from their CTAs.
+  // Gated on `active`: when the board isn't the shown surface a leftover-open
+  // sheet must not keep the FAB hidden on Documents. Report false on unmount /
+  // deactivation so the FAB can never get stuck hidden.
+  const overlayOpen = active && (filterSheetOpen || sidebarOpen || detailId !== null);
+  useEffect(() => {
+    onOverlayOpenChange?.(overlayOpen);
+    return () => onOverlayOpenChange?.(false);
+  }, [overlayOpen, onOverlayOpenChange]);
 
   // TDM-14: consume the one-shot focus handoff from the header agent presence.
   // Scope the board to the task's epic (or "No epic" for epicless tasks, unless

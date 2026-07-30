@@ -347,6 +347,12 @@ export default function App() {
   const [boardFocusTaskId, setBoardFocusTaskId] = useState<string | null>(null);
   // One-shot epic-scope handoff (roadmap epic chip → Board scoped to it).
   const [boardFocusEpicId, setBoardFocusEpicId] = useState<string | null>(null);
+  // TDM-135: whether a mobile sheet/modal is open over the board (filter sheet,
+  // epic sheet, detail slide-over). The nav FAB is a fixed z-30 sibling of the
+  // board's `relative isolate` container, so `isolate` cages those overlays
+  // below it and it steals taps from their bottom-right CTAs. Hide the FAB while
+  // one is open. (Removing `isolate` is not an option — it cages Leaflet.)
+  const [boardOverlayOpen, setBoardOverlayOpen] = useState(false);
 
   // ── Document tabs (migration 0024) ──────────────────────────────────────────
   // A canvas is a bag of named documents; the tab strip shows the OPEN ones.
@@ -1679,6 +1685,8 @@ export default function App() {
               spotlightTaskId={spotlight?.id ?? null}
               spotlightNonce={spotlight?.nonce}
               active={surface === "board"}
+              // Hide the nav FAB while a board sheet/modal is up (TDM-135).
+              onOverlayOpenChange={setBoardOverlayOpen}
             />
           </div>
         )}
@@ -1768,20 +1776,27 @@ export default function App() {
             index.css): a corner inset that adds the iOS safe-area strip, so the
             48px target and its badge stay clear of the home indicator. Anything
             else that floats in this corner takes slot 2 rather than stacking on
-            top of it. */}
-        <button
-          onClick={() => setMobileNavOpen(true)}
-          className="tandem-float-br fixed z-30 flex h-12 w-12 items-center justify-center rounded-full border border-ink/10 bg-surface text-ink shadow-lg active:translate-y-px sm:hidden"
-          title="Menu"
-          aria-label="Open navigation"
-        >
-          <Menu size={20} strokeWidth={1.75} />
-          {proposedTaskCount > 0 && (
-            <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-agent px-1 text-[9px] font-bold text-white">
-              {proposedTaskCount}
-            </span>
-          )}
-        </button>
+            top of it.
+
+            Hidden while a board sheet/modal is open (TDM-135): the FAB is a
+            fixed z-30 sibling of the board's `relative isolate` container, so it
+            paints ABOVE those overlays (which the isolate cages below it) and
+            would steal taps from their bottom-right CTAs. */}
+        {!boardOverlayOpen && (
+          <button
+            onClick={() => setMobileNavOpen(true)}
+            className="tandem-float-br fixed z-30 flex h-12 w-12 items-center justify-center rounded-full border border-ink/10 bg-surface text-ink shadow-lg active:translate-y-px sm:hidden"
+            title="Menu"
+            aria-label="Open navigation"
+          >
+            <Menu size={20} strokeWidth={1.75} />
+            {proposedTaskCount > 0 && (
+              <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-agent px-1 text-[9px] font-bold text-white">
+                {proposedTaskCount}
+              </span>
+            )}
+          </button>
+        )}
         </div>
         </div>
       </div>
