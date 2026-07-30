@@ -305,13 +305,22 @@ async function readTask(id: string): Promise<StoredTask> {
 }
 
 /**
- * The task as a comparable string, with the fields that legitimately move on any
- * write stripped out. `updatedAt` changes on every touch; everything else here is
- * what a mutation would show up in.
+ * The task's WORK STATE as a comparable string — the fields a mutation by the
+ * loser would show up in. The assertion this feeds is "the loser mutated no WORK
+ * state," NOT "the row is byte-identical," and the difference is deliberate: a
+ * REFUSED (fenced) write is no longer a pure no-op. TDM-100's contention telemetry
+ * (contention.go recordContention → a detached goroutine) appends payload.contention[]
+ * and bumps updatedAt AFTER the refusal response — an INTENDED server-owned write on
+ * exactly these refusals. So strip the fields the server owns and moves on its own:
+ *   - `updatedAt` changes on every touch (it always did);
+ *   - `payload.contention` is the telemetry ledger TDM-100 writes on a refusal.
+ * Everything left — state / claimedBy / claimedAt / result / the rest of payload
+ * (progress[] included) — is worker-facing state the loser must not have moved.
  */
 function fingerprint(t: StoredTask): string {
   const { state, claimedBy, claimedAt, result, payload } = t;
   const p = { ...(payload ?? {}) };
+  delete p.contention;
   return JSON.stringify({ state, claimedBy, claimedAt, result, payload: p });
 }
 
