@@ -20,12 +20,13 @@ import (
 // existing per-type Patch struct (so the partial fields decode with the exact
 // same json tags and semantics as the single PATCH handlers) plus the target
 // id. Items with a missing/zero id are skipped; the response returns the ids
-// that were applied.
+// that were actually applied.
 //
-// The int returned by store.UpdateX is the bumped canvas version, not a
-// rows-affected count (same as the single handlers, which ignore it), so
-// "updated" here means "patched without error", matching single-handler
-// semantics where a well-formed but absent id is a no-op, not an error.
+// "Applied" means ROWS-AFFECTED, not "patched without error" (TDM-138). Each
+// store.UpdateX now returns the true rows-affected, so an id that is absent or
+// belongs to another canvas — a silent 0-row no-op — is NOT echoed back as
+// updated. See runBatchAffected / finishBatch in batch_common.go, which also
+// converge the canvas even when a batch partially fails.
 //
 // Execution: each handler validates its items synchronously (400s stay on the
 // request goroutine), then runs the per-item store calls concurrently via
@@ -42,20 +43,10 @@ import (
 // on a full-canvas read + marshal + WS fan-out that only exists to converge
 // viewers — the same reasoning as broadcastStateAsync elsewhere.
 func (h *Handler) broadcastBatchUpdate(w http.ResponseWriter, r *http.Request, updated []string) {
-	canvasID := CanvasIDFromCtx(r.Context())
-	// The per-item writes ran with the version bump suppressed (store.WithoutVersionBump);
-	// bump exactly once here so a batch advances the canvas version a single time. Skip
-	// when nothing was applied — matches the old serial loop, which bumped only on real
-	// writes. Synchronous (before the async broadcast) so the broadcasted state carries
-	// the new version.
-	if len(updated) > 0 {
-		if _, err := h.store.BumpCanvasVersion(r.Context(), canvasID); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-	}
-	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
-	writeJSON(w, http.StatusOK, map[string]any{"updated": updated})
+	// Thin wrapper over finishBatch (no batch error) for the serial handlers that
+	// build their applied list directly (sheet columns). The parallel handlers call
+	// finishBatch themselves so they can surface a partial-batch error.
+	h.finishBatch(w, r, updated, nil, "updated")
 }
 
 // POST /api/canvas/pins/batch-update
@@ -76,11 +67,13 @@ func (h *Handler) UpdatePinsBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "items: at least one entry is required")
 		return
 	}
+	if tooManyBatchItems(w, len(body.Items)) {
+		return
+	}
 	// Validate synchronously and collect the valid items; the store calls then run
 	// concurrently via runBatch. Validation stays on the request goroutine so a
 	// 400 is decided before any write, exactly as the old serial loop did.
 	items := make([]pinItem, 0, len(body.Items))
-	updated := make([]string, 0, len(body.Items))
 	for _, item := range body.Items {
 		if item.ID == uuid.Nil {
 			continue
@@ -102,16 +95,11 @@ func (h *Handler) UpdatePinsBatch(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		items = append(items, item)
-		updated = append(updated, item.ID.String())
 	}
-	if err := runBatch(len(items), func(i int) error {
-		_, err := h.store.UpdatePin(store.WithoutVersionBump(r.Context()), canvasID, items[i].ID, items[i].PinPatch)
-		return err
-	}); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	h.broadcastBatchUpdate(w, r, updated)
+	applied, batchErr := runBatchAffected(len(items), func(i int) (int, error) {
+		return h.store.UpdatePin(store.WithoutVersionBump(r.Context()), canvasID, items[i].ID, items[i].PinPatch)
+	})
+	h.finishBatch(w, r, appliedIDs(applied, func(i int) string { return items[i].ID.String() }), batchErr, "updated")
 }
 
 // POST /api/canvas/events/batch-update
@@ -132,23 +120,20 @@ func (h *Handler) UpdateEventsBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "items: at least one entry is required")
 		return
 	}
+	if tooManyBatchItems(w, len(body.Items)) {
+		return
+	}
 	items := make([]eventItem, 0, len(body.Items))
-	updated := make([]string, 0, len(body.Items))
 	for _, item := range body.Items {
 		if item.ID == uuid.Nil {
 			continue
 		}
 		items = append(items, item)
-		updated = append(updated, item.ID.String())
 	}
-	if err := runBatch(len(items), func(i int) error {
-		_, err := h.store.UpdateEvent(store.WithoutVersionBump(r.Context()), canvasID, items[i].ID, items[i].EventPatch)
-		return err
-	}); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	h.broadcastBatchUpdate(w, r, updated)
+	applied, batchErr := runBatchAffected(len(items), func(i int) (int, error) {
+		return h.store.UpdateEvent(store.WithoutVersionBump(r.Context()), canvasID, items[i].ID, items[i].EventPatch)
+	})
+	h.finishBatch(w, r, appliedIDs(applied, func(i int) string { return items[i].ID.String() }), batchErr, "updated")
 }
 
 // POST /api/canvas/notes/batch-update
@@ -169,23 +154,20 @@ func (h *Handler) UpdateNotesBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "items: at least one entry is required")
 		return
 	}
+	if tooManyBatchItems(w, len(body.Items)) {
+		return
+	}
 	items := make([]noteItem, 0, len(body.Items))
-	updated := make([]string, 0, len(body.Items))
 	for _, item := range body.Items {
 		if item.ID == uuid.Nil {
 			continue
 		}
 		items = append(items, item)
-		updated = append(updated, item.ID.String())
 	}
-	if err := runBatch(len(items), func(i int) error {
-		_, err := h.store.UpdateNote(store.WithoutVersionBump(r.Context()), canvasID, items[i].ID, items[i].NotePatch)
-		return err
-	}); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	h.broadcastBatchUpdate(w, r, updated)
+	applied, batchErr := runBatchAffected(len(items), func(i int) (int, error) {
+		return h.store.UpdateNote(store.WithoutVersionBump(r.Context()), canvasID, items[i].ID, items[i].NotePatch)
+	})
+	h.finishBatch(w, r, appliedIDs(applied, func(i int) string { return items[i].ID.String() }), batchErr, "updated")
 }
 
 // POST /api/canvas/roadmap-items/batch-update
@@ -206,23 +188,20 @@ func (h *Handler) UpdateRoadmapItemsBatch(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "items: at least one entry is required")
 		return
 	}
+	if tooManyBatchItems(w, len(body.Items)) {
+		return
+	}
 	items := make([]roadmapItem, 0, len(body.Items))
-	updated := make([]string, 0, len(body.Items))
 	for _, item := range body.Items {
 		if item.ID == uuid.Nil {
 			continue
 		}
 		items = append(items, item)
-		updated = append(updated, item.ID.String())
 	}
-	if err := runBatch(len(items), func(i int) error {
-		_, err := h.store.UpdateRoadmapItem(store.WithoutVersionBump(r.Context()), canvasID, items[i].ID, items[i].RoadmapItemPatch)
-		return err
-	}); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	h.broadcastBatchUpdate(w, r, updated)
+	applied, batchErr := runBatchAffected(len(items), func(i int) (int, error) {
+		return h.store.UpdateRoadmapItem(store.WithoutVersionBump(r.Context()), canvasID, items[i].ID, items[i].RoadmapItemPatch)
+	})
+	h.finishBatch(w, r, appliedIDs(applied, func(i int) string { return items[i].ID.String() }), batchErr, "updated")
 }
 
 // POST /api/canvas/charts/batch-update
@@ -243,8 +222,10 @@ func (h *Handler) UpdateChartsBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "items: at least one entry is required")
 		return
 	}
+	if tooManyBatchItems(w, len(body.Items)) {
+		return
+	}
 	items := make([]chartItem, 0, len(body.Items))
-	updated := make([]string, 0, len(body.Items))
 	for _, item := range body.Items {
 		if item.ID == uuid.Nil {
 			continue
@@ -254,16 +235,11 @@ func (h *Handler) UpdateChartsBatch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		items = append(items, item)
-		updated = append(updated, item.ID.String())
 	}
-	if err := runBatch(len(items), func(i int) error {
-		_, err := h.store.UpdateChart(store.WithoutVersionBump(r.Context()), canvasID, items[i].ID, items[i].ChartPatch)
-		return err
-	}); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	h.broadcastBatchUpdate(w, r, updated)
+	applied, batchErr := runBatchAffected(len(items), func(i int) (int, error) {
+		return h.store.UpdateChart(store.WithoutVersionBump(r.Context()), canvasID, items[i].ID, items[i].ChartPatch)
+	})
+	h.finishBatch(w, r, appliedIDs(applied, func(i int) string { return items[i].ID.String() }), batchErr, "updated")
 }
 
 // POST /api/canvas/sheet-rows/batch-update
@@ -284,23 +260,20 @@ func (h *Handler) UpdateSheetRowsBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "items: at least one entry is required")
 		return
 	}
+	if tooManyBatchItems(w, len(body.Items)) {
+		return
+	}
 	items := make([]rowItem, 0, len(body.Items))
-	updated := make([]string, 0, len(body.Items))
 	for _, item := range body.Items {
 		if item.ID == uuid.Nil {
 			continue
 		}
 		items = append(items, item)
-		updated = append(updated, item.ID.String())
 	}
-	if err := runBatch(len(items), func(i int) error {
-		_, err := h.store.UpdateSheetRow(store.WithoutVersionBump(r.Context()), canvasID, items[i].ID, items[i].SheetRowPatch)
-		return err
-	}); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	h.broadcastBatchUpdate(w, r, updated)
+	applied, batchErr := runBatchAffected(len(items), func(i int) (int, error) {
+		return h.store.UpdateSheetRow(store.WithoutVersionBump(r.Context()), canvasID, items[i].ID, items[i].SheetRowPatch)
+	})
+	h.finishBatch(w, r, appliedIDs(applied, func(i int) string { return items[i].ID.String() }), batchErr, "updated")
 }
 
 // POST /api/canvas/sheet-columns/batch-update
@@ -324,6 +297,9 @@ func (h *Handler) UpdateSheetColumnsBatch(w http.ResponseWriter, r *http.Request
 	}
 	if len(body.Items) == 0 {
 		writeError(w, http.StatusBadRequest, "items: at least one entry is required")
+		return
+	}
+	if tooManyBatchItems(w, len(body.Items)) {
 		return
 	}
 	// NOT parallelized (unlike the other batch-updates): a column lives inside its

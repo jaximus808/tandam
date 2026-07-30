@@ -815,6 +815,28 @@ func (s *supabaseStore) exec(b interface{ Execute() ([]byte, int64, error) }) er
 	return err
 }
 
+// affectedThenBump runs a single-row UPDATE/DELETE that was built with
+// count=exact (so PostgREST returns the affected-row count in Content-Range,
+// which the client surfaces as Execute's int64), then bumps the canvas version
+// and returns the TRUE rows-affected (TDM-138).
+//
+// 0 affected means the id matched nothing IN THIS CANVAS — it was absent, already
+// gone, or belongs to another tenant (the canvas_id predicate filtered it out).
+// Callers report only affected ids, so a no-op / cross-canvas write is never
+// echoed back as "applied". The version bump is a no-op on the batch path
+// (skipVersionBump — the batch handler bumps once at the end); on the single path
+// it advances the version exactly as before.
+func (s *supabaseStore) affectedThenBump(ctx context.Context, canvasID uuid.UUID, b interface{ Execute() ([]byte, int64, error) }) (int, error) {
+	_, n, err := b.Execute()
+	if err != nil {
+		return 0, err
+	}
+	if _, err := s.bumpVersion(ctx, canvasID); err != nil {
+		return 0, err
+	}
+	return int(n), nil
+}
+
 // ── Canvas ────────────────────────────────────────────────────────────────────
 
 func (s *supabaseStore) CreateCanvas(_ context.Context, name string, ownerUserID *uuid.UUID, visibility, publicRole string) (*Canvas, error) {
@@ -2057,25 +2079,17 @@ func (s *supabaseStore) UpdateDocument(ctx context.Context, canvasID uuid.UUID, 
 	if len(m) == 0 {
 		return 0, nil
 	}
-	err := s.exec(s.client.From("documents").
-		Update(m, "minimal", "").
+	return s.affectedThenBump(ctx, canvasID, s.client.From("documents").
+		Update(m, "minimal", "exact").
 		Eq("id", id.String()).
 		Eq("canvas_id", canvasID.String()))
-	if err != nil {
-		return 0, err
-	}
-	return s.bumpVersion(ctx, canvasID)
 }
 
 func (s *supabaseStore) DeleteDocument(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error) {
-	err := s.exec(s.client.From("documents").
-		Delete("minimal", "").
+	return s.affectedThenBump(ctx, canvasID, s.client.From("documents").
+		Delete("minimal", "exact").
 		Eq("id", id.String()).
 		Eq("canvas_id", canvasID.String()))
-	if err != nil {
-		return 0, err
-	}
-	return s.bumpVersion(ctx, canvasID)
 }
 
 func (s *supabaseStore) ReorderDocuments(ctx context.Context, canvasID uuid.UUID, updates []DocumentReorder) (int, error) {
@@ -2194,25 +2208,17 @@ func (s *supabaseStore) UpdatePin(ctx context.Context, canvasID uuid.UUID, id uu
 	if len(m) == 0 {
 		return 0, nil
 	}
-	err := s.exec(s.client.From("pins").
-		Update(m, "minimal", "").
+	return s.affectedThenBump(ctx, canvasID, s.client.From("pins").
+		Update(m, "minimal", "exact").
 		Eq("id", id.String()).
 		Eq("canvas_id", canvasID.String()))
-	if err != nil {
-		return 0, err
-	}
-	return s.bumpVersion(ctx, canvasID)
 }
 
 func (s *supabaseStore) DeletePin(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error) {
-	err := s.exec(s.client.From("pins").
-		Delete("minimal", "").
+	return s.affectedThenBump(ctx, canvasID, s.client.From("pins").
+		Delete("minimal", "exact").
 		Eq("id", id.String()).
 		Eq("canvas_id", canvasID.String()))
-	if err != nil {
-		return 0, err
-	}
-	return s.bumpVersion(ctx, canvasID)
 }
 
 // ── Events ────────────────────────────────────────────────────────────────────
@@ -2353,25 +2359,17 @@ func (s *supabaseStore) UpdateEvent(ctx context.Context, canvasID uuid.UUID, id 
 	if len(m) == 0 {
 		return 0, nil
 	}
-	err := s.exec(s.client.From("events").
-		Update(m, "minimal", "").
+	return s.affectedThenBump(ctx, canvasID, s.client.From("events").
+		Update(m, "minimal", "exact").
 		Eq("id", id.String()).
 		Eq("canvas_id", canvasID.String()))
-	if err != nil {
-		return 0, err
-	}
-	return s.bumpVersion(ctx, canvasID)
 }
 
 func (s *supabaseStore) DeleteEvent(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error) {
-	err := s.exec(s.client.From("events").
-		Delete("minimal", "").
+	return s.affectedThenBump(ctx, canvasID, s.client.From("events").
+		Delete("minimal", "exact").
 		Eq("id", id.String()).
 		Eq("canvas_id", canvasID.String()))
-	if err != nil {
-		return 0, err
-	}
-	return s.bumpVersion(ctx, canvasID)
 }
 
 // ── Notes ─────────────────────────────────────────────────────────────────────
@@ -2517,25 +2515,17 @@ func (s *supabaseStore) UpdateNote(ctx context.Context, canvasID uuid.UUID, id u
 	if len(m) == 0 {
 		return 0, nil
 	}
-	err := s.exec(s.client.From("notes").
-		Update(m, "minimal", "").
+	return s.affectedThenBump(ctx, canvasID, s.client.From("notes").
+		Update(m, "minimal", "exact").
 		Eq("id", id.String()).
 		Eq("canvas_id", canvasID.String()))
-	if err != nil {
-		return 0, err
-	}
-	return s.bumpVersion(ctx, canvasID)
 }
 
 func (s *supabaseStore) DeleteNote(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error) {
-	err := s.exec(s.client.From("notes").
-		Delete("minimal", "").
+	return s.affectedThenBump(ctx, canvasID, s.client.From("notes").
+		Delete("minimal", "exact").
 		Eq("id", id.String()).
 		Eq("canvas_id", canvasID.String()))
-	if err != nil {
-		return 0, err
-	}
-	return s.bumpVersion(ctx, canvasID)
 }
 
 // ListNotesByDocument returns one document's notes ordered by sort_order — the
@@ -2665,25 +2655,17 @@ func (s *supabaseStore) UpdateRoadmapItem(ctx context.Context, canvasID uuid.UUI
 	if len(m) == 0 {
 		return 0, nil
 	}
-	err := s.exec(s.client.From("roadmap_items").
-		Update(m, "minimal", "").
+	return s.affectedThenBump(ctx, canvasID, s.client.From("roadmap_items").
+		Update(m, "minimal", "exact").
 		Eq("id", id.String()).
 		Eq("canvas_id", canvasID.String()))
-	if err != nil {
-		return 0, err
-	}
-	return s.bumpVersion(ctx, canvasID)
 }
 
 func (s *supabaseStore) DeleteRoadmapItem(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error) {
-	err := s.exec(s.client.From("roadmap_items").
-		Delete("minimal", "").
+	return s.affectedThenBump(ctx, canvasID, s.client.From("roadmap_items").
+		Delete("minimal", "exact").
 		Eq("id", id.String()).
 		Eq("canvas_id", canvasID.String()))
-	if err != nil {
-		return 0, err
-	}
-	return s.bumpVersion(ctx, canvasID)
 }
 
 // ListRoadmapItems returns a canvas's roadmap items ordered by sort_order,
@@ -3702,14 +3684,10 @@ func (s *supabaseStore) UpdateActionPayload(ctx context.Context, canvasID, id uu
 
 // DeleteAction removes an action row (e.g. deleting a task from the queue).
 func (s *supabaseStore) DeleteAction(ctx context.Context, canvasID, id uuid.UUID) (int, error) {
-	err := s.exec(s.client.From("actions").
-		Delete("minimal", "").
+	return s.affectedThenBump(ctx, canvasID, s.client.From("actions").
+		Delete("minimal", "exact").
 		Eq("id", id.String()).
 		Eq("canvas_id", canvasID.String()))
-	if err != nil {
-		return 0, err
-	}
-	return s.bumpVersion(ctx, canvasID)
 }
 
 // ApproveEpicTasks flips every currently-proposed task under an epic to
@@ -3917,14 +3895,10 @@ func (s *supabaseStore) UpdateSheet(ctx context.Context, canvasID uuid.UUID, id 
 	if len(m) == 0 {
 		return 0, nil
 	}
-	err := s.exec(s.client.From("sheets").
-		Update(m, "minimal", "").
+	return s.affectedThenBump(ctx, canvasID, s.client.From("sheets").
+		Update(m, "minimal", "exact").
 		Eq("id", id.String()).
 		Eq("canvas_id", canvasID.String()))
-	if err != nil {
-		return 0, err
-	}
-	return s.bumpVersion(ctx, canvasID)
 }
 
 func (s *supabaseStore) DeleteSheet(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error) {
@@ -3935,14 +3909,10 @@ func (s *supabaseStore) DeleteSheet(ctx context.Context, canvasID uuid.UUID, id 
 	if sh, err := s.getSheet(canvasID, id); err == nil && sh.DocumentID != nil {
 		return s.DeleteDocument(ctx, canvasID, *sh.DocumentID)
 	}
-	err := s.exec(s.client.From("sheets").
-		Delete("minimal", "").
+	return s.affectedThenBump(ctx, canvasID, s.client.From("sheets").
+		Delete("minimal", "exact").
 		Eq("id", id.String()).
 		Eq("canvas_id", canvasID.String()))
-	if err != nil {
-		return 0, err
-	}
-	return s.bumpVersion(ctx, canvasID)
 }
 
 func (s *supabaseStore) AddSheetColumn(ctx context.Context, canvasID, sheetID uuid.UUID, col SheetColumn) (int, error) {
@@ -4219,13 +4189,9 @@ func (s *supabaseStore) UpdateSheetRow(ctx context.Context, canvasID uuid.UUID, 
 	if patch.SortOrder != nil {
 		m["sort_order"] = *patch.SortOrder
 	}
-	err = s.exec(s.client.From("sheet_rows").
-		Update(m, "minimal", "").
+	return s.affectedThenBump(ctx, canvasID, s.client.From("sheet_rows").
+		Update(m, "minimal", "exact").
 		Eq("id", id.String()))
-	if err != nil {
-		return 0, err
-	}
-	return s.bumpVersion(ctx, canvasID)
 }
 
 func (s *supabaseStore) DeleteSheetRow(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error) {
@@ -4242,13 +4208,9 @@ func (s *supabaseStore) DeleteSheetRow(ctx context.Context, canvasID uuid.UUID, 
 	if len(rows) == 0 {
 		return 0, fmt.Errorf("sheet row %s not found in canvas %s", id, canvasID)
 	}
-	err = s.exec(s.client.From("sheet_rows").
-		Delete("minimal", "").
+	return s.affectedThenBump(ctx, canvasID, s.client.From("sheet_rows").
+		Delete("minimal", "exact").
 		Eq("id", id.String()))
-	if err != nil {
-		return 0, err
-	}
-	return s.bumpVersion(ctx, canvasID)
 }
 
 func (s *supabaseStore) ReorderSheetRows(ctx context.Context, canvasID, sheetID uuid.UUID, updates []SheetRowReorder) (int, error) {
@@ -4475,14 +4437,10 @@ func (s *supabaseStore) UpdateChart(ctx context.Context, canvasID uuid.UUID, id 
 	if len(m) == 0 {
 		return 0, nil
 	}
-	err := s.exec(s.client.From("charts").
-		Update(m, "minimal", "").
+	return s.affectedThenBump(ctx, canvasID, s.client.From("charts").
+		Update(m, "minimal", "exact").
 		Eq("id", id.String()).
 		Eq("canvas_id", canvasID.String()))
-	if err != nil {
-		return 0, err
-	}
-	return s.bumpVersion(ctx, canvasID)
 }
 
 func (s *supabaseStore) DeleteChart(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error) {
@@ -4490,14 +4448,10 @@ func (s *supabaseStore) DeleteChart(ctx context.Context, canvasID uuid.UUID, id 
 	if ch, err := s.getChart(canvasID, id); err == nil && ch.DocumentID != nil {
 		return s.DeleteDocument(ctx, canvasID, *ch.DocumentID)
 	}
-	err := s.exec(s.client.From("charts").
-		Delete("minimal", "").
+	return s.affectedThenBump(ctx, canvasID, s.client.From("charts").
+		Delete("minimal", "exact").
 		Eq("id", id.String()).
 		Eq("canvas_id", canvasID.String()))
-	if err != nil {
-		return 0, err
-	}
-	return s.bumpVersion(ctx, canvasID)
 }
 
 // ── Forms (direct-input layer) ──────────────────────────────────────────────
@@ -4580,25 +4534,17 @@ func (s *supabaseStore) UpdateForm(ctx context.Context, canvasID uuid.UUID, id u
 	if len(m) == 0 {
 		return 0, nil
 	}
-	err := s.exec(s.client.From("forms").
-		Update(m, "minimal", "").
+	return s.affectedThenBump(ctx, canvasID, s.client.From("forms").
+		Update(m, "minimal", "exact").
 		Eq("id", id.String()).
 		Eq("canvas_id", canvasID.String()))
-	if err != nil {
-		return 0, err
-	}
-	return s.bumpVersion(ctx, canvasID)
 }
 
 func (s *supabaseStore) DeleteForm(ctx context.Context, canvasID uuid.UUID, id uuid.UUID) (int, error) {
-	err := s.exec(s.client.From("forms").
-		Delete("minimal", "").
+	return s.affectedThenBump(ctx, canvasID, s.client.From("forms").
+		Delete("minimal", "exact").
 		Eq("id", id.String()).
 		Eq("canvas_id", canvasID.String()))
-	if err != nil {
-		return 0, err
-	}
-	return s.bumpVersion(ctx, canvasID)
 }
 
 // SubmitForm applies a resolved batch via the submit_canvas_form RPC, which

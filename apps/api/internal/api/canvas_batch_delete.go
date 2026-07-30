@@ -27,9 +27,11 @@ import (
 // aborts the batch — unlike a zero id, a non-empty-but-wrong ref is a real
 // mistake worth surfacing, not a silent no-op.
 //
-// The store DeleteX methods return (rows-affected int, error); like the single
-// handlers, the int is ignored — a well-formed but already-absent id is a
-// no-op, not an error, matching single-handler semantics.
+// The store DeleteX methods return (rows-affected int, error). The batch uses
+// that count: an id that removed 0 rows — already gone, or belonging to another
+// canvas — is NOT echoed back as deleted (TDM-138). See runBatchAffected /
+// finishBatch in batch_common.go, which also converge the canvas even when a
+// batch partially fails.
 //
 // Execution: the id-keyed deletes run concurrently via runBatch (each row is
 // independent), with the trailing broadcast async (broadcastBatchDelete). Two
@@ -43,18 +45,10 @@ import (
 // deletes are durable, so the caller returns immediately and viewers converge a
 // moment later off the request goroutine.
 func (h *Handler) broadcastBatchDelete(w http.ResponseWriter, r *http.Request, deleted []string) {
-	canvasID := CanvasIDFromCtx(r.Context())
-	// One version bump per batch — the per-item deletes ran with the bump suppressed
-	// (store.WithoutVersionBump). Skip when nothing was deleted, mirroring the old
-	// serial loop. Synchronous so the async broadcast reflects the new version.
-	if len(deleted) > 0 {
-		if _, err := h.store.BumpCanvasVersion(r.Context(), canvasID); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-	}
-	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
-	writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted})
+	// Thin wrapper over finishBatch (no batch error) for the serial handlers that
+	// build their deleted list directly (sheet columns, documents). The parallel
+	// handlers call finishBatch themselves so they can surface a partial-batch error.
+	h.finishBatch(w, r, deleted, nil, "deleted")
 }
 
 // POST /api/canvas/pins/batch-delete
@@ -71,23 +65,20 @@ func (h *Handler) DeletePinsBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ids: at least one id is required")
 		return
 	}
+	if tooManyBatchItems(w, len(body.IDs)) {
+		return
+	}
 	ids := make([]uuid.UUID, 0, len(body.IDs))
-	deleted := make([]string, 0, len(body.IDs))
 	for _, id := range body.IDs {
 		if id == uuid.Nil {
 			continue
 		}
 		ids = append(ids, id)
-		deleted = append(deleted, id.String())
 	}
-	if err := runBatch(len(ids), func(i int) error {
-		_, err := h.store.DeletePin(store.WithoutVersionBump(r.Context()), canvasID, ids[i])
-		return err
-	}); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	h.broadcastBatchDelete(w, r, deleted)
+	applied, batchErr := runBatchAffected(len(ids), func(i int) (int, error) {
+		return h.store.DeletePin(store.WithoutVersionBump(r.Context()), canvasID, ids[i])
+	})
+	h.finishBatch(w, r, appliedIDs(applied, func(i int) string { return ids[i].String() }), batchErr, "deleted")
 }
 
 // POST /api/canvas/events/batch-delete
@@ -104,23 +95,20 @@ func (h *Handler) DeleteEventsBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ids: at least one id is required")
 		return
 	}
+	if tooManyBatchItems(w, len(body.IDs)) {
+		return
+	}
 	ids := make([]uuid.UUID, 0, len(body.IDs))
-	deleted := make([]string, 0, len(body.IDs))
 	for _, id := range body.IDs {
 		if id == uuid.Nil {
 			continue
 		}
 		ids = append(ids, id)
-		deleted = append(deleted, id.String())
 	}
-	if err := runBatch(len(ids), func(i int) error {
-		_, err := h.store.DeleteEvent(store.WithoutVersionBump(r.Context()), canvasID, ids[i])
-		return err
-	}); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	h.broadcastBatchDelete(w, r, deleted)
+	applied, batchErr := runBatchAffected(len(ids), func(i int) (int, error) {
+		return h.store.DeleteEvent(store.WithoutVersionBump(r.Context()), canvasID, ids[i])
+	})
+	h.finishBatch(w, r, appliedIDs(applied, func(i int) string { return ids[i].String() }), batchErr, "deleted")
 }
 
 // POST /api/canvas/notes/batch-delete
@@ -137,23 +125,20 @@ func (h *Handler) DeleteNotesBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ids: at least one id is required")
 		return
 	}
+	if tooManyBatchItems(w, len(body.IDs)) {
+		return
+	}
 	ids := make([]uuid.UUID, 0, len(body.IDs))
-	deleted := make([]string, 0, len(body.IDs))
 	for _, id := range body.IDs {
 		if id == uuid.Nil {
 			continue
 		}
 		ids = append(ids, id)
-		deleted = append(deleted, id.String())
 	}
-	if err := runBatch(len(ids), func(i int) error {
-		_, err := h.store.DeleteNote(store.WithoutVersionBump(r.Context()), canvasID, ids[i])
-		return err
-	}); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	h.broadcastBatchDelete(w, r, deleted)
+	applied, batchErr := runBatchAffected(len(ids), func(i int) (int, error) {
+		return h.store.DeleteNote(store.WithoutVersionBump(r.Context()), canvasID, ids[i])
+	})
+	h.finishBatch(w, r, appliedIDs(applied, func(i int) string { return ids[i].String() }), batchErr, "deleted")
 }
 
 // POST /api/canvas/roadmap-items/batch-delete
@@ -170,23 +155,20 @@ func (h *Handler) DeleteRoadmapItemsBatch(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "ids: at least one id is required")
 		return
 	}
+	if tooManyBatchItems(w, len(body.IDs)) {
+		return
+	}
 	ids := make([]uuid.UUID, 0, len(body.IDs))
-	deleted := make([]string, 0, len(body.IDs))
 	for _, id := range body.IDs {
 		if id == uuid.Nil {
 			continue
 		}
 		ids = append(ids, id)
-		deleted = append(deleted, id.String())
 	}
-	if err := runBatch(len(ids), func(i int) error {
-		_, err := h.store.DeleteRoadmapItem(store.WithoutVersionBump(r.Context()), canvasID, ids[i])
-		return err
-	}); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	h.broadcastBatchDelete(w, r, deleted)
+	applied, batchErr := runBatchAffected(len(ids), func(i int) (int, error) {
+		return h.store.DeleteRoadmapItem(store.WithoutVersionBump(r.Context()), canvasID, ids[i])
+	})
+	h.finishBatch(w, r, appliedIDs(applied, func(i int) string { return ids[i].String() }), batchErr, "deleted")
 }
 
 // POST /api/canvas/charts/batch-delete
@@ -203,23 +185,20 @@ func (h *Handler) DeleteChartsBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ids: at least one id is required")
 		return
 	}
+	if tooManyBatchItems(w, len(body.IDs)) {
+		return
+	}
 	ids := make([]uuid.UUID, 0, len(body.IDs))
-	deleted := make([]string, 0, len(body.IDs))
 	for _, id := range body.IDs {
 		if id == uuid.Nil {
 			continue
 		}
 		ids = append(ids, id)
-		deleted = append(deleted, id.String())
 	}
-	if err := runBatch(len(ids), func(i int) error {
-		_, err := h.store.DeleteChart(store.WithoutVersionBump(r.Context()), canvasID, ids[i])
-		return err
-	}); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	h.broadcastBatchDelete(w, r, deleted)
+	applied, batchErr := runBatchAffected(len(ids), func(i int) (int, error) {
+		return h.store.DeleteChart(store.WithoutVersionBump(r.Context()), canvasID, ids[i])
+	})
+	h.finishBatch(w, r, appliedIDs(applied, func(i int) string { return ids[i].String() }), batchErr, "deleted")
 }
 
 // POST /api/canvas/sheets/batch-delete
@@ -236,23 +215,20 @@ func (h *Handler) DeleteSheetsBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ids: at least one id is required")
 		return
 	}
+	if tooManyBatchItems(w, len(body.IDs)) {
+		return
+	}
 	ids := make([]uuid.UUID, 0, len(body.IDs))
-	deleted := make([]string, 0, len(body.IDs))
 	for _, id := range body.IDs {
 		if id == uuid.Nil {
 			continue
 		}
 		ids = append(ids, id)
-		deleted = append(deleted, id.String())
 	}
-	if err := runBatch(len(ids), func(i int) error {
-		_, err := h.store.DeleteSheet(store.WithoutVersionBump(r.Context()), canvasID, ids[i])
-		return err
-	}); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	h.broadcastBatchDelete(w, r, deleted)
+	applied, batchErr := runBatchAffected(len(ids), func(i int) (int, error) {
+		return h.store.DeleteSheet(store.WithoutVersionBump(r.Context()), canvasID, ids[i])
+	})
+	h.finishBatch(w, r, appliedIDs(applied, func(i int) string { return ids[i].String() }), batchErr, "deleted")
 }
 
 // POST /api/canvas/sheet-rows/batch-delete
@@ -269,23 +245,20 @@ func (h *Handler) DeleteSheetRowsBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ids: at least one id is required")
 		return
 	}
+	if tooManyBatchItems(w, len(body.IDs)) {
+		return
+	}
 	ids := make([]uuid.UUID, 0, len(body.IDs))
-	deleted := make([]string, 0, len(body.IDs))
 	for _, id := range body.IDs {
 		if id == uuid.Nil {
 			continue
 		}
 		ids = append(ids, id)
-		deleted = append(deleted, id.String())
 	}
-	if err := runBatch(len(ids), func(i int) error {
-		_, err := h.store.DeleteSheetRow(store.WithoutVersionBump(r.Context()), canvasID, ids[i])
-		return err
-	}); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	h.broadcastBatchDelete(w, r, deleted)
+	applied, batchErr := runBatchAffected(len(ids), func(i int) (int, error) {
+		return h.store.DeleteSheetRow(store.WithoutVersionBump(r.Context()), canvasID, ids[i])
+	})
+	h.finishBatch(w, r, appliedIDs(applied, func(i int) string { return ids[i].String() }), batchErr, "deleted")
 }
 
 // POST /api/canvas/sheet-columns/batch-delete
@@ -313,6 +286,9 @@ func (h *Handler) DeleteSheetColumnsBatch(w http.ResponseWriter, r *http.Request
 	}
 	if len(body.Items) == 0 {
 		writeError(w, http.StatusBadRequest, "items: at least one entry is required")
+		return
+	}
+	if tooManyBatchItems(w, len(body.Items)) {
 		return
 	}
 	deleted := make([]string, 0, len(body.Items))
@@ -354,6 +330,9 @@ func (h *Handler) DeleteDocumentsBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "refs: at least one document ref is required")
 		return
 	}
+	if tooManyBatchItems(w, len(body.Refs)) {
+		return
+	}
 	deleted := make([]string, 0, len(body.Refs))
 	for _, ref := range body.Refs {
 		if ref == "" {
@@ -387,23 +366,20 @@ func (h *Handler) DeleteFormsBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ids: at least one id is required")
 		return
 	}
+	if tooManyBatchItems(w, len(body.IDs)) {
+		return
+	}
 	ids := make([]uuid.UUID, 0, len(body.IDs))
-	deleted := make([]string, 0, len(body.IDs))
 	for _, id := range body.IDs {
 		if id == uuid.Nil {
 			continue
 		}
 		ids = append(ids, id)
-		deleted = append(deleted, id.String())
 	}
-	if err := runBatch(len(ids), func(i int) error {
-		_, err := h.store.DeleteForm(store.WithoutVersionBump(r.Context()), canvasID, ids[i])
-		return err
-	}); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	h.broadcastBatchDelete(w, r, deleted)
+	applied, batchErr := runBatchAffected(len(ids), func(i int) (int, error) {
+		return h.store.DeleteForm(store.WithoutVersionBump(r.Context()), canvasID, ids[i])
+	})
+	h.finishBatch(w, r, appliedIDs(applied, func(i int) string { return ids[i].String() }), batchErr, "deleted")
 }
 
 // POST /api/canvas/actions/batch-delete
@@ -424,21 +400,18 @@ func (h *Handler) DeleteActionsBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ids: at least one id is required")
 		return
 	}
+	if tooManyBatchItems(w, len(body.IDs)) {
+		return
+	}
 	ids := make([]uuid.UUID, 0, len(body.IDs))
-	deleted := make([]string, 0, len(body.IDs))
 	for _, id := range body.IDs {
 		if id == uuid.Nil {
 			continue
 		}
 		ids = append(ids, id)
-		deleted = append(deleted, id.String())
 	}
-	if err := runBatch(len(ids), func(i int) error {
-		_, err := h.store.DeleteAction(store.WithoutVersionBump(r.Context()), canvasID, ids[i])
-		return err
-	}); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	h.broadcastBatchDelete(w, r, deleted)
+	applied, batchErr := runBatchAffected(len(ids), func(i int) (int, error) {
+		return h.store.DeleteAction(store.WithoutVersionBump(r.Context()), canvasID, ids[i])
+	})
+	h.finishBatch(w, r, appliedIDs(applied, func(i int) string { return ids[i].String() }), batchErr, "deleted")
 }
