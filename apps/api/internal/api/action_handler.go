@@ -564,20 +564,32 @@ func (h *Handler) transitionAction(w http.ResponseWriter, r *http.Request, to st
 	// the single funnel every transition goes through — the MCP/web PATCH, the
 	// status API's completed/failed, approve and reject alike.
 	if len(patch.Payload) > 0 {
-		if changed := store.ContentDiff(current.Payload, patch.Payload); len(changed) > 0 {
+		// A payload carrying ONLY server-owned keys (claim / contention / audit)
+		// says nothing about content — it is what a client sends when it echoes the
+		// fencing record back on a completion. It must not be diffed as content
+		// (TDM-141): ContentDiff would read the absent title/body as a deletion and
+		// refuse with a misleading content_locked, when in fact nothing was
+		// rewritten. And because this write REPLACES the payload wholesale, storing
+		// it would actually DROP title/body — so drop it from the patch entirely:
+		// the server-owned keys are already authoritative on the stored row, so
+		// there is nothing to carry and nothing to write.
+		if store.PayloadIsOnlyServerOwned(patch.Payload) {
+			patch.Payload = nil
+		} else if changed := store.ContentDiff(current.Payload, patch.Payload); len(changed) > 0 {
 			writeJSON(w, http.StatusConflict, map[string]string{
 				"error": "content_locked",
 				"message": "a state change cannot also rewrite the task's " + strings.Join(changed, " and ") +
 					" — edit content with a payload-only PATCH, which re-enters the approval gate",
 			})
 			return nil, false
+		} else {
+			// The claim record and the contention trail are server-owned, and this is
+			// the one payload door that writes raw (see store.CarryClaimRecord /
+			// store.CarryContention): whatever the caller sent under `claim` or
+			// `contention`, the stored copies are what get stored again.
+			patch.Payload = store.CarryClaimRecord(patch.Payload, current.Payload)
+			patch.Payload = store.CarryContention(patch.Payload, current.Payload)
 		}
-		// The claim record and the contention trail are server-owned, and this is
-		// the one payload door that writes raw (see store.CarryClaimRecord /
-		// store.CarryContention): whatever the caller sent under `claim` or
-		// `contention`, the stored copies are what get stored again.
-		patch.Payload = store.CarryClaimRecord(patch.Payload, current.Payload)
-		patch.Payload = store.CarryContention(patch.Payload, current.Payload)
 	}
 	patch.State = to
 	if _, err := h.store.UpdateActionState(r.Context(), canvasID, id, patch); err != nil {

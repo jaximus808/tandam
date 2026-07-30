@@ -331,6 +331,36 @@ func moveTask(t *testing.T, h *Handler, canvasID, id uuid.UUID, body map[string]
 	return w
 }
 
+// TDM-141: a transition PATCH whose payload carries ONLY server-owned keys (here
+// the fencing record echoed back on a completion) is NOT a content rewrite. It
+// must not be refused with a misleading content_locked, and — because this write
+// replaces the payload wholesale — it must not drop the task's title/body.
+func TestClaimOnlyTransitionPayloadIsNotContentLocked(t *testing.T) {
+	canvasID := uuid.New()
+	task := fenceTask() // title "fence every write path", assignee "agent"
+	fake := newFenceStore(task)
+	h := NewHandler(fake, nil, nil)
+
+	gen := claimVia(t, h, canvasID, task.ID, "worker-a")
+
+	w := patchTask(t, h, canvasID, task.ID, map[string]any{
+		"state": "done", "agentName": "worker-a", "claimGeneration": gen,
+		"payload": map[string]any{"claim": map[string]any{"generation": 9}},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("claim-only completion = %d, want 200 (not content_locked); body %s", w.Code, w.Body)
+	}
+	final := fake.task(task.ID)
+	if final.State != "done" {
+		t.Fatalf("state = %q, want done", final.State)
+	}
+	// Title/body must survive: the claim-only payload carried no content, so the
+	// stored content is untouched.
+	if changed := store.ContentDiff(fenceTask().Payload, final.Payload); len(changed) != 0 {
+		t.Fatalf("completion dropped content %v — a claim-only payload must not blank title/body", changed)
+	}
+}
+
 // ── (1) The race: an expired lease's old holder cannot write ──────────────────
 
 // THE test. worker-a claims, goes quiet past its lease, worker-b takes the task

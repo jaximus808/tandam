@@ -15,6 +15,39 @@ import (
 	"github.com/google/uuid"
 )
 
+// TDM-141: PayloadIsOnlyServerOwned tells a transition PATCH that a payload
+// carrying nothing but server-owned keys (claim / contention / audit) says
+// nothing about content, so it must be diffed as content by nobody.
+func TestPayloadIsOnlyServerOwned(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{"claim only", `{"claim":{"generation":9}}`, true},
+		{"contention only", `{"contention":[{"lostBy":"a"}]}`, true},
+		{"audit only", `{"audit":[{"actor":"x"}]}`, true},
+		{"all three server-owned", `{"claim":{},"contention":[],"audit":[]}`, true},
+		{"has title", `{"title":"x"}`, false},
+		{"claim plus title", `{"claim":{},"title":"x"}`, false},
+		{"empty object", `{}`, false},
+		{"empty payload", ``, false},
+		{"array not object", `[1,2]`, false},
+		{"scalar not object", `"just a string"`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var raw json.RawMessage
+			if tc.raw != "" {
+				raw = json.RawMessage(tc.raw)
+			}
+			if got := PayloadIsOnlyServerOwned(raw); got != tc.want {
+				t.Fatalf("PayloadIsOnlyServerOwned(%s) = %v, want %v", tc.raw, got, tc.want)
+			}
+		})
+	}
+}
+
 // TDM-41 (E4.2) — the content-mutation gate, at the layer that enforces it.
 //
 // THE ACCEPTANCE CRITERION IS THE SECURITY TEST: an agent must not be able to

@@ -177,6 +177,40 @@ func ContentDiff(stored, incoming json.RawMessage) []string {
 	return changed
 }
 
+// serverOwnedPayloadKeys are the payload keys the server owns outright — a
+// caller's value for any of them is ignored and the stored row's copy carried
+// instead (see carryContentAudit / CarryClaimRecord / CarryContention). None of
+// them is content: a payload carrying only these keys says nothing about the
+// task's title or body.
+var serverOwnedPayloadKeys = map[string]bool{
+	ClaimRecordKey: true, // "claim" — the fencing record (claim_fence.go)
+	ContentionKey:  true, // "contention" — the lost-claim trail (contention.go)
+	"audit":        true, // the content/state audit log
+}
+
+// PayloadIsOnlyServerOwned reports whether a payload is a JSON object carrying
+// NOTHING but server-owned keys (claim / contention / audit). Such a payload
+// says nothing about content, so a transition PATCH that carries one is a
+// bookkeeping no-op, not a content rewrite: diffing it against the stored payload
+// would misread the absent title/body as a deletion and refuse with a misleading
+// content_locked (TDM-141). Empty and non-object payloads are NOT "only
+// server-owned" — they fall to ContentDiff's own rules.
+func PayloadIsOnlyServerOwned(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var p map[string]json.RawMessage
+	if json.Unmarshal(raw, &p) != nil || len(p) == 0 {
+		return false
+	}
+	for k := range p {
+		if !serverOwnedPayloadKeys[k] {
+			return false
+		}
+	}
+	return true
+}
+
 // contentValues pulls the content fields out of a payload as plain strings. A
 // non-string value under a content key (a number, an object) reads as "" —
 // which is a change if it used to hold text, again the safe direction.
