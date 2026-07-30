@@ -158,6 +158,28 @@ func (h *Handler) GetCanvasByCode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "canvas not found")
 		return
 	}
+	// A PRIVATE canvas must not leak its name/owner — or even its existence — to a
+	// caller with no grant (TDM-139). Resolve the session role and answer an
+	// existence-agnostic 404 (NOT 403) when it's "none", so guessing an 8-char code
+	// cannot distinguish a private canvas from one that doesn't exist. Public
+	// canvases are unaffected: the code is their access token.
+	if canvas.Visibility == "private" {
+		var uid *uuid.UUID
+		if h.authSvc != nil {
+			if id, ok := sessionUserID(h.authSvc, r); ok {
+				uid = &id
+			}
+		}
+		role, rerr := h.store.ResolveCanvasRole(r.Context(), canvas, uid)
+		if rerr != nil {
+			writeError(w, http.StatusInternalServerError, "could not resolve canvas access")
+			return
+		}
+		if role == "none" {
+			writeError(w, http.StatusNotFound, "canvas not found")
+			return
+		}
+	}
 	writeJSON(w, http.StatusOK, canvas)
 }
 
