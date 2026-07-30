@@ -423,10 +423,30 @@ export class Gateway {
     throw new Error(`${method} ${path} failed: ${res.status} ${body}`);
   }
 
+  /**
+   * Parse a 2xx body as JSON, but FIRST reject a non-JSON one with an actionable
+   * error instead of an opaque `SyntaxError: Unexpected token '<'` (TDM-133). The
+   * API mounts the SPA on `/*`, so an unrouted `/api/...` path — most often an
+   * empty or malformed id segment building `/api/canvas/actions/` — is answered
+   * with index.html and a 200. res.json() on that HTML throws a parser error that
+   * leaks nothing useful; name the real problem instead.
+   */
+  private async parseJson<T>(method: string, path: string, res: Response): Promise<T> {
+    const contentType = res.headers.get("content-type") ?? "";
+    if (!contentType.includes("json")) {
+      throw new Error(
+        `${method} ${path} did not return JSON (content-type: ${contentType || "none"}). ` +
+          `This usually means the id was empty or malformed and the request fell through to ` +
+          `the web app. Check the id you passed and retry.`
+      );
+    }
+    return res.json() as Promise<T>;
+  }
+
   async get<T>(path: string): Promise<T> {
     const res = await this.safeFetch(path, { headers: this.authHeaders() });
     await this.assertOk("GET", path, res);
-    return res.json() as Promise<T>;
+    return this.parseJson<T>("GET", path, res);
   }
 
   /**
@@ -456,7 +476,7 @@ export class Gateway {
   async getPublic<T>(path: string): Promise<T> {
     const res = await this.safeFetch(path);
     await this.assertOk("GET", path, res);
-    return res.json() as Promise<T>;
+    return this.parseJson<T>("GET", path, res);
   }
 
   async post<T>(path: string, body?: unknown): Promise<T> {
@@ -466,7 +486,7 @@ export class Gateway {
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
     await this.assertOk("POST", path, res);
-    return res.json() as Promise<T>;
+    return this.parseJson<T>("POST", path, res);
   }
 
   /**
@@ -485,7 +505,7 @@ export class Gateway {
     });
     if (isConflictStatus(res.status)) return { conflict: (await res.json()) as C };
     await this.assertOk("POST", path, res);
-    return { data: (await res.json()) as T };
+    return { data: await this.parseJson<T>("POST", path, res) };
   }
 
   async patch<T>(path: string, body: unknown): Promise<T> {
@@ -495,7 +515,7 @@ export class Gateway {
       body: JSON.stringify(body),
     });
     await this.assertOk("PATCH", path, res);
-    return res.json() as Promise<T>;
+    return this.parseJson<T>("PATCH", path, res);
   }
 
   /**
@@ -514,7 +534,7 @@ export class Gateway {
     });
     if (isConflictStatus(res.status)) return { conflict: (await res.json()) as C };
     await this.assertOk("PATCH", path, res);
-    return { data: (await res.json()) as T };
+    return { data: await this.parseJson<T>("PATCH", path, res) };
   }
 
   async del<T>(path: string): Promise<T> {
@@ -523,6 +543,6 @@ export class Gateway {
       headers: this.authHeaders(),
     });
     await this.assertOk("DELETE", path, res);
-    return res.json() as Promise<T>;
+    return this.parseJson<T>("DELETE", path, res);
   }
 }

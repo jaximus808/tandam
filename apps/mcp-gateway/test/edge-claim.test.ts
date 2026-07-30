@@ -908,3 +908,62 @@ test("no token is presented when the claim minted none", async () => {
     globalThis.fetch = real;
   }
 });
+
+// ── (6) Clean errors on a missing / malformed id (TDM-133) ────────────────────
+//
+// task_get / task_claim / task_complete are pass-through delegators that used to
+// skip the required-arg validation task_progress does, so a missing id built a
+// URL with an empty segment, fell through to the SPA catch-all (200 HTML), and
+// surfaced as an opaque `SyntaxError: Unexpected token '<'`.
+test("task_get/claim/complete reject a missing or blank id with a clean message", async () => {
+  const api = new FakeApi([]);
+  await api.run(async () => {
+    const a = await connect({ role: "executor", name: "worker-a" });
+    for (const tool of ["task_get", "task_claim", "task_complete"]) {
+      await assert.rejects(
+        () => handleFacadeTool(a.gw, tool, {}) as Promise<unknown>,
+        /`id` \(string\) is required/,
+        `${tool} with {} must reject cleanly`
+      );
+      await assert.rejects(
+        () => handleFacadeTool(a.gw, tool, { id: "   " }) as Promise<unknown>,
+        /`id` \(string\) is required/,
+        `${tool} with a blank id must reject cleanly`
+      );
+    }
+  });
+});
+
+// Defense in depth: even a non-empty id that somehow falls through to the SPA
+// (200 HTML) must raise an actionable error, never a raw JSON parser throw.
+test("a non-JSON (HTML) 200 raises a clean error, not a SyntaxError", async () => {
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/api/mcp/auth") {
+      return new Response(
+        JSON.stringify({ token: "t", canvasId: "canvas-1", canvasName: "C", canvasCode: CODE }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    // The API mounts the SPA on /*, so an unrouted /api path answers index.html.
+    return new Response("<!doctype html><html><body>app</body></html>", {
+      status: 200,
+      headers: { "content-type": "text/html; charset=utf-8" },
+    });
+  }) as typeof globalThis.fetch;
+  try {
+    const a = await connect({ role: "executor", name: "worker-a" });
+    await assert.rejects(
+      () => handleFacadeTool(a.gw, "task_get", { id: "TDM-1" }) as Promise<unknown>,
+      (err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        assert.match(msg, /did not return JSON/, "names the real problem");
+        assert.doesNotMatch(msg, /Unexpected token|<!doctype/i, "no leaked parser internals");
+        return true;
+      }
+    );
+  } finally {
+    globalThis.fetch = real;
+  }
+});

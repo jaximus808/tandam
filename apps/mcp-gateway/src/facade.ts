@@ -334,6 +334,24 @@ export function isFacadeTool(name: string): boolean {
   return FACADE_NAMES.has(name) && !IMPLEMENTED_BY_CRUD.has(name);
 }
 
+/**
+ * Reject a missing/empty `id` BEFORE any request (TDM-133). The pass-through
+ * delegators (task_get / task_claim / task_complete) used to skip this, so an
+ * empty id built a URL with an empty segment — the API mounts the SPA on `/*`, so
+ * `/api/canvas/actions/` is answered with index.html (200), which the gateway then
+ * JSON-parsed and threw an opaque `SyntaxError: Unexpected token '<'` on. Mirror
+ * task_progress's clean validation instead. Returns the trimmed id.
+ */
+function requireTaskId(args: Args): string {
+  const id = typeof args.id === "string" ? args.id.trim() : "";
+  if (!id) {
+    throw new Error(
+      "`id` (string) is required — pass the task's ticket ref (e.g. \"TDM-21\") or its uuid."
+    );
+  }
+  return id;
+}
+
 export async function handleFacadeTool(
   gateway: Gateway,
   toolName: string,
@@ -446,9 +464,11 @@ export async function handleFacadeTool(
     }
 
     case "task_get":
+      requireTaskId(args);
       return handleTool(gateway, "canvas_task_get", args);
 
     case "task_claim":
+      requireTaskId(args);
       return handleTool(gateway, "canvas_task_start", args);
 
     case "task_progress": {
@@ -566,6 +586,7 @@ export async function handleFacadeTool(
     }
 
     case "task_complete":
+      requireTaskId(args);
       return handleTool(gateway, "canvas_task_complete", args);
 
     case "task_propose": {
