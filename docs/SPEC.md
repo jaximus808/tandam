@@ -96,8 +96,15 @@ Agent processes push enormous op rates; if Tandem is slow it gets dropped. We ne
 ### Metrics (in-process, current stack — no new infra)
 - API middleware: per-route + per-intent-op latency histograms (in-memory sliding window), p50/p95/p99.
 - Counters: `claims_total`, `claim_conflicts_total` (already-claimed errors — the contention signal), `ttl_expiries_total`, `webhook_deliveries{ok|failed}`, `status_api_posts`, `ws_clients`, `broadcast_fanout_ms` histogram.
-- **`GET /api/metrics`** returns the JSON summary (per-op p50/p95/p99 + counters + uptime). Optional Prometheus text format later.
+- **`GET /api/metrics`** returns the JSON summary (per-op p50/p95/p99 + counters + uptime). Open by design — aggregates and chi route *patterns* only, never anything canvas-shaped. Optional Prometheus text format later.
 - Gateway: per-tool-call latency logging (extends MCP_TRACE) + session summary line.
+
+### Metrics history — the series, not the snapshot (TDM-94, migration 0040)
+The in-memory registry above is a 5-minute window that dies with the process, so nothing could be compared to anything. Persisted on top of it:
+- **`metrics_snapshots`** — one row per scrape (default every 60s, `METRICS_SNAPSHOT_INTERVAL_SECONDS`), extracted headline columns plus the full snapshot as jsonb. Retention 30 days, pruned hourly by the collector (`METRICS_RETENTION_DAYS`, 0 = forever).
+- **`loadtest_runs`** — `cmd/loadtest` baselines as a run history, one row per *(run, scenario)*; published with `go run ./cmd/loadtest -publish` or by POSTing a baseline file. Upserted, so re-publishing never doubles the history. No retention: every row is a deliberate measurement.
+- **`GET /api/metrics/history`** (`?hours`, `?format=csv`), **`/history/latest`** (one snapshot's full payload), **`GET|POST /api/metrics/loadtest`** — all behind a `METRICS_OWNER_EMAILS` allowlist. Unlike the live endpoint these are **not** open: the accumulated series is a deploy log plus a capacity ceiling. Unset allowlist ⇒ the whole subtree 404s.
+- **`/metrics`** page (owner-only, URL-only): counters charted as per-minute rates with the lines **broken at every restart** (a delta across a boot reads as a huge negative spike), gauges and windowed percentiles plotted as-is, restarts drawn as deploy rules, plus the loadtest run table and CSV/JSON export.
 
 ### Performance targets (assert in benchmarks; publish baseline numbers)
 | Op | Target (server-side p95) |

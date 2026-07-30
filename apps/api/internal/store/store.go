@@ -8,6 +8,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	// Metrics history (migration 0040) is stored using the row types defined
+	// alongside the registry that produces them — see metrics_history.go for why
+	// the dependency runs store → metrics and not the other way.
+	"github.com/agentcanvas/api/internal/metrics"
 )
 
 // Claim outcomes. ClaimCanvas distinguishes these so the caller can return the
@@ -34,6 +39,11 @@ var (
 	// canvas, or it is but its status isn't one the human retry button applies
 	// to ('failed' and 'dead' are the only two — see the method's doc).
 	ErrWebhookDeliveryNotRetryable = errors.New("webhook delivery not found or not retryable")
+	// ErrMetricsSnapshotNotFound is returned by GetMetricsSnapshotPayload when no
+	// snapshot has been captured yet (migration 0040) — the expected state on a
+	// process that has been up for less than one scrape interval, not an error
+	// worth a 500.
+	ErrMetricsSnapshotNotFound = errors.New("no metrics snapshot recorded")
 	// ErrIllegalActionState wraps a ClaimAction/ReleaseAction that matched no
 	// row because the action is in a state the transition doesn't apply to
 	// (e.g. claiming a task still in 'proposed').
@@ -1330,6 +1340,39 @@ type Store interface {
 	// dead-letter list in the web UI. Returns ErrWebhookDeliveryNotRetryable
 	// when nothing matched.
 	RetryWebhookDelivery(ctx context.Context, canvasID, id uuid.UUID) (*WebhookDelivery, error)
+
+	// ── Metrics history (migration 0040) ──────────────────────────────────────
+	//
+	// The persisted series behind /api/metrics/history plus the cmd/loadtest
+	// baseline run history. Row types live in internal/metrics (the package that
+	// defines what the numbers MEAN); see metrics_history.go for why the
+	// dependency points that way. Nothing here is canvas-scoped — by design, and
+	// metrics_snapshots has no canvas_id to scope by.
+
+	// InsertMetricsSnapshot appends one scrape (metrics.SnapshotSink).
+	InsertMetricsSnapshot(ctx context.Context, row metrics.SnapshotRow) error
+	// PruneMetricsSnapshots deletes snapshots captured before `before` and
+	// returns how many (metrics.SnapshotSink) — the retention policy from 0040,
+	// enforced in Go because migrations here are hand-applied and a policy that
+	// needs someone to remember pg_cron is not a policy.
+	PruneMetricsSnapshots(ctx context.Context, before time.Time) (int, error)
+	// ListMetricsSnapshots returns snapshots at/after `since`, OLDEST FIRST
+	// (chart order). truncated reports that the row cap clipped the window, so
+	// the caller can say so instead of mislabelling the axis. Counters come back
+	// CUMULATIVE — differencing them, and deciding what to do at a restart
+	// boundary, is the chart's job.
+	ListMetricsSnapshots(ctx context.Context, since time.Time, limit int) (rows []*MetricsSnapshot, truncated bool, err error)
+	// GetMetricsSnapshotPayload returns the full stored snapshot at or before
+	// `at` (zero = newest) — the per-route forensic detail the series projection
+	// omits. ErrMetricsSnapshotNotFound when nothing has been captured.
+	GetMetricsSnapshotPayload(ctx context.Context, at time.Time) (json.RawMessage, time.Time, error)
+	// UpsertLoadtestRuns writes published cmd/loadtest baselines, keyed on
+	// (run_id, scenario) so a re-publish updates in place rather than doubling
+	// the history (metrics.LoadtestSink).
+	UpsertLoadtestRuns(ctx context.Context, rows []metrics.LoadtestRunRow) error
+	// ListLoadtestRuns returns the baseline history newest first, optionally for
+	// one scenario ("" = all).
+	ListLoadtestRuns(ctx context.Context, scenario string, limit int) ([]*LoadtestRun, error)
 
 	// Pending edits
 	CreatePendingEdit(ctx context.Context, canvasID uuid.UUID, entityID uuid.UUID, instruction string) (*PendingEdit, error)

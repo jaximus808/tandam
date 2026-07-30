@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/agentcanvas/api/internal/metrics"
 )
 
 const defaultJWTTokenTTL = 24 * time.Hour
@@ -73,6 +75,25 @@ type Config struct {
 	// webhook worker and the handlers is a nil-receiver no-op. Nothing is
 	// recorded-but-hidden.
 	MetricsEnabled bool
+
+	// MetricsSnapshotInterval is how often the collector persists a scrape of the
+	// in-memory registry into metrics_snapshots (migration 0040 / TDM-94), turning
+	// the live snapshot into a series that survives restarts.
+	//
+	// Defaults to metrics.DefaultSnapshotInterval (60s), chosen against the
+	// registry's 300s percentile window — see the constant's doc. Set
+	// METRICS_SNAPSHOT_INTERVAL_SECONDS=0 to keep the endpoint and the live
+	// numbers but persist nothing (the reads still work; they just return whatever
+	// history already exists). Implies nothing about MetricsEnabled: with metrics
+	// off there is no registry to scrape and the collector is never built.
+	MetricsSnapshotInterval time.Duration
+
+	// MetricsRetentionDays is how long persisted snapshots are kept; the collector
+	// prunes older rows hourly. Defaults to 30 days (see 0040 for the sizing
+	// argument). METRICS_RETENTION_DAYS=0 disables pruning entirely — history then
+	// grows without bound, which is a legitimate choice for a tiny local database
+	// or an operator pruning out of band, so it is honoured rather than corrected.
+	MetricsRetentionDays int
 }
 
 func Load() (*Config, error) {
@@ -130,6 +151,32 @@ func Load() (*Config, error) {
 		imageDir = "./canvas-images"
 	}
 
+	// Metrics persistence (TDM-94). Both are "0 means off" rather than "0 means
+	// default", so the off switch is reachable without a second flag.
+	snapshotInterval := metrics.DefaultSnapshotInterval
+	if raw := os.Getenv("METRICS_SNAPSHOT_INTERVAL_SECONDS"); raw != "" {
+		secs, err := strconv.Atoi(raw)
+		if err != nil {
+			return nil, fmt.Errorf("METRICS_SNAPSHOT_INTERVAL_SECONDS: %w (expected whole seconds, e.g. 60; 0 disables persistence)", err)
+		}
+		if secs < 0 {
+			return nil, fmt.Errorf("METRICS_SNAPSHOT_INTERVAL_SECONDS must be >= 0, got %d", secs)
+		}
+		snapshotInterval = time.Duration(secs) * time.Second
+	}
+
+	retentionDays := int(metrics.DefaultRetention / (24 * time.Hour))
+	if raw := os.Getenv("METRICS_RETENTION_DAYS"); raw != "" {
+		days, err := strconv.Atoi(raw)
+		if err != nil {
+			return nil, fmt.Errorf("METRICS_RETENTION_DAYS: %w (expected whole days, e.g. 30; 0 disables pruning)", err)
+		}
+		if days < 0 {
+			return nil, fmt.Errorf("METRICS_RETENTION_DAYS must be >= 0, got %d", days)
+		}
+		retentionDays = days
+	}
+
 	return &Config{
 		SupabaseURL:     supabaseURL,
 		SupabaseKey:     supabaseKey,
@@ -144,6 +191,9 @@ func Load() (*Config, error) {
 		PublicBaseURL:   strings.TrimRight(os.Getenv("PUBLIC_BASE_URL"), "/"),
 		MetricsEnabled:  os.Getenv("METRICS_ENABLED") != "false",
 		WebhooksEnabled: os.Getenv("WEBHOOKS_ENABLED") != "false",
+
+		MetricsSnapshotInterval: snapshotInterval,
+		MetricsRetentionDays:    retentionDays,
 
 		WebhooksAllowPrivateTargets: envOptIn("TANDEM_WEBHOOKS_ALLOW_PRIVATE"),
 	}, nil

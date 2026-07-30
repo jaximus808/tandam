@@ -606,3 +606,118 @@ export async function removeCanvasAccess(code: string, userId: string): Promise<
   });
   if (!res.ok) throw await apiError(res, "Could not remove access");
 }
+
+// ── Metrics history (TDM-94 / migration 0040) ────────────────────────────────
+//
+// The persisted series behind /api/metrics. Owner-gated (METRICS_OWNER_EMAILS on
+// the API), which is why these throw a MetricsAccessError the page can tell apart
+// instead of one opaque Error: 404 means the console is not configured on this
+// deployment at all, 401 means sign in, 403 means signed in but not an owner, and
+// those three want three different screens rather than one red box.
+
+export type MetricsSnapshot = {
+  capturedAt: string;
+  // The boot time of the process that produced this row. Where it CHANGES between
+  // consecutive snapshots, the counters below reset and the latency histograms
+  // emptied — so lines must break there rather than diff across, and a change is
+  // also exactly what a deploy looks like.
+  processStartedAt: string;
+  uptimeSeconds: number;
+  windowSeconds: number;
+  // Cumulative since processStartedAt — plot deltas, not the raw value.
+  requestsTotal: number;
+  routeP95Ms: number;
+  routeP95Route: string;
+  routeP95Method: string;
+  fanoutP95Ms: number;
+  claims: number;
+  claimConflicts: number;
+  ttlExpiries: number;
+  fencedWrites: number;
+  webhookOk: number;
+  webhookFailed: number;
+  webhookDead: number;
+  // A gauge — plot as-is.
+  wsClients: number;
+};
+
+export type MetricsRestart = {
+  at: string;
+  processStartedAt: string;
+  index: number;
+};
+
+export type MetricsHistory = {
+  since: string;
+  until: string;
+  windowHours: number;
+  count: number;
+  truncated: boolean;
+  restarts: MetricsRestart[];
+  snapshots: MetricsSnapshot[];
+};
+
+export type LoadtestRun = {
+  runId: string;
+  scenario: string;
+  schemaVersion: string;
+  startedAt: string;
+  finishedAt: string;
+  api: string;
+  gitRev: string;
+  gitDirty: boolean;
+  liveAgents: number;
+  measuredSeconds: number;
+  taskOpsPerSec: number;
+  errorRate: number;
+  claimP95Ms: number;
+  queueP95Ms: number;
+  assertionsPassed: number;
+  assertionsFailed: number;
+  aborted: boolean;
+  skipped: boolean;
+  notes: string;
+};
+
+// MetricsAccessError carries the status so the page can render the right thing
+// for "not configured" vs "not signed in" vs "not you".
+export class MetricsAccessError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "MetricsAccessError";
+    this.status = status;
+  }
+}
+
+async function metricsFetch(path: string): Promise<Response> {
+  const res = await fetch(path, { credentials: "same-origin" });
+  if (res.status === 404 || res.status === 401 || res.status === 403) {
+    throw new MetricsAccessError(res.status, (await apiError(res, "")).message);
+  }
+  if (!res.ok) throw await apiError(res, "Could not load metrics history");
+  return res;
+}
+
+export async function fetchMetricsHistory(hours: number): Promise<MetricsHistory> {
+  const res = await metricsFetch(`/api/metrics/history?hours=${hours}`);
+  return (await res.json()) as MetricsHistory;
+}
+
+export async function fetchLoadtestRuns(): Promise<LoadtestRun[]> {
+  const res = await metricsFetch("/api/metrics/loadtest");
+  return ((await res.json()) as { runs: LoadtestRun[] | null }).runs ?? [];
+}
+
+// Export URLs are plain links rather than fetch+blob: the point of export is that
+// the data can leave the app, and a URL is scriptable (curl with a PAT) where a
+// client-built blob is only reachable from this page.
+export function metricsHistoryExportUrl(hours: number, format: "csv" | "json"): string {
+  return format === "csv"
+    ? `/api/metrics/history?hours=${hours}&format=csv`
+    : `/api/metrics/history?hours=${hours}`;
+}
+
+export function loadtestExportUrl(format: "csv" | "json"): string {
+  return format === "csv" ? "/api/metrics/loadtest?format=csv" : "/api/metrics/loadtest";
+}

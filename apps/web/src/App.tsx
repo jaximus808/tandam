@@ -24,6 +24,7 @@ import About from "./pages/About";
 import WhyTandem from "./pages/WhyTandem";
 import MyCanvases from "./pages/MyCanvases";
 import StatsPage from "./pages/StatsPage";
+import MetricsPage from "./pages/MetricsPage";
 import UserSettings from "./pages/UserSettings";
 import OAuthConsent from "./pages/OAuthConsent";
 import { fetchMe, getCachedUser, type User } from "./lib/auth";
@@ -175,13 +176,26 @@ const SIDEBAR_WIDTH_KEY = "tandem.sidebar.width";
 // it dies with the tab instead of ambushing a later, unrelated sign-in.
 const PENDING_COPY_KEY = "tandem.pendingCopy";
 
-type Route = "home" | "mcp" | "dashboard" | "stats" | "settings" | "about" | "why" | "authorize";
+type Route =
+  | "home"
+  | "mcp"
+  | "dashboard"
+  | "stats"
+  // The owner-only performance console (TDM-94). Reachable only by typing the
+  // URL: it is an operator tool, not a product surface, and the API gate is what
+  // actually protects it (the SPA cannot keep a secret).
+  | "metrics"
+  | "settings"
+  | "about"
+  | "why"
+  | "authorize";
 
 function routeFromPath(): Route {
   const p = window.location.pathname.replace(/\/$/, "");
   if (p === "/mcp") return "mcp";
   if (p === "/dashboard") return "dashboard";
   if (p === "/stats") return "stats";
+  if (p === "/metrics") return "metrics";
   if (p === "/me") return "settings";
   if (p === "/about") return "about";
   if (p === "/why-tandem") return "why";
@@ -711,6 +725,11 @@ export default function App() {
     setRoute("about");
   }
 
+  function showMetrics() {
+    window.history.pushState(null, "", "/metrics");
+    setRoute("metrics");
+  }
+
   function showWhy() {
     window.history.pushState(null, "", "/why-tandem");
     setRoute("why");
@@ -1106,6 +1125,28 @@ export default function App() {
   if (route === "stats") {
     return (
       <StatsPage
+        onHome={() => {
+          window.history.pushState(null, "", "/");
+          setRoute("home");
+        }}
+        onOpenMCP={() => {
+          setMCPInURL();
+          setRoute("mcp");
+        }}
+        onShowCanvases={showMyCanvases}
+        onShowSettings={showSettings}
+        onShowAbout={showAbout}
+        onOpenCanvas={(code) => {
+          setRoute("home");
+          handleJoin(code);
+        }}
+      />
+    );
+  }
+
+  if (route === "metrics") {
+    return (
+      <MetricsPage
         onHome={() => {
           window.history.pushState(null, "", "/");
           setRoute("home");

@@ -27,6 +27,33 @@ go run ./cmd/loadtest -h        # every flag
 Results land in `cmd/loadtest/baselines/baseline-<timestamp>.json`, and a
 human-readable table goes to stdout.
 
+### Publishing to the run history (`-publish`)
+
+A directory of baseline files is not a history: comparing two runs means opening
+both, and comparing twenty is nobody's afternoon. `-publish` POSTs the file the
+run just wrote to `POST /api/metrics/loadtest` on the `-api` target, where each
+scenario becomes one row of the run history the owner-only `/metrics` page charts
+(TDM-94, migration 0040).
+
+```bash
+export TANDEM_PAT=tdm_pat_…          # create one at /me; the endpoint is owner-gated
+go run ./cmd/loadtest -api http://localhost:7891 -publish
+
+# backfill a baseline that predates the feature — same endpoint, same bytes
+curl -X POST -H "Authorization: Bearer $TANDEM_PAT" \
+     --data-binary @cmd/loadtest/baselines/baseline-20260729-062823.json \
+     http://localhost:7891/api/metrics/loadtest
+```
+
+The local file is still written first and is still the durable artifact — the
+history is a view of it. A publish failure prints a warning and never changes the
+exit code: a network hiccup must not make a clean 30-minute run look failed.
+Publishing is idempotent (upsert on `run_id` + `scenario`), so retrying or
+re-posting the same file will not double the history.
+
+Needs `METRICS_OWNER_EMAILS` to include your account on the target; without it the
+endpoint 404s and `-publish` says so.
+
 ---
 
 ## Safety — read this before pointing it at anything

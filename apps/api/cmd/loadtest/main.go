@@ -53,6 +53,7 @@ func main() {
 			`scenarios to run: comma-separated names, "all" (8/64/256), or "custom" with -agents/-queue-depth/-rounds/-ops`)
 		out     = flag.String("out", "", "results file path (default: <baselines dir>/baseline-<timestamp>.json)")
 		jsonOut = flag.Bool("json", false, "also print the results JSON on stdout")
+		publish = flag.Bool("publish", false, "also POST the baseline to -api's metrics history (needs TANDEM_PAT; the file is still written locally either way)")
 		keep    = flag.Bool("keep", false, "skip cleanup (leave seeded tasks on the scratch canvases)")
 		code    = flag.String("code", "", "run against this EXISTING canvas instead of creating scratch ones (use a THROWAWAY canvas)")
 		seed    = flag.Int64("seed", 1, "RNG seed for the op mix — same seed, same sequence of choices")
@@ -93,10 +94,23 @@ func main() {
 	if outPath == "" {
 		outPath = filepath.Join(defaultBaselineDir(), fmt.Sprintf("baseline-%s.json", time.Now().UTC().Format("20060102-150405")))
 	}
+	wrote := true
 	if err := writeResults(outPath, results); err != nil {
+		wrote = false
 		fmt.Fprintf(os.Stderr, "loadtest: writing results: %v\n", err)
 	} else {
 		logf("results written to %s", outPath)
+	}
+	// Publishing is strictly additive to the file on disk (see publish.go): the
+	// baseline is the durable artifact, the history is a view of it. A failure here
+	// is a warning and never changes the exit code — a network hiccup must not make
+	// a clean run look like a failed one.
+	if *publish && wrote {
+		if err := publishResults(cfg.base, outPath, 60*time.Second); err != nil {
+			fmt.Fprintf(os.Stderr, "loadtest: -publish failed (baseline is still on disk at %s): %v\n", outPath, err)
+		} else {
+			logf("baseline published to %s/api/metrics/loadtest", strings.TrimRight(cfg.base, "/"))
+		}
 	}
 	printHuman(results)
 	if *jsonOut {

@@ -68,6 +68,29 @@ func main() {
 		log.Printf("METRICS_ENABLED=false — GET /api/metrics disabled, nothing recorded")
 	}
 
+	// Metrics PERSISTENCE (TDM-94 / migration 0040). The registry above is a
+	// 5-minute in-memory window that dies with the process, which answers "how is
+	// this process behaving right now" and nothing with a "since" in it. The
+	// collector scrapes it on a timer into metrics_snapshots so the series
+	// survives restarts and /metrics can chart it.
+	//
+	// Started here, cancelled on shutdown, exactly like the hub and the webhook
+	// worker. NewCollector returns nil when metrics are off or persistence is
+	// disabled, and Run on nil is a no-op, so this stays two unconditional lines.
+	metricsCtx, stopMetrics := context.WithCancel(context.Background())
+	defer stopMetrics()
+	if cfg.MetricsSnapshotInterval <= 0 {
+		log.Printf("METRICS_SNAPSHOT_INTERVAL_SECONDS=0 — metrics history not persisted (live /api/metrics unaffected)")
+	} else if collector := metrics.NewCollector(metricsReg, db,
+		metrics.WithInterval(cfg.MetricsSnapshotInterval),
+		metrics.WithRetention(time.Duration(cfg.MetricsRetentionDays)*24*time.Hour),
+		metrics.WithLogger(log.Printf),
+	); collector != nil {
+		go collector.Run(metricsCtx)
+		log.Printf("metrics history: persisting every %s, retention %d days (0 = keep forever)",
+			cfg.MetricsSnapshotInterval, cfg.MetricsRetentionDays)
+	}
+
 	hub := ws.NewHub()
 	if metricsReg != nil {
 		// Wired BEFORE Run so there is no window where broadcasts go unmeasured.
@@ -162,6 +185,7 @@ func main() {
 
 	hub.Shutdown()
 	stopWebhooks()
+	stopMetrics()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Printf("graceful shutdown: %v (forcing close)", err)
 		_ = srv.Close()

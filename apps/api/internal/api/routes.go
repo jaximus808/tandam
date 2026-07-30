@@ -59,7 +59,7 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 		hOpts = append(hOpts, WithMetrics(metricsReg))
 		// ws_clients is pulled from the hub at scrape time (see Hub.ClientCount).
 		if hub != nil {
-			metricsReg.RegisterGauge("ws_clients", hub.ClientCount)
+			metricsReg.RegisterGauge(metrics.GaugeWSClients, hub.ClientCount)
 		}
 	}
 	h := NewHandler(s, hub, mapsReg, hOpts...)
@@ -85,6 +85,27 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 		// Aggregates only (no canvas data) — open by design.
 		r.Get("/api/metrics", metricsReg.Handler)
 	}
+
+	// ── Metrics history (TDM-94 / migration 0040) ────────────────────────────────
+	//
+	// Registered UNCONDITIONALLY, unlike /api/metrics above: reading the stored
+	// series does not need a live registry (the rows may have been written by a
+	// previous process, or by a different instance), so gating these on
+	// METRICS_ENABLED would make the history unreadable exactly when you most want
+	// it — after turning collection off to investigate something.
+	//
+	// OptionalUser then RequireMetricsOwner: OptionalUser resolves cookie / PAT /
+	// OAuth into a user, the gate checks that user against METRICS_OWNER_EMAILS and
+	// 404s the whole subtree when the allowlist is unset. Not RequireUser, because
+	// `cmd/loadtest -publish` carries a PAT and no cookie.
+	r.Group(func(r chi.Router) {
+		r.Use(OptionalUser(authSvc, s))
+		r.Use(RequireMetricsOwner(s))
+		r.Get("/api/metrics/history", h.MetricsHistory)
+		r.Get("/api/metrics/history/latest", h.MetricsSnapshotLatest)
+		r.Get("/api/metrics/loadtest", h.LoadtestRuns)
+		r.Post("/api/metrics/loadtest", h.PublishLoadtest)
+	})
 
 	// ── OAuth 2.1 authorization server (hosted MCP connector) ────────────────────
 	// Discovery metadata (RFC 8414 / 9728). Registered with a trailing wildcard
@@ -237,6 +258,11 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 		// ("TDM-21", "tdm-21", "#21", "21") — ResolveTicketRef rewrites the param
 		// to the uuid so the handlers stay uuid-only. See ticket_ref.go.
 		r.With(ResolveTicketRef(s)).Get("/api/canvas/actions/{id}", h.ReadAction)
+		// The batch-level read (TDM-93): every epic with its summary and its
+		// derived rollup — counts, activity window, one line per finished ticket
+		// — so "what did this epic achieve" costs one round trip instead of one
+		// read per ticket. See epic_rollup.go.
+		r.Get("/api/canvas/epics", h.ListEpics)
 		r.Get("/api/canvas/roadmap-items", h.ListRoadmapItems)
 		r.Get("/api/canvas/documents", h.ListDocuments)
 		// Fleet presence + activity (TDM-46). The roster pairs every registered
