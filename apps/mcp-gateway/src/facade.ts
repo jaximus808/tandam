@@ -667,15 +667,30 @@ export async function handleFacadeTool(
       // Update in place when an id was given — same note, new content.
       if (typeof args.noteId === "string" && args.noteId.trim()) {
         const noteId = args.noteId.trim();
+        // The note PATCH 200s for ANY id: the API does not existence-check it and
+        // returns no documentId to confirm a write landed (TDM-137). Relaying that
+        // as updated:true tells an agent rewriting a stale/wrong noteId that its
+        // content was saved when it was silently dropped. So confirm the note
+        // exists FIRST (a cheap notes-only state read, which also gives us the
+        // documentId to echo back); only then is updated:true honest.
+        const resp = (await gateway.get(`/api/canvas/state?fields=notes`)) as {
+          state?: { notes?: Record<string, { id?: string; documentId?: string }> };
+        };
+        const note = resp.state?.notes?.[noteId];
+        if (!note) {
+          throw new Error(
+            `No note with id "${noteId}" exists on this canvas, so there was nothing to update — ` +
+              `your content was NOT saved. Re-check the noteId, or omit it to create a new note ` +
+              `(optionally with a \`document\` name to place it).`
+          );
+        }
         // Project the response: echoing the note body back would just spend the
         // model's context on text it wrote a moment ago.
-        const updated = (await gateway.patch(`/api/canvas/notes/${noteId}`, {
-          body: markdown,
-        })) as { documentId?: string };
+        await gateway.patch(`/api/canvas/notes/${noteId}`, { body: markdown });
         return {
           updated: true,
           noteId,
-          ...(updated?.documentId ? { documentId: updated.documentId } : {}),
+          ...(note.documentId ? { documentId: note.documentId } : {}),
           url: canvasBlock(gateway).url,
         };
       }
