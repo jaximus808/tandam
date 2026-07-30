@@ -136,6 +136,32 @@ export function onRoleChange(fn: RoleHandler): () => void {
   };
 }
 
+// Connection health, surfaced as a status chip (TDM-134). State is push-only
+// over WS: on a transient drop the client reconnects with backoff, and after
+// MAX_RECONNECT_ATTEMPTS it gives up. Without a signal the board looks live
+// while it is actually frozen. These three states drive the chip:
+//   "connected"    — socket open, pushes flowing (chip hidden)
+//   "reconnecting" — dropped, inside the backoff budget, still retrying
+//   "offline"      — retry budget exhausted; the board is stale until a reconnect
+// `lastSyncAt` is the epoch-ms of the most recent state snapshot, so the chip can
+// say "last synced Xs ago" instead of a bare spinner.
+export type ConnStatus = "connected" | "reconnecting" | "offline";
+let connStatus: ConnStatus = "connected";
+let lastSyncAt: number | null = null;
+type ConnStatusHandler = (status: ConnStatus, lastSyncAt: number | null) => void;
+let connStatusHandlers: ConnStatusHandler[] = [];
+export function onConnStatus(fn: ConnStatusHandler): () => void {
+  connStatusHandlers.push(fn);
+  fn(connStatus, lastSyncAt); // sync a late subscriber to the current state
+  return () => {
+    connStatusHandlers = connStatusHandlers.filter((h) => h !== fn);
+  };
+}
+function emitConnStatus(s: ConnStatus) {
+  connStatus = s;
+  connStatusHandlers.forEach((h) => h(s, lastSyncAt));
+}
+
 // Pull the {error} message out of a probe response (or fall back).
 async function errMessage(res: Response, fallback: string): Promise<string> {
   try {
@@ -168,6 +194,7 @@ export function connectToCanvas(code: string) {
   if (currentCode === code && socket?.readyState === WebSocket.OPEN) return;
   currentCode = code;
   reconnectAttempts = 0;
+  emitConnStatus("connected"); // clear a prior canvas's stale offline/reconnecting chip
   lastAppliedVersion = -1; // fresh canvas — its version line is unrelated to the last
   readOnly = false; // fresh canvas — don't carry a prior board's read-only gate
   emitAccessError(null); // clear any denial from a previous canvas
@@ -207,6 +234,7 @@ function connect(code: string) {
 
   ws.onopen = () => {
     opened = true;
+    emitConnStatus("connected"); // socket live — pushes flow again, hide the chip
     emitAccessError(null); // we got in — clear any stale denial
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
@@ -230,6 +258,7 @@ function connect(code: string) {
           if (state.version < lastAppliedVersion) return;
           lastAppliedVersion = state.version;
         }
+        lastSyncAt = Date.now(); // a real snapshot landed — this is "last synced"
         handlers.forEach((h) =>
           h(
             msg.canvas as CanvasMeta,
@@ -293,11 +322,30 @@ function scheduleReconnect(code: string) {
   if (currentCode !== code) return;
   if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
     console.warn(`[ws] giving up after ${reconnectAttempts} reconnect attempts for ${code}`);
+    emitConnStatus("offline"); // budget exhausted — board is now silently stale
     return;
   }
   reconnectAttempts++;
+  emitConnStatus("reconnecting"); // dropped but still trying — chip says so
   const delay = Math.min(30_000, 500 * 2 ** reconnectAttempts); // 1s, 2s, 4s, 8s, 16s, 30s
   reconnectTimer = setTimeout(() => connect(code), delay);
+}
+
+// Manual reconnect for the offline chip's "Retry" — once the auto-retry budget
+// is spent nothing reconnects on its own. Unlike connectToCanvas this keeps the
+// applied-version and read-only state (it's the same canvas, just a fresh
+// socket) and works even while a dead socket lingers from the giving-up close.
+export function reconnectNow() {
+  if (MOCK_ENABLED || !currentCode) return;
+  reconnectAttempts = 0;
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  detachSocket(socket);
+  socket = null;
+  emitConnStatus("reconnecting");
+  connect(currentCode);
 }
 
 // A WS upgrade that closed before opening tells us nothing (close 1006). Probe

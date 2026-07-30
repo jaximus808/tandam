@@ -43,6 +43,7 @@ import NotificationBell from "./components/NotificationBell";
 import AgentToasts from "./components/AgentToasts";
 import TaskBoard from "./components/TaskBoard";
 import TicketView from "./components/TicketView";
+import ConnectionStatus from "./components/ConnectionStatus";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { useAgentActivity, type CursorShowcase } from "./lib/useAgentActivity";
 import { useAgentNotifications } from "./lib/useAgentNotifications";
@@ -1851,6 +1852,13 @@ export default function App() {
         showcase={boardShowcase ?? agentShowcase}
         name={agentList[0]?.name ?? "Claude"}
       />
+
+      {/* Connection-health chip (TDM-134). Hidden while pushes flow; surfaces
+          "Reconnecting…" / "Connection lost" the moment the socket drops, so a
+          frozen board can never masquerade as live. Bottom-centre keeps it clear
+          of the mobile FAB (bottom-right) and the follow "back to…" pill
+          (bottom-left). */}
+      <ConnectionStatus />
 
       {/* Follow took you somewhere; this takes you back. Transient by design —
           if you haven't clicked it within a few moves, you're watching, and a
