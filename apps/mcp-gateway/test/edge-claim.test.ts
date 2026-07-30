@@ -578,12 +578,15 @@ test("queue_next forgets the loss once the task is ready and unheld again", asyn
 // thrown protocol error, and none of it may need this gateway to be redeployed
 // in lockstep — so both spellings and both statuses fold into one tap-out.
 test("a fenced rejection folds into the tap-out contract, 409 or 412", async () => {
-  // The body writeFenced actually sends (apps/api/internal/api/claim_fence.go):
-  // the code twice (`error` + `reason`), the holder twice (`holder` + `claimedBy`),
-  // the flag, the live generation, and its own STOP sentence.
+  // The body writeFenced actually sends for a GENERATION fence (the case identity
+  // cannot see — see apps/api/internal/api/claim_fence.go): the stale-generation
+  // code twice (`error` + `reason`), the holder twice (`holder` + `claimedBy`),
+  // the flag, the live generation, and its own STOP sentence. A rival-holder refusal
+  // (`claimed_by_other`) carries the same flag but a different code, and is
+  // distinguished below by its own test (TDM-122).
   const fence = {
-    error: "claimed_by_other",
-    reason: "claimed_by_other",
+    error: "stale_claim_generation",
+    reason: "stale_claim_generation",
     fenced: true,
     holder: "worker-a",
     claimedBy: "worker-a",
@@ -629,8 +632,8 @@ test("a fenced rejection folds into the tap-out contract, 409 or 412", async () 
         4,
         "the live generation is passed through — it is what a legitimate re-claim presents"
       );
-      // `fenced` overrides the code: the API's own error string here is the
-      // pre-fence "claimed_by_other", and the flag is what says it was fenced.
+      // The stale-generation CODE is what says it was fenced — not the flag alone
+      // (TDM-122). The message is the fence sentence, not the rival-holder one.
       assert.equal(claim.reason, "fenced");
       assert.match(claim.message, /no longer current/i);
       assert.match(claim.message, /Do NOT work on it/);
@@ -647,6 +650,70 @@ test("a fenced rejection folds into the tap-out contract, 409 or 412", async () 
     } finally {
       globalThis.fetch = real;
     }
+  }
+});
+
+// TDM-122: the API stamps `fenced: true` on EVERY refusal (so a client can branch
+// on one flag), including a plain rival-holder refusal whose code is
+// "claimed_by_other". That is NOT a generation fence, and the tap-out must say so:
+// a CLAIM that loses the race is "already_claimed", a WRITE against a task a rival
+// holds is "not_your_claim". Branching on the flag alone collapsed both into
+// "fenced" and made "not_your_claim" unreachable on the write paths.
+test("a rival-holder refusal carrying fenced:true is NOT a generation fence", async () => {
+  // What the API sends when identity (not generation) refuses the write.
+  const rival = {
+    error: "claimed_by_other",
+    reason: "claimed_by_other",
+    fenced: true,
+    holder: "worker-a",
+    claimedBy: "worker-a",
+    claimGeneration: 4,
+    message: "STOP — this task is claimed by \"worker-a\", not by you.",
+  };
+  resetLossLedger();
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(String(input));
+    const method = init?.method ?? "GET";
+    if (url.pathname === "/api/mcp/auth") {
+      return new Response(
+        JSON.stringify({ token: "t", canvasId: "canvas-1", canvasName: "C", canvasCode: CODE }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    if (method === "PATCH") {
+      return new Response(JSON.stringify(rival), {
+        status: 409,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({ action: { state: "executing", claimedBy: "worker-a" } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof globalThis.fetch;
+  try {
+    const b = await connect({ role: "executor", name: "worker-b" });
+
+    // A lost claim race → "already_claimed", not "fenced".
+    const claim = (await handleFacadeTool(b.gw, "task_claim", { id: "task-9" })) as any;
+    assert.equal(claim.claimed, false);
+    assert.equal(claim.tapOut, true);
+    assert.equal(claim.reason, "already_claimed", "a lost race is not a generation fence");
+    assert.equal(claim.holder, "worker-a");
+
+    // A write against a rival's task → "not_your_claim", not "fenced" (TDM-122).
+    const done = (await handleFacadeTool(b.gw, "task_complete", {
+      id: "task-8",
+      result: "finished something a rival holds",
+    })) as any;
+    assert.equal(done.completed, false);
+    assert.equal(done.tapOut, true);
+    assert.equal(done.reason, "not_your_claim", "restored distinction: rival holder, not stale lease");
+    assert.equal(done.holder, "worker-a");
+    assert.match(done.message, /not yours to complete|Do NOT work on it/i);
+  } finally {
+    globalThis.fetch = real;
   }
 });
 

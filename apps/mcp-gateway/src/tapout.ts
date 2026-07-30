@@ -163,12 +163,35 @@ function firstNonEmpty(...values: Array<unknown>): string | undefined {
 }
 
 /**
+ * A GENERATION fence specifically — "your claim generation is stale" — as opposed
+ * to a rival simply holding the task (TDM-122).
+ *
+ * WHY THE CODE AND NOT THE FLAG. The API stamps `fenced: true` on EVERY refusal so
+ * a client can branch on one field (see claim_fence.go — the flag means "you do not
+ * hold this, stop"). But two different causes wear that flag: `claimed_by_other`
+ * (a rival holds it) and `stale_claim_generation` (your lease was superseded). They
+ * reach the SAME conclusion — let go — but a human reading the board wants "someone
+ * beat me" told apart from "my claim went stale". So the reason is chosen off the
+ * CODE, not the flag: only the FENCE_CODES are a real generation fence. Branching on
+ * the flag alone (the pre-TDM-122 bug) collapsed both into "fenced" and made
+ * "not_your_claim" unreachable on the write paths.
+ */
+function isGenerationFence(c: ReadConflict): boolean {
+  if (c.code && FENCE_CODES.has(c.code)) return true;
+  // A fenced flag with no code we recognize AND no named holder: nothing says it is
+  // a rival, so trust the flag and treat it as a fence.
+  return c.fenced && !c.code && !c.holder;
+}
+
+/**
  * Which reason a rejected CLAIM gets. A fence and a lost race are different
  * causes with the same conclusion, and the loser is told which so a human
- * reading the board can tell "someone beat me" from "my claim went stale".
+ * reading the board can tell "someone beat me" from "my claim went stale". A
+ * lost race arrives as `claimed_by_other` (a rival won) → "already_claimed"; only
+ * a genuine generation fence → "fenced".
  */
 export function claimReason(c: ReadConflict): TapOutReason {
-  if (c.fenced) return "fenced";
+  if (isGenerationFence(c)) return "fenced";
   return "already_claimed";
 }
 
@@ -177,10 +200,15 @@ export function claimReason(c: ReadConflict): TapOutReason {
  * complete, state move). Returns undefined when the rejection is NOT a tap-out —
  * i.e. nobody else holds it and it is not finished, which is the "you never
  * claimed this" case whose answer is task_claim, not queue_next.
+ *
+ * The CODE, not the flag, decides fenced-vs-not_your_claim (TDM-122): a rival
+ * holder (`claimed_by_other`, which also carries `fenced: true` on the current API)
+ * is "not_your_claim"; a stale generation (`stale_claim_generation`) is "fenced".
  */
 export function writeReason(c: ReadConflict): TapOutReason | undefined {
-  if (c.fenced) return "fenced";
+  if (isGenerationFence(c)) return "fenced";
   if (c.holder) return "not_your_claim";
+  if (c.fenced) return "fenced";
   if (c.state && TERMINAL_STATES.has(c.state)) return "already_finished";
   return undefined;
 }

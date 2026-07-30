@@ -546,34 +546,30 @@ async function main(): Promise<void> {
 
     const prog = await loser.call("task_progress", { id: t1, note: "loser reporting progress" });
     check("progress refused (recorded:false)", prog.recorded === false, prog);
-    // Either reason is a correct "stop": "not_your_claim" is what a pre-TDM-98 API
-    // produces (409 {claimedBy}), "fenced" is what a fenced API produces, because
-    // its refusal sets fenced:true on EVERY code — including claimed_by_other —
-    // and readConflict checks that flag first. Asserted as a set rather than
-    // pinned, with the collapse called out below so it is visible rather than
-    // quietly absorbed.
+    // TDM-122: a WRITE against a task a rival holds reports "not_your_claim" again.
+    // The API carries fenced:true on EVERY refusal (so a client can branch on one
+    // flag), but the CODE — claimed_by_other here — is what the gateway routes on,
+    // so a rival holder is told apart from a stale lease ("fenced"). This is the
+    // loser's FIRST write, so it races the API rather than being answered from the
+    // loss ledger: the reason is pinned to a single value, not a set.
     checkTapOut("progress", prog, {
-      reasonIn: ["not_your_claim", "fenced"],
+      reason: "not_your_claim",
       holder: winner.name,
     });
-    if (prog.reason === "fenced" && prog.apiError === "claimed_by_other") {
-      note(
-        `the API's code was "claimed_by_other" but the tap-out reason is "fenced" — with the ` +
-          `fence deployed, fenced:true is set on every refusal, so a WRITE can no longer ` +
-          `report "not_your_claim". Same conclusion for the worker; less signal for the human.`
-      );
-    }
 
     const comp = await loser.call("task_complete", { id: t1, result: "loser completing" });
     check("complete refused (completed:false)", comp.completed === false, comp);
+    // The progress refusal above recorded a loss, so a follow-up write can be
+    // answered locally as "already_lost" (the anti-loop) instead of racing to
+    // "not_your_claim". Never "fenced": a rival holder is not a generation fence.
     checkTapOut("complete", comp, {
-      reasonIn: ["not_your_claim", "already_lost", "fenced"],
+      reasonIn: ["not_your_claim", "already_lost"],
       holder: winner.name,
     });
 
     const mv = await loser.call("canvas_action_update_state", { id: t1, state: "done" });
     check("state move refused (moved:false)", mv.moved === false, mv);
-    checkTapOut("move", mv, { reasonIn: ["not_your_claim", "already_lost", "fenced"] });
+    checkTapOut("move", mv, { reasonIn: ["not_your_claim", "already_lost"] });
 
     const afterLoserWrites = await readTask(t1);
     check(
