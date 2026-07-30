@@ -158,8 +158,10 @@ Work the approved queue end to end, then stop:
    on top if you have it; do not rewrite the steps and do not claim anything yourself.
 4. Independent tasks go out in parallel. Tasks that touch the same files go one at a time.
 5. When the batch drains, call board_status and report what landed — done, failed, still
-   executing. That is a READ. A task left executing is reported, not completed by you; its claim
-   expires on its own.
+   executing. That is a READ, and it is enough on its own: every in-flight row carries the holder,
+   how long they have held the claim, their last progress note, and staleClaim once nothing has
+   been reported for longer than the lease. A task left executing is reported, not completed by
+   you; its claim expires on its own.
 6. Re-run queue_next, in case approvals landed while you worked. Stop when it comes back empty.
 
 The tasks just approved are $TANDEM_TICKETS. A worker never works a task it did not claim, never
@@ -407,11 +409,12 @@ they are not actually in the ready queue. `board_status` answers the last one.
 
 ## Notes on the tool surface
 
-Everything the prompt above uses is on the **default** manifest — the 12-tool
+Everything the prompt above uses is on the **default** manifest — the 14-tool
 intent facade: `canvas_connect`, `agent_register`, `context_get`, `queue_next`,
-`task_get`, `task_claim`, `task_progress`, `task_complete`, `task_propose`,
-`epic_propose`, `doc_write`, `board_status`. No `TANDEM_FULL_TOOLS=1` needed;
-that env var opens the full CRUD surface, which orchestration does not require.
+`task_find`, `task_get`, `task_claim`, `task_progress`, `task_complete`,
+`task_propose`, `task_amend`, `epic_propose`, `doc_write`, `board_status`. No
+`TANDEM_FULL_TOOLS=1` needed; that env var opens the full CRUD surface, which
+orchestration does not require.
 
 Registration is part of **`canvas_connect`**: pass `role` (plus `name`, `model`,
 and `parentAgentId` if an orchestrator spawned you) and the one call connects and

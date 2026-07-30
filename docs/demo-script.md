@@ -8,9 +8,10 @@
 > shipped ones (Board surface, not "Tasks panel"). **§4's landing-hero subsection is
 > superseded** — the hero is a coded animation now, so there is no hero cut to extract.
 >
-> The default MCP manifest is the **12-tool intent facade** (`canvas_connect`,
-> `context_get`, `queue_next`, `task_get`, `task_claim`, `task_progress`, `task_complete`,
-> `task_propose`, `epic_propose`, `doc_write`, `board_status`, `agent_register`). Nothing in
+> The default MCP manifest is the **14-tool intent facade** (`canvas_connect`,
+> `context_get`, `queue_next`, `task_find`, `task_get`, `task_claim`, `task_progress`,
+> `task_complete`, `task_propose`, `task_amend`, `epic_propose`, `doc_write`,
+> `board_status`, `agent_register`). Nothing in
 > this doc may name a `canvas_task_*` tool at a session: those still work when called, but
 > they are not advertised, so a session cannot see them and will improvise instead.
 

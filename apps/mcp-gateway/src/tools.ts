@@ -3367,7 +3367,7 @@ const CONNECTORS = new Set(["canvas_connect", "canvas_create"]);
 // Read-only tools whose NAME doesn't end in _read/_list/_get. The intent facade
 // (facade.ts) names tools by intent, not by CRUD verb, so the regex below can't
 // classify them — list them explicitly rather than renaming for the regex's sake.
-const READ_ONLY_TOOLS = new Set(["queue_next", "board_status", "context_get"]);
+const READ_ONLY_TOOLS = new Set(["queue_next", "board_status", "context_get", "task_find"]);
 
 /**
  * MCP tool annotations (behaviour hints). Clients — notably the Claude.ai web

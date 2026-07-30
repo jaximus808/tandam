@@ -87,9 +87,18 @@ type TaskRow = {
   state: string;
   proposedBy?: string;
   claimedBy?: string;
+  // When the current claim was taken (or last heartbeated). The board's whole
+  // "is anyone actually working this?" question is answered from this field.
+  claimedAt?: string;
   result?: string;
   createdAt?: string;
-  payload?: { title?: string; assignee?: string; epicId?: string };
+  payload?: {
+    title?: string;
+    body?: string;
+    assignee?: string;
+    epicId?: string;
+    progress?: unknown;
+  };
 };
 
 /** Every agent task on the canvas, in one read. The basis of queue/board views. */
@@ -116,6 +125,77 @@ function countByState(tasks: TaskRow[]): Record<string, number> {
   for (const t of tasks) counts[t.state] = (counts[t.state] ?? 0) + 1;
   return counts;
 }
+
+// ── In-flight reporting (TDM-95) ─────────────────────────────────────────────
+
+/**
+ * How long the API honours a claim before another session may take the task over
+ * (CLAIM_TTL_MINUTES on the server, default 15). The gateway cannot read the
+ * server's setting, so this is only used to LABEL a claim as stale in
+ * board_status — it enforces nothing, and the server remains the authority on
+ * whether a lease actually lapsed.
+ */
+const DEFAULT_CLAIM_LEASE_MINUTES = 15;
+
+/** How long a progress note may be in a board read before it gets trimmed. */
+const BOARD_PROGRESS_CHARS = 200;
+
+type ProgressEntry = { at?: string; agent?: string; note?: string };
+
+/** Whole minutes since an ISO timestamp; undefined if it isn't usable. */
+function minutesSince(iso: string | undefined, now = Date.now()): number | undefined {
+  if (!iso) return undefined;
+  const at = Date.parse(iso);
+  if (Number.isNaN(at)) return undefined;
+  return Math.max(0, Math.round((now - at) / 60_000));
+}
+
+/**
+ * The task's most recent progress note, trimmed. This is what makes a board read
+ * a REPORT rather than a list of names: without it an orchestrator asked "how is
+ * the fleet doing?" had to task_get every executing task to find out. It costs
+ * nothing extra — progress is stored on the task payload the board read already
+ * fetched.
+ */
+function lastProgressOf(task: TaskRow) {
+  const hist: ProgressEntry[] = Array.isArray(task.payload?.progress)
+    ? (task.payload?.progress as ProgressEntry[])
+    : [];
+  const last = hist[hist.length - 1];
+  const note = typeof last?.note === "string" ? last.note.trim() : "";
+  if (!note) return undefined;
+  const ageMinutes = minutesSince(last?.at);
+  return {
+    note: note.length > BOARD_PROGRESS_CHARS ? `${note.slice(0, BOARD_PROGRESS_CHARS)}…` : note,
+    ...(last?.at ? { at: last.at } : {}),
+    ...(ageMinutes === undefined ? {} : { ageMinutes }),
+    entries: hist.length,
+  };
+}
+
+/**
+ * One executing task, as a fleet report line: who holds it, how long they have
+ * held it, whether that claim has outlived its lease, and the last thing they
+ * said. `ticketId` is absent only for a task created before ticket numbering
+ * (migration 0034) — those are still addressable by `id`.
+ */
+function inFlightRow(task: TaskRow) {
+  const claimAgeMinutes = minutesSince(task.claimedAt);
+  const progress = lastProgressOf(task);
+  return {
+    ...compactTask(task),
+    claimedBy: task.claimedBy ?? "agent",
+    ...(task.claimedAt ? { claimedAt: task.claimedAt } : {}),
+    ...(claimAgeMinutes === undefined ? {} : { claimAgeMinutes }),
+    // Past the default lease with no heartbeat since: the holder has probably
+    // gone dark, and the server will let the task be reclaimed.
+    ...(claimAgeMinutes !== undefined && claimAgeMinutes >= DEFAULT_CLAIM_LEASE_MINUTES
+      ? { staleClaim: true }
+      : {}),
+    ...(progress ? { lastProgress: progress } : {}),
+  };
+}
+
 
 const BRIEFING_NAMES_PER_KIND = 20;
 
@@ -196,6 +276,60 @@ async function composeContext(gateway: Gateway) {
         ? "There is approved work waiting. Call queue_next: it returns a paste-ready `handoff` per " +
           "task to dispatch a subagent with, or task_get + task_claim the one you'll do yourself."
         : "No approved work. Ask the human what to do, or draft tasks with task_propose (they land as 'proposed' for approval).",
+  };
+}
+
+// ── Lookup by name (TDM-95) ──────────────────────────────────────────────────
+
+/**
+ * THE LAST REASON TO READ THE WHOLE BOARD, removed.
+ *
+ * A ticket ref reaches a task in one call (every task_* tool accepts "TDM-21").
+ * A NAME did not: told "finish the constraints task", a session had to list every
+ * task and scan titles itself — the exact full-board read the queue-first surface
+ * exists to avoid, and it burned the context window on rows it threw away.
+ *
+ * So: search server-side-ish (one list read, no bodies returned) and hand back
+ * only the matches. Matching is deliberately dumb and predictable — substring,
+ * then all-words-in-title, then all-words-in-title-or-body — because a model that
+ * cannot tell why something matched will not trust the answer. `matchedIn` says
+ * which rule fired.
+ */
+const FIND_MATCH_SUBSTRING = 3;
+const FIND_MATCH_TITLE_WORDS = 2;
+const FIND_MATCH_BODY = 1;
+
+/** Ticket forms a human/model writes: "TDM-21", "tdm-21", "#21", "21". */
+function asTicketRef(query: string): string | undefined {
+  const m = /^(?:tdm-|#)?(\d{1,9})$/i.exec(query.trim());
+  return m ? `TDM-${Number(m[1])}` : undefined;
+}
+
+/** Score one task against a query. undefined = not a match. */
+function scoreTask(
+  task: TaskRow,
+  needle: string,
+  words: string[]
+): { score: number; matchedIn: "title" | "body" } | undefined {
+  const title = (task.payload?.title ?? "").toLowerCase();
+  const body = (task.payload?.body ?? "").toLowerCase();
+  if (title.includes(needle)) return { score: FIND_MATCH_SUBSTRING, matchedIn: "title" };
+  if (words.length > 0 && words.every((w) => title.includes(w))) {
+    return { score: FIND_MATCH_TITLE_WORDS, matchedIn: "title" };
+  }
+  if (words.length > 0 && words.every((w) => title.includes(w) || body.includes(w))) {
+    return { score: FIND_MATCH_BODY, matchedIn: "body" };
+  }
+  return undefined;
+}
+
+/** A match row: enough to act on (claim it, get it), never a body. */
+function findRow(task: TaskRow, matchedIn?: "title" | "body") {
+  return {
+    ...compactTask(task),
+    assignee: task.payload?.assignee ?? "agent",
+    ...(task.claimedAt ? { claimedAt: task.claimedAt } : {}),
+    ...(matchedIn ? { matchedIn } : {}),
   };
 }
 
@@ -310,6 +444,7 @@ const FACADE_NAMES = new Set([
   "agent_register",
   "context_get",
   "queue_next",
+  "task_find",
   "task_get",
   "task_claim",
   "task_progress",
@@ -461,6 +596,78 @@ export async function handleFacadeTool(
                 "Nothing approved. Tasks you propose land as 'proposed' and need a human to " +
                 "approve them on the board — check board_status, or ask the human.",
             }),
+      };
+    }
+
+    case "task_find": {
+      const query = typeof args.query === "string" ? args.query.trim() : "";
+      if (!query) {
+        throw new Error(
+          "`query` (string) is required — part of the task's title (e.g. \"constraints\"), or " +
+            "its ticket ref (\"TDM-21\")."
+        );
+      }
+      const limit = Number.isFinite(Number(args.limit)) ? Math.max(1, Number(args.limit)) : 10;
+      const state = typeof args.state === "string" ? args.state.trim() : "";
+      const assignee = typeof args.assignee === "string" ? args.assignee.trim() : "any";
+
+      // A ticket ref is not a search — it is an address. Resolve it directly
+      // rather than scanning titles for a number that isn't in them. Absent is an
+      // ANSWER here (no matches), not an error: the API 404s an unknown ref
+      // (TDM-95) and getIfAvailable turns that into null.
+      const ticketRef = asTicketRef(query);
+      if (ticketRef) {
+        const hit = await gateway.getIfAvailable<{ action?: TaskRow }>(
+          `/api/canvas/actions/${encodeURIComponent(ticketRef)}`
+        );
+        const action = hit?.action;
+        return {
+          query,
+          resolvedAs: ticketRef,
+          matches: action ? [findRow(action)] : [],
+          _next: action
+            ? `That ref addresses a task directly — pass "${ticketRef}" to task_get / task_claim / ` +
+              `task_complete as \`id\`, no lookup needed.`
+            : `No task ${ticketRef} on this canvas. Either the number is wrong or you are on a ` +
+              `different canvas than the one it belongs to — check board_status, or search by title.`,
+        };
+      }
+
+      const params = ["type=task"];
+      if (state) params.push(`state=${encodeURIComponent(state)}`);
+      if (assignee && assignee !== "any") params.push(`assignee=${encodeURIComponent(assignee)}`);
+      const listed = (await gateway.get(`/api/canvas/actions?${params.join("&")}`)) as {
+        actions?: TaskRow[];
+      };
+      const rows = listed.actions ?? [];
+
+      const needle = query.toLowerCase();
+      const words = needle.split(/\s+/).filter((w) => w.length > 1);
+      const scored = rows
+        .map((task) => ({ task, hit: scoreTask(task, needle, words) }))
+        .filter((r): r is { task: TaskRow; hit: { score: number; matchedIn: "title" | "body" } } =>
+          Boolean(r.hit)
+        )
+        // Best rule first, then newest — a repeated title is usually the recent one.
+        .sort(
+          (a, b) =>
+            b.hit.score - a.hit.score ||
+            Date.parse(b.task.createdAt ?? "") - Date.parse(a.task.createdAt ?? "")
+        );
+
+      const matches = scored.slice(0, limit).map((r) => findRow(r.task, r.hit.matchedIn));
+      return {
+        query,
+        matches,
+        ...(scored.length > limit ? { truncated: scored.length - limit } : {}),
+        searched: rows.length,
+        _next:
+          matches.length === 0
+            ? "Nothing matched. Try fewer words (matching is substring-then-all-words over the " +
+              "title, then bodies), drop the `state` filter, or read board_status for what is here."
+            : "Take the `id` (or `ticketId`) of the right one straight to task_get for the full " +
+              "brief, then task_claim if it is approved and you will do it yourself. Matching is " +
+              "textual, so confirm the title is the task you meant before claiming.",
       };
     }
 
@@ -837,9 +1044,13 @@ export async function handleFacadeTool(
         };
       });
 
-      const inFlight = tasks
-        .filter((t) => t.state === "executing")
-        .map((t) => ({ ...compactTask(t), claimedBy: t.claimedBy ?? "agent" }));
+      // Each in-flight row is a REPORT line, not just a name (TDM-95): ticket,
+      // holder, how long they have held it, whether the claim outlived its lease,
+      // and their last progress note. An orchestrator asked "where does the fleet
+      // stand?" used to have to task_get every executing task to say anything
+      // concrete; now the one board read answers it.
+      const inFlight = tasks.filter((t) => t.state === "executing").map(inFlightRow);
+      const stale = inFlight.filter((t) => "staleClaim" in t);
 
       return {
         canvas: canvasBlock(gateway),
@@ -847,9 +1058,19 @@ export async function handleFacadeTool(
         inFlight,
         epics,
         unassignedTasks: tasks.filter((t) => !t.payload?.epicId).length,
+        ...(stale.length > 0
+          ? {
+              _staleClaims:
+                `${stale.length} in-flight task(s) are marked staleClaim: nothing has been ` +
+                `reported on them for over ${DEFAULT_CLAIM_LEASE_MINUTES} minutes, so their ` +
+                `holder has probably gone dark and the task is reclaimable. Report them as at ` +
+                `risk — do NOT complete them on the holder's behalf.`,
+            }
+          : {}),
         _next:
           "Ready work is the 'approved' count — call queue_next to see it. Tasks stuck at " +
-          "'proposed' are waiting on a human (and tasks under a 'proposed' epic wait on that epic).",
+          "'proposed' are waiting on a human (and tasks under a 'proposed' epic wait on that " +
+          "epic). Looking for one specific task by name? task_find.",
       };
     }
 
@@ -916,6 +1137,43 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
         limit: { type: "number", description: "Max tasks to return. Default 10." },
         epicId: { type: "string", description: "Only ready tasks under this epic." },
       },
+    },
+  },
+  {
+    name: "task_find",
+    description:
+      "FIND a task by NAME when you don't have its id — \"the constraints task\", \"dark mode " +
+      "rollout\". Returns only the matches ({id, ticketId, title, state, claimedBy, epicId}), so " +
+      "you never have to read the whole board to turn a description into an id. Matching is " +
+      "textual and predictable: the query as a substring of the title, then all its words in the " +
+      "title, then all its words in title-or-body — `matchedIn` says which fired, so CHECK the " +
+      "title is the task you meant before acting on it. Filter with `state` (e.g. 'approved' for " +
+      "ready work, 'executing' for in flight). A ticket ref ('TDM-21', '#21') is resolved directly " +
+      "instead of searched — though you can also just pass a ref straight to task_get / task_claim " +
+      "as `id`, with no lookup at all. Then: task_get for the brief, task_claim to take it. " +
+      SESSION_CONVENTION,
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        query: {
+          type: "string",
+          description:
+            "What you know: part of the title (\"constraints\"), or a ticket ref (\"TDM-21\").",
+        },
+        state: {
+          type: "string",
+          description:
+            "Only tasks in this state — 'proposed' | 'approved' | 'executing' | 'done' | " +
+            "'failed'. Omit to search every state.",
+        },
+        assignee: {
+          type: "string",
+          description:
+            "'agent' for agent work, 'human' for the human's own todos, 'any' (default) for both.",
+        },
+        limit: { type: "number", description: "Max matches to return. Default 10." },
+      },
+      required: ["query"],
     },
   },
   {
@@ -1184,11 +1442,14 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
   {
     name: "board_status",
     description:
-      "A compact read of the BOARD, not the canvas: task counts by state, what's in flight and who " +
-      "holds it, epics with their approval state and per-epic task counts. Use it to answer 'where " +
-      "does this project stand', to check whether your proposals got approved, or to spot a task " +
-      "another session left stuck in 'executing'. Cheap — it never dumps canvas contents. For the " +
-      "work you can actually start, use queue_next. " +
+      "A compact read of the BOARD, not the canvas: task counts by state, epics with their approval " +
+      "state and per-epic task counts, and every in-flight task as a report line — ticketId, " +
+      "holder, how many minutes they have held the claim, their last progress note, and " +
+      "`staleClaim: true` once nothing has been reported for longer than the claim lease (~15 min), " +
+      "meaning the holder has probably gone dark. THIS IS THE ORCHESTRATOR'S REPORT: it is enough " +
+      "to say where every worker stands without reading a single task. Also how you check whether " +
+      "your proposals got approved. Cheap — it never dumps canvas contents. For the work you can " +
+      "actually start, use queue_next; to find one task by name, task_find. " +
       SESSION_CONVENTION,
     inputSchema: { type: "object" as const, properties: {} },
   },

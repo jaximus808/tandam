@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### `task_find`, and a board read you can report from (TDM-95)
+
+- **New `task_find`** on the default surface: find a task by NAME when you have
+  no id ("the constraints task"). Matching is substring-then-all-words over
+  titles, then bodies, with `matchedIn` saying which rule fired; `state` /
+  `assignee` / `limit` narrow it. It returns only the matches, so turning a
+  description into an id no longer costs a full board read. A ticket ref
+  ("TDM-21", "#21") is resolved directly instead of searched — and an unknown one
+  comes back as zero matches, not an error.
+- **`board_status` in-flight rows are report lines**, not just names: each
+  carries `ticketId`, the holder, `claimAgeMinutes`, the last progress note
+  (`lastProgress`), and `staleClaim: true` once nothing has been reported for
+  longer than the claim lease (~15 min), plus a `_staleClaims` summary. An
+  orchestrator can now say where every worker stands from one read instead of
+  `task_get`-ing each executing task.
+- Requires nothing new from the API. The default manifest is now **14 tools**.
+
 ### `task_progress` is a heartbeat that extends your claim (TDM-67)
 
 - `task_progress` now reports through the inbound status endpoint

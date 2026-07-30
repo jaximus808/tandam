@@ -18,12 +18,13 @@ Live at https://tandemcanvas.com. Deploy = push to `main` (GitHub Actions → GC
 The living roadmap for THIS project is itself a Tandem canvas: **code `TEGLQFXR`**
 ("tandem planning"). Dogfooding — we plan Tandem in Tandem.
 
-The tool names below are the **default MCP surface** — the 12-tool intent facade
+The tool names below are the **default MCP surface** — the 14-tool intent facade
 (`FACADE_NAMES` in `apps/mcp-gateway/src/facade.ts`): `canvas_connect`,
-`agent_register`, `context_get`, `queue_next`, `task_get`, `task_claim`,
-`task_progress`, `task_complete`, `task_propose`, `epic_propose`, `doc_write`,
-`board_status`. The old ~80-tool `canvas_*` CRUD surface is still callable but is
-only *advertised* behind `TANDEM_FULL_TOOLS=1`, so write against these names.
+`agent_register`, `context_get`, `queue_next`, `task_find`, `task_get`,
+`task_claim`, `task_progress`, `task_complete`, `task_propose`, `task_amend`,
+`epic_propose`, `doc_write`, `board_status`. The old ~80-tool `canvas_*` CRUD
+surface is still callable but is only *advertised* behind `TANDEM_FULL_TOOLS=1`,
+so write against these names.
 
 Sessions start from the task queue, NOT a full canvas read:
 
@@ -39,7 +40,10 @@ Sessions start from the task queue, NOT a full canvas read:
    roadmap items / notes hydrated, which is all the context you need.
    **`id` takes a ticket ref, not just a uuid:** told "take on TDM-21", pass
    `TDM-21` (or `tdm-21` / `#21` / `21`) straight to `task_get`, `task_claim`,
-   `task_progress`, `task_complete`. No lookup call, no board read.
+   `task_progress`, `task_complete`. No lookup call, no board read. A ref that
+   names nothing here answers 404 `task_not_found`, not "invalid id". Given a
+   NAME instead of a ref ("the constraints task"), `task_find` matches it by
+   title — also not a board read.
 4. `task_claim` to claim it (so parallel sessions skip it). The claim is
    **atomic and losing is normal**: `{ claimed: false, claimedBy }` means
    another session won — do NOT work it, go back to `queue_next`. On success

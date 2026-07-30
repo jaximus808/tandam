@@ -163,7 +163,7 @@ Same fields, one JSON object per line, so the numbers can be scraped straight ou
 
 ## Tools
 
-The default surface is a **12-tool intent facade** shaped like the work loop, not like the API:
+The default surface is a **14-tool intent facade** shaped like the work loop, not like the API:
 
 | Tool             | Purpose                                                                                                     |
 | ---------------- | ----------------------------------------------------------------------------------------------------------- |
@@ -171,14 +171,16 @@ The default surface is a **12-tool intent facade** shaped like the work loop, no
 | `agent_register` | Register or re-register this session's identity after connect — fix a rejected `parentAgentId`, record the model, switch role. |
 | `context_get`    | The canvas briefing in one cheap call — identity, mode, document tabs, per-kind counts, queue state.        |
 | `queue_next`     | The approved tasks ready to work, compact. The entry point for work.                                        |
+| `task_find`      | Find a task by NAME when you have no id — substring/word match over titles (then bodies), optional `state` filter. Returns just the matches, so a description never costs a board read. A ticket ref is resolved directly. |
 | `task_get`       | One task with its linked context hydrated — all a session needs to start.                                   |
 | `task_claim`     | Atomic claim (`approved` → `executing`). Losers get `{ claimed: false, claimedBy }` and move on.             |
 | `task_progress`  | Mid-flight progress on a task you claimed; stored on the task, returned by `task_get`. Also a heartbeat — each report extends your claim, so long work keeps its task. |
 | `task_complete`  | Finish with a `result` (include commit hashes) plus `links` (commit / PR / branch URLs), or `status: "failed"` + `error`. |
 | `task_propose`   | Propose one task or a whole plan (`tasks: [...]`). Lands as `proposed` for human approval.                   |
+| `task_amend`     | Correct or withdraw a task YOU proposed — only while it is still `proposed`, unclaimed, and yours.            |
 | `epic_propose`   | Propose an epic, optionally with its whole plan (`tasks: [...]`) in one call. A human approves the epic once and it cascades to every task under it. |
 | `doc_write`      | Leave context behind as a markdown note; names a tab and creates it if new.                                  |
-| `board_status`   | Board-shaped overview — counts by state, in-flight claims, epics — without dumping the canvas.               |
+| `board_status`   | Board-shaped overview — counts by state, epics, and every in-flight task as a report line (holder, claim age, last progress note, `staleClaim` past the lease) — without dumping the canvas. |
 
 The loop: `canvas_connect` → `queue_next` → `task_get` → `task_claim` → work (`task_progress`, `doc_write`) → `task_complete`.
 

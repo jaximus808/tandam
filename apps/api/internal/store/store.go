@@ -1089,6 +1089,11 @@ type Store interface {
 	// use don't have to list the board to find the uuid. Tickets are unique per
 	// canvas (reserve_task_tickets, migration 0034); a non-task action has none
 	// and is therefore never returned here.
+	//
+	// A ticket this canvas does not have returns an error wrapping
+	// ErrActionNotFound. That distinction is load-bearing: it is how a caller
+	// tells "no such ticket here" (answerable — 404, name the ref) from "the
+	// lookup failed" (not answerable that way), so an implementation must keep it.
 	GetActionByTicket(ctx context.Context, canvasID uuid.UUID, ticket int) (*Action, error)
 	ListActions(ctx context.Context, canvasID uuid.UUID, stateFilter, typeFilter, assigneeFilter string) ([]*Action, error)
 	UpdateActionState(ctx context.Context, canvasID, id uuid.UUID, patch ActionStatePatch) (int, error)

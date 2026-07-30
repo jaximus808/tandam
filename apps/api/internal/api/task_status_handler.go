@@ -66,12 +66,12 @@ type taskStatusBody struct {
 // error carries a stable code to branch on AND a message that says what the
 // next call should be. `extra` carries the fact that makes it actionable
 // (claimedBy, the current state).
+//
+// The envelope itself now lives in helpers.go (writeCodedError) because the
+// ticket-ref middleware answers in it too: an unknown "TDM-99999" gets ONE shape
+// whether it was aimed at this endpoint or at an action route.
 func writeTaskStatusError(w http.ResponseWriter, status int, code, message string, extra map[string]string) {
-	out := map[string]string{"error": code, "message": message}
-	for k, v := range extra {
-		out[k] = v
-	}
-	writeJSON(w, status, out)
+	writeCodedError(w, status, code, message, extra)
 }
 
 // ReportTaskStatus handles POST /api/canvas/{code}/tasks/{id}/status — one call

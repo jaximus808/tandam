@@ -25,6 +25,7 @@ const EXPECTED_FACADE = [
   "agent_register",
   "context_get",
   "queue_next",
+  "task_find",
   "task_get",
   "task_claim",
   "task_progress",
@@ -36,10 +37,10 @@ const EXPECTED_FACADE = [
   "board_status",
 ];
 
-test("default manifest is exactly the 13-tool intent facade", () => {
+test("default manifest is exactly the 14-tool intent facade", () => {
   const names = manifestFor(false).map((t) => t.name);
   assert.deepEqual(names, EXPECTED_FACADE);
-  assert.equal(names.length, 13);
+  assert.equal(names.length, 14);
 });
 
 test("TANDEM_FULL_TOOLS adds the CRUD surface without dropping or duplicating", () => {
@@ -135,7 +136,7 @@ test("every facade tool but the connector advertises the session handle", () => 
 
 test("read-only facade tools are annotated read-only", () => {
   const byName = new Map(FACADE_TOOLS.map((t) => [t.name, t]));
-  for (const n of ["context_get", "queue_next", "task_get", "board_status"]) {
+  for (const n of ["context_get", "queue_next", "task_find", "task_get", "board_status"]) {
     assert.equal(byName.get(n)!.annotations.readOnlyHint, true, `${n} is a read`);
   }
   for (const n of ["task_claim", "task_complete", "doc_write", "task_propose", "epic_propose"]) {

@@ -3046,7 +3046,10 @@ func (s *supabaseStore) GetActionByTicket(_ context.Context, canvasID uuid.UUID,
 		return nil, err
 	}
 	if len(rows) == 0 {
-		return nil, fmt.Errorf("no task %s in canvas %s", TicketID(ticket), canvasID)
+		// Wrapped so a caller can tell "this canvas has no such ticket" apart from
+		// "the lookup itself failed" — the ticket-ref middleware answers 404 for the
+		// first and must NOT for the second (TDM-95).
+		return nil, fmt.Errorf("no task %s in canvas %s: %w", TicketID(ticket), canvasID, ErrActionNotFound)
 	}
 	return toAction(rows[0]), nil
 }
