@@ -128,6 +128,10 @@ Report what you changed and what's left for him to do, and stop there.
 **Git: commit ticket work — one commit per ticket.** When your changes belong to
 a ticket, commit them as `TDM-<n>: <short change summary>` right after builds/
 tests pass and BEFORE `task_complete`, so the result can carry the commit hash.
+When a `task_complete` result or its `links` points at a commit, build the URL
+from the REAL remote — `git remote get-url origin` (this repo is
+`github.com/jaximus808/tandam`) — never guess the owner/repo from the npm scope,
+product name, or folder, or the board's live GitHub resolver 404s the link.
 Scope the commit to your ticket's files only — never sweep in other sessions'
 uncommitted work. Everything else about git stays Jaxon's: do NOT push, branch,
 or open PRs unless he explicitly asks. Non-ticket work stays uncommitted unless
