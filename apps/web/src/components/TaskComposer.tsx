@@ -102,7 +102,10 @@ export default function TaskComposer({
               onClick={() => setAssignee(a)}
               aria-pressed={active}
               className={[
-                "flex flex-1 items-center justify-center gap-1.5 rounded px-2 py-1 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
+                // tandem-tap (index.css): the same 44px touch floor the Board's
+                // card controls use, collapsing to the dense desktop height on
+                // sm+ so this segmented control is unchanged above 640px.
+                "tandem-tap flex flex-1 items-center justify-center gap-1.5 rounded px-2 py-1 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
                 active ? "bg-surface text-accent shadow-sm" : "text-ink/40 hover:text-ink/65",
               ].join(" ")}
             >
@@ -133,20 +136,24 @@ export default function TaskComposer({
           <button
             onClick={() => setPickerOpen((o) => !o)}
             aria-expanded={pickerOpen}
-            className="flex items-center gap-1 text-[11px] font-medium text-ink/45 hover:text-ink/70"
+            className="tandem-tap flex items-center gap-1 text-[11px] font-medium text-ink/45 hover:text-ink/70"
           >
             <Link2 size={12} />
             {linked.size > 0 ? `${linked.size} linked` : "Link roadmap items / notes"}
           </button>
           {pickerOpen && (
-            <div className="mt-1.5 max-h-40 overflow-y-auto rounded-md border border-ink/10 bg-ink/[0.02] p-1">
+            // Taller on a phone: each row is a 44px target, so a 10rem box shows
+            // barely two of them and the list reads as broken rather than short.
+            <div className="mt-1.5 max-h-[13rem] overflow-y-auto rounded-md border border-ink/10 bg-ink/[0.02] p-1 sm:max-h-40">
               {targets.map((t) => (
                 <button
                   key={t.id}
                   onClick={() => toggleLink(t.id)}
-                  className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-[12px] text-ink/70 hover:bg-ink/5"
+                  aria-pressed={linked.has(t.id)}
+                  className="tandem-tap flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-[12px] text-ink/70 hover:bg-ink/5"
                 >
                   <span
+                    aria-hidden="true"
                     className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border transition-colors ${
                       linked.has(t.id) ? "border-accent bg-accent" : "border-ink/20 bg-transparent"
                     }`}
@@ -170,13 +177,13 @@ export default function TaskComposer({
         <button
           onClick={() => void submit()}
           disabled={!title.trim() || saving}
-          className="flex-1 rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40"
+          className="tandem-tap flex flex-1 items-center justify-center rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40"
         >
           {saving ? "Saving…" : submitLabel}
         </button>
         <button
           onClick={onCancel}
-          className="rounded-md border border-ink/15 px-3 py-1.5 text-sm font-medium text-ink/60 hover:border-ink/30"
+          className="tandem-tap flex items-center justify-center rounded-md border border-ink/15 px-3 py-1.5 text-sm font-medium text-ink/60 hover:border-ink/30"
         >
           Cancel
         </button>

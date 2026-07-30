@@ -24,6 +24,7 @@ export type {
   ActionState,
   NavigatePayload,
   TaskPayload,
+  TaskProgressEntry,
   EpicPayload,
   ContentAuditEntry,
   ApprovalPolicy,

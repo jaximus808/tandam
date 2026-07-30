@@ -917,13 +917,17 @@ export default function MapMode({
           )}
         </div>
 
-        {/* Mobile: compact corner chip to reveal the floating pin card. */}
+        {/* Mobile: compact corner chip to reveal the floating pin card. Takes
+            slot 2 of the floating column (`.tandem-float-br-2`, see index.css)
+            so it sits clear of the app's nav FAB, which is fixed in the same
+            corner and — being later in the DOM — would otherwise paint over it.
+            The slot also carries the safe-area inset. */}
         {pins.length > 0 && dir.collapsed && (
           <button
             onClick={() => dir.setCollapsed(false)}
             aria-label="Show pins"
             title="Show pins"
-            className="absolute bottom-3 right-3 z-[1000] flex items-center gap-1.5 rounded-full bg-surface border border-ink/15 shadow-lg pl-2.5 pr-3 py-2 text-sm font-semibold text-ink/80 sm:hidden"
+            className="tandem-float-br-2 absolute z-[1000] flex items-center gap-1.5 rounded-full bg-surface border border-ink/15 shadow-lg pl-2.5 pr-3 py-2 text-sm font-semibold text-ink/80 sm:hidden"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
               <path

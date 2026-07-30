@@ -11,11 +11,17 @@ interface Props {
  * an agent just did ("Claude created a doc") and fade themselves out. Agent
  * attribution carries the terracotta agent token; everything else is quiet
  * surface + hairline.
+ *
+ * The stack takes slot 2 of the floating column (`.tandem-float-br-2`, see
+ * index.css): on mobile it starts one FAB-height above the nav button so a
+ * burst of toasts can't bury it, and it grows upward from there; on desktop,
+ * where there is no FAB, it sits in the corner as before. Either way the inset
+ * includes the safe-area strip.
  */
 export default function AgentToasts({ toasts, onDismiss }: Props) {
   if (toasts.length === 0) return null;
   return (
-    <div className="pointer-events-none fixed bottom-4 right-4 z-50 flex w-[19rem] max-w-[calc(100vw-2rem)] flex-col gap-2">
+    <div className="tandem-float-br-2 pointer-events-none fixed z-50 flex w-[19rem] max-w-[calc(100vw-2.5rem)] flex-col gap-2">
       {toasts.map((t) => (
         <Toast key={t.id} t={t} onDismiss={onDismiss} />
       ))}

@@ -200,9 +200,19 @@ test("a non-holder's report comes back as DATA, not a thrown error", async () =>
 
     assert.equal(out.recorded, false, "nothing was recorded");
     assert.equal(out.claimedBy, "worker-two", "the rival is named so the model can route");
-    assert.equal(out.reason, "claimed_by_other");
     assert.match(out.message, /worker-two/);
     assert.match(out.message, /queue_next/, "and told what to do instead");
+
+    // TDM-99: a heartbeat into someone else's task is a LOSING path, so it now
+    // carries the tap-out block — `reason` is the contract's code, and the API's
+    // own error string moved to `apiError` (deliberate change from the earlier
+    // pin of reason === "claimed_by_other": the whole point of the contract is
+    // that one closed set of reasons covers every losing path).
+    assert.equal(out.tapOut, true);
+    assert.equal(out.reason, "not_your_claim");
+    assert.equal(out.apiError, "claimed_by_other", "the raw API code is still available");
+    assert.equal(out.holder, "worker-two");
+    assert.equal(out.next, "queue_next");
   });
 });
 
@@ -220,6 +230,12 @@ test("reporting on a task that is not executing is data too, with the state", as
     assert.equal(out.state, "approved");
     // The endpoint's own remedy is curl-shaped; the MCP caller gets the MCP one.
     assert.match(out.message, /task_claim/);
+
+    // …and this is explicitly NOT a tap-out (TDM-99). Nobody beat this caller to
+    // the task: it is unclaimed, so the right move is to claim it and work. A
+    // tapOut here would send a worker away from work it could actually do.
+    assert.equal(out.tapOut, undefined, "an unclaimed task is not a contention loss");
+    assert.equal(out.next, undefined);
   });
 });
 

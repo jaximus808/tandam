@@ -1,4 +1,4 @@
-import type { CanvasMeta } from "../types";
+import type { Action, ActionState, CanvasMeta } from "../types";
 import type { FleetActivityAction } from "./ws";
 
 // Image upload is disabled for v1 (no durable-storage story yet). Reading
@@ -55,11 +55,12 @@ export async function markNotificationsRead(): Promise<void> {
   if (!res.ok) throw new Error("Failed to mark notifications read");
 }
 
-// ── Form submit (direct-input layer) ─────────────────────────────────────────
-// Submitting a form is an HTTP POST that needs a canvas JWT. We obtain one with
-// the same code→JWT exchange the MCP gateway uses (no Google login needed) and
-// cache it per canvas code for the session. The backend broadcasts the resulting
-// state over WS, so the board updates itself — we just need the call to land.
+// ── Canvas-JWT writes ────────────────────────────────────────────────────────
+// The mutating calls below are HTTP POSTs that need a canvas JWT. We obtain one
+// with the same code→JWT exchange the MCP gateway uses (no Google login needed)
+// and cache it per canvas code for the session. The backend broadcasts the
+// resulting state over WS, so the board updates itself — we just need the call
+// to land.
 const tokenCache = new Map<string, string>();
 
 async function canvasToken(code: string): Promise<string> {
@@ -106,20 +107,6 @@ async function authedFetch(
     throw new Error(msg || fallbackError);
   }
   return res;
-}
-
-export async function submitForm(
-  code: string,
-  formId: string,
-  values: Record<string, unknown>,
-  submissionId?: string,
-): Promise<void> {
-  await authedFetch(
-    code,
-    `/api/canvas/forms/${formId}/submit`,
-    { method: "POST", body: { values, submissionId } },
-    "Submit failed",
-  );
 }
 
 // ── Tasks (actions of type "task") ───────────────────────────────────────────
@@ -332,9 +319,42 @@ export async function createEpic(code: string, epic: EpicDraft): Promise<void> {
   );
 }
 
+// ── Human board moves (E10) ──────────────────────────────────────────────────
+
+// POST /api/canvas/actions/{id}/move — walk a task through its lifecycle as a
+// PERSON: start it, finish it, mark it failed, or rewind it (release / re-queue
+// / reopen / reconsider). One endpoint for all of them; the legal moves out of
+// each state live in lib/taskMoves.ts and are re-validated server-side.
+//
+// It CANNOT approve. A proposed task has no move targets at all — the approval
+// gate (approveAction / rejectAction) is the only way out of triage, and the
+// server refuses anything else with a 400 that says so.
+//
+// `note` is optional: on 'done' it becomes the task's result, on 'failed' the
+// error, and on a rewind it lives in the audit trail (a rewind clears both
+// columns — a card back in Ready must not advertise the run being undone).
+export async function moveTask(
+  code: string,
+  id: string,
+  to: ActionState,
+  note?: string,
+): Promise<Action> {
+  const res = await authedFetch(
+    code,
+    `/api/canvas/actions/${id}/move`,
+    { method: "POST", body: { to, note } },
+    "Could not move this task",
+  );
+  return ((await res.json()) as { action: Action }).action;
+}
+
 // Release a stuck claim: an executing task whose agent session died goes back
 // to the queue (approved) with claimedBy/claimedAt cleared. Human-only by
 // surface — this endpoint is deliberately not exposed through the MCP gateway.
+//
+// Superseded by moveTask(code, id, "approved") on an executing task, which the
+// board now calls for every move; kept because the dedicated route is what
+// older clients call and because "release" is a verb worth its own URL.
 export async function releaseTask(code: string, id: string): Promise<void> {
   await authedFetch(
     code,

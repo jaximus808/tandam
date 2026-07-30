@@ -84,7 +84,7 @@ pnpm --filter @jaximus/tandem-mcp build
 | ------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `API_URL`           | `https://tandemcanvas.com` | Tandem HTTP API base URL. Only set this to override the default.                                                                                    |
 | `TANDEM_TOKEN`      | _(unset)_                  | Personal access token — lets the agent act as **you** on your private and shared canvases. Mint one at `/me`. Without it, only public canvases work. |
-| `TANDEM_FULL_TOOLS` | _(unset)_                  | Set to `1` to also advertise the full CRUD surface (maps, sheets, charts, forms, …) alongside the default 10-tool facade. Same as `--full-tools`.    |
+| `TANDEM_FULL_TOOLS` | _(unset)_                  | Set to `1` to also advertise the full CRUD surface (maps, sheets, charts, forms, …) alongside the default 12-tool facade. Same as `--full-tools`.    |
 | `TANDEM_CANVAS_CODE` | _(unset)_                 | This project's canvas code, written by `init`. Named in the `canvas_connect` tool description so the agent knows which canvas it belongs to, and used as the default when it calls `canvas_connect` without one. |
 | `MCP_TRACE`         | _(unset)_                  | Per-tool-call timing on stderr, plus a session summary on exit. `1` for human-readable lines, `json` for one JSON object per line. See [Tracing](#tracing). |
 | `REQUEST_TIMEOUT_MS` | `15000`                   | Per-request timeout for calls to the Tandem API.                                                                                                    |

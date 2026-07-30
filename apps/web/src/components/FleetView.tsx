@@ -315,7 +315,9 @@ export default function FleetView({
             : "Who's on this canvas and what they're working on"
         }
         className={[
-          "inline-flex h-8 items-center gap-2 rounded-md px-2.5 text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper",
+          // h-9 below sm, matching the header's other controls; on a phone this
+          // chip collapses to a gauge + count, so it is also the narrowest.
+          "inline-flex h-9 items-center gap-2 rounded-md px-2.5 text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper sm:h-8",
           open ? "bg-accent/[0.08] text-accent" : "text-ink/60 hover:bg-ink/5 hover:text-ink/85",
         ].join(" ")}
       >
@@ -361,7 +363,9 @@ export default function FleetView({
                       }
                     }}
                     className={[
-                      "flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[11.5px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
+                      // tandem-tap: on a phone the fleet popover is a full-width
+                      // panel and these tabs are its only navigation.
+                      "tandem-tap flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[11.5px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
                       tab === t.id
                         ? "bg-accent/[0.08] text-accent"
                         : "text-ink/50 hover:bg-ink/5 hover:text-ink/80",
@@ -388,7 +392,7 @@ export default function FleetView({
                   triggerRef.current?.focus();
                 }}
                 aria-label="Close fleet"
-                className="ml-auto flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-ink/40 transition-colors hover:bg-ink/5 hover:text-ink/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                className="ml-auto flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-ink/40 transition-colors hover:bg-ink/5 hover:text-ink/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-6 sm:w-6"
               >
                 <X size={14} />
               </button>

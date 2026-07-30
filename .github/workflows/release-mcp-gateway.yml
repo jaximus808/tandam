@@ -1,0 +1,192 @@
+# Publish @jaximus/tandem-mcp (apps/mcp-gateway) to npm.
+#
+# Why: 2.2.1 was on npm while 2.3.0's work sat unpublished in the repo, because
+# releasing meant a human remembering to run ./publish.sh. Releases now happen
+# here, gated on the version/CHANGELOG/tag agreeing (see
+# apps/mcp-gateway/scripts/check-release-version.mjs).
+#
+# Two ways to run it:
+#
+#   1. Push a tag — this is a real release:
+#        git tag mcp-v2.3.1 && git push origin mcp-v2.3.1
+#      The tag's version MUST equal package.json's version.
+#
+#   2. Actions → "Release tandem-mcp to npm" → Run workflow. Defaults to a DRY
+#      RUN: it verifies, builds, tests, and does `npm publish --dry-run`, so it
+#      publishes nothing. Untick "dry_run" to publish the current version
+#      without tagging.
+#
+# One-time setup (Jaxon): add repo secret NPM_TOKEN — an npm **Automation**
+# access token for the account owning the @jaximus scope (Automation tokens
+# bypass 2FA, which a classic Publish token does not). Nothing here needs GCP.
+#
+# Note: this does NOT touch the GCP deploy. deploy.yml only triggers on pushes
+# to main, so pushing an mcp-v* tag releases the npm package and nothing else.
+
+name: Release tandem-mcp to npm
+
+on:
+  push:
+    tags:
+      - 'mcp-v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run — verify + build + test + npm publish --dry-run (publishes nothing)'
+        type: boolean
+        default: true
+
+# Never let two releases race to the registry.
+concurrency:
+  group: release-mcp-gateway
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # To publish with npm provenance later, add `id-token: write` here and pass
+  # `--provenance` to npm publish below. It requires the repo to be public and
+  # package.json's repository.url to match this repo, so it is opt-in rather
+  # than on by default.
+
+jobs:
+  release:
+    name: Verify, build, publish
+    runs-on: ubuntu-latest
+
+    env:
+      # Tag pushes are real releases. Manual runs honour the dry_run input,
+      # which defaults to true — the safe direction to be wrong in.
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+      # Empty on a manual run (github.ref is a branch, not a release tag), and
+      # the guard treats empty as "no tag to check".
+      RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          # Pinned because the repo root has no "packageManager" field.
+          version: 11.2.2
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          # Writes the .npmrc that NODE_AUTH_TOKEN slots into at publish time.
+          registry-url: 'https://registry.npmjs.org'
+
+      # Full workspace install: the gateway has no workspace-internal deps, but
+      # a frozen root install is the one command guaranteed to match the
+      # lockfile, and it is cached above.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # THE GUARD. Runs before anything is built or published: fails if
+      # package.json's version, the top versioned CHANGELOG heading, and (on a
+      # tag push) the tag do not all agree.
+      - name: Verify version / CHANGELOG / tag agree
+        working-directory: apps/mcp-gateway
+        run: node scripts/check-release-version.mjs --tag "$RELEASE_TAG"
+
+      - name: Read version
+        id: meta
+        working-directory: apps/mcp-gateway
+        run: |
+          NAME="$(node -p "require('./package.json').name")"
+          VERSION="$(node -p "require('./package.json').version")"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing $NAME@$VERSION (dry_run=$DRY_RUN)"
+
+      # Invoke tsup/tsx directly rather than `pnpm run build` / `pnpm test`:
+      # pnpm's verify-deps-before-run preflight tries to re-install and chokes
+      # on this workspace's ignored build scripts. Same reason publish.sh does.
+      - name: Build
+        working-directory: apps/mcp-gateway
+        run: pnpm exec tsup
+
+      - name: Test
+        working-directory: apps/mcp-gateway
+        run: pnpm exec tsx --test test/*.test.ts
+
+      - name: Check the build output is publishable
+        working-directory: apps/mcp-gateway
+        run: |
+          set -euo pipefail
+          for f in dist/index.js dist/http.js; do
+            if [ ! -s "$f" ]; then
+              echo "::error::$f is missing or empty after build — refusing to publish."
+              exit 1
+            fi
+          done
+          echo "--- tarball contents ---"
+          npm pack --dry-run
+
+      # Republishing an existing version always fails at the registry; catching
+      # it here says WHY (you re-ran a tag without bumping) instead of leaving
+      # an E403 to decode.
+      - name: Check this version is not already on npm
+        env:
+          PKG: ${{ steps.meta.outputs.name }}@${{ steps.meta.outputs.version }}
+        run: |
+          set -uo pipefail
+          if npm view "$PKG" version >/dev/null 2>&1; then
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "::warning::$PKG is already published — a real release would fail here. Bump the version."
+            else
+              echo "::error::$PKG is already published to npm. Bump the version in apps/mcp-gateway/package.json (and add a CHANGELOG section) before releasing."
+              exit 1
+            fi
+          else
+            echo "$PKG is not on npm yet — good."
+          fi
+
+      - name: Require NPM_TOKEN for a real publish
+        if: env.DRY_RUN != 'true'
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NPM_TOKEN:-}" ]; then
+            echo "::error::NPM_TOKEN secret is not set. Add an npm Automation token as the repo secret NPM_TOKEN, then re-run."
+            exit 1
+          fi
+          echo "NPM_TOKEN is present."
+
+      - name: Publish to npm
+        working-directory: apps/mcp-gateway
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          # --ignore-scripts skips prepublishOnly, which would re-run the build
+          # through pnpm's preflight; we already built and tested above.
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "DRY RUN — nothing will be published."
+            npm publish --ignore-scripts --access public --dry-run
+          else
+            npm publish --ignore-scripts --access public
+          fi
+
+      - name: Summary
+        if: always()
+        env:
+          PKG: ${{ steps.meta.outputs.name }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          {
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "### Dry run: \`$PKG@$VERSION\` :mag:"
+              echo ""
+              echo "Verified, built, and tested. **Nothing was published.**"
+            else
+              echo "### Published \`$PKG@$VERSION\` :package:"
+              echo ""
+              echo "- <https://www.npmjs.com/package/@jaximus/tandem-mcp>"
+              echo "- Smoke test outside this repo: \`npx -y @jaximus/tandem-mcp\` (should wait on stdin)"
+              echo "- Restart Claude Code / any MCP client to pick up new tool metadata."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

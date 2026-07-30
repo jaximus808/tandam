@@ -83,6 +83,16 @@ type ClaimOutcome struct {
 	// ExpiredClaimAt is when the lapsed claim was originally taken. Zero unless
 	// ExpiredClaimBy is set.
 	ExpiredClaimAt time.Time
+	// ClaimGeneration is THIS lease's fencing token (TDM-98): the per-task claim
+	// counter, incremented by every claim that stamps a fresh lease and never
+	// reset. The claimant presents it on later writes and the server refuses any
+	// write whose generation is not the live one — so a worker whose lease lapsed
+	// cannot complete a task that has since changed hands (and back again).
+	//
+	// 0 means no token: the stamp write did not land, or the store does not mint
+	// them. Callers must treat 0 as "fence on holder identity alone", never as a
+	// valid generation. See store/claim_fence.go for the full rationale.
+	ClaimGeneration int
 }
 
 // ── Domain types ──────────────────────────────────────────────────────────────
@@ -1074,6 +1084,12 @@ type Store interface {
 	CreateAction(ctx context.Context, canvasID uuid.UUID, a *Action) (int, error)
 	CreateActions(ctx context.Context, canvasID uuid.UUID, actions []*Action) (int, error)
 	GetAction(ctx context.Context, canvasID, id uuid.UUID) (*Action, error)
+	// GetActionByTicket looks a task up by its per-canvas ticket number (the "21"
+	// of "TDM-21"), so callers holding the identifier humans and commit messages
+	// use don't have to list the board to find the uuid. Tickets are unique per
+	// canvas (reserve_task_tickets, migration 0034); a non-task action has none
+	// and is therefore never returned here.
+	GetActionByTicket(ctx context.Context, canvasID uuid.UUID, ticket int) (*Action, error)
 	ListActions(ctx context.Context, canvasID uuid.UUID, stateFilter, typeFilter, assigneeFilter string) ([]*Action, error)
 	UpdateActionState(ctx context.Context, canvasID, id uuid.UUID, patch ActionStatePatch) (int, error)
 	// ClaimAction atomically claims an approved action for claimedBy — a single
@@ -1106,6 +1122,36 @@ type Store interface {
 	// pattern. Human-only — the gate lives at the route surface (see
 	// api.RequeueAction); agents must not requeue their own failures.
 	RequeueAction(ctx context.Context, canvasID, id uuid.UUID) (*Action, int, error)
+	// ReopenAction is the human REWIND out of a state a task cannot leave on its
+	// own: done → approved (reopen a task that wasn't really finished) and
+	// rejected → proposed (reconsider something triaged away). Same
+	// conditional-UPDATE + re-read-to-disambiguate pattern as
+	// ReleaseAction/RequeueAction, predicated on `from`, so a task that moved
+	// under the request yields ErrIllegalActionState instead of a lost update.
+	//
+	// The claim, result and error are cleared: a task back in the queue must not
+	// advertise the outcome of a life it is about to live again (the same reason
+	// RequeueAction clears result). A rewind to 'proposed' also clears
+	// approved_by — it is going back INTO the gate, and a proposed task
+	// rendering as "approved by …" is a lie.
+	//
+	// (from, to) is validated by the CALLER against the human move matrix (see
+	// api.humanMoveTargets); this method must never be reachable with an
+	// arbitrary pair from a request body. Human-only by surface, exactly like
+	// release and requeue: no MCP tool maps to it.
+	ReopenAction(ctx context.Context, canvasID, id uuid.UUID, from, to string) (*Action, int, error)
+	// AppendActionAudit appends ONE server-authored entry to an action's
+	// payload.audit[] log and returns the stored payload. Unlike
+	// UpdateActionPayload it takes no caller payload at all — it exists for the
+	// entries the SERVER writes about its own state moves (see
+	// NewStateAudit), which UpdateActionPayload cannot express because it
+	// deliberately discards any audit[] that arrives with a payload.
+	//
+	// Touches nothing but `audit`, so it never trips the content gate and never
+	// bumps a task out of its state. Best-effort by contract: the callers record
+	// after the move has already committed, so a failure here is logged, not
+	// returned to a human who has already seen their card move.
+	AppendActionAudit(ctx context.Context, canvasID, id uuid.UUID, entry ContentAudit) (json.RawMessage, error)
 	// UpdateActionPayload is the ONE write path for an action's payload, and
 	// therefore the place the content gate lives (TDM-41 — see content_gate.go
 	// for the full rule table and its rationale). Every payload write goes

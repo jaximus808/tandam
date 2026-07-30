@@ -430,7 +430,7 @@ func (h *Handler) ReadAction(w http.ResponseWriter, r *http.Request) {
 	canvasID := CanvasIDFromCtx(r.Context())
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid id")
+		writeError(w, http.StatusBadRequest, "invalid id: expected a task uuid or an existing ticket ref like TDM-21")
 		return
 	}
 	action, err := h.store.GetAction(r.Context(), canvasID, id)
@@ -475,11 +475,19 @@ func (h *Handler) ReadAction(w http.ResponseWriter, r *http.Request) {
 // one place. Returns the fresh action and whether the transition landed (false
 // on error AND on the idempotent already-there no-op), so a caller can chain
 // follow-up work — e.g. approving an epic cascades to its tasks.
-func (h *Handler) transitionAction(w http.ResponseWriter, r *http.Request, to string, patch store.ActionStatePatch) (*store.Action, bool) {
+//
+// `caller` is the claim identity behind the request, and this is where the claim
+// fence applies to EVERY transition (TDM-98): the MCP/web completion PATCH, the
+// CI status API's completed/failed, and the human board's Done button all funnel
+// through here, so fencing here is what makes "you cannot finish a task you no
+// longer hold" true on all of them at once rather than on whichever handler
+// remembered to check. Approve/reject pass a zero claimant — a proposed task has
+// no holder to fence against (see claim_fence.go's audit table).
+func (h *Handler) transitionAction(w http.ResponseWriter, r *http.Request, to string, patch store.ActionStatePatch, caller claimant) (*store.Action, bool) {
 	canvasID := CanvasIDFromCtx(r.Context())
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid id")
+		writeError(w, http.StatusBadRequest, "invalid id: expected a task uuid or an existing ticket ref like TDM-21")
 		return nil, false
 	}
 	current, err := h.store.GetAction(r.Context(), canvasID, id)
@@ -498,6 +506,14 @@ func (h *Handler) transitionAction(w http.ResponseWriter, r *http.Request, to st
 	}
 	if !canTransition(current.State, to) {
 		writeError(w, http.StatusBadRequest, "illegal transition: "+current.State+" → "+to)
+		return nil, false
+	}
+	// The claim fence, before anything is written: a caller that presents a claim
+	// identity must still hold this task. Checked AFTER the idempotent no-op above
+	// on purpose — a retry of a transition that already landed is answered like the
+	// first response, and re-fencing it would turn a lost 200 into a scary 409 for
+	// a caller that did nothing wrong.
+	if !h.fenceTaskWriteOrFail(w, current, caller) {
 		return nil, false
 	}
 	// The content gate's other door (TDM-41). ActionStatePatch can carry a
@@ -521,6 +537,10 @@ func (h *Handler) transitionAction(w http.ResponseWriter, r *http.Request, to st
 			})
 			return nil, false
 		}
+		// The claim record is server-owned, and this is the one payload door that
+		// writes raw (see store.CarryClaimRecord): whatever the caller sent under
+		// `claim`, the stored record is what gets stored again.
+		patch.Payload = store.CarryClaimRecord(patch.Payload, current.Payload)
 	}
 	patch.State = to
 	if _, err := h.store.UpdateActionState(r.Context(), canvasID, id, patch); err != nil {
@@ -568,7 +588,9 @@ func (h *Handler) ApproveAction(w http.ResponseWriter, r *http.Request) {
 	if approvedBy == "" {
 		approvedBy = "human"
 	}
-	fresh, moved := h.transitionAction(w, r, "approved", store.ActionStatePatch{ApprovedBy: &approvedBy})
+	// No claimant: approve is the human gate on a PROPOSED task, which by
+	// definition has no holder to fence against (see claim_fence.go).
+	fresh, moved := h.transitionAction(w, r, "approved", store.ActionStatePatch{ApprovedBy: &approvedBy}, claimant{})
 	// task.approved fires on the TRANSITION only (moved), never on the idempotent
 	// already-approved retry — a client re-sending an approve must not hand the
 	// fleet the same task twice. emitTaskEvent skips non-tasks, so approving an
@@ -739,7 +761,9 @@ func (h *Handler) RejectAction(w http.ResponseWriter, r *http.Request) {
 	if body.Reason != "" {
 		reason = &body.Reason
 	}
-	h.transitionAction(w, r, "rejected", store.ActionStatePatch{Error: reason})
+	// No claimant, same reason as approve: rejection is the other exit from the
+	// human gate, and 'proposed' is never claimed.
+	h.transitionAction(w, r, "rejected", store.ActionStatePatch{Error: reason}, claimant{})
 }
 
 // PATCH /api/canvas/actions/{id}  — two modes:
@@ -762,13 +786,19 @@ func (h *Handler) UpdateActionState(w http.ResponseWriter, r *http.Request) {
 		// whether the report arrives by MCP or by curl. Only read on a terminal
 		// transition; see the merge below.
 		Links []string `json:"links"`
+		// ClaimGeneration is the fencing token this caller holds (TDM-98) — the
+		// `claim.generation` a successful claim handed back. Optional: absent means
+		// the holder-identity check alone, which is what every client before the
+		// token got. Present and stale means refused, whatever AgentName says.
+		ClaimGeneration int `json:"claimGeneration"`
 	}
 	if err := decode(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	caller := callerClaim(r, body.AgentName, body.ClaimGeneration)
 	if body.State == "" && len(body.Payload) > 0 {
-		h.updateActionPayload(w, r, body.Payload)
+		h.updateActionPayload(w, r, body.Payload, caller)
 		return
 	}
 	switch body.State {
@@ -785,24 +815,12 @@ func (h *Handler) UpdateActionState(w http.ResponseWriter, r *http.Request) {
 	}
 	// Terminal transitions respect the claim: a task another NAMED agent holds
 	// cannot be completed out from under it (the atomic claim would otherwise
-	// buy exclusivity at start and nothing at finish). The generic "agent"
-	// holder is exempt, mirroring ClaimAction's idempotency rule; a caller
-	// sending no identity (the web surface) is not blocked.
+	// buy exclusivity at start and nothing at finish), and neither can a task
+	// whose lease has since been reclaimed — that check now lives in
+	// transitionAction, which every completion on every surface goes through, so
+	// there is no longer a per-handler copy of it here (TDM-98).
 	if body.AgentName != "" {
 		canvasID := CanvasIDFromCtx(r.Context())
-		if id, perr := uuid.Parse(chi.URLParam(r, "id")); perr == nil {
-			if current, gerr := h.store.GetAction(r.Context(), canvasID, id); gerr == nil &&
-				current.State == "executing" && current.ClaimedBy != nil {
-				holder := *current.ClaimedBy
-				if holder != "" && holder != "agent" && holder != body.AgentName {
-					writeJSON(w, http.StatusConflict, map[string]string{
-						"error":     "claimed_by_other",
-						"claimedBy": holder,
-					})
-					return
-				}
-			}
-		}
 		// Liveness heartbeat: completing (or failing) a task proves the agent is
 		// alive — refresh its last_seen_at so the swarm view gets a short grace
 		// window between tasks instead of flickering offline. Touch-or-create: a
@@ -855,7 +873,7 @@ func (h *Handler) UpdateActionState(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	fresh, moved := h.transitionAction(w, r, body.State, patch)
+	fresh, moved := h.transitionAction(w, r, body.State, patch, caller)
 	// Terminal transition → task.completed, for 'done' AND 'failed' alike; the
 	// payload's task.state says which, and task.error carries the failure reason.
 	// (Rationale for folding 'failed' in here rather than staying silent: see the
@@ -875,7 +893,7 @@ func (h *Handler) claimAction(w http.ResponseWriter, r *http.Request, agentName 
 	canvasID := CanvasIDFromCtx(r.Context())
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid id")
+		writeError(w, http.StatusBadRequest, "invalid id: expected a task uuid or an existing ticket ref like TDM-21")
 		return
 	}
 	if agentName == "" {
@@ -900,7 +918,9 @@ func (h *Handler) claimAction(w http.ResponseWriter, r *http.Request, agentName 
 		return
 	}
 	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
-	writeJSON(w, http.StatusOK, map[string]any{"action": action})
+	// The response carries the fencing token this claim minted (TDM-98) — the
+	// claimant must present it on every later write to the task.
+	writeClaimed(w, action)
 }
 
 // claimTask is THE claim — the atomic store call plus the two side effects every
@@ -913,6 +933,20 @@ func (h *Handler) claimAction(w http.ResponseWriter, r *http.Request, agentName 
 // The caller maps the error onto a status code and broadcasts state; everything
 // that must happen REGARDLESS of surface lives here.
 func (h *Handler) claimTask(ctx context.Context, canvasID, id uuid.UUID, agentName string) (*store.Action, error) {
+	return h.claimTaskAs(ctx, canvasID, id, agentName, true)
+}
+
+// claimTaskAs is claimTask with the presence side effect made explicit.
+//
+// `presence` is true for every AGENT surface: a claimant that never called
+// agent_register still belongs in the roster, so the claim touch-or-creates its
+// agents row. It is false for the human board controls (see MoveAction), and
+// that distinction is the whole reason this parameter exists — a person marking
+// their own todo as started is not a fleet member, and minting an agents row
+// named "human" would put a fake executor in the swarm view, permanently
+// "online", for as long as the canvas lives. The claim itself is identical:
+// same atomic store call, same 409, same metrics, same activity ping.
+func (h *Handler) claimTaskAs(ctx context.Context, canvasID, id uuid.UUID, agentName string, presence bool) (*store.Action, error) {
 	action, outcome, err := h.store.ClaimAction(ctx, canvasID, id, agentName)
 	if err != nil {
 		// Contention metric (TDM-42). Counted HERE, at the one function both
@@ -939,12 +973,14 @@ func (h *Handler) claimTask(ctx context.Context, canvasID, id uuid.UUID, agentNa
 	// claimedBy → agent name). This is also what puts a CI job on the board as a
 	// named member. Best-effort and DETACHED: presence must never add a
 	// round-trip to the claim path (the exact latency the loadtest measures).
-	touchCtx := context.WithoutCancel(ctx)
-	go func() {
-		if err := h.store.TouchOrCreateAgent(touchCtx, canvasID, agentName); err != nil {
-			log.Printf("claim %s: touching agent last_seen (%s): %v", id, agentName, err)
-		}
-	}()
+	if presence {
+		touchCtx := context.WithoutCancel(ctx)
+		go func() {
+			if err := h.store.TouchOrCreateAgent(touchCtx, canvasID, agentName); err != nil {
+				log.Printf("claim %s: touching agent last_seen (%s): %v", id, agentName, err)
+			}
+		}()
+	}
 	// TDM-46 live fleet feed: a claim is the transition the presence UI most
 	// needs pushed (who just picked up what), and it is the one the webhook
 	// vocabulary deliberately stays silent on.
@@ -981,28 +1017,16 @@ func (h *Handler) claimTask(ctx context.Context, canvasID, id uuid.UUID, agentNa
 // agent that lost a claim must ask a human, never un-claim a peer itself);
 // only the web Tasks panel's Release button calls it. If canvas tokens ever
 // grow an origin claim (browser vs gateway), enforce it here instead.
+//
+// One line on top of rewindTask (task_move.go), which is the shared body of
+// every backwards human move — so a release, a requeue and a reopen leave the
+// board, the activity feed and the task's audit trail in the same shape. This
+// endpoint stays as its own route because it is what the web app has always
+// called and because "release" is a verb worth keeping in the URL space; POST
+// …/move with {"to":"approved"} on an executing task does exactly the same thing.
 func (h *Handler) ReleaseAction(w http.ResponseWriter, r *http.Request) {
-	canvasID := CanvasIDFromCtx(r.Context())
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid id")
-		return
-	}
-	action, _, err := h.store.ReleaseAction(r.Context(), canvasID, id)
-	if err != nil {
-		switch {
-		case errors.Is(err, store.ErrActionNotFound):
-			writeError(w, http.StatusNotFound, "action not found")
-		case errors.Is(err, store.ErrIllegalActionState):
-			writeError(w, http.StatusBadRequest, err.Error())
-		default:
-			writeError(w, http.StatusInternalServerError, err.Error())
-		}
-		return
-	}
-	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
-	broadcastActionActivity(h.hub, canvasID, activityReleased, action) // TDM-46
-	writeJSON(w, http.StatusOK, map[string]any{"action": action})
+	note, caller := moveBody(r)
+	h.rewindTask(w, r, moveRelease, note, caller)
 }
 
 // POST /api/canvas/actions/{id}/requeue — send a FAILED task back to the
@@ -1016,38 +1040,37 @@ func (h *Handler) ReleaseAction(w http.ResponseWriter, r *http.Request) {
 // cannot distinguish human from agent, so the gate is that no MCP gateway tool
 // maps to this endpoint — only the web task surfaces call it. Re-queueing a
 // task that is already back in 'approved' is an idempotent success.
+//
+// Shares rewindTask with release and reopen — see ReleaseAction above.
 func (h *Handler) RequeueAction(w http.ResponseWriter, r *http.Request) {
-	canvasID := CanvasIDFromCtx(r.Context())
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid id")
-		return
-	}
-	action, _, err := h.store.RequeueAction(r.Context(), canvasID, id)
-	if err != nil {
-		switch {
-		case errors.Is(err, store.ErrActionNotFound):
-			writeError(w, http.StatusNotFound, "action not found")
-		case errors.Is(err, store.ErrIllegalActionState):
-			writeError(w, http.StatusBadRequest, err.Error())
-		default:
-			writeError(w, http.StatusInternalServerError, err.Error())
-		}
-		return
-	}
-	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
-	broadcastActionActivity(h.hub, canvasID, activityRequeued, action) // TDM-46
-	writeJSON(w, http.StatusOK, map[string]any{"action": action})
+	note, caller := moveBody(r)
+	h.rewindTask(w, r, moveRequeue, note, caller)
 }
 
 // DELETE /api/canvas/actions/{id}  — remove an action (e.g. delete a task from
 // the queue). Terminal for any state — no state-machine guard.
+//
+// FENCED for a caller that asserts an agent identity (TDM-98): deleting a task
+// another worker is mid-flight on is the most destructive write there is, and an
+// agent tidying up must not do it to a peer. A human (or an anonymous viewer on a
+// public canvas) asserts no claim identity and is deliberately NOT fenced — the
+// board's delete is one of the escape hatches, like release and requeue.
+//
+// The extra read only happens when there is something to fence: an unidentified
+// caller deletes in one round trip exactly as before.
 func (h *Handler) DeleteAction(w http.ResponseWriter, r *http.Request) {
 	canvasID := CanvasIDFromCtx(r.Context())
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid id")
+		writeError(w, http.StatusBadRequest, "invalid id: expected a task uuid or an existing ticket ref like TDM-21")
 		return
+	}
+	if caller := callerClaim(r, "", 0); caller.presented() {
+		if current, gerr := h.store.GetAction(r.Context(), canvasID, id); gerr == nil {
+			if !h.fenceTaskWriteOrFail(w, current, caller) {
+				return
+			}
+		}
 	}
 	if _, err := h.store.DeleteAction(r.Context(), canvasID, id); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -1067,16 +1090,25 @@ func (h *Handler) DeleteAction(w http.ResponseWriter, r *http.Request) {
 // that rewrites an approved task and gets a bare 200 would carry on believing
 // the task is queued; being told it must be re-approved is the difference
 // between a gate and a trap.
-func (h *Handler) updateActionPayload(w http.ResponseWriter, r *http.Request, payload json.RawMessage) {
+// FENCED as well as gated (TDM-98), and the two rules answer different questions:
+// the content gate asks "does this edit cost the approval?", the fence asks "is
+// this task yours to edit at all?". Rewriting the body of a task another worker
+// is executing would otherwise be a way to change the work under it — and, since
+// a content edit REVERTS an approved task to 'proposed' and clears the claim, a
+// way for one agent to knock another off its task entirely.
+func (h *Handler) updateActionPayload(w http.ResponseWriter, r *http.Request, payload json.RawMessage, caller claimant) {
 	canvasID := CanvasIDFromCtx(r.Context())
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid id")
+		writeError(w, http.StatusBadRequest, "invalid id: expected a task uuid or an existing ticket ref like TDM-21")
 		return
 	}
 	current, err := h.store.GetAction(r.Context(), canvasID, id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if !h.fenceTaskWriteOrFail(w, current, caller) {
 		return
 	}
 	if current.Type == "task" {

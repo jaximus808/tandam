@@ -38,6 +38,18 @@
 
 import type { Gateway } from "./gateway.js";
 import { RAW_TOOL_BY_NAME, adoptCarriedSession, handleTool, type RawTool } from "./tools.js";
+import {
+  alreadyFinishedMessage,
+  fenceRejectionMessage,
+  findAnyLoss,
+  forgetLoss,
+  notYourClaimMessage,
+  readConflict,
+  recordLoss,
+  tapOutBlock,
+  writeReason,
+  type ConflictBody,
+} from "./tapout.js";
 
 type Args = Record<string, unknown>;
 
@@ -352,8 +364,46 @@ export async function handleFacadeTool(
       })) as { tasks?: unknown[]; hint?: string };
       const tasks = listed.tasks ?? [];
       const session = gateway.getSession();
+
+      // ANTI-LOOP, the queue half (TDM-99). A task THIS session was told to let
+      // go of must not be offered back to it as fresh work — that round trip
+      // (queue_next → claim → lose → queue_next) is the loop the tap-out contract
+      // exists to break, and the ready queue is where it closes.
+      //
+      // Annotated rather than hidden: a vanishing task is worse than a marked
+      // one — the session (and the human reading its transcript) can still see
+      // the work exists and who holds it. What it does NOT get is a `handoff`,
+      // because a handoff is a dispatch instruction and dispatching a task you
+      // just lost is the loop with extra steps.
+      //
+      // And this is the SELF-HEALING path: if the server now lists the task as
+      // ready with NO holder, the winner's claim is over (release clears
+      // claimed_by), so the loss is stale and gets forgotten right here — the
+      // task comes back with a handoff, claimable again.
+      const lostByYou: Array<Record<string, unknown>> = [];
       const shown = tasks.slice(0, Math.max(1, limit)).map((t) => {
         const row = (t ?? {}) as Record<string, unknown>;
+        const id = typeof row.id === "string" ? row.id : undefined;
+        const ticketId = typeof row.ticketId === "string" ? row.ticketId : undefined;
+        const loss = findAnyLoss(gateway, [id, ticketId]);
+        if (loss) {
+          const holder = typeof row.claimedBy === "string" ? row.claimedBy : undefined;
+          if (!holder) {
+            // Ready and unheld: proof the claim that beat us is gone.
+            forgetLoss(gateway, id, ticketId);
+          } else {
+            const marked = {
+              ...row,
+              lostByYou: true,
+              ...(loss.holder ? { lostTo: loss.holder } : {}),
+              _tapOut:
+                `You already lost this task to "${loss.holder ?? holder}" — it is NOT yours to ` +
+                `claim or dispatch. No handoff is attached on purpose. Take a different task.`,
+            };
+            lostByYou.push({ id, ...(ticketId ? { ticketId } : {}) });
+            return marked;
+          }
+        }
         return { ...row, handoff: buildHandoff(row, session.canvasCode, session.agentId) };
       });
       // canvas_task_list's fan-out `hint` is deliberately NOT passed through:
@@ -363,6 +413,16 @@ export async function handleFacadeTool(
       return {
         tasks: shown,
         ...(tasks.length > limit ? { truncated: tasks.length - limit } : {}),
+        ...(lostByYou.length > 0
+          ? {
+              lostByYou,
+              _lostByYou:
+                `${lostByYou.length} task(s) in this list are marked lostByYou — you already ` +
+                `raced for them and lost, so they carry no handoff and you must not claim them ` +
+                `again. If every task is marked, there is nothing here for you: report that ` +
+                `instead of re-claiming.`,
+            }
+          : {}),
         ...(shown.length > 0
           ? {
               _dispatch:
@@ -423,7 +483,7 @@ export async function handleFacadeTool(
 
       const { data, conflict } = await gateway.postWithConflict<
         { action?: { claimedBy?: string; claimedAt?: string; payload?: Record<string, unknown> } },
-        { error?: string; message?: string; claimedBy?: string; state?: string }
+        ConflictBody
       >(`/api/canvas/${encodeURIComponent(code)}/tasks/${encodeURIComponent(id)}/status`, {
         state: "progress",
         agent: claimant,
@@ -433,22 +493,49 @@ export async function handleFacadeTool(
       // A rejected heartbeat is an ANSWER, not a crash: the model should route on
       // it (go take a task that is actually yours) rather than see a thrown
       // protocol error mid-work. Same shape the old client-side guard returned.
+      //
+      // TDM-99: when the rejection is CONTENTION — another agent holds it, our
+      // claim was fenced, or the work is already over — it also carries the
+      // tap-out block, so a worker heartbeating into a task that moved on beneath
+      // it gets the same machine-readable "stop" a lost claim gets, and the loss
+      // is remembered so it cannot follow up with a claim attempt.
+      //
+      // A task that is merely NOT CLAIMED is not a tap-out: nobody beat this
+      // caller, and the answer is task_claim, not queue_next. `reason` is a
+      // TapOutReason on a tap-out response and the API's own error code otherwise
+      // (`apiError` always carries the raw code, whichever branch you are in).
       if (conflict) {
-        const holder = conflict.claimedBy;
+        const c = readConflict(conflict);
+        const holder = c.holder;
+        const reason = writeReason(c);
+        if (reason) {
+          const loss = recordLoss(gateway, id, { holder, reason, claimGeneration: c.claimGeneration });
+          return {
+            recorded: false,
+            id,
+            by: claimant,
+            ...(c.code ? { apiError: c.code } : {}),
+            ...(holder ? { claimedBy: holder } : {}),
+            ...(c.state ? { state: c.state } : {}),
+            ...tapOutBlock(loss),
+            message: c.fenced
+              ? fenceRejectionMessage(id, holder)
+              : reason === "already_finished"
+                ? alreadyFinishedMessage(c.state ?? "finished")
+                : notYourClaimMessage(holder ?? "another agent", "report on"),
+          };
+        }
         return {
           recorded: false,
           id,
           by: claimant,
-          reason: conflict.error ?? "rejected",
-          ...(holder ? { claimedBy: holder } : {}),
-          ...(conflict.state ? { state: conflict.state } : {}),
-          message: holder
-            ? `This task is claimed by "${holder}" — it is not yours to report on. ` +
-              `Call queue_next and pick a task you can claim.`
-            : conflict.state
-              ? `This task is "${conflict.state}", not executing — only the agent currently ` +
-                `working a task can report on it. Claim it with task_claim first.`
-              : (conflict.message ?? "The API rejected this progress report."),
+          reason: c.code ?? "rejected",
+          ...(c.code ? { apiError: c.code } : {}),
+          ...(c.state ? { state: c.state } : {}),
+          message: c.state
+            ? `This task is "${c.state}", not executing — only the agent currently ` +
+              `working a task can report on it. Claim it with task_claim first.`
+            : (c.message ?? "The API rejected this progress report."),
         };
       }
 
@@ -537,9 +624,14 @@ export async function handleFacadeTool(
         ...(many.length > 0 ? { tasks } : {}),
         url: canvasBlock(gateway).url,
         _next:
-          "The epic is 'proposed'. A HUMAN approves it once in the web Tasks panel and that " +
-          "approval cascades to every task under it — do not try to approve it yourself. " +
-          "Add more tasks to it later with task_propose and this `epicId`.",
+          "The epic is 'proposed'. A HUMAN approves it once on the board and that approval " +
+          "cascades to every task under it — do not try to approve it yourself. NOW LISTEN FOR " +
+          "THAT APPROVAL instead of ending your turn: unless the user told you otherwise, poll " +
+          "queue_next with this `epicId` on a backing-off interval (start ~15s, double to a ~2min " +
+          "cap) and the moment tasks come back approved, work them — with subagents, dispatch one " +
+          "per task using the `handoff` blocks queue_next returns. The human approving on the " +
+          "board IS the go signal; they should not have to prompt you again. Add more tasks to " +
+          "the batch later with task_propose and this `epicId`.",
       };
     }
 
@@ -671,7 +763,8 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
       "worker's behalf, and never passes on its `session` handle — the handle stays with you, the " +
       "CODE is what travels. WORKING ALONE: pick ONE, task_get it for the full brief, task_claim " +
       "it, then work. Empty means nothing is approved: tasks you propose sit at 'proposed' until " +
-      "a human approves them on the board. " +
+      "a human approves them on the board. A task marked `lostByYou: true` carries NO handoff: you " +
+      "raced for it and lost, so it is neither yours to claim nor yours to dispatch — take another. " +
       SESSION_CONVENTION,
     inputSchema: {
       type: "object" as const,
@@ -701,7 +794,10 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
       "its own. A task claimed by an orchestrator that never touches it reads on the board as " +
       "in-flight work nobody is doing. The claim is ATOMIC and losing is NORMAL: " +
       "{ claimed: false, claimedBy } means another session got there first — do NOT work on it, " +
-      "go back to queue_next and take the next one. On success you get the task's `ticketId` " +
+      "go back to queue_next and take the next one. Every losing answer also carries " +
+      "`tapOut: true` with a `reason` and `next: \"queue_next\"` — that flag is the one thing to " +
+      "branch on, and it means STOP TOUCHING THIS TASK, not try again. Asking a second time for a " +
+      "task you already lost is refused without even reaching the server. On success you get the task's `ticketId` " +
       "(e.g. 'TDM-142'); put it in your commit messages so the work traces back. " +
       SESSION_CONVENTION,
     inputSchema: schemaOf("canvas_task_start"),
@@ -820,9 +916,12 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
       "Propose an EPIC — the named container a plan hangs off — and, in the SAME call, the tasks " +
       "under it via `tasks` (same item shape as task_propose). Use this whenever you're asked to " +
       "'write an epic' or plan a feature: tasks proposed without one are unparented and each need " +
-      "their own approval. The epic lands as 'proposed'; a HUMAN approves it ONCE in the web Tasks " +
-      "panel and that single approval cascades to every task under it. You must NOT try to approve " +
+      "their own approval. The epic lands as 'proposed'; a HUMAN approves it ONCE on the board " +
+      "and that single approval cascades to every task under it. You must NOT try to approve " +
       "it yourself — that gate is the human's, and the gateway refuses agent approval of epics. " +
+      "After proposing, do not end your turn: LISTEN for the approval by polling queue_next with " +
+      "the returned `epicId` on a backing-off interval, so the human's approval on the board — " +
+      "not another prompt — is what starts the work. " +
       "Returns `epicId`: pass it as `epicId` on later task_propose calls to add work to the same " +
       "batch (once the epic is approved, those tasks are born approved). " +
       SESSION_CONVENTION,

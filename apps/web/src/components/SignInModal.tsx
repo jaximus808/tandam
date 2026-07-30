@@ -98,7 +98,11 @@ export default function SignInModal({ onClose, onSignedIn }: Props) {
         role="dialog"
         aria-modal="true"
         aria-labelledby="signin-title"
-        className="w-full max-w-sm bg-surface rounded-[10px] border border-ink/10 shadow-lg overflow-hidden"
+        // max-h + scroll: the banner plus three feature rows plus the Google
+        // button is taller than a phone in landscape (and than a short in-app
+        // webview), and this box had `overflow-hidden` with no scroller — the
+        // sign-in button itself was the part that got cut off.
+        className="w-full max-w-sm max-h-[92dvh] overflow-y-auto bg-surface rounded-[10px] border border-ink/10 shadow-lg"
       >
         {/* Banner: the orbit logo doubles as "agents around a canvas". Follows
             the app theme like every other modal. */}
@@ -106,7 +110,7 @@ export default function SignInModal({ onClose, onSignedIn }: Props) {
           <button
             onClick={onClose}
             aria-label="Close"
-            className="absolute top-2 right-2 z-10 w-7 h-7 flex items-center justify-center rounded-full text-ink/55 hover:bg-ink/5 hover:text-ink/70 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            className="absolute top-1 right-1 z-10 w-11 h-11 flex items-center justify-center rounded-full text-ink/55 hover:bg-ink/5 hover:text-ink/70 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:top-2 sm:right-2 sm:w-7 sm:h-7"
           >
             <X size={15} />
           </button>

@@ -185,7 +185,8 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 		r.Use(RequireCanvasByCode(authSvc, s))
 		r.Use(RequireLiveGrant(s))
 		r.Use(RequireWrite)
-		r.Post("/api/canvas/{code}/tasks/{id}/status", h.ReportTaskStatus)
+		// {id} accepts a uuid or a ticket ref ("TDM-21") — see ticket_ref.go.
+		r.With(ResolveTicketRef(s)).Post("/api/canvas/{code}/tasks/{id}/status", h.ReportTaskStatus)
 	})
 
 	// Image upload is intentionally disabled for v1 — needs a real storage
@@ -227,7 +228,10 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 		r.Get("/api/canvas/pending-edits", h.ListPendingEdits)
 		r.Post("/api/canvas/forms/scaffold", h.ScaffoldForm) // computes a spec; no mutation
 		r.Get("/api/canvas/actions", h.ListActions)
-		r.Get("/api/canvas/actions/{id}", h.ReadAction)
+		// Every action-addressing route below takes a uuid OR a ticket ref
+		// ("TDM-21", "tdm-21", "#21", "21") — ResolveTicketRef rewrites the param
+		// to the uuid so the handlers stay uuid-only. See ticket_ref.go.
+		r.With(ResolveTicketRef(s)).Get("/api/canvas/actions/{id}", h.ReadAction)
 		r.Get("/api/canvas/roadmap-items", h.ListRoadmapItems)
 		r.Get("/api/canvas/documents", h.ListDocuments)
 		// Fleet presence + activity (TDM-46). The roster pairs every registered
@@ -334,17 +338,28 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 			r.Post("/api/canvas/actions/batch", h.ProposeActionsBatch)
 			r.Post("/api/canvas/actions/batch-delete", h.DeleteActionsBatch)
 			r.Post("/api/canvas/actions/approve-batch", h.ApproveActionsBatch)
-			r.Post("/api/canvas/actions/{id}/approve", h.ApproveAction)
-			r.Post("/api/canvas/actions/{id}/reject", h.RejectAction)
+			// Ticket refs work on every action route below (see ticket_ref.go), so a
+			// caller holding "TDM-21" can approve, claim, move or complete it without
+			// resolving the uuid first.
+			r.With(ResolveTicketRef(s)).Post("/api/canvas/actions/{id}/approve", h.ApproveAction)
+			r.With(ResolveTicketRef(s)).Post("/api/canvas/actions/{id}/reject", h.RejectAction)
 			// Stuck-claim release (executing → approved). Human-only by surface:
 			// not exposed through the MCP gateway — see Handler.ReleaseAction.
-			r.Post("/api/canvas/actions/{id}/release", h.ReleaseAction)
+			r.With(ResolveTicketRef(s)).Post("/api/canvas/actions/{id}/release", h.ReleaseAction)
 			// Failed-task requeue (failed → approved, error cleared). Human-only
 			// by surface: not exposed through the MCP gateway — agents must not
 			// requeue their own failures. See Handler.RequeueAction.
-			r.Post("/api/canvas/actions/{id}/requeue", h.RequeueAction)
-			r.Patch("/api/canvas/actions/{id}", h.UpdateActionState)
-			r.Delete("/api/canvas/actions/{id}", h.DeleteAction)
+			r.With(ResolveTicketRef(s)).Post("/api/canvas/actions/{id}/requeue", h.RequeueAction)
+			// The human board's state moves (E10): start / complete / mark
+			// failed / release / re-queue / reopen / reconsider, all through
+			// ONE endpoint validated against the human move matrix. Human-only
+			// by surface like the two above (no MCP tool maps to it), and it
+			// deliberately CANNOT approve: 'proposed' has no move targets, so
+			// approve/reject stay the only door into the ready queue. See
+			// task_move.go for the matrix and the whole argument.
+			r.With(ResolveTicketRef(s)).Post("/api/canvas/actions/{id}/move", h.MoveAction)
+			r.With(ResolveTicketRef(s)).Patch("/api/canvas/actions/{id}", h.UpdateActionState)
+			r.With(ResolveTicketRef(s)).Delete("/api/canvas/actions/{id}", h.DeleteAction)
 
 			r.Post("/api/canvas/pending-edits", h.CreatePendingEdit)
 			r.Delete("/api/canvas/pending-edits/{id}", h.DeletePendingEdit)

@@ -124,7 +124,9 @@ function CopyField({
       <button
         onClick={onCopy}
         className={[
-          "inline-flex shrink-0 items-center gap-1 rounded-[5px] px-2.5 py-1.5 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
+          // tandem-tap (index.css): copying the code IS the primary action of
+          // this modal on a phone, so it gets the touch floor.
+          "tandem-tap inline-flex shrink-0 items-center justify-center gap-1 rounded-[5px] px-2.5 py-1.5 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
           accent ? "bg-accent text-white hover:bg-accent/90" : "bg-ink text-paper hover:bg-ink/80",
         ].join(" ")}
       >
@@ -194,7 +196,7 @@ export default function ConnectModal({ code, version, agents, onClose, onSwitchC
 
   function tabPill(active: boolean) {
     return [
-      "rounded-md border px-2.5 py-1 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
+      "tandem-tap inline-flex items-center justify-center rounded-md border px-2.5 py-1 text-center text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
       active
         ? "border-accent bg-accent text-white"
         : "border-ink/15 bg-surface text-ink/50 hover:border-ink/35 hover:text-ink",
@@ -214,7 +216,9 @@ export default function ConnectModal({ code, version, agents, onClose, onSwitchC
         role="dialog"
         aria-modal="true"
         aria-labelledby="connect-title"
-        className="relative flex max-h-[88vh] w-full max-w-md flex-col overflow-hidden rounded-[10px] border border-ink/10 bg-surface text-ink shadow-lg outline-none"
+        // dvh, not vh — see ShareDialog: 88vh over-measures on mobile Safari and
+        // pushes this modal's pinned footer below the visible fold.
+        className="relative flex max-h-[88dvh] w-full max-w-md flex-col overflow-hidden rounded-[10px] border border-ink/10 bg-surface text-ink shadow-lg outline-none"
       >
         <div className="overflow-y-auto px-5 pb-5 pt-5">
           {/* ── Header ─────────────────────────────────────────────────────── */}
@@ -266,7 +270,7 @@ export default function ConnectModal({ code, version, agents, onClose, onSwitchC
               <div className="mt-4">
                 <button
                   onClick={() => setShowSetup((s) => !s)}
-                  className="flex w-full items-center gap-2 rounded-md border border-ink/15 bg-paper px-3 py-2 text-left transition-colors hover:border-ink/30"
+                  className="tandem-tap flex w-full items-center gap-2 rounded-md border border-ink/15 bg-paper px-3 py-2 text-left transition-colors hover:border-ink/30"
                   aria-expanded={showSetup}
                 >
                   <Icon
@@ -283,7 +287,10 @@ export default function ConnectModal({ code, version, agents, onClose, onSwitchC
 
                 {showSetup && (
                   <div className="mt-2 rounded-md border border-ink/15 bg-paper p-3">
-                    <div className="flex gap-1.5">
+                    {/* flex-wrap: "Claude · web / desktop" + "Editor / CLI" is
+                        wider than the box inside a 390px modal once the pills
+                        carry a touch target. */}
+                    <div className="flex flex-wrap gap-1.5">
                       <button onClick={() => setSetupTab("claude")} className={tabPill(setupTab === "claude")}>
                         Claude · web / desktop
                       </button>
@@ -333,7 +340,7 @@ export default function ConnectModal({ code, version, agents, onClose, onSwitchC
                       href="/mcp"
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="mt-2.5 inline-flex items-center gap-1.5 text-[11px] font-medium text-accent transition-colors hover:text-ink"
+                      className="tandem-tap mt-2.5 inline-flex items-center gap-1.5 text-[11px] font-medium text-accent transition-colors hover:text-ink"
                     >
                       Full setup guide — every client
                       <Icon name="external" className="h-3 w-3" />
@@ -350,7 +357,7 @@ export default function ConnectModal({ code, version, agents, onClose, onSwitchC
           {connected ? (
             <button
               onClick={done}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-accent px-6 py-2.5 text-[13px] font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              className="tandem-tap inline-flex w-full items-center justify-center gap-2 rounded-md bg-accent px-6 py-2.5 text-[13px] font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
             >
               Start working
               <Icon name="arrow" className="h-4 w-4" />
@@ -359,17 +366,23 @@ export default function ConnectModal({ code, version, agents, onClose, onSwitchC
             <div className="flex items-center gap-3">
               <button
                 onClick={done}
-                className="flex-1 rounded-md border border-ink/15 bg-surface py-2.5 text-[13px] font-medium text-ink transition-colors hover:bg-ink/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                className="tandem-tap flex flex-1 items-center justify-center rounded-md border border-ink/15 bg-surface py-2.5 text-[13px] font-medium text-ink transition-colors hover:bg-ink/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
               >
                 Done
               </button>
-              <button onClick={onClose} className="px-2 py-2.5 text-sm text-ink/45 hover:text-ink/70">
+              <button
+                onClick={onClose}
+                className="tandem-tap flex shrink-0 items-center justify-center px-2 py-2.5 text-sm text-ink/45 hover:text-ink/70"
+              >
                 Later
               </button>
             </div>
           )}
-          <div className="mt-3 flex items-center justify-between text-[11px] text-ink/35">
-            <button onClick={onSwitchCanvas} className="transition-colors hover:text-ink/60">
+          <div className="mt-1 flex items-center justify-between text-[11px] text-ink/35 sm:mt-3">
+            <button
+              onClick={onSwitchCanvas}
+              className="tandem-tap flex items-center transition-colors hover:text-ink/60"
+            >
               ← Switch canvas
             </button>
             <span>v{version}</span>

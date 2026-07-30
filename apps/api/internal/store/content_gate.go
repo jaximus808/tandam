@@ -93,6 +93,64 @@ type ContentAudit struct {
 	Summary string `json:"summary"`
 }
 
+// ── State moves (the human board controls, E10) ───────────────────────────────
+//
+// audit[] was built for CONTENT edits, and it is the right home for a HUMAN
+// STATE MOVE too: same question ("who touched this task, when, and what did
+// they do to it"), same server-owned log, same read paths — one trail per task
+// rather than two competing ones.
+//
+// A move entry is told apart from a content entry by Change: it holds
+// StateChange ("state") instead of title/body, and Reverted is always false
+// because moving a task on the board never costs an approval — the proposed
+// gate is not a legal move target (see api.humanMoveTargets). The UI's
+// "edited after approval" notice keys on Reverted, so move entries are
+// invisible to it by construction.
+
+// StateChange is what a move entry's Change holds, in place of the content
+// field names. Not in contentFields: widening THAT would make a state move
+// trip the approval gate, which is the opposite of the point.
+const StateChange = "state"
+
+// NewStateAudit builds the audit entry for one human state move. `note` is the
+// optional result / reason the human typed, excerpted like any other quoted
+// value; from/to are the states as the PERSON experienced them (the Ready card
+// they marked Done), not necessarily every intermediate write the API made to
+// get there.
+func NewStateAudit(actor, from, to, note string, at time.Time) ContentAudit {
+	if strings.TrimSpace(actor) == "" {
+		// Same rule as NewContentAudit: provenance wasn't derived, and "unknown"
+		// is the honest answer. Guessing "human" would be the exact lie the
+		// provenance work exists to prevent.
+		actor = "unknown"
+	}
+	summary := fmt.Sprintf("%s: %q → %q", StateChange, from, to)
+	if n := excerpt(note); n != "" {
+		summary += " — " + n
+	}
+	return ContentAudit{
+		At:        at.UTC().Format(time.RFC3339),
+		Actor:     actor,
+		Change:    []string{StateChange},
+		FromState: from,
+		ToState:   to,
+		Reverted:  false,
+		Summary:   summary,
+	}
+}
+
+// AppendAudit returns `stored` with one SERVER-AUTHORED entry appended to its
+// audit[] log, capped at MaxContentAudit.
+//
+// It goes through carryContentAudit — the same function the content gate uses —
+// with the stored payload as BOTH the base and the history source. That is what
+// makes the log unforgeable here as well: an audit[] a caller sent is discarded
+// (it never reaches this function; the callers pass the row they just read),
+// and the prior entries always come off the stored row.
+func AppendAudit(stored json.RawMessage, entry ContentAudit) (json.RawMessage, error) {
+	return carryContentAudit(stored, stored, &entry)
+}
+
 // contentFields IS the definition of content, in the order Change reports them.
 // Adding a field here widens the gate; that is the intended, single place to do
 // it — and it should stay tiny. Every field added is a field a legitimate
@@ -192,6 +250,12 @@ func excerpt(s string) string {
 // invent an approval-looking history nor drop the entry that records its own
 // edit. It also survives the web editor, which sends a fresh TaskDraft with no
 // audit key at all — without this, every human edit would wipe the log.
+//
+// `claim` (the fencing record — see claim_fence.go) is carried the SAME way and
+// for the same reason: it is the token every task write is checked against, so a
+// payload PATCH must be able to neither forge a generation nor blank the one it
+// would be fenced by. Both keys are server-owned; this is the one function that
+// decides what a caller's payload may say about them, which is none of it.
 func carryContentAudit(incoming, stored json.RawMessage, entry *ContentAudit) (json.RawMessage, error) {
 	p := map[string]any{}
 	if len(incoming) > 0 {
@@ -200,6 +264,13 @@ func carryContentAudit(incoming, stored json.RawMessage, entry *ContentAudit) (j
 			// the (already-run) type-specific validation own the shape question.
 			return incoming, nil
 		}
+	}
+	// Server-owned, taken from the stored row whatever the caller sent. A task
+	// that has never been claimed has no record and must not grow an empty one.
+	if rec := ReadClaimRecord(stored); rec.Generation > 0 {
+		p[ClaimRecordKey] = rec
+	} else {
+		delete(p, ClaimRecordKey)
 	}
 	history := storedAudit(stored)
 	if entry != nil {

@@ -5,11 +5,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
    Following an agent means the page moves under you. That is exactly what you
    want while you're WATCHING, and exactly what you don't want while you're
-   WRITING. This hook draws that line, and it draws it at the keyboard:
+   WRITING. This hook draws that line at focus, not at the keyboard:
 
-     BUSY  = a text field / contenteditable holds focus, or the last keystroke
-             landed less than GRACE_MS ago. Follow holds its fire; anything it
-             wanted to show you is buffered and played once you stop.
+     BUSY  = a text field / contenteditable holds focus. Follow holds its fire;
+             anything it wanted to show you is buffered and played once you
+             blur. Keystrokes outside a field (shortcuts, navigation) never
+             count as writing — only a focused editing surface does.
 
      SCROLLING (separate, softer) = a wheel/touch gesture within SCROLL_GRACE_MS.
              This does NOT stop following — it only tells the auto-pan to skip
@@ -22,8 +23,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
    reactive state (for the chrome that says "paused while you're typing").
    ──────────────────────────────────────────────────────────────────────────── */
 
-// How long after your last keystroke you still count as writing. Long enough to
-// cover thinking between words, short enough that follow feels responsive again.
+// How long a noteInteraction() stamp (e.g. a drag) counts as deliberate work.
+// Focused text fields don't need this — they hold busy for as long as they
+// hold focus, and release it the moment they blur.
 const GRACE_MS = 5_000;
 // A wheel/touch gesture suppresses the next auto-pan for this long.
 const SCROLL_GRACE_MS = 1_200;
@@ -83,19 +85,18 @@ export function useFocusGuard(): FocusGuard {
     };
     const onFocusOut = () => {
       fieldRef.current = false;
-      // Leaving a field starts the grace clock rather than resuming instantly —
-      // a blur is usually the middle of an edit (tabbing to the next input),
-      // not the end of one.
-      lastTypedRef.current = Date.now();
+      // Unfocusing IS the end of the edit — resume immediately. (Tabbing to
+      // another field re-arms via the focusin that follows in the same beat.)
+      lastTypedRef.current = 0;
       settle();
     };
     const onKeyDown = (e: KeyboardEvent) => {
-      // Only real composition counts. Arrow keys and shortcuts are navigation;
-      // treating them as "writing" would pause follow for anyone reading with
-      // the keyboard.
-      const printable = e.key.length === 1 || e.key === "Backspace" || e.key === "Enter";
-      if (!printable && !isTextEntry(e.target)) return;
-      lastTypedRef.current = Date.now();
+      // Keys only count as writing when they land in an editing surface.
+      // Anywhere else they're shortcuts or navigation — never a reason to
+      // pause follow. The focus check (not a grace clock) is what keeps busy
+      // true, so this is just a fallback for a field focused before mount.
+      if (!isTextEntry(e.target)) return;
+      fieldRef.current = true;
       settle();
     };
     const onScroll = () => {

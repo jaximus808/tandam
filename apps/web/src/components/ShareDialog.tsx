@@ -25,7 +25,14 @@ function Kicker({ children }: { children: React.ReactNode }) {
   );
 }
 
-// Segmented two-option toggle (visibility + role) — keeps the ink/paper look.
+// Segmented toggle (visibility + public role + approval policy) — keeps the
+// ink/paper look.
+//
+// Below sm it goes FULL WIDTH with equal segments on its own line. Sat beside
+// its label in a 390px dialog it was a shrinkable flex item, so the three-way
+// approval control ("Strict / Epic / Auto") squeezed its own labels while the
+// sentence next to it collapsed to one word per line. Above sm it is the
+// unchanged inline control.
 function Segmented<T extends string>({
   value,
   options,
@@ -38,14 +45,14 @@ function Segmented<T extends string>({
   disabled?: boolean;
 }) {
   return (
-    <div className="inline-flex rounded-md border border-ink/15 bg-paper p-0.5">
+    <div className="flex w-full shrink-0 rounded-md border border-ink/15 bg-paper p-0.5 sm:inline-flex sm:w-auto">
       {options.map((o) => (
         <button
           key={o.value}
           disabled={disabled}
           onClick={() => onChange(o.value)}
           className={[
-            "rounded-[5px] px-3 py-1 text-[12px] font-medium transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
+            "tandem-tap flex flex-1 items-center justify-center rounded-[5px] px-3 py-1 text-[12px] font-medium transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:flex-none",
             value === o.value ? "bg-accent text-white" : "text-ink/55 hover:text-ink",
           ].join(" ")}
         >
@@ -176,7 +183,11 @@ export default function ShareDialog({ code, canvas, onClose }: Props) {
         role="dialog"
         aria-modal="true"
         aria-labelledby="share-title"
-        className="relative flex max-h-[88vh] w-full max-w-md flex-col overflow-hidden rounded-[10px] border border-ink/10 bg-surface text-ink shadow-lg outline-none"
+        // dvh, not vh: on mobile Safari 88vh measures against the viewport
+        // WITHOUT the URL bar, so the dialog can be taller than what's visible
+        // and the pinned "Done" footer ends up below the fold with no way to
+        // scroll to it (the scroller is the body above the footer, not this box).
+        className="relative flex max-h-[88dvh] w-full max-w-md flex-col overflow-hidden rounded-[10px] border border-ink/10 bg-surface text-ink shadow-lg outline-none"
       >
         <div className="overflow-y-auto px-5 pb-5 pt-5">
           <Kicker>Share · {code}</Kicker>
@@ -186,8 +197,10 @@ export default function ShareDialog({ code, canvas, onClose }: Props) {
 
           {/* ── General access ─────────────────────────────────────────────── */}
           <div className="mt-4 rounded-md border border-ink/15 bg-paper p-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
+            {/* Label above the control below sm, beside it above — the setting
+                and its explanation both get the full 390px column. */}
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+              <div className="min-w-0">
                 <p className="text-[13px] font-medium text-ink">General access</p>
                 <p className="mt-0.5 text-[12px] leading-relaxed text-ink/55">
                   {visibility === "public"
@@ -207,7 +220,7 @@ export default function ShareDialog({ code, canvas, onClose }: Props) {
             </div>
 
             {visibility === "public" && (
-              <div className="mt-3 flex items-center justify-between gap-3 border-t border-ink/10 pt-3">
+              <div className="mt-3 flex flex-col gap-2 border-t border-ink/10 pt-3 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
                 <p className="text-[12px] text-ink/60">People with the code can</p>
                 <Segmented<Role>
                   value={publicRole}
@@ -225,8 +238,8 @@ export default function ShareDialog({ code, canvas, onClose }: Props) {
 
           {/* ── Agent task approval policy (migration 0033) ────────────────── */}
           <div className="mt-4 rounded-md border border-ink/15 bg-paper p-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+              <div className="min-w-0">
                 <p className="text-[13px] font-medium text-ink">Agent task approval</p>
                 <p className="mt-0.5 text-[12px] leading-relaxed text-ink/55">
                   {approvalPolicy === "strict"
@@ -253,29 +266,39 @@ export default function ShareDialog({ code, canvas, onClose }: Props) {
           {/* ── Share with specific people ─────────────────────────────────── */}
           <div className="mt-4">
             <Kicker>People with access</Kicker>
-            <form onSubmit={invite} className="mt-2 flex items-center gap-2">
+            {/* Three controls in one row is a desktop row. Below sm the email
+                field takes its own line (it is the field you type a whole
+                address into) and the role + Add pair sits under it. */}
+            <form onSubmit={invite} className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
               <input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="name@email.com"
-                className="min-w-0 flex-1 rounded-md border border-ink/15 bg-surface px-3 py-1.5 text-[13px] text-ink outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/20"
+                className="tandem-tap min-w-0 flex-1 rounded-md border border-ink/15 bg-surface px-3 py-1.5 text-[13px] text-ink outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/20"
               />
-              <Segmented<Role>
-                value={inviteRole}
-                onChange={setInviteRole}
-                options={[
-                  { value: "read", label: "View" },
-                  { value: "write", label: "Edit" },
-                ]}
-              />
-              <button
-                type="submit"
-                disabled={inviting || !email.trim()}
-                className="shrink-0 rounded-md bg-accent px-3 py-1.5 text-[12.5px] font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50"
-              >
-                {inviting ? "…" : "Add"}
-              </button>
+              <div className="flex min-w-0 items-center gap-2 sm:shrink-0">
+                {/* Segmented is w-full below sm (it is a stacked control in the
+                    rows above), so it needs a shrinking box of its own here or
+                    it claims the whole line and pushes Add off the edge. */}
+                <div className="min-w-0 flex-1 sm:flex-none">
+                  <Segmented<Role>
+                    value={inviteRole}
+                    onChange={setInviteRole}
+                    options={[
+                      { value: "read", label: "View" },
+                      { value: "write", label: "Edit" },
+                    ]}
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={inviting || !email.trim()}
+                  className="tandem-tap flex shrink-0 items-center justify-center rounded-md bg-accent px-4 py-1.5 text-[12.5px] font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50"
+                >
+                  {inviting ? "…" : "Add"}
+                </button>
+              </div>
             </form>
             {shareError && <p className="mt-2 text-[12px] text-rose-600 dark:text-rose-400">{shareError}</p>}
 
@@ -311,9 +334,11 @@ export default function ShareDialog({ code, canvas, onClose }: Props) {
                     <span className="font-code text-[11px] text-ink/45">
                       {m.role === "write" ? "Edit" : "View"}
                     </span>
+                    {/* Was an 18px-tall text link — the smallest target in the
+                        dialog, and the destructive one. */}
                     <button
                       onClick={() => revoke(m.userId)}
-                      className="rounded px-1.5 py-0.5 text-[11px] text-ink/40 transition-colors hover:bg-ink/5 hover:text-rose-600 dark:hover:text-rose-400"
+                      className="tandem-tap flex shrink-0 items-center justify-center rounded px-2 py-0.5 text-[11px] text-ink/40 transition-colors hover:bg-ink/5 hover:text-rose-600 dark:hover:text-rose-400"
                       title="Remove access"
                     >
                       Remove
@@ -328,7 +353,7 @@ export default function ShareDialog({ code, canvas, onClose }: Props) {
         <div className="border-t border-ink/10 px-5 py-3.5">
           <button
             onClick={onClose}
-            className="w-full rounded-md border border-ink/15 bg-surface py-2.5 text-[13px] font-medium text-ink transition-colors hover:bg-ink/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            className="tandem-tap flex w-full items-center justify-center rounded-md border border-ink/15 bg-surface py-2.5 text-[13px] font-medium text-ink transition-colors hover:bg-ink/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           >
             Done
           </button>

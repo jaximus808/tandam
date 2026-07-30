@@ -454,7 +454,7 @@ export default function WebhooksModal({ code, onClose }: Props) {
         role="dialog"
         aria-modal="true"
         aria-labelledby="webhooks-title"
-        className="relative flex max-h-[88vh] w-full max-w-2xl flex-col overflow-hidden rounded-[10px] border border-ink/10 bg-surface text-ink shadow-lg outline-none"
+        className="relative flex max-h-[88dvh] w-full max-w-2xl flex-col overflow-hidden rounded-[10px] border border-ink/10 bg-surface text-ink shadow-lg outline-none"
       >
         <div className="tandem-scroll overflow-y-auto px-5 pb-5 pt-5">
           <Kicker>Webhooks · {code}</Kicker>

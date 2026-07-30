@@ -225,12 +225,21 @@ export interface NavigatePayload {
 // an approved or executing task sends it back to 'proposed' with its claim
 // released, and this is the record of why. See apps/api/internal/store/
 // content_gate.go for the full rule.
+// The log holds a SECOND kind of entry (E10): a human STATE MOVE — someone
+// started, finished, reopened or re-queued the task on the board. Those carry
+// change: ["state"] and are always `reverted: false`, because moving a card
+// never costs an approval (a proposed task cannot be moved at all; the approval
+// gate is the only way out of it). One trail per task rather than two competing
+// ones — tell the kinds apart by `change`.
 export interface ContentAuditEntry {
   at: string;
   /** Server-derived provenance, same vocabulary as `authoredBy`. */
   actor: string;
-  /** Which approval-relevant fields moved. */
-  change: ("title" | "body")[];
+  /**
+   * Which approval-relevant fields moved — or the literal "state" for a human
+   * board move, whose fromState/toState are the whole content of the entry.
+   */
+  change: ("title" | "body" | "state")[];
   fromState: ActionState;
   toState: ActionState;
   reverted: boolean;

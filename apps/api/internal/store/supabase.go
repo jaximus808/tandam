@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -3052,6 +3053,22 @@ func (s *supabaseStore) GetAction(_ context.Context, canvasID, id uuid.UUID) (*A
 	return toAction(rows[0]), nil
 }
 
+func (s *supabaseStore) GetActionByTicket(_ context.Context, canvasID uuid.UUID, ticket int) (*Action, error) {
+	var rows []dbAction
+	_, err := s.client.From("actions").
+		Select("*", "", false).
+		Eq("canvas_id", canvasID.String()).
+		Eq("ticket", strconv.Itoa(ticket)).
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("no task %s in canvas %s", TicketID(ticket), canvasID)
+	}
+	return toAction(rows[0]), nil
+}
+
 func (s *supabaseStore) ListActions(_ context.Context, canvasID uuid.UUID, stateFilter, typeFilter, assigneeFilter string) ([]*Action, error) {
 	var rows []dbAction
 	q := s.client.From("actions").
@@ -3143,12 +3160,16 @@ func (s *supabaseStore) ClaimAction(ctx context.Context, canvasID, id uuid.UUID,
 		return nil, ClaimOutcome{}, err
 	}
 	if len(rows) == 1 {
+		claimed := toAction(rows[0])
+		// Mint this lease's fencing token before the version bump, so the version
+		// the caller is handed already accounts for the payload write (TDM-98).
+		gen := s.stampClaimRecord(canvasID, id, rows[0], claimed)
 		v, verr := s.bumpVersion(ctx, canvasID)
 		if verr != nil {
 			return nil, ClaimOutcome{}, verr
 		}
 		// Ordinary claim off the queue — nothing expired.
-		return toAction(rows[0]), ClaimOutcome{Version: v}, nil
+		return claimed, ClaimOutcome{Version: v, ClaimGeneration: gen}, nil
 	}
 	// No row updated — disambiguate the reason from current state.
 	existing, gerr := s.GetAction(ctx, canvasID, id)
@@ -3178,7 +3199,7 @@ func (s *supabaseStore) ClaimAction(ctx context.Context, canvasID, id uuid.UUID,
 		// the exact double-execution the atomic claim exists to prevent.
 		if holder != "" && holder != "agent" && holder == claimedBy {
 			if s.claimTTL > 0 && existing.ClaimedAt != nil && now.Sub(*existing.ClaimedAt) >= s.claimTTL {
-				a, v, ok, terr := s.takeOverExpiredClaim(ctx, canvasID, id, claimedBy, now)
+				a, out, ok, terr := s.takeOverExpiredClaim(ctx, canvasID, id, claimedBy, now)
 				if terr != nil {
 					// A lost self-takeover race means someone ELSE now holds it —
 					// surface that as the conflict it is.
@@ -3189,13 +3210,23 @@ func (s *supabaseStore) ClaimAction(ctx context.Context, canvasID, id uuid.UUID,
 					// hands, so ExpiredClaimBy stays empty (see ClaimOutcome) and
 					// no task.claim_expired fires — the agent is alive, it just
 					// took longer than the TTL.
-					return a, ClaimOutcome{Version: v}, nil
+					//
+					// It IS a new lease, though, so it carries a new generation
+					// (TDM-98): the old one is dead the moment claimed_at is
+					// restamped, and the agent's own in-flight writes from the
+					// lapsed lease must not land either. The generation is in this
+					// call's response, which is what the retrying claimant then
+					// presents.
+					return a, out, nil
 				}
 				// No takeover happened (e.g. claimed_at refreshed concurrently by
 				// our own parallel retry) — the claim is live again; fall through
 				// to the idempotent success below.
 			}
-			return existing, ClaimOutcome{}, nil
+			// Idempotent no-op: the lease did not move, so neither does the
+			// generation — hand back the one already recorded so a claimant whose
+			// first response was lost ends up with the SAME token it would have had.
+			return existing, ClaimOutcome{ClaimGeneration: ReadClaimRecord(existing.Payload).Generation}, nil
 		}
 		// Expired claim → atomic takeover. The Go-side expiry check is only an
 		// optimization gate (skip the extra UPDATE on the common non-expired
@@ -3203,7 +3234,7 @@ func (s *supabaseStore) ClaimAction(ctx context.Context, canvasID, id uuid.UUID,
 		// guard. (A per-canvas TTL override would be read here, from canvas
 		// settings; for now the TTL is process-wide.)
 		if s.claimTTL > 0 && existing.ClaimedAt != nil && now.Sub(*existing.ClaimedAt) >= s.claimTTL {
-			a, v, ok, terr := s.takeOverExpiredClaim(ctx, canvasID, id, claimedBy, now)
+			a, out, ok, terr := s.takeOverExpiredClaim(ctx, canvasID, id, claimedBy, now)
 			if terr != nil {
 				return nil, ClaimOutcome{}, terr
 			}
@@ -3211,7 +3242,7 @@ func (s *supabaseStore) ClaimAction(ctx context.Context, canvasID, id uuid.UUID,
 				// The one place a lapsed claim is ever observed (lazy expiry, no
 				// sweeper). Report who lost it so the API can fire
 				// task.claim_expired — this is the ONLY source of that event.
-				out := ClaimOutcome{Version: v, ExpiredClaimBy: holder}
+				out.ExpiredClaimBy = holder
 				if existing.ClaimedAt != nil {
 					out.ExpiredClaimAt = *existing.ClaimedAt
 				}
@@ -3228,7 +3259,10 @@ func (s *supabaseStore) ClaimAction(ctx context.Context, canvasID, id uuid.UUID,
 // takeover happened" and the caller should report the ordinary claim
 // conflict; a lost takeover race instead returns *AlreadyClaimedError naming
 // the NEW holder from a re-read.
-func (s *supabaseStore) takeOverExpiredClaim(ctx context.Context, canvasID, id uuid.UUID, claimedBy string, now time.Time) (*Action, int, bool, error) {
+//
+// The ClaimOutcome carries the new lease's Version and ClaimGeneration; the
+// caller fills in ExpiredClaimBy/At, which only IT can know (see ClaimAction).
+func (s *supabaseStore) takeOverExpiredClaim(ctx context.Context, canvasID, id uuid.UUID, claimedBy string, now time.Time) (*Action, ClaimOutcome, bool, error) {
 	cutoff := now.Add(-s.claimTTL)
 	var rows []dbAction
 	// Atomic conditional UPDATE, NOT read-then-write: `claimed_at < cutoff` is
@@ -3249,23 +3283,87 @@ func (s *supabaseStore) takeOverExpiredClaim(ctx context.Context, canvasID, id u
 		Lt("claimed_at", cutoff.Format(time.RFC3339Nano)).
 		ExecuteTo(&rows)
 	if err != nil {
-		return nil, 0, false, err
+		return nil, ClaimOutcome{}, false, err
 	}
 	if len(rows) == 1 {
+		taken := toAction(rows[0])
+		// A takeover is a NEW lease, so it mints a new generation off the stored
+		// one — which is what invalidates every write still in flight from the
+		// lease it just ended (TDM-98).
+		gen := s.stampClaimRecord(canvasID, id, rows[0], taken)
 		v, verr := s.bumpVersion(ctx, canvasID)
 		if verr != nil {
-			return nil, 0, false, verr
+			return nil, ClaimOutcome{}, false, verr
 		}
-		return toAction(rows[0]), v, true, nil
+		return taken, ClaimOutcome{Version: v, ClaimGeneration: gen}, true, nil
 	}
 	// 0 rows: either the claim wasn't actually expired (claimed_at within TTL,
 	// or NULL — pre-migration rows) or a rival takeover restamped it first.
 	// Re-read so the conflict the caller reports names the CURRENT holder.
 	fresh, gerr := s.GetAction(ctx, canvasID, id)
 	if gerr == nil && fresh.State == "executing" && fresh.ClaimedBy != nil {
-		return nil, 0, false, &AlreadyClaimedError{ClaimedBy: *fresh.ClaimedBy}
+		return nil, ClaimOutcome{}, false, &AlreadyClaimedError{ClaimedBy: *fresh.ClaimedBy}
 	}
-	return nil, 0, false, nil
+	return nil, ClaimOutcome{}, false, nil
+}
+
+// stampClaimRecord mints the fencing token for a lease that just landed and
+// writes it onto the task payload, returning the new generation.
+//
+// BEST-EFFORT BY CONTRACT: every failure path returns 0 and no error, because a
+// claim that won must not be reported as lost over its bookkeeping. 0 means "no
+// token" — the claimant presents nothing on later writes and the fence falls back
+// to holder identity, exactly as it does for a client that predates the token
+// (see claim_fence.go). This package deliberately does no logging; the absence of
+// a `claim` block on the claim response is the observable signal.
+//
+// `row` is the raw claim UPDATE's representation and `claimed` its parsed form;
+// the payload on both is the PRE-IMAGE the generation counts from, because the
+// claim UPDATE writes state/claimed_by/claimed_at and never payload. On success
+// the fresh payload is reflected onto `claimed`, so the claimant's response
+// carries its own token without another read.
+//
+// THE PREDICATE IS THE SAFETY. The write is conditional on the exact lease just
+// stamped (type + state + claimed_by + claimed_at, using the timestamp text
+// Postgres itself returned, so no format round-trip can make it miss): if a
+// takeover has already restamped the row, this UPDATE matches nothing and the
+// winner's record stands. It is NOT protected against a concurrent payload write
+// — the read-modify-write window is the milliseconds between the claim and this
+// call, on a task that was in 'approved' (or an expired lease) an instant ago, so
+// there is nothing legitimately writing progress to it yet.
+func (s *supabaseStore) stampClaimRecord(canvasID, id uuid.UUID, row dbAction, claimed *Action) int {
+	if row.ClaimedBy == nil || row.ClaimedAt == nil || claimed == nil {
+		return 0
+	}
+	at := time.Now().UTC()
+	if claimed.ClaimedAt != nil {
+		at = *claimed.ClaimedAt
+	}
+	rec := NextClaimRecord(claimed.Payload, *row.ClaimedBy, at)
+	next, err := WithClaimRecord(claimed.Payload, rec)
+	if err != nil {
+		return 0
+	}
+	var rows []dbAction
+	if _, err := s.client.From("actions").
+		Update(map[string]any{"payload": next}, "representation", "").
+		Eq("id", id.String()).
+		Eq("canvas_id", canvasID.String()).
+		Eq("type", "task").
+		Eq("state", "executing").
+		Eq("claimed_by", *row.ClaimedBy).
+		Eq("claimed_at", *row.ClaimedAt).
+		ExecuteTo(&rows); err != nil {
+		return 0
+	}
+	if len(rows) != 1 {
+		// The lease moved under us (a takeover landed first). The winner's record
+		// is authoritative; this claimant gets no token and falls back to the
+		// holder-identity fence, which will correctly refuse its writes.
+		return 0
+	}
+	claimed.Payload = next
+	return rec.Generation
 }
 
 // TouchActionClaim refreshes the claim lease on an executing task: ONE
@@ -3399,6 +3497,83 @@ func (s *supabaseStore) RequeueAction(ctx context.Context, canvasID, id uuid.UUI
 		return existing, 0, nil // already back in the queue — idempotent retry
 	}
 	return nil, 0, fmt.Errorf("%w: cannot re-queue task in state %q", ErrIllegalActionState, existing.State)
+}
+
+// ReopenAction is the human rewind out of a terminal-ish state — done →
+// approved, rejected → proposed — with the same conditional-UPDATE +
+// re-read-to-disambiguate pattern as ReleaseAction/RequeueAction. See the
+// interface doc in store.go for the rule and why the clear-set is what it is;
+// (from, to) is the caller's validated pair, never a request body's.
+func (s *supabaseStore) ReopenAction(ctx context.Context, canvasID, id uuid.UUID, from, to string) (*Action, int, error) {
+	m := map[string]any{
+		"state":      to,
+		"claimed_by": nil,
+		"claimed_at": nil,
+		// A reopened task must not advertise the result (or the error) of the run
+		// that is being undone — a card back in Ready showing a green "Result", and
+		// matching the has-commit filter, reports work that no longer stands.
+		"result": nil,
+		"error":  nil,
+	}
+	if to == "proposed" {
+		m["approved_by"] = nil
+	}
+	var rows []dbAction
+	_, err := s.client.From("actions").
+		Update(m, "representation", "").
+		Eq("id", id.String()).
+		Eq("canvas_id", canvasID.String()).
+		Eq("state", from).
+		Eq("type", "task").
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(rows) == 1 {
+		v, verr := s.bumpVersion(ctx, canvasID)
+		if verr != nil {
+			return nil, 0, verr
+		}
+		return toAction(rows[0]), v, nil
+	}
+	existing, gerr := s.GetAction(ctx, canvasID, id)
+	if gerr != nil {
+		return nil, 0, ErrActionNotFound
+	}
+	if existing.Type != "task" {
+		return nil, 0, fmt.Errorf("%w: only tasks can be reopened (this is a %q)", ErrIllegalActionState, existing.Type)
+	}
+	if existing.State == to {
+		return existing, 0, nil // already where the caller wants it — idempotent retry
+	}
+	return nil, 0, fmt.Errorf("%w: cannot move task from %q to %q (it is %q now)",
+		ErrIllegalActionState, from, to, existing.State)
+}
+
+// AppendActionAudit records one server-authored audit entry on an action's
+// payload: read the row, append through the shared AppendAudit (which caps the
+// log and takes the prior entries off the STORED payload), write the payload
+// back. Two round trips, on a path a human clicks — not a batch path.
+//
+// No version bump: this writes no board content of its own. Every caller is
+// mid-move and broadcasts full state right after, so viewers get the entry with
+// the state change it describes rather than in a push of its own.
+func (s *supabaseStore) AppendActionAudit(ctx context.Context, canvasID, id uuid.UUID, entry ContentAudit) (json.RawMessage, error) {
+	current, err := s.GetAction(ctx, canvasID, id)
+	if err != nil {
+		return nil, ErrActionNotFound
+	}
+	next, err := AppendAudit(current.Payload, entry)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.exec(s.client.From("actions").
+		Update(map[string]any{"payload": next}, "minimal", "").
+		Eq("id", id.String()).
+		Eq("canvas_id", canvasID.String())); err != nil {
+		return nil, err
+	}
+	return next, nil
 }
 
 // UpdateActionPayload replaces an action's payload — and enforces the

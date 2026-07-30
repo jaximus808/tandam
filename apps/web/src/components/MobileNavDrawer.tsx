@@ -76,7 +76,16 @@ export default function MobileNavDrawer({
         aria-hidden="true"
       />
       <aside
-        className="absolute inset-x-0 bottom-0 flex max-h-[80vh] flex-col rounded-t-[10px] border-t border-ink/10 bg-surface shadow-lg animate-[drawer-in_180ms_ease-out]"
+        // tandem-safe-pb: the sheet sits on the viewport floor, so without the
+        // safe-area strip its last row of controls falls under the iOS home
+        // indicator. tandem-sheet-in: the shared sheet entrance (index.css) —
+        // the Board's epic + filter sheets rise the same way, and it honours
+        // prefers-reduced-motion, which the local keyframes this replaced did
+        // not.
+        // 80dvh, not 80vh: vh measures the viewport WITHOUT mobile Safari's URL
+        // bar, so on a phone the sheet could be taller than what you can see and
+        // the panel body's own scroller would start below the fold.
+        className="tandem-safe-pb tandem-sheet-in absolute inset-x-0 bottom-0 flex max-h-[80dvh] flex-col rounded-t-[10px] border-t border-ink/10 bg-surface shadow-lg"
         role="dialog"
         aria-modal="true"
         aria-label="Canvas navigation"
@@ -118,7 +127,7 @@ export default function MobileNavDrawer({
           })}
           <button
             onClick={onClose}
-            className="flex h-12 w-10 shrink-0 items-center justify-center rounded-md text-ink/40 transition-colors hover:bg-ink/5 hover:text-ink/70"
+            className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md text-ink/40 transition-colors hover:bg-ink/5 hover:text-ink/70"
             title="Close"
             aria-label="Close navigation"
           >
@@ -126,7 +135,11 @@ export default function MobileNavDrawer({
           </button>
         </div>
 
-        {/* Panel switcher — the drawer's secondary row (file tree / settings). */}
+        {/* Panel switcher — the drawer's secondary row (file tree / settings).
+            This whole component is `sm:hidden`, so every control in it is a
+            touch target with no desktop reading: h-11 (44px), not the h-8 a
+            mouse would get. The type comes up a rung to match (12px) — 11.5px
+            was the desktop rung on a phone-only surface. */}
         <div className="flex items-center gap-1 border-b border-ink/10 px-2 py-1.5">
           {PANEL_ITEMS.map((item) => {
             const Icon = item.icon;
@@ -137,7 +150,7 @@ export default function MobileNavDrawer({
                 onClick={() => onSelectView(item.id)}
                 aria-pressed={isActive}
                 className={[
-                  "flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[11.5px] font-medium transition-colors",
+                  "flex h-11 items-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium transition-colors",
                   isActive
                     ? "bg-accent/[0.08] text-accent"
                     : "text-ink/40 hover:bg-ink/5 hover:text-ink/70",
@@ -154,10 +167,10 @@ export default function MobileNavDrawer({
                 onClose();
                 onConnect();
               }}
-              className="ml-auto flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-[11.5px] font-medium text-accent transition-colors hover:bg-accent/[0.08]"
+              className="ml-auto flex h-11 min-w-0 shrink items-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium text-accent transition-colors hover:bg-accent/[0.08]"
             >
-              <Link2 size={14} strokeWidth={1.75} />
-              Connect an agent
+              <Link2 size={14} strokeWidth={1.75} className="shrink-0" />
+              <span className="truncate">Connect an agent</span>
             </button>
           )}
         </div>
@@ -165,11 +178,6 @@ export default function MobileNavDrawer({
         {/* The selected panel body — reused verbatim from the desktop dock. */}
         <div className="flex min-h-0 flex-1 flex-col">{children}</div>
       </aside>
-
-      {/* Local keyframes so the drawer is self-contained (mirrors QuickLog). */}
-      <style>{`
-        @keyframes drawer-in { from { opacity: 0; transform: translateY(24px) } to { opacity: 1; transform: translateY(0) } }
-      `}</style>
     </div>
   );
 }

@@ -41,8 +41,8 @@ import FollowControl from "./components/FollowControl";
 import FleetView from "./components/FleetView";
 import NotificationBell from "./components/NotificationBell";
 import AgentToasts from "./components/AgentToasts";
-import QuickLog from "./components/QuickLog";
 import TaskBoard from "./components/TaskBoard";
+import TicketView from "./components/TicketView";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { useAgentActivity, type CursorShowcase } from "./lib/useAgentActivity";
 import { useAgentNotifications } from "./lib/useAgentNotifications";
@@ -111,6 +111,40 @@ function getCodeFromURL(): string | null {
   return new URLSearchParams(window.location.search).get("code")?.toUpperCase() ?? null;
 }
 
+// The ticket a /c/CODE/ticket/TDM-n deep link is asking for, or null for the
+// plain canvas. The ticket is a VIEW of the canvas, not a route of its own: the
+// code still resolves through getCodeFromURL above, so the canvas connects
+// exactly as it always did and the ticket page renders from the state that
+// arrives. Kept deliberately loose on the id shape ("TDM-7", "7") — TicketView
+// resolves it against the loaded tasks and says so plainly when nothing matches.
+function getTicketFromURL(): string | null {
+  if (MOCK_ENABLED) return null;
+  const m = window.location.pathname.match(
+    /^\/c\/[A-Z0-9]{8}\/ticket\/([A-Za-z0-9_-]{1,40})\/?$/i,
+  );
+  return m ? m[1].toUpperCase() : null;
+}
+
+// Did WE push the ticket entry the browser is currently sitting on? If so,
+// closing the ticket is a back() — the board you came from is literally the
+// previous entry, so the stack stays the length the user expects. On a cold deep
+// link there is nothing of ours behind us, so closing rewrites the current entry
+// instead of walking off into whatever page preceded the tab.
+//
+// The mark lives ON the history entry rather than in a ref, because a ref can't
+// survive the round trip: back off the ticket and forward onto it again and a ref
+// has already been reset, so "Back to board" would replaceState over an entry
+// that DOES have a board behind it and leave the user a dead back press. The
+// state object travels with its entry, so the answer stays correct however the
+// user got here. Every other pushState in this file passes null, so an unmarked
+// entry reads as "not ours" for free.
+const TICKET_PUSH_MARK = "tandemTicketPushed";
+
+function ticketWasPushed(): boolean {
+  const s = window.history.state as Record<string, unknown> | null;
+  return s?.[TICKET_PUSH_MARK] === true;
+}
+
 // The private one-time claim token from an agent-created canvas link
 // (/c/CODE?claim=clm_…). Present → the visitor should take ownership of THIS
 // canvas (not a copy). Read once on load; stripped from the URL after claiming.
@@ -160,6 +194,10 @@ function isMCPRoute(): boolean {
   return window.location.pathname.replace(/\/$/, "") === "/mcp";
 }
 
+// Normalizes the address bar to the canvas root. Called ONLY from handleJoin —
+// i.e. on an explicit "open this canvas", which is also exactly when a
+// /c/CODE/ticket/TDM-n path should be dropped. Do not call it on load: it would
+// clobber a ticket deep link before the canvas even connects.
 function setCodeInURL(code: string) {
   window.history.replaceState(null, "", `/c/${code}`);
 }
@@ -175,6 +213,9 @@ function setMCPInURL() {
 export default function App() {
   const [route, setRoute] = useState<Route>(routeFromPath);
   const [canvasCode, setCanvasCode] = useState<string | null>(getCodeFromURL);
+  // The ticket page (/c/CODE/ticket/TDM-n). Set → the canvas renders ONE ticket
+  // instead of the workspace; the canvas connection is identical either way.
+  const [ticketRef, setTicketRef] = useState<string | null>(getTicketFromURL);
   const [canvas, setCanvas] = useState<CanvasMeta | null>(null);
   const [canvasState, setCanvasState] = useState<CanvasState | null>(null);
   const [selectedPinId, setSelectedPinId] = useState<string | null>(null);
@@ -458,6 +499,11 @@ export default function App() {
   useEffect(() => {
     function onPop() {
       setRoute(routeFromPath());
+      // Back/forward across the ticket page is just this: the URL is the truth,
+      // and the ticket resolves out of the state we already hold. Whether the
+      // board sits behind the entry we landed on is read off that entry's own
+      // history state (ticketWasPushed), so there is nothing to reset here.
+      setTicketRef(getTicketFromURL());
     }
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
@@ -611,6 +657,11 @@ export default function App() {
   }
 
   function handleJoin(code: string) {
+    // Joining (or leaving) a canvas rewrites the path to its root, so the
+    // ticket view goes with it — a TDM number is scoped to one canvas. The
+    // rewrite below (setCodeInURL / clearCodeInURL) replaces the current entry
+    // with an unmarked one, so the push mark goes with the path it described.
+    setTicketRef(null);
     if (!code) {
       disconnectFromCanvas();
       setCanvasCode(null);
@@ -656,6 +707,33 @@ export default function App() {
   function showWhy() {
     window.history.pushState(null, "", "/why-tandem");
     setRoute("why");
+  }
+
+  // ── The ticket page ─────────────────────────────────────────────────────────
+  // A card's ticket chip opens /c/CODE/ticket/TDM-n. pushState, like every other
+  // route here, so browser back goes where the user came from.
+  function openTicket(ticketId: string) {
+    if (!canvasCode) return;
+    window.history.pushState(
+      { [TICKET_PUSH_MARK]: true },
+      "",
+      `/c/${canvasCode}/ticket/${ticketId}`,
+    );
+    setTicketRef(ticketId.toUpperCase());
+    posthog.capture("ticket_view_opened", { canvas_code: canvasCode, ticket: ticketId });
+  }
+
+  // Leaving the ticket. If we pushed our way in, the board is literally the
+  // previous history entry — go back to it (the popstate listener clears
+  // ticketRef). On a cold deep link there is nothing of ours behind us, so
+  // rewrite the current entry down to the canvas root instead.
+  function closeTicket() {
+    if (ticketWasPushed()) {
+      window.history.back();
+      return;
+    }
+    if (canvasCode) window.history.replaceState(null, "", `/c/${canvasCode}`);
+    setTicketRef(null);
   }
 
   // Deep-copy the current canvas into my account, then open the owned copy.
@@ -1108,6 +1186,39 @@ export default function App() {
     );
   }
 
+  // The ticket page (/c/CODE/ticket/TDM-n) — one piece of work, at its own URL.
+  // Deliberately ABOVE the canvas-loaded gate below: a cold deep link should
+  // land on a ticket-shaped skeleton (TicketView handles state === null) rather
+  // than the generic joining splash, then fill in when the first snapshot lands
+  // and say so plainly if the ticket isn't on this canvas.
+  //
+  // openBoardForEpic / openDoc are function DECLARATIONS further down this
+  // component — hoisted, so they're callable from here. Don't convert them to
+  // const arrows without moving them above this return.
+  if (ticketRef) {
+    return (
+      <TicketView
+        code={canvasCode}
+        canvasName={canvas?.name ?? null}
+        state={canvasState}
+        ticketRef={ticketRef}
+        onOpenBoard={() => {
+          setSurface("board");
+          closeTicket();
+        }}
+        onOpenEpic={(epicId) => {
+          openBoardForEpic(epicId);
+          closeTicket();
+        }}
+        onOpenDocument={(docId) => {
+          openDoc(docId);
+          closeTicket();
+        }}
+        onHome={() => handleJoin("")}
+      />
+    );
+  }
+
   if (!canvasState || !canvas) {
     return (
       <div className="relative flex h-app flex-col items-center justify-center overflow-hidden bg-paper text-ink">
@@ -1224,9 +1335,9 @@ export default function App() {
       {/* z-[80] so the header (and its bell dropdown) sits above the agent
           cursor overlay (z-[70]); modals are z-[2000] and still cover it. */}
       <header className="relative z-[80] flex items-center gap-1.5 px-3 py-2.5 bg-paper border-b border-ink/10 shrink-0 sm:gap-2 sm:px-4">
-        {/* On mobile the nav-drawer trigger lives as a FAB stacked under the
-            QuickLog button (see below) — off the header so the canvas title has
-            room. The desktop left dock is `hidden sm:flex`. */}
+        {/* On mobile the nav-drawer trigger lives as a bottom-right FAB (see
+            below) — off the header so the canvas title has room. The desktop
+            left dock is `hidden sm:flex`. */}
         <button
           onClick={() => handleJoin("")}
           className="group flex items-center gap-1.5 text-sm shrink-0 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
@@ -1371,7 +1482,9 @@ export default function App() {
           {me && canvas.ownerUserId === me.id && (
             <button
               onClick={() => setShareOpen(true)}
-              className="inline-flex h-8 items-center rounded-md border border-ink/15 bg-surface px-3 text-[13px] font-medium text-ink/80 transition-colors hover:border-ink/25 hover:bg-ink/[0.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
+              // h-9 below sm like the copy CTA beside it — this button is
+              // visible at every width, so it needs the taller phone target.
+              className="inline-flex h-9 items-center rounded-md border border-ink/15 bg-surface px-3 text-[13px] font-medium text-ink/80 transition-colors hover:border-ink/25 hover:bg-ink/[0.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper sm:h-8"
               title="Control who can open and edit this canvas"
             >
               Share
@@ -1520,8 +1633,8 @@ export default function App() {
           </div>
         )}
 
-        {/* Mode content row: the focused document's view + the QuickLog dock.
-            The mode components + QuickLog are dark-mode-ready (grays swept to
+        {/* Mode content row: the focused document's view.
+            The mode components are dark-mode-ready (grays swept to
             paper/surface/ink tokens), so the worksurface follows the active
             theme. MapMode is a deliberate exception: the raster tiles + baked
             annotation pills stay light (a light map framed by dark chrome),
@@ -1531,9 +1644,21 @@ export default function App() {
         {/* The Board surface's full-page view. Mounted on first visit, then
             kept alive and toggled with CSS like the modes below. It renders
             from the same canvas-state props as every other view, so WS pushes
-            (claims, completions) move cards live — no polling. */}
+            (claims, completions) move cards live — no polling.
+
+            `tandem-fab-reserve` shortens the board by the mobile floating
+            column's band (zero on desktop), so the kanban's own scroll boxes
+            end ABOVE the nav FAB and the last card's action row is always
+            tappable. Applied here rather than inside TaskBoard so the guarantee
+            holds however the columns are laid out. */}
         {(surface === "board" || boardVisited) && (
-          <div className={surface === "board" ? "relative isolate flex flex-1 min-h-0 min-w-0" : "hidden"}>
+          <div
+            className={
+              surface === "board"
+                ? "tandem-fab-reserve relative isolate flex flex-1 min-h-0 min-w-0"
+                : "hidden"
+            }
+          >
             <TaskBoard
               code={canvas.code}
               state={canvasState}
@@ -1547,6 +1672,8 @@ export default function App() {
               // Plan chip on a scoped epic → the roadmap doc it delivers.
               // openDoc switches to the Documents surface and focuses the tab.
               onOpenRoadmapDoc={openDoc}
+              // A card's ticket chip → the ticket's own page.
+              onOpenTicket={openTicket}
               // Follow camera: put this card on screen while it changes lanes.
               spotlightTaskId={spotlight?.id ?? null}
               spotlightNonce={spotlight?.nonce}
@@ -1561,7 +1688,7 @@ export default function App() {
           if (!active && !visitedModes.has(m)) return null;
           // `isolate` gives each mode its own stacking context so a mode's
           // internal z-indexes (notably Leaflet's panes/controls, which go up to
-          // ~1000) can't escape and paint over the QuickLog dock beside it.
+          // ~1000) can't escape and paint over the surrounding chrome.
           const wrapperClass = active ? "relative isolate flex flex-1 min-h-0 min-w-0" : "hidden";
           // Render just the focused document's slice. For a hidden (kept-alive)
           // mode, fall back to the first open doc of its type so it stays coherent.
@@ -1631,17 +1758,19 @@ export default function App() {
         })}
         </ErrorBoundary>
 
-        {/* Direct-input layer: quick-log rail + mobile FAB, overlaid on whatever
-            mode is showing. Renders the canvas's agent-defined forms. */}
-        <QuickLog code={canvas.code} forms={canvasState.forms} />
+        {/* Mobile nav-drawer trigger — a bottom-right FAB. Moved off the header
+            so the canvas title gets the space, and a bottom-corner tap is an
+            easier thumb reach than the top-left. Badges proposed tasks like the
+            rail.
 
-        {/* Mobile nav-drawer trigger — a secondary FAB tucked just under the
-            QuickLog button (which sits at bottom-5). Moved off the header so the
-            canvas title gets the space, and a bottom-corner tap is an easier
-            thumb reach than the top-left. Badges proposed tasks like the rail. */}
+            It owns slot 1 of the floating column (`.tandem-float-br`, see
+            index.css): a corner inset that adds the iOS safe-area strip, so the
+            48px target and its badge stay clear of the home indicator. Anything
+            else that floats in this corner takes slot 2 rather than stacking on
+            top of it. */}
         <button
           onClick={() => setMobileNavOpen(true)}
-          className="fixed bottom-5 right-5 z-30 flex h-12 w-12 items-center justify-center rounded-full border border-ink/10 bg-surface text-ink shadow-lg active:translate-y-px sm:hidden"
+          className="tandem-float-br fixed z-30 flex h-12 w-12 items-center justify-center rounded-full border border-ink/10 bg-surface text-ink shadow-lg active:translate-y-px sm:hidden"
           title="Menu"
           aria-label="Open navigation"
         >
@@ -1733,7 +1862,7 @@ export default function App() {
             if (returnTo.docId) setActiveDocId(returnTo.docId);
             setReturnTo(null);
           }}
-          className="tandem-toast-in fixed bottom-4 left-4 z-[75] inline-flex items-center gap-1.5 rounded-full border border-ink/10 bg-surface/95 px-3 py-1.5 text-[12px] font-medium text-ink/70 shadow-lg backdrop-blur transition-colors hover:border-ink/25 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          className="tandem-toast-in tandem-float-bl fixed z-[75] inline-flex items-center gap-1.5 rounded-full border border-ink/10 bg-surface/95 px-3 py-1.5 text-[12px] font-medium text-ink/70 shadow-lg backdrop-blur transition-colors hover:border-ink/25 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           title="Follow moved you here — go back to what you were looking at"
         >
           <span aria-hidden="true">←</span>

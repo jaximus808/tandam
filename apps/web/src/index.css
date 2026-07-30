@@ -33,6 +33,24 @@ body {
   background-color: rgb(var(--color-paper));
 }
 
+/* ── iOS font boosting ───────────────────────────────────────────────────────
+   Mobile Safari (and Chrome on Android) runs "text autosizing": inside a block
+   that is WIDER THAN THE VIEWPORT it inflates font sizes by its own heuristic
+   so the text stays readable when you pinch out. A horizontally-scrolling
+   kanban is precisely that block, so on a phone the Board renders card titles,
+   column headers and mono chips at arbitrary, inconsistent sizes with nothing
+   in the CSS to explain the discrepancy — the type scale we actually wrote is
+   never what ships.
+
+   Pinning the adjustment to 100% opts the whole app out of the heuristic and
+   makes our declared sizes authoritative. Note this is NOT `user-scalable=no`:
+   pinch-zoom stays fully available, so it costs nothing in accessibility (the
+   16px input rule below is what keeps focus from auto-zooming). */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 /* ── Mobile viewport + touch fixes ───────────────────────────────────────────
    .h-app: the full-height app shell. 100vh over-measures on phones (mobile
    Safari's URL bar, LinkedIn/Instagram in-app webviews), clipping the bottom
@@ -62,6 +80,124 @@ body {
   select,
   textarea {
     font-size: 16px !important;
+  }
+}
+
+/* ── Floating controls: one deliberate column, clear of the home indicator ────
+   Several controls float in a screen corner — the mobile nav FAB, the agent
+   toast stack, the "back to…" pill, MapMode's pin chip. Left to themselves they
+   each hard-code `bottom-4`/`bottom-5`, so they land on the SAME pixels: the
+   toast stack buried the FAB (and its badge), and none of them knew about an
+   iOS home indicator or a landscape notch.
+
+   Two rules fix that for good:
+     1. Every corner float positions from a shared inset that ADDS the device's
+        safe-area strip, so nothing sits under system chrome.
+     2. They take NUMBERED SLOTS up the column (`-br` owns the corner, `-br-2`
+        sits one FAB-height clear of it) instead of all claiming the corner.
+
+   --tandem-fab-reserve is the vertical band that column occupies on mobile;
+   a scroll area padded by it can never hide the last card's actions behind a
+   floating button. The FAB is `sm:hidden`, so on desktop the reserve — and the
+   slot-2 offset — collapse back to zero.
+
+   639.98px, not 639px, so the range is exactly complementary to Tailwind's
+   `sm:` (`min-width: 640px`) on fractional-width viewports. */
+:root {
+  --tandem-float-gap: 1.25rem; /* corner inset — matches bottom-5/right-5 */
+  --tandem-fab-size: 3rem; /* h-12: a 48px tap target, over the 44px floor */
+  --tandem-safe-b: env(safe-area-inset-bottom, 0px);
+  --tandem-safe-l: env(safe-area-inset-left, 0px);
+  --tandem-safe-r: env(safe-area-inset-right, 0px);
+  --tandem-fab-reserve: 0px;
+}
+@media (max-width: 639.98px) {
+  :root {
+    --tandem-fab-reserve: calc(
+      var(--tandem-float-gap) + var(--tandem-fab-size) + 0.375rem + var(--tandem-safe-b)
+    );
+  }
+}
+
+/* Slot 1 — the control that owns the bottom-right corner (the nav FAB). */
+.tandem-float-br {
+  right: calc(var(--tandem-float-gap) + var(--tandem-safe-r));
+  bottom: calc(var(--tandem-float-gap) + var(--tandem-safe-b));
+}
+/* Slot 2 — clears slot 1 on mobile; falls back into the corner on desktop,
+   where there is no FAB to clear. */
+.tandem-float-br-2 {
+  right: calc(var(--tandem-float-gap) + var(--tandem-safe-r));
+  bottom: calc(var(--tandem-float-gap) + var(--tandem-safe-b));
+}
+@media (max-width: 639.98px) {
+  .tandem-float-br-2 {
+    bottom: calc(
+      var(--tandem-float-gap) + var(--tandem-fab-size) + 0.75rem + var(--tandem-safe-b)
+    );
+  }
+}
+/* Bottom-left corner float (the follow-camera "back to…" pill). */
+.tandem-float-bl {
+  left: calc(var(--tandem-float-gap) + var(--tandem-safe-l));
+  bottom: calc(var(--tandem-float-gap) + var(--tandem-safe-b));
+}
+/* Keep the floating column's band free at the foot of a scrolling surface. */
+.tandem-fab-reserve {
+  padding-bottom: var(--tandem-fab-reserve);
+}
+
+/* Bottom sheets anchored to the viewport floor (the mobile nav drawer): keep
+   the last row of controls off the home indicator. */
+.tandem-safe-pb {
+  padding-bottom: var(--tandem-safe-b);
+}
+/* The same strip, ADDED to a surface that already has its own bottom padding —
+   a scrolling page whose last line would otherwise end under the indicator.
+   Set --tandem-pb-base to the padding the element would have had. */
+.tandem-safe-pb-plus {
+  padding-bottom: calc(var(--tandem-pb-base, 0px) + var(--tandem-safe-b));
+}
+
+/* ── One touch-target floor ───────────────────────────────────────────────────
+   Below sm, an interactive control is at least 44px tall — the platform floor
+   for a thumb. Above sm the app is a dense desktop tool and the floor lifts
+   entirely, so a control keeps whatever compact height its own classes give it.
+
+   This is the CSS home of the Board's `TAP` constant (TaskBoard.tsx), moved out
+   of that file so composers, sheets and dialogs can reach the SAME rule instead
+   of each re-deriving `min-h-[44px] sm:min-h-0`. Pair it with a flex/grid
+   centering utility on controls whose text would otherwise sit at the top. */
+.tandem-tap {
+  min-height: 44px;
+}
+@media (min-width: 640px) {
+  .tandem-tap {
+    min-height: 0;
+  }
+}
+
+/* A bottom sheet rising into place (the Board's mobile epic picker, TDM-87).
+   One short travel from the floor it is anchored to — the same 180ms/24px the
+   mobile nav drawer uses, named here so sheets share one definition instead of
+   each shipping its own inline <style>. */
+@keyframes tandem-sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.tandem-sheet-in {
+  animation: tandem-sheet-in 180ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tandem-sheet-in {
+    animation: none;
   }
 }
 
@@ -140,6 +276,22 @@ body {
   --tw-prose-pre-bg: rgb(var(--color-ink) / 0.06);
   --tw-prose-th-borders: rgb(var(--color-ink) / 0.2);
   --tw-prose-td-borders: rgb(var(--color-ink) / 0.1);
+}
+
+/* Prose is where the app renders text it did NOT write — an agent's task brief
+   on the ticket page, a pasted note. That text carries the two things a 390px
+   column cannot absorb: unbroken machine tokens (a URL, a flag, an id) and GFM
+   tables. Typography gives `pre` its own scroller but nothing else, so a long
+   token pushes the whole page sideways and a 5-column table blows the layout
+   out. Break the token where there is no other opportunity, and give the table
+   the same scroller `pre` already has. */
+.prose :where(p, li, td, th, blockquote, h1, h2, h3, h4) {
+  overflow-wrap: break-word;
+}
+.prose :where(table) {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 /* Rich-text note editor (DocsMode): a muted placeholder on the empty

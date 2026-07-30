@@ -1,20 +1,24 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import {
+  Ban,
   Bot,
   Check,
+  ChevronDown,
   ChevronRight,
   CircleDashed,
   GitCommitHorizontal,
   Layers,
   Link2,
   Milestone,
-  PanelLeft,
   Pencil,
   PenLine,
+  Play,
   Plus,
   RotateCcw,
   Search,
+  SlidersHorizontal,
   SquareKanban,
+  Timer,
   Trash2,
   User,
   X,
@@ -33,11 +37,19 @@ import {
   approveBatch,
   createTask,
   deleteTask,
+  moveTask,
   rejectAction,
-  releaseTask,
-  requeueTask,
   updateTask,
 } from "../lib/api";
+import { humanMovesFor, primaryMoveFor, type HumanMove } from "../lib/taskMoves";
+import {
+  deriveLease,
+  leaseAge,
+  leaseLabel,
+  leaseSentence,
+  type Lease,
+} from "../lib/lease";
+import { useFreshnessNow } from "./Freshness";
 import posthog from "../lib/posthog";
 import TaskComposer, { linkTargets } from "./TaskComposer";
 import { epicLifecycle, TERMINAL_STATES } from "../lib/epicLifecycle";
@@ -46,6 +58,7 @@ import { parseAuthoredBy, provenanceTitle } from "../lib/provenance";
 import { auditActorLabel, auditChangeLabel, lastReapprovalEdit } from "../lib/taskAudit";
 import TaskLinks from "./TaskLinks";
 import { useCardFlight } from "../lib/useCardFlight";
+import { spaLink } from "../lib/spaNav";
 
 /* ─────────────────────────────────────────────────────────────────────────────
    TaskBoard — the Board surface: the one home for tasks on a canvas. Humans
@@ -85,25 +98,83 @@ import { useCardFlight } from "../lib/useCardFlight";
 
    Card click opens the full TaskDetail side panel (wave 2): complete body,
    linked context, result with commit chips, provenance, and the step-in
-   controls per state — edit/approve/reject (proposed), release (executing),
-   re-queue (failed). Destructive actions confirm inline (two-step).
+   controls per state. Destructive actions confirm inline (two-step).
+
+   HUMANS MOVE CARDS TOO (E10). Everything except approve/reject used to be an
+   agent transition, which made your own `assignee:"human"` todo in Ready a card
+   you could only look at. Now: a card carries the one forward move for a human
+   todo (Start / Mark done — one click, no confirm), and the detail panel
+   carries the whole legal set for ANY task from lib/taskMoves — start, mark
+   done, mark failed, release a claim, re-queue a failure, reopen a done task,
+   reconsider a rejected one, each with an optional note. Explicit controls, no
+   drag-and-drop: a state change is a decision, not a gesture, and it has to be
+   as available to a keyboard as to a mouse.
+
+   What no control here can do is APPROVE. A proposed task has no moves at all
+   — Approve / Reject are its only exits, on the server as much as in this file.
    ──────────────────────────────────────────────────────────────────────────── */
 
 // Kanban columns. `dot` is the header hue (from the shared six-hue state set);
 // Failed + Rejected share the terminal "closed" column so dead work doesn't
-// take two lanes.
-const COLUMNS: { key: string; label: string; states: ActionState[]; dot: string }[] = [
-  { key: "proposed", label: "Proposed", states: ["proposed"], dot: STATE_CHIP.proposed.dot },
-  { key: "ready",    label: "Ready",    states: ["approved"], dot: STATE_CHIP.approved.dot },
-  { key: "working",  label: "Working",  states: ["executing"], dot: STATE_CHIP.executing.dot },
-  { key: "done",     label: "Done",     states: ["done"], dot: STATE_CHIP.done.dot },
-  { key: "closed",   label: "Failed / Rejected", states: ["failed", "rejected"], dot: STATE_CHIP.failed.dot },
+// take two lanes. `short` is the mobile column-switcher label — the strip has
+// five segments to fit on a 390px screen, so "Failed / Rejected" spends width
+// the switcher does not have (the lane header still says it in full).
+const COLUMNS: {
+  key: string;
+  label: string;
+  short: string;
+  states: ActionState[];
+  dot: string;
+}[] = [
+  { key: "proposed", label: "Proposed", short: "Proposed", states: ["proposed"], dot: STATE_CHIP.proposed.dot },
+  { key: "ready",    label: "Ready",    short: "Ready",    states: ["approved"], dot: STATE_CHIP.approved.dot },
+  { key: "working",  label: "Working",  short: "Working",  states: ["executing"], dot: STATE_CHIP.executing.dot },
+  { key: "done",     label: "Done",     short: "Done",     states: ["done"], dot: STATE_CHIP.done.dot },
+  { key: "closed",   label: "Failed / Rejected", short: "Closed", states: ["failed", "rejected"], dot: STATE_CHIP.failed.dot },
 ];
+
+// Which lane a task in this state lives in — so a focus/follow handoff can bring
+// the right lane forward on mobile, where only one is on screen at a time.
+function colKeyForState(s: string): string {
+  return COLUMNS.find((c) => c.states.includes(s as ActionState))?.key ?? COLUMNS[0].key;
+}
 
 // How many cards may resolve their evidence links against GitHub on a board
 // load (TDM-45). The rest render their chips without a dot until you open them.
 // See liveLinkTaskIds for why this is a small number.
 const LIVE_LINK_CARDS = 6;
+
+/* ── Mobile type scale (TDM-85) ───────────────────────────────────────────────
+   The board's desktop scale is deliberately DENSE: five lanes side by side, so
+   a card title is 13px and its record metadata 10px. On a phone none of those
+   reasons hold — one lane is on screen at a time (TDM-86), the card is
+   full-width, and the reading distance is shorter. Rendering the desktop sizes
+   unchanged is how a dense-by-design board turns into a cramped one.
+
+   So the scale is MOBILE-FIRST here: the bare size is the PHONE size and `sm:`
+   restores the desktop density verbatim — ≥640px is unchanged, pixel for pixel.
+   Written as constants because the same few rungs recur across cards, sidebar
+   rows and column headers, and a scale is only a scale if it is applied once.
+
+   This pairs with the text-size-adjust fix in index.css: until iOS stopped
+   font-boosting the wide kanban, tuning these numbers was pointless because the
+   browser was overriding them anyway. */
+
+/** Card titles. */
+const T_TITLE = "text-[14px] sm:text-[13px]";
+/** Sidebar epic + pseudo-entry titles (one rung below a card title). */
+const T_ROW = "text-[13.5px] sm:text-[12.5px]";
+/** Record metadata: ticket chips, ages, counts — the smallest readable rung. */
+const T_META = "text-[11px] sm:text-[10px]";
+/** Column headers and the uppercase group labels. */
+const T_HEAD = "text-[11.5px] sm:text-[11px]";
+/** In-card and in-row action buttons (approve / reject / state moves). */
+const T_BTN = "text-[12px] sm:text-[11px]";
+/** Comfortable touch height for a real control, collapsing to dense on sm+.
+    The rule itself lives in index.css as `.tandem-tap` so the composer, the
+    sheets and the dialogs share ONE definition of the floor rather than each
+    re-deriving it. */
+const TAP = "tandem-tap";
 
 // Sidebar scope — which lens the kanban shows: "all" | "none" | an epic id.
 // Persisted so the board reopens where you left it.
@@ -137,7 +208,7 @@ export function extractCommits(text: string | undefined): string[] {
 // Compact relative age ("now", "5m", "2h", "3d", "2w", "4mo"). Renders from
 // props only — it refreshes on state pushes, which is exactly as live as the
 // rest of the board (no timers, no polling).
-function ageOf(iso: string): string {
+export function ageOf(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime();
   if (!Number.isFinite(ms) || ms < 60_000) return "now";
   const m = Math.floor(ms / 60_000);
@@ -150,7 +221,7 @@ function ageOf(iso: string): string {
   return `${Math.floor(d / 30)}mo`;
 }
 
-function fullDate(iso: string): string {
+export function fullDate(iso: string): string {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
 }
@@ -213,7 +284,7 @@ function ProgressBar({
   );
 }
 
-function StateChip({ state, className = "" }: { state: string; className?: string }) {
+export function StateChip({ state, className = "" }: { state: string; className?: string }) {
   const chip = STATE_CHIP[state] ?? STATE_CHIP.proposed;
   return (
     <span className={`${CHIP_BASE} ${chip.chip} ${className}`}>
@@ -223,7 +294,7 @@ function StateChip({ state, className = "" }: { state: string; className?: strin
 }
 
 // The one claimant treatment everywhere: who's executing, in working-violet.
-function ClaimantChip({ name, className = "" }: { name: string; className?: string }) {
+export function ClaimantChip({ name, className = "" }: { name: string; className?: string }) {
   return (
     <span
       className={`inline-flex min-w-0 items-center gap-1 text-[11px] font-medium ${STATE_CHIP.executing.text} ${className}`}
@@ -232,6 +303,110 @@ function ClaimantChip({ name, className = "" }: { name: string; className?: stri
       <Zap size={11} className="shrink-0" />
       <span className="truncate">{name}</span>
     </span>
+  );
+}
+
+// ── Claim leases (TDM-101) ───────────────────────────────────────────────────
+// The claimant chip above says WHO holds a task. It cannot say whether they are
+// still alive — and because claim expiry is lazy on the server (no sweeper), a
+// worker that died ten minutes ago renders exactly like one mid-sentence. These
+// two say the rest: how long since we heard from the holder, and whether the
+// lease has lapsed so that any other agent may take the task over.
+//
+// Hue: the closed six-hue state set owns STATE, and a lapsed lease is not a new
+// state — the task is still Working. So live rides the working violet the
+// claimant chip already wears, and the two states that want a human's attention
+// borrow the board's one attention hue (amber), the same hue "needs approval"
+// and "edited after approval" use. Those live only on PROPOSED cards and this
+// lives only on EXECUTING ones, so amber never means two things on one card.
+//
+// Shape carries the same information as hue, per the Freshness rule: a pulsing
+// solid dot for live, a hollow ring for slipping, a solid dot in a filled well
+// for lapsed — so the three survive a colourblind reader, and the whole sentence
+// rides along as `title` and as screen-reader text.
+
+const LEASE_TONE: Record<"live" | "slipping" | "stale", { well: string; dot: string; text: string }> = {
+  live: { well: "", dot: "bg-violet-500 animate-pulse", text: "text-ink/50" },
+  slipping: {
+    well: "",
+    dot: "border border-amber-500 bg-transparent",
+    text: "text-amber-600 dark:text-amber-400",
+  },
+  stale: {
+    well: "bg-amber-500/10",
+    dot: "bg-amber-500",
+    text: "text-amber-600 dark:text-amber-400",
+  },
+};
+
+/** Heartbeat freshness for a claim: silent-for age, plus a word once the lease
+ *  is in trouble. Renders nothing when there is no lease to report. */
+export function LeaseChip({ lease, className = "" }: { lease: Lease; className?: string }) {
+  if (lease.health === "none") return null;
+  const tone = LEASE_TONE[lease.health];
+  const label = leaseLabel(lease.health);
+  const sentence = leaseSentence(lease);
+  return (
+    <span
+      className={`inline-flex shrink-0 items-center gap-1 rounded-[4px] px-1 py-px ${tone.well} ${className}`}
+      title={sentence}
+    >
+      <span aria-hidden="true" className={`h-[6px] w-[6px] shrink-0 rounded-full ${tone.dot}`} />
+      <span className={`font-code ${T_META} ${tone.text}`}>{leaseAge(lease.silentMs)}</span>
+      {label && (
+        <span
+          className={`shrink-0 text-[10px] font-semibold uppercase tracking-[0.06em] ${tone.text}`}
+        >
+          {label}
+        </span>
+      )}
+      <span className="sr-only">{sentence}</span>
+    </span>
+  );
+}
+
+/** The lapsed-lease explainer, for the step-in surfaces — it sits next to the
+ *  Release control, because "another agent will take this over" and "you can put
+ *  it back in the queue yourself right now" are one decision.
+ *
+ *  Only for a LAPSED lease. A slipping one is carried by the chip alone: nothing
+ *  has happened yet, and a panel that grows a paragraph halfway through every
+ *  ordinary long task teaches people to skip paragraphs. */
+export function LeaseNotice({
+  lease,
+  canRelease = false,
+  className = "",
+}: {
+  lease: Lease;
+  /** Whether a Release control is adjacent — changes what the last line says. */
+  canRelease?: boolean;
+  className?: string;
+}) {
+  if (lease.health !== "stale") return null;
+  return (
+    <div
+      className={`rounded-md border border-amber-500/25 bg-amber-500/[0.07] px-2.5 py-2 ${className}`}
+    >
+      <div className="flex items-center gap-1.5 text-[12px] font-semibold text-amber-700 dark:text-amber-400">
+        <Timer size={12} className="shrink-0" aria-hidden="true" />
+        Claim lease lapsed — reclaimable
+      </div>
+      <p className="mt-1 text-[11.5px] leading-relaxed text-ink/65">
+        {lease.holder ?? "The holder"} has not reported for{" "}
+        <span className="font-code">{leaseAge(lease.silentMs)}</span>, so the next agent that asks
+        for this task takes it over.{" "}
+        {canRelease
+          ? "Release puts it back in the queue now, under nobody's name."
+          : "A human can release it from the board to put it back in the queue now."}
+      </p>
+      {lease.unextendable && (
+        <p className="mt-1 text-[11.5px] leading-relaxed text-ink/55">
+          It is still filing reports, but the lease is not moving with them — usually a claim taken
+          under the shared <span className="font-code">agent</span> identity, which the server will
+          not extend.
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -248,7 +423,7 @@ function ClaimantChip({ name, className = "" }: { name: string; className?: stri
 // No provenance at all renders NOTHING. A row that predates migration 0039 is
 // genuinely unknown, and an "unknown" chip on every old task would be noise
 // standing in for information.
-function ProvenanceChip({
+export function ProvenanceChip({
   authoredBy,
   verbose = false,
   className = "",
@@ -275,7 +450,7 @@ function ProvenanceChip({
   const Glyph = p.kind === "agent" ? Bot : p.kind === "human" ? PenLine : CircleDashed;
   return (
     <span
-      className={`inline-flex min-w-0 items-center gap-1 text-[10px] text-ink/45 ${className}`}
+      className={`inline-flex min-w-0 items-center gap-1 text-ink/45 ${T_META} ${className}`}
       title={provenanceTitle(p)}
       aria-label={`Authored by ${p.label}`}
     >
@@ -302,7 +477,7 @@ function ProvenanceChip({
 function ReapprovalMark({ edit }: { edit: ContentAuditEntry }) {
   return (
     <div
-      className="mt-1.5 inline-flex items-center gap-1 text-[10.5px] font-medium text-amber-600 dark:text-amber-400"
+      className="mt-1.5 inline-flex items-center gap-1 text-[11.5px] font-medium text-amber-600 dark:text-amber-400 sm:text-[10.5px]"
       title={`${auditActorLabel(edit.actor)} changed the ${auditChangeLabel(edit.change)} after this was approved, so it went back for approval. ${edit.summary}`}
     >
       <RotateCcw size={10} className="shrink-0" aria-hidden="true" />
@@ -362,13 +537,13 @@ function ApproveRejectControls({
           <button
             onClick={onReject}
             disabled={busy}
-            className="flex-1 rounded-md bg-rose-600 px-2 py-1 text-[11px] font-medium text-white transition-colors hover:bg-rose-700 disabled:opacity-40"
+            className={`flex-1 rounded-md bg-rose-600 px-2 py-1 font-medium text-white transition-colors hover:bg-rose-700 disabled:opacity-40 ${T_BTN} ${TAP}`}
           >
             Confirm reject
           </button>
           <button
             onClick={() => setRejecting(false)}
-            className="rounded-md border border-ink/15 px-2 py-1 text-[11px] font-medium text-ink/60 transition-colors hover:border-ink/30"
+            className={`rounded-md border border-ink/15 px-2 py-1 font-medium text-ink/60 transition-colors hover:border-ink/30 ${T_BTN} ${TAP}`}
           >
             Cancel
           </button>
@@ -378,19 +553,58 @@ function ApproveRejectControls({
           <button
             onClick={onApprove}
             disabled={busy}
-            className="flex flex-1 items-center justify-center gap-1 rounded-md bg-accent px-2 py-1 text-[11px] font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40"
+            className={`flex flex-1 items-center justify-center gap-1 rounded-md bg-accent px-2 py-1 font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40 ${T_BTN} ${TAP}`}
           >
             <Check size={12} /> {approveLabel}
           </button>
           <button
             onClick={() => setRejecting(true)}
             disabled={busy}
-            className="flex flex-1 items-center justify-center gap-1 rounded-md border border-ink/15 px-2 py-1 text-[11px] font-medium text-ink/60 transition-colors hover:border-ink/30 disabled:opacity-40"
+            className={`flex flex-1 items-center justify-center gap-1 rounded-md border border-ink/15 px-2 py-1 font-medium text-ink/60 transition-colors hover:border-ink/30 disabled:opacity-40 ${T_BTN} ${TAP}`}
           >
             <X size={12} /> Reject
           </button>
         </>
       )}
+    </div>
+  );
+}
+
+// ── Human state moves (E10) ──────────────────────────────────────────────────
+// The board used to be a VIEWER for agent work: cards moved when a session
+// claimed one and again when it reported back, and a person's own todo sitting
+// in Ready had no control on it at all. These render the moves in
+// lib/taskMoves — one glyph per destination, so a move reads the same on a card
+// as it does in the detail panel.
+
+function moveIcon(move: HumanMove) {
+  if (move.kind === "rewind") return <RotateCcw size={12} />;
+  if (move.to === "executing") return <Play size={12} />;
+  if (move.to === "failed") return <Ban size={12} />;
+  return <Check size={12} />;
+}
+
+// Card form: the ONE forward move, quiet, full width. stopPropagation so the
+// card's click-through to the detail panel doesn't fire underneath it.
+function PrimaryMoveControl({
+  move,
+  busy,
+  onGo,
+}: {
+  move: HumanMove;
+  busy: boolean;
+  onGo: () => void;
+}) {
+  return (
+    <div className="mt-2" onClick={(e) => e.stopPropagation()}>
+      <button
+        onClick={onGo}
+        disabled={busy}
+        title={move.hint}
+        className={`flex w-full items-center justify-center gap-1 rounded-md border border-ink/15 px-2 py-1 font-medium text-ink/70 transition-colors hover:border-accent/40 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40 ${T_BTN} ${TAP}`}
+      >
+        {moveIcon(move)} {move.label}
+      </button>
     </div>
   );
 }
@@ -412,7 +626,13 @@ const NO_FILTERS: Filters = {
 };
 
 const FILTER_SELECT_CLS =
-  "h-7 max-w-[10rem] shrink-0 rounded-md border border-ink/15 bg-surface px-1.5 text-[11px] font-medium text-ink/70 outline-none transition-colors focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/40";
+  "h-9 max-w-[10rem] shrink-0 rounded-md border border-ink/15 bg-surface px-1.5 text-[12px] font-medium text-ink/70 outline-none transition-colors focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-7 sm:text-[11px]";
+
+// The same selects inside the mobile filter sheet: full width, one per row, at a
+// real touch height. (index.css forces every select to 16px on coarse-pointer
+// phones so focusing one can't auto-zoom the app — hence the generous height.)
+const SHEET_SELECT_CLS =
+  "h-11 w-full rounded-md border border-ink/15 bg-surface px-2 text-[13px] font-medium text-ink outline-none transition-colors focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/40";
 
 export default function TaskBoard({
   code,
@@ -425,6 +645,7 @@ export default function TaskBoard({
   onOpenConnect,
   onOpenDocuments,
   onOpenRoadmapDoc,
+  onOpenTicket,
   spotlightTaskId,
   spotlightNonce,
   active = true,
@@ -439,6 +660,10 @@ export default function TaskBoard({
   /** Scoped-epic header's plan chip: open the roadmap document an epic's
       linked goal lives in (switches to the Documents surface). */
   onOpenRoadmapDoc?: (docId: string) => void;
+  /** A card's ticket-id chip: open the ticket's own page
+      (/c/CODE/ticket/TDM-n). The card body still opens the detail slide-over —
+      the chip is the route to the full, linkable view. */
+  onOpenTicket?: (ticketId: string) => void;
   // TDM-14 one-shot focus handoff (from the header agent presence): when a
   // task id arrives, scope to its epic, scroll its card into view, open its
   // detail — then hand the token back via onFocusHandled.
@@ -471,6 +696,19 @@ export default function TaskBoard({
   });
   // Mobile only — on md+ the sidebar is always visible.
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // ── Mobile lane selection (TDM-86) ────────────────────────────────────────
+  // Below md the kanban shows ONE lane at a time, full width, with a switcher
+  // above it. Five 17rem columns in a horizontal scroller meant a 390px phone
+  // saw one and a half of them, every card clipped at the right edge — and a
+  // scroll container wider than the viewport is also what triggered iOS font
+  // boosting (TDM-85). md+ still renders all five side by side, unchanged.
+  //
+  // null = "nobody has chosen yet", which resolves to the first lane that has
+  // cards (see activeCol) so an unopened board never lands on an empty lane. An
+  // explicit tap pins the choice: silently moving someone off the lane they
+  // picked because its last card completed is worse than an empty lane with a
+  // switcher one tap away.
+  const [mobileCol, setMobileCol] = useState<string | null>(null);
   // Done-bucket expansion (finished + rejected epics) — persisted preference.
   const [doneOpen, setDoneOpen] = useState<boolean>(() => {
     try {
@@ -496,6 +734,21 @@ export default function TaskBoard({
   const [query, setQuery] = useState(""); // debounced, lowercased
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
   const searchRef = useRef<HTMLInputElement>(null);
+  // The lease clock (TDM-101). Claim leases are derived from `now`, and the whole
+  // point is the case where NOTHING arrives over the socket — a worker that went
+  // dark pushes no state, so without a moving clock its heartbeat age would
+  // freeze at whatever it read when the last push landed, which is precisely the
+  // stall we are trying to show. One re-render a minute (the finest granularity
+  // any age here prints), shared with the rest of the app's relative-time
+  // treatment via useFreshnessNow.
+  const now = useFreshnessNow();
+  // Mobile filter sheet (TDM-88). Search stays inline at every width — it is the
+  // filter people reach for — but the four chip filters were a horizontally
+  // scrolling row that simply ran off a 390px screen ("Any claimant" clipped
+  // mid-word), i.e. controls that existed but could not be seen. Below md they
+  // live behind ONE affordance carrying the active count; md+ keeps the inline
+  // row exactly as it was.
+  const [filterSheetOpen, setFilterSheetOpen] = useState(false);
 
   useEffect(() => {
     const t = setTimeout(() => setQuery(searchInput.trim().toLowerCase()), 150);
@@ -509,11 +762,40 @@ export default function TaskBoard({
     filters.assignee !== "all" ||
     filters.hasCommit;
 
+  // How many of the COLLAPSED filters are on — the badge on the mobile
+  // affordance. Search is deliberately excluded: it stays inline, so its state
+  // is already visible and counting it would double-report.
+  const activeFilterCount =
+    (filters.state !== "all" ? 1 : 0) +
+    (filters.claimant !== "all" ? 1 : 0) +
+    (filters.assignee !== "all" ? 1 : 0) +
+    (filters.hasCommit ? 1 : 0);
+
   function clearFilters() {
     setSearchInput("");
     setQuery("");
     setFilters(NO_FILTERS);
   }
+
+  // Each filter's options, shared by the md+ inline row and the mobile sheet, so
+  // the two presentations cannot drift into offering different choices.
+  const stateOptions = (
+    <>
+      <option value="all">All states</option>
+      {Object.entries(STATE_CHIP).map(([k, v]) => (
+        <option key={k} value={k}>
+          {v.label}
+        </option>
+      ))}
+    </>
+  );
+  const assigneeOptions = (
+    <>
+      <option value="all">Anyone's</option>
+      <option value="agent">Agent tasks</option>
+      <option value="human">Your todos</option>
+    </>
+  );
 
   function toggleDoneOpen() {
     setDoneOpen((v) => {
@@ -607,6 +889,17 @@ export default function TaskBoard({
     for (const t of tasks) if (t.claimedBy) s.add(t.claimedBy);
     return [...s].sort();
   }, [tasks]);
+  // Shared by the inline row and the mobile filter sheet (see stateOptions).
+  const claimantOptions = (
+    <>
+      <option value="all">Any claimant</option>
+      {claimants.map((c) => (
+        <option key={c} value={c}>
+          {c}
+        </option>
+      ))}
+    </>
+  );
 
   // Every task grouped under its (valid) epic — unfiltered, feeds the sidebar
   // progress bars and the scoped kanban alike.
@@ -637,6 +930,15 @@ export default function TaskBoard({
     effectiveScope !== "all" && effectiveScope !== "none"
       ? epics.find((e) => e.id === effectiveScope)
       : undefined;
+  // What the mobile epic affordance says. Unscoped it names the CONTROL
+  // ("Epics") rather than the scope, because an unscoped board is the first-run
+  // state and a first-time user needs to be told the control exists before they
+  // need to be told what it is set to. Once scoped it names the scope.
+  const scopeLabel = scopedEpic
+    ? epicPayload(scopedEpic).title || "Untitled epic"
+    : effectiveScope === "none"
+      ? "No epic"
+      : "Epics";
 
   const scopedTasks = useMemo(() => {
     if (effectiveScope === "none") return epiclessAll;
@@ -715,6 +1017,40 @@ export default function TaskBoard({
     [scopedTasks, filtering, query, filters],
   );
 
+  // One bucket per lane, computed once: the mobile switcher needs every lane's
+  // counts before any lane renders, and the lanes themselves need the same
+  // lists. `all` is the lane within the scope; `shown` is what survives the
+  // filters (identical when nothing is filtered).
+  const columnBuckets = useMemo(
+    () =>
+      COLUMNS.map((col) => {
+        const all = scopedTasks.filter((t) => col.states.includes(t.state));
+        return {
+          col,
+          all,
+          shown: filtering ? visibleTasks.filter((t) => col.states.includes(t.state)) : all,
+        };
+      }),
+    [scopedTasks, visibleTasks, filtering],
+  );
+
+  // How many visible cards are held by a LAPSED lease (TDM-101). The Working
+  // lane header wears this, so "something is stuck" is answerable from the lane
+  // label without reading a single card — the per-card chips are the detail
+  // behind a number you can see from across the room. Recomputed on the lease
+  // clock, which is what makes it move on its own while nothing arrives.
+  const stalledCount = useMemo(
+    () => visibleTasks.filter((t) => deriveLease(t, now).health === "stale").length,
+    [visibleTasks, now],
+  );
+
+  // The lane showing on mobile: the explicit choice if there is one, else the
+  // first lane with cards, else Proposed (COLUMNS[0]) on a genuinely empty scope.
+  const activeCol =
+    (mobileCol && COLUMNS.some((c) => c.key === mobileCol) ? mobileCol : null) ??
+    columnBuckets.find((b) => b.shown.length > 0)?.col.key ??
+    COLUMNS[0].key;
+
   // Which cards get a LIVE GitHub status (TDM-45).
   //
   // Every card with evidence renders its link chips; only these ask the server
@@ -741,6 +1077,19 @@ export default function TaskBoard({
   // movement whether or not the camera brought you here.
   const kanbanRef = useRef<HTMLDivElement>(null);
   const landed = useCardFlight(kanbanRef, [visibleTasks, effectiveScope, active]);
+
+  // The mobile lane switcher is a scroll strip, so its five pills don't all fit
+  // on a 390px screen — and `activeCol` changes on its own when a follow handoff
+  // brings an agent's lane forward. Keep the selected pill on screen, or the one
+  // control telling you which lane you're looking at is the one scrolled out of
+  // sight. Horizontal only: `nearest` in the block axis so this never nudges the
+  // page itself.
+  const switcherRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    switcherRef.current
+      ?.querySelector(`[data-col-key="${activeCol}"]`)
+      ?.scrollIntoView({ inline: "nearest", block: "nearest", behavior: "smooth" });
+  }, [activeCol]);
 
   async function run(id: string, fn: () => Promise<void>) {
     setBusyId(id);
@@ -793,6 +1142,24 @@ export default function TaskBoard({
     });
   }
 
+  // A human state move from a CARD: no note, no confirm — the whole point is
+  // that marking your own todo started or done is one click. The card doesn't
+  // move optimistically; the WS broadcast flies it to its new lane, which is
+  // also the confirmation that the write landed.
+  function moveCard(t: Action, move: HumanMove) {
+    void run(t.id, async () => {
+      const from = t.state;
+      await moveTask(code, t.id, move.to);
+      posthog.capture("task_moved", {
+        canvas_code: code,
+        from,
+        to: move.to,
+        assignee: taskPayload(t).assignee ?? "agent",
+        surface: "board",
+      });
+    });
+  }
+
   // The detail panel reads the LIVE action from state (not a snapshot), so a
   // claim or completion landing over WS updates it in place; a deleted task
   // closes it. It is independent of the filters — a card filtered out of the
@@ -819,6 +1186,10 @@ export default function TaskBoard({
       const eid = taskPayload(t).epicId;
       if (eid && epicIds.has(eid)) selectScope(eid);
       else if (effectiveScope !== "all") selectScope("none");
+      // Mobile shows one lane at a time (TDM-86), so scoping is not enough —
+      // bring the lane this task actually sits in forward, or the card we are
+      // about to scroll to is in a `hidden` column.
+      setMobileCol(colKeyForState(t.state));
       setDetailId(focusTaskId);
       // The card renders into the (possibly new) scope on the next paint —
       // scroll once the DOM has settled. Deliberately not cleaned up: the
@@ -859,6 +1230,10 @@ export default function TaskBoard({
         selectScope(eid ? "all" : "none");
       }
     }
+    // Same reason as the focus handoff: on mobile the card's lane may be the
+    // hidden one. Following an agent means the lane it moved the card INTO comes
+    // forward — which is the whole point of watching.
+    if (t) setMobileCol(colKeyForState(t.state));
     const center = () =>
       document
         .querySelector(`[data-task-id="${CSS.escape(spotlightTaskId)}"]`)
@@ -895,6 +1270,15 @@ export default function TaskBoard({
       if (e.key === "Escape") {
         if (detailId) {
           setDetailId(null);
+        } else if (filterSheetOpen) {
+          // Dismiss the sheet before clearing what it configures — Escape on an
+          // open sheet means "put this away", not "throw away my filters".
+          setFilterSheetOpen(false);
+        } else if (sidebarOpen) {
+          // Below md the epic list is a modal sheet over the board, so Escape
+          // dismisses it before it reaches for the filters. On md+ the rail
+          // renders whatever this flag says, so clearing it is a no-op there.
+          setSidebarOpen(false);
         } else if (filtering || searchInput) {
           clearFilters();
           searchRef.current?.blur();
@@ -916,6 +1300,19 @@ export default function TaskBoard({
   // Whether the canvas has any real documents (folders only nest them) — the
   // teaching empty state only points at Documents when there's something there.
   const hasDocs = Object.values(state.documents ?? {}).some((d) => d.type !== "folder");
+
+  // The inline move on a card, and the rule for WHICH cards get one: your own
+  // todos. An agent task's card stays clean — a human hijacking a queued agent
+  // task is a real move, but it is a considered one, so it lives in the detail
+  // panel with the rest of the matrix rather than one stray click from every
+  // card on the board. (Terminal states have only rewinds, and primaryMoveFor
+  // returns none, so a done card grows no button either.)
+  function renderPrimaryMove(t: Action) {
+    if (readOnly || (taskPayload(t).assignee ?? "agent") !== "human") return null;
+    const move = primaryMoveFor(t.state);
+    if (!move) return null;
+    return <PrimaryMoveControl move={move} busy={busyId === t.id} onGo={() => moveCard(t, move)} />;
+  }
 
   function renderApproveReject(a: Action, approveLabel?: string) {
     if (readOnly || a.state !== "proposed") return null;
@@ -943,6 +1340,11 @@ export default function TaskBoard({
     // Just flew in from another lane (or the camera brought us here for it) —
     // hold the agent ring while it settles.
     const justLanded = landed[t.id] !== undefined || spotlightGlow?.id === t.id;
+    // Lease health (TDM-101) — "none" for anything not executing, so every other
+    // lane's cards are untouched. A lapsed lease is the one thing about a Working
+    // card worth borrowing the card's own border for: it is a fact about the
+    // CARD (nobody is driving this), not about a field inside it.
+    const lease = deriveLease(t, now);
     return (
       <div
         key={t.id}
@@ -965,27 +1367,51 @@ export default function TaskBoard({
           }
         }}
         className={`cursor-pointer rounded-lg border bg-surface p-2.5 transition-[border-color,box-shadow] hover:border-ink/25 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${
-          justLanded ? "tandem-card-land border-agent/40" : "border-ink/10"
+          justLanded
+            ? "tandem-card-land border-agent/40"
+            : lease.health === "stale"
+              ? "border-amber-500/40"
+              : "border-ink/10"
         }`}
       >
         <div className="flex items-start justify-between gap-2">
           <span
-            className={`min-w-0 text-[13px] font-semibold leading-snug ${terminal ? "text-ink/55" : "text-ink"}`}
+            className={`min-w-0 font-semibold leading-snug ${T_TITLE} ${terminal ? "text-ink/55" : "text-ink"}`}
           >
-            {t.ticketId && (
-              <span className="mr-1.5 font-code text-[10px] font-medium tracking-tight text-ink/50">
-                {t.ticketId}
-              </span>
-            )}
+            {t.ticketId &&
+              (onOpenTicket ? (
+                /* A real <a>, so cmd/middle-click opens the ticket in a new tab
+                   (spaLink lets modified clicks through). stopPropagation keeps
+                   the card's own click — the detail slide-over — out of it. */
+                <a
+                  href={`/c/${code}/ticket/${t.ticketId}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    spaLink(() => onOpenTicket(t.ticketId as string))(e);
+                  }}
+                  title={`Open ${t.ticketId} — the full ticket page`}
+                  className={`mr-1.5 rounded-[3px] font-code font-medium tracking-tight text-ink/50 transition-colors hover:text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${T_META}`}
+                >
+                  {t.ticketId}
+                </a>
+              ) : (
+                <span className={`mr-1.5 font-code font-medium tracking-tight text-ink/50 ${T_META}`}>
+                  {t.ticketId}
+                </span>
+              ))}
             {p.title || "Untitled task"}
           </span>
           {/* State is the column in this view — chip only where the column is
               ambiguous (the merged Failed / Rejected lane). */}
           {showState && <StateChip state={t.state} />}
         </div>
+        {/* Who is on it, and whether they are still breathing. One row: the pair
+            is a single fact ("this agent, this recently"), and splitting them
+            would put a name on one line and its own vital sign on another. */}
         {t.state === "executing" && t.claimedBy && (
-          <div className="mt-1">
-            <ClaimantChip name={t.claimedBy} />
+          <div className="mt-1 flex min-w-0 items-center gap-1.5">
+            <ClaimantChip name={t.claimedBy} className="min-w-0" />
+            <LeaseChip lease={lease} className="ml-auto" />
           </div>
         )}
         {/* Only while it's waiting on a human. Once re-approved the mark has
@@ -1011,7 +1437,7 @@ export default function TaskBoard({
                 selectScope(epicId);
               }}
               title={`Scope the board to "${epicTitle}"`}
-              className="inline-flex min-w-0 items-center gap-1 rounded-[4px] border border-ink/10 bg-ink/[0.03] px-1.5 py-px text-[10px] text-ink/50 transition-colors hover:border-ink/30 hover:text-ink/75"
+              className={`inline-flex min-w-0 items-center gap-1 rounded-[4px] border border-ink/10 bg-ink/[0.03] px-1.5 py-0.5 text-ink/50 transition-colors hover:border-ink/30 hover:text-ink/75 sm:py-px ${T_META}`}
             >
               <Layers size={9} className="shrink-0" />
               <span className="max-w-[9rem] truncate">{epicTitle}</span>
@@ -1025,12 +1451,13 @@ export default function TaskBoard({
               at the same dim weight. */}
           <div className="ml-auto flex shrink-0 items-center gap-1.5">
             <ProvenanceChip authoredBy={t.authoredBy} />
-            <span className="font-code text-[10px] text-ink/50" title={fullDate(t.createdAt)}>
+            <span className={`font-code text-ink/50 ${T_META}`} title={fullDate(t.createdAt)}>
               {ageOf(t.createdAt)}
             </span>
           </div>
         </div>
         {renderApproveReject(t)}
+        {renderPrimaryMove(t)}
       </div>
     );
   }
@@ -1053,7 +1480,7 @@ export default function TaskBoard({
 
   const entryCls = (selected: boolean) =>
     [
-      "cursor-pointer border-l-2 px-3 py-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40",
+      "cursor-pointer border-l-2 px-3 py-2.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 sm:py-2",
       selected ? "border-accent bg-accent/[0.08]" : "border-transparent hover:bg-ink/[0.03]",
     ].join(" ");
 
@@ -1078,11 +1505,11 @@ export default function TaskBoard({
         className={`flex items-center gap-1.5 ${entryCls(selected)}`}
       >
         <span
-          className={`min-w-0 flex-1 truncate text-[12.5px] font-semibold ${selected ? "text-accent" : "text-ink/70"}`}
+          className={`min-w-0 flex-1 truncate font-semibold ${T_ROW} ${selected ? "text-accent" : "text-ink/70"}`}
         >
           {label}
         </span>
-        <span className="shrink-0 font-code text-[10px] text-ink/50">{count}</span>
+        <span className={`shrink-0 font-code text-ink/50 ${T_META}`}>{count}</span>
       </div>
     );
   }
@@ -1108,7 +1535,7 @@ export default function TaskBoard({
         <div className="flex items-center gap-1.5">
           <Layers size={12} className="shrink-0 text-ink/45" />
           <span
-            className={`min-w-0 flex-1 truncate text-[12.5px] font-semibold ${selected ? "text-accent" : "text-ink/80"}`}
+            className={`min-w-0 flex-1 truncate font-semibold ${T_ROW} ${selected ? "text-accent" : "text-ink/80"}`}
             title={p.title || "Untitled epic"}
           >
             {p.title || "Untitled epic"}
@@ -1118,12 +1545,15 @@ export default function TaskBoard({
         {/* The goal this epic delivers — quiet provenance, not a control (the
             plan chip in the scoped header is the interactive route). */}
         {plan && (
-          <div className="mt-0.5 truncate pl-[18px] text-[11px] text-ink/45" title={plan.goalTitle}>
+          <div
+            className={`mt-0.5 truncate pl-[18px] text-ink/45 ${T_HEAD}`}
+            title={plan.goalTitle}
+          >
             {plan.goalTitle}
           </div>
         )}
         <ProgressBar done={done} working={working} total={total} className="mt-1.5 h-1.5" />
-        <div className="mt-1 flex items-center justify-between font-code text-[10px] text-ink/50">
+        <div className={`mt-1 flex items-center justify-between font-code text-ink/50 ${T_META}`}>
           <span>
             {done}/{total} done
           </span>
@@ -1150,7 +1580,7 @@ export default function TaskBoard({
           <button
             onClick={() => setDetailId(e.id)}
             title="Open epic details"
-            className="min-w-0 truncate text-left text-[14px] font-semibold text-ink hover:underline"
+            className="min-w-0 truncate text-left text-[15px] font-semibold text-ink hover:underline sm:text-[14px]"
           >
             {p.title || "Untitled epic"}
           </button>
@@ -1163,7 +1593,7 @@ export default function TaskBoard({
               onClick={() => onOpenRoadmapDoc(plan.docId)}
               title="Open the roadmap this epic belongs to"
               aria-label="Open the roadmap this epic belongs to"
-              className="inline-flex min-w-0 shrink items-center gap-1 rounded-[4px] border border-ink/10 bg-ink/[0.03] px-1.5 py-px text-[10px] text-ink/50 transition-colors hover:border-ink/30 hover:text-ink/75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              className={`inline-flex min-w-0 shrink items-center gap-1 rounded-[4px] border border-ink/10 bg-ink/[0.03] px-1.5 py-0.5 text-ink/50 transition-colors hover:border-ink/30 hover:text-ink/75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:py-px ${T_META}`}
             >
               <Milestone size={9} className="shrink-0" />
               <span className="truncate">
@@ -1181,7 +1611,9 @@ export default function TaskBoard({
           </span>
         </div>
         {p.body && (
-          <p className="mt-1 line-clamp-2 text-[12px] leading-relaxed text-ink/60">{p.body}</p>
+          <p className="mt-1 line-clamp-2 text-[12.5px] leading-relaxed text-ink/60 sm:text-[12px]">
+            {p.body}
+          </p>
         )}
         {finished ? (
           <div className="mt-2 h-1.5 rounded-full bg-emerald-500" />
@@ -1197,19 +1629,42 @@ export default function TaskBoard({
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
-      {/* Toolbar: mobile sidebar toggle + a quiet census of the current scope. */}
+      {/* Toolbar: the mobile epic-scope affordance + a quiet census of the
+          current scope. */}
       <div className="flex shrink-0 items-center gap-2 border-b border-ink/10 px-4 py-2">
+        <span className="shrink-0 text-sm font-semibold text-ink">Board</span>
+        {/* Epic navigation on mobile (TDM-87). This used to be a bare PanelLeft
+            glyph with nothing but an aria-label on it — on a phone, where the
+            sidebar is the ONLY route to an epic and the only place epics get
+            approved, "an unlabeled icon" and "undiscoverable" are the same
+            thing. So it is a labeled control, and it doubles as the scope
+            READOUT: unscoped it reads "Epics" (which is what makes it findable
+            in the first place); scoped it reads the epic's own name, which is
+            the only place a phone says what lens the board is under.
+            The chevron is the promise that tapping opens something. */}
         {!empty && (
           <button
             onClick={() => setSidebarOpen((v) => !v)}
-            aria-label="Toggle epic sidebar"
+            aria-label={
+              scopedEpic
+                ? `Epics — the board is scoped to ${epicPayload(scopedEpic).title || "Untitled epic"}`
+                : "Epics — choose which epic scopes the board"
+            }
             aria-expanded={sidebarOpen}
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink/50 transition-colors hover:bg-ink/5 hover:text-ink/80 md:hidden"
+            title="Choose which epic scopes the board"
+            className={[
+              "flex h-9 min-w-0 shrink items-center gap-1.5 rounded-md border px-2 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 md:hidden",
+              T_BTN,
+              sidebarOpen
+                ? "border-accent/40 bg-accent/[0.08] text-accent"
+                : "border-ink/15 text-ink/70",
+            ].join(" ")}
           >
-            <PanelLeft size={15} />
+            <Layers size={13} className="shrink-0" />
+            <span className="min-w-0 truncate">{scopeLabel}</span>
+            <ChevronDown size={12} className="shrink-0 opacity-60" />
           </button>
         )}
-        <span className="text-sm font-semibold text-ink">Board</span>
         {!empty && (
           <span className="hidden font-code text-[11px] text-ink/50 sm:inline">
             {filtering
@@ -1223,7 +1678,7 @@ export default function TaskBoard({
           <button
             onClick={() => setComposing((v) => !v)}
             aria-expanded={composing}
-            className="ml-auto flex h-7 shrink-0 items-center gap-1 rounded-md bg-accent pl-2 pr-2.5 text-xs font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            className="ml-auto flex h-9 shrink-0 items-center gap-1 rounded-md bg-accent pl-2.5 pr-3 text-[13px] font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-7 sm:pl-2 sm:pr-2.5 sm:text-xs"
           >
             <Plus size={13} /> New task
           </button>
@@ -1249,80 +1704,215 @@ export default function TaskBoard({
         </div>
       )}
 
-      {/* Filter bar: search + chip filters, AND-composed. Horizontal scroll on
-          narrow screens rather than wrapping into the board. */}
+      {/* Filter bar, AND-composed. Search is inline at EVERY width — it is the
+          filter people actually reach for, and it takes the whole row on a phone
+          because nothing else is competing for it. The state / claimant /
+          assignee / commit chips are inline on md+ (unchanged, horizontally
+          scrolling rather than wrapping into the board) and collapse below md
+          into the one "Filters" button beside it (TDM-88). */}
       {!empty && (
-        <div className="flex shrink-0 items-center gap-1.5 overflow-x-auto border-b border-ink/10 px-4 py-1.5">
-          <div className="relative shrink-0">
+        <div className="flex shrink-0 items-center gap-1.5 border-b border-ink/10 px-4 py-1.5 md:overflow-x-auto">
+          <div className="relative min-w-0 flex-1 md:flex-none md:shrink-0">
             <Search size={12} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-ink/30" />
             <input
               ref={searchRef}
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
               placeholder='Search tasks  ·  "/"'
-              className="h-7 w-44 rounded-md border border-ink/15 bg-surface pl-[26px] pr-2 text-[12px] text-ink outline-none placeholder:text-ink/30 focus:border-accent/50 focus:ring-2 focus:ring-accent/40 sm:w-52"
+              className="h-9 w-full rounded-md border border-ink/15 bg-surface pl-[26px] pr-2 text-[12px] text-ink outline-none placeholder:text-ink/30 focus:border-accent/50 focus:ring-2 focus:ring-accent/40 md:h-7 md:w-52"
             />
           </div>
-          <select
-            value={filters.state}
-            onChange={(e) => setFilters((f) => ({ ...f, state: e.target.value as Filters["state"] }))}
-            aria-label="Filter by state"
-            className={FILTER_SELECT_CLS}
-          >
-            <option value="all">All states</option>
-            {Object.entries(STATE_CHIP).map(([k, v]) => (
-              <option key={k} value={k}>
-                {v.label}
-              </option>
-            ))}
-          </select>
-          {claimants.length > 0 && (
-            <select
-              value={filters.claimant}
-              onChange={(e) => setFilters((f) => ({ ...f, claimant: e.target.value }))}
-              aria-label="Filter by claimant"
-              className={FILTER_SELECT_CLS}
-            >
-              <option value="all">Any claimant</option>
-              {claimants.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
-          )}
-          <select
-            value={filters.assignee}
-            onChange={(e) => setFilters((f) => ({ ...f, assignee: e.target.value as Filters["assignee"] }))}
-            aria-label="Filter by assignee"
-            className={FILTER_SELECT_CLS}
-          >
-            <option value="all">Anyone's</option>
-            <option value="agent">Agent tasks</option>
-            <option value="human">Your todos</option>
-          </select>
+
+          {/* Below md: the one affordance for everything else. The badge is the
+              whole point — a collapsed filter you have forgotten about is a
+              board silently hiding cards, so the count has to be on the closed
+              control, not only inside the sheet. */}
           <button
-            onClick={() => setFilters((f) => ({ ...f, hasCommit: !f.hasCommit }))}
-            aria-pressed={filters.hasCommit}
-            title="Only tasks whose result mentions a commit hash"
+            onClick={() => setFilterSheetOpen(true)}
+            aria-expanded={filterSheetOpen}
+            aria-label={
+              activeFilterCount > 0
+                ? `Filters — ${activeFilterCount} active`
+                : "Filters"
+            }
             className={[
-              "flex h-7 shrink-0 items-center gap-1 rounded-md border px-2 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
-              filters.hasCommit
+              "flex h-9 shrink-0 items-center gap-1.5 rounded-md border px-2.5 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 md:hidden",
+              T_BTN,
+              activeFilterCount > 0
                 ? "border-accent/40 bg-accent/[0.08] text-accent"
-                : "border-ink/15 text-ink/60 hover:border-ink/30",
+                : "border-ink/15 text-ink/70",
             ].join(" ")}
           >
-            <GitCommitHorizontal size={12} /> Has commit
+            <SlidersHorizontal size={13} className="shrink-0" />
+            Filters
+            {activeFilterCount > 0 && (
+              <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 font-code text-[10px] font-semibold leading-none text-white">
+                {activeFilterCount}
+              </span>
+            )}
           </button>
-          {filtering && (
-            <button
-              onClick={clearFilters}
-              title="Clear search and filters (Esc)"
-              className="flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-[11px] font-medium text-ink/50 transition-colors hover:bg-ink/5 hover:text-ink/75"
+
+          {/* md+ inline chip row — the original controls, untouched. */}
+          <div className="hidden shrink-0 items-center gap-1.5 md:flex">
+            <select
+              value={filters.state}
+              onChange={(e) => setFilters((f) => ({ ...f, state: e.target.value as Filters["state"] }))}
+              aria-label="Filter by state"
+              className={FILTER_SELECT_CLS}
             >
-              <X size={12} /> Clear
+              {stateOptions}
+            </select>
+            {claimants.length > 0 && (
+              <select
+                value={filters.claimant}
+                onChange={(e) => setFilters((f) => ({ ...f, claimant: e.target.value }))}
+                aria-label="Filter by claimant"
+                className={FILTER_SELECT_CLS}
+              >
+                {claimantOptions}
+              </select>
+            )}
+            <select
+              value={filters.assignee}
+              onChange={(e) => setFilters((f) => ({ ...f, assignee: e.target.value as Filters["assignee"] }))}
+              aria-label="Filter by assignee"
+              className={FILTER_SELECT_CLS}
+            >
+              {assigneeOptions}
+            </select>
+            <button
+              onClick={() => setFilters((f) => ({ ...f, hasCommit: !f.hasCommit }))}
+              aria-pressed={filters.hasCommit}
+              title="Only tasks whose result mentions a commit hash"
+              className={[
+                "flex h-7 shrink-0 items-center gap-1 rounded-md border px-2 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
+                filters.hasCommit
+                  ? "border-accent/40 bg-accent/[0.08] text-accent"
+                  : "border-ink/15 text-ink/60 hover:border-ink/30",
+              ].join(" ")}
+            >
+              <GitCommitHorizontal size={12} /> Has commit
             </button>
-          )}
+            {filtering && (
+              <button
+                onClick={clearFilters}
+                title="Clear search and filters (Esc)"
+                className="flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-[11px] font-medium text-ink/50 transition-colors hover:bg-ink/5 hover:text-ink/75"
+              >
+                <X size={12} /> Clear
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* The mobile filter sheet. Fixed to the viewport floor (not the board's,
+          unlike the epic sheet) because it is a full modal over the app, and
+          `tandem-safe-pb` keeps its footer off the home indicator. Filters apply
+          LIVE as you change them — there is no Apply step to forget — so the
+          footer button is a readout of what you have done ("Show N tasks") that
+          happens to close the sheet. */}
+      {filterSheetOpen && (
+        <div className="fixed inset-0 z-[2000] flex flex-col justify-end md:hidden">
+          <div
+            className="absolute inset-0 bg-ink/25"
+            onClick={() => setFilterSheetOpen(false)}
+            aria-hidden="true"
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Filter tasks"
+            className="tandem-safe-pb tandem-sheet-in relative flex max-h-[85%] flex-col rounded-t-[10px] border-t border-ink/10 bg-surface shadow-lg"
+          >
+            <div className="flex shrink-0 items-center gap-2 border-b border-ink/10 px-4 py-2.5">
+              <SlidersHorizontal size={14} className="shrink-0 text-ink/45" />
+              <span className={`min-w-0 flex-1 font-semibold text-ink ${T_ROW}`}>Filters</span>
+              <button
+                onClick={() => setFilterSheetOpen(false)}
+                aria-label="Close the filters"
+                className="-mr-1.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-ink/50 transition-colors hover:bg-ink/5 hover:text-ink/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="tandem-scroll flex min-h-0 flex-col gap-3 overflow-y-auto px-4 py-3">
+              <label className="flex flex-col gap-1">
+                <span className={`font-medium uppercase tracking-wide text-ink/50 ${T_META}`}>
+                  State
+                </span>
+                <select
+                  value={filters.state}
+                  onChange={(e) =>
+                    setFilters((f) => ({ ...f, state: e.target.value as Filters["state"] }))
+                  }
+                  className={SHEET_SELECT_CLS}
+                >
+                  {stateOptions}
+                </select>
+              </label>
+              {claimants.length > 0 && (
+                <label className="flex flex-col gap-1">
+                  <span className={`font-medium uppercase tracking-wide text-ink/50 ${T_META}`}>
+                    Claimant
+                  </span>
+                  <select
+                    value={filters.claimant}
+                    onChange={(e) => setFilters((f) => ({ ...f, claimant: e.target.value }))}
+                    className={SHEET_SELECT_CLS}
+                  >
+                    {claimantOptions}
+                  </select>
+                </label>
+              )}
+              <label className="flex flex-col gap-1">
+                <span className={`font-medium uppercase tracking-wide text-ink/50 ${T_META}`}>
+                  Assignee
+                </span>
+                <select
+                  value={filters.assignee}
+                  onChange={(e) =>
+                    setFilters((f) => ({ ...f, assignee: e.target.value as Filters["assignee"] }))
+                  }
+                  className={SHEET_SELECT_CLS}
+                >
+                  {assigneeOptions}
+                </select>
+              </label>
+              <button
+                onClick={() => setFilters((f) => ({ ...f, hasCommit: !f.hasCommit }))}
+                aria-pressed={filters.hasCommit}
+                className={[
+                  "flex h-11 w-full items-center gap-2 rounded-md border px-2.5 text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
+                  filters.hasCommit
+                    ? "border-accent/40 bg-accent/[0.08] text-accent"
+                    : "border-ink/15 text-ink/70",
+                ].join(" ")}
+              >
+                <GitCommitHorizontal size={14} className="shrink-0" />
+                <span className="min-w-0 flex-1 text-left">Has commit</span>
+                {filters.hasCommit && <Check size={14} className="shrink-0" />}
+              </button>
+            </div>
+            <div className="flex shrink-0 items-center gap-2 border-t border-ink/10 px-4 py-3">
+              {filtering && (
+                <button
+                  onClick={clearFilters}
+                  className="flex h-11 shrink-0 items-center gap-1.5 rounded-md border border-ink/15 px-3 text-[13px] font-medium text-ink/60 transition-colors hover:border-ink/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                >
+                  <X size={14} /> Clear all
+                </button>
+              )}
+              <button
+                onClick={() => setFilterSheetOpen(false)}
+                className="flex h-11 min-w-0 flex-1 items-center justify-center rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              >
+                {filtering
+                  ? `Show ${visibleTasks.length} of ${scopedTasks.length}`
+                  : `Show all ${scopedTasks.length}`}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1394,11 +1984,16 @@ export default function TaskBoard({
         </div>
       ) : (
         <div className="relative flex min-h-0 min-w-0 flex-1">
-          {/* Epic navigator: the timeline sidebar. Hidden on mobile unless
-              toggled from the toolbar; always visible on md+. Below md it
-              OVERLAYS the kanban (a 256px inline sidebar would squeeze the
-              board to a sliver on a 375px phone) with a scrim to dismiss;
-              picking a scope also dismisses (see selectScope). */}
+          {/* Epic navigator. On md+ it is the static left timeline rail, exactly
+              as before. Below md it is a BOTTOM SHEET (TDM-87), opened by the
+              labeled "Epics" control in the toolbar and dismissed by the scrim,
+              by Escape, or by picking a scope (see selectScope).
+              A sheet rather than the old left drawer for two reasons: it is the
+              idiom this app already uses on phones (MobileNavDrawer), and epic
+              rows are the tallest tap targets on the board — they belong under
+              the thumb, not against the far edge of the screen. Everything
+              inside is the SAME markup as desktop, so epic Approve / Reject and
+              the Done bucket work in the sheet by construction. */}
           {sidebarOpen && (
             <div
               className="absolute inset-0 z-20 bg-ink/25 md:hidden"
@@ -1407,8 +2002,32 @@ export default function TaskBoard({
             />
           )}
           <aside
-            className={`${sidebarOpen ? "flex" : "hidden"} absolute inset-y-0 left-0 z-30 w-64 shrink-0 flex-col border-r border-ink/10 bg-paper shadow-lg md:static md:z-auto md:flex md:shadow-none`}
+            aria-label="Epics"
+            className={[
+              sidebarOpen ? "flex" : "hidden",
+              // Mobile: a sheet on the board's floor, capped so the kanban
+              // behind it stays visible as context. No safe-area padding of its
+              // own — App already shortens the whole board surface by
+              // `tandem-fab-reserve`, which includes the home-indicator strip,
+              // so this floor is already clear of it.
+              "tandem-sheet-in absolute inset-x-0 bottom-0 z-30 max-h-[78%] flex-col rounded-t-[10px] border-t border-ink/10 bg-paper shadow-lg",
+              // md+: the original 16rem rail, unchanged.
+              "md:static md:inset-auto md:z-auto md:flex md:max-h-none md:w-64 md:shrink-0 md:animate-none md:rounded-none md:border-r md:border-t-0 md:shadow-none",
+            ].join(" ")}
           >
+            {/* Sheet handle + title + explicit close. Mobile only: on desktop
+                the rail is permanent chrome and needs no dismiss. */}
+            <div className="flex shrink-0 items-center gap-2 border-b border-ink/10 px-3 py-2 md:hidden">
+              <Layers size={13} className="shrink-0 text-ink/45" />
+              <span className={`min-w-0 flex-1 font-semibold text-ink ${T_ROW}`}>Epics</span>
+              <button
+                onClick={() => setSidebarOpen(false)}
+                aria-label="Close the epic list"
+                className="-mr-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-ink/50 transition-colors hover:bg-ink/5 hover:text-ink/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              >
+                <X size={16} />
+              </button>
+            </div>
             <div className="min-h-0 flex-1 overflow-y-auto pb-2">
               <div className="sticky top-0 z-10 border-b border-ink/10 bg-paper py-1">
                 {renderPseudoEntry("all", "All tasks", tasks.length)}
@@ -1421,14 +2040,18 @@ export default function TaskBoard({
                   zero visual change there). */}
               {planGroups.groups.map((g) => (
                 <div key={g.docId}>
-                  <div className="px-3 pb-0.5 pt-2.5 text-[10px] font-medium uppercase tracking-wide text-ink/50">
+                  <div
+                    className={`px-3 pb-0.5 pt-2.5 font-medium uppercase tracking-wide text-ink/50 ${T_META}`}
+                  >
                     {g.name}
                   </div>
                   {g.list.map((e) => renderEpicEntry(e))}
                 </div>
               ))}
               {(planGroups.groups.length === 0 || planGroups.unlinked.length > 0) && (
-                <div className="px-3 pb-0.5 pt-2.5 text-[10px] font-medium uppercase tracking-wide text-ink/50">
+                <div
+                  className={`px-3 pb-0.5 pt-2.5 font-medium uppercase tracking-wide text-ink/50 ${T_META}`}
+                >
                   Epic timeline
                 </div>
               )}
@@ -1445,7 +2068,7 @@ export default function TaskBoard({
                   <button
                     onClick={toggleDoneOpen}
                     aria-expanded={doneOpen}
-                    className="flex w-full items-center gap-1 px-3 pb-1 pt-2.5 text-[10px] font-medium uppercase tracking-wide text-ink/50 transition-colors hover:text-ink/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+                    className={`flex w-full items-center gap-1 px-3 pb-2 pt-3 font-medium uppercase tracking-wide text-ink/50 transition-colors hover:text-ink/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 sm:pb-1 sm:pt-2.5 ${T_META}`}
                   >
                     <ChevronRight
                       size={10}
@@ -1462,27 +2085,77 @@ export default function TaskBoard({
           {/* Main area: ONE kanban, always scoped to the sidebar selection. */}
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             {scopedEpic && renderScopeHeader(scopedEpic)}
-            {/* Kanban: the whole strip scrolls horizontally (usable on mobile);
-                each column scrolls its own cards. Empty columns collapse to a
-                slim rail. Under a filter, cards simply vanish and the header
-                shows shown/total (within the scope). */}
-            <div ref={kanbanRef} className="min-h-0 flex-1 overflow-x-auto">
-              {/* pr on sm+: the QuickLog chip rail floats over the right gutter
-                  (App.tsx renders it absolutely at right-4, z-20). The extra
-                  end-padding lets the last kanban column scroll fully clear of
-                  the rail instead of ending underneath it. */}
-              <div className="flex h-full gap-3 py-3 pl-4 pr-4 sm:pr-24">
-                {COLUMNS.map((col) => {
-                  const colAll = scopedTasks.filter((t) => col.states.includes(t.state));
-                  const colTasks = filtering
-                    ? visibleTasks.filter((t) => col.states.includes(t.state))
-                    : colAll;
+            {/* Mobile lane switcher (TDM-86) — the navigation the single-column
+                board needs. Below md exactly one lane is on screen, so the strip
+                is also the only place every lane's count is visible; it doubles
+                as the board's census. A scroll strip rather than five rigid
+                thirds: "Proposed 12" must not truncate to make room. */}
+            <div
+              ref={switcherRef}
+              className="tandem-scroll flex shrink-0 items-center gap-1.5 overflow-x-auto border-b border-ink/10 px-4 py-2 md:hidden"
+              aria-label="Board columns"
+            >
+              {columnBuckets.map(({ col, all, shown }) => {
+                const selected = col.key === activeCol;
+                return (
+                  <button
+                    key={col.key}
+                    data-col-key={col.key}
+                    onClick={() => setMobileCol(col.key)}
+                    aria-pressed={selected}
+                    className={[
+                      "flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
+                      T_BTN,
+                      TAP,
+                      selected
+                        ? "border-accent/40 bg-accent/[0.08] text-accent"
+                        : "border-ink/15 text-ink/60",
+                    ].join(" ")}
+                  >
+                    <span
+                      className="h-2 w-2 shrink-0 rounded-full"
+                      style={{ backgroundColor: col.dot, opacity: shown.length === 0 ? 0.35 : 1 }}
+                    />
+                    {col.short}
+                    <span className={`font-code ${selected ? "text-accent/70" : "text-ink/45"}`}>
+                      {filtering ? `${shown.length}/${all.length}` : shown.length}
+                    </span>
+                    {/* A phone shows ONE lane, so the switcher is where a stalled
+                        worker has to be visible from whichever lane you're on —
+                        otherwise the signal is hidden behind a tap. */}
+                    {col.key === "working" && stalledCount > 0 && (
+                      <span
+                        className="inline-flex shrink-0 items-center gap-0.5 font-code text-[10px] font-semibold text-amber-600 dark:text-amber-400"
+                        aria-label={`${stalledCount} with a lapsed claim lease`}
+                      >
+                        <Timer size={10} className="shrink-0" aria-hidden="true" />
+                        {stalledCount}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+            {/* Kanban: on md+ the whole strip scrolls horizontally and each
+                column scrolls its own cards; empty columns collapse to a slim
+                rail. Below md the strip does NOT scroll sideways at all — the
+                switcher above picks the one lane, which fills the width. Under a
+                filter, cards simply vanish and the header shows shown/total
+                (within the scope). */}
+            <div ref={kanbanRef} className="min-h-0 flex-1 overflow-x-hidden md:overflow-x-auto">
+              <div className="flex h-full gap-3 py-3 pl-4 pr-4">
+                {columnBuckets.map(({ col, all: colAll, shown: colTasks }) => {
                   const slim = colTasks.length === 0;
                   const showState = col.states.length > 1;
                   return (
                     <div
                       key={col.key}
-                      className={`flex min-h-0 shrink-0 flex-col ${slim ? "w-44" : "w-[17rem]"}`}
+                      className={[
+                        "min-h-0 w-full min-w-0 flex-col md:flex md:shrink-0",
+                        // Below md: only the switcher's lane is mounted visible.
+                        col.key === activeCol ? "flex" : "hidden",
+                        slim ? "md:w-44" : "md:w-[17rem]",
+                      ].join(" ")}
                     >
                       <div className="mb-2 flex shrink-0 items-center gap-1.5 px-1">
                         <span
@@ -1490,13 +2163,26 @@ export default function TaskBoard({
                           style={{ backgroundColor: col.dot, opacity: slim ? 0.35 : 1 }}
                         />
                         <span
-                          className={`truncate text-[11px] font-medium uppercase tracking-wide ${slim ? "text-ink/50" : "text-ink/60"}`}
+                          className={`truncate font-medium uppercase tracking-wide ${T_HEAD} ${slim ? "text-ink/50" : "text-ink/60"}`}
                         >
                           {col.label}
                         </span>
-                        <span className="shrink-0 font-code text-[10px] text-ink/50">
+                        <span className={`shrink-0 font-code text-ink/50 ${T_META}`}>
                           {filtering ? `${colTasks.length}/${colAll.length}` : colTasks.length}
                         </span>
+                        {/* "N stalled" (TDM-101) — how many of this lane's claims
+                            have run past their lease. The lane label is the
+                            cheapest place on the board to read it: five lanes
+                            side by side and one of them says a number in amber. */}
+                        {col.key === "working" && stalledCount > 0 && (
+                          <span
+                            title={`${stalledCount} claim${stalledCount === 1 ? "" : "s"} here have run past the 15-minute lease with no report — any agent asking for the task takes it over`}
+                            className={`ml-auto inline-flex shrink-0 items-center gap-1 rounded-[4px] bg-amber-500/10 px-1.5 py-px font-semibold text-amber-600 dark:text-amber-400 ${T_META}`}
+                          >
+                            <Timer size={10} className="shrink-0" aria-hidden="true" />
+                            {stalledCount} stalled
+                          </span>
+                        )}
                         {/* Bulk triage: one approve-batch call for the whole
                             proposed column (within the current scope). */}
                         {col.key === "proposed" && !readOnly && colAll.length > 1 && (
@@ -1504,14 +2190,25 @@ export default function TaskBoard({
                             onClick={() => approveAllProposed(colAll.map((t) => t.id))}
                             disabled={batchBusy}
                             title="Approve every proposed task in this scope in one batch"
-                            className="ml-auto shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold text-ink/50 transition-colors hover:bg-ink/5 hover:text-ink/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50"
+                            className={`ml-auto shrink-0 rounded-md px-1.5 py-1 font-semibold text-ink/50 transition-colors hover:bg-ink/5 hover:text-ink/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 sm:py-0.5 ${T_META}`}
                           >
                             {batchBusy ? "Approving…" : `Approve all ${colAll.length}`}
                           </button>
                         )}
                       </div>
                       {slim ? (
-                        <div className="flex-1 rounded-lg border border-dashed border-ink/10" />
+                        /* On md+ this is a slim rail among four populated lanes —
+                           the emptiness is self-evident from the neighbours, so
+                           it stays wordless. On mobile it is the ENTIRE screen,
+                           and a bare dashed rectangle reads as a failure to
+                           load, so the one lane on show says what it is. */
+                        <div className="flex flex-1 items-center justify-center rounded-lg border border-dashed border-ink/10 p-6">
+                          <p className={`text-center text-ink/40 md:hidden ${T_HEAD}`}>
+                            {filtering
+                              ? `Nothing in ${col.label} matches the filters`
+                              : `Nothing in ${col.label}`}
+                          </p>
+                        </div>
                       ) : (
                         <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pb-2 pr-0.5">
                           {colTasks.map((t) =>
@@ -1536,6 +2233,7 @@ export default function TaskBoard({
           state={state}
           epicTitleById={epicTitleById}
           readOnly={readOnly}
+          onOpenTicket={onOpenTicket}
           onClose={() => setDetailId(null)}
         />
       )}
@@ -1554,7 +2252,11 @@ export default function TaskBoard({
    Destructive moves (reject / release / re-queue) confirm inline, two-step.
    ──────────────────────────────────────────────────────────────────────────── */
 
-type DetailConfirm = "reject" | "release" | "requeue" | "delete" | null;
+// The two-step confirms that are NOT state moves: rejecting (the gate) and
+// deleting (gone for everyone). State moves have their own strip — see
+// TaskDetail's renderMoves, which carries the optional note as well as the
+// confirm, since "are you sure" and "say why" are the same beat.
+type DetailConfirm = "reject" | "delete" | null;
 
 // Resolve a linked entity id to a human label using the same canvas state the
 // board already receives — roadmap items by title, notes by first line.
@@ -1575,6 +2277,7 @@ function TaskDetail({
   state,
   epicTitleById,
   readOnly,
+  onOpenTicket,
   onClose,
 }: {
   code: string;
@@ -1582,6 +2285,8 @@ function TaskDetail({
   state: CanvasState;
   epicTitleById: Map<string, string>;
   readOnly: boolean;
+  /** Leave the slide-over for the ticket's own page (/c/CODE/ticket/TDM-n). */
+  onOpenTicket?: (ticketId: string) => void;
   onClose: () => void;
 }) {
   const isTask = action.type === "task";
@@ -1593,8 +2298,17 @@ function TaskDetail({
   const [editing, setEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(p.title ?? "");
   const [editBody, setEditBody] = useState(p.body ?? "");
+  // The state move waiting on its confirm (and its note), or null.
+  const [pendingMove, setPendingMove] = useState<HumanMove | null>(null);
+  const [moveNote, setMoveNote] = useState("");
 
   const commits = extractCommits(action.result);
+  // The panel's own lease clock (TDM-101). It can sit open for a whole lease
+  // window, and a heartbeat age frozen at the instant the panel opened is worse
+  // than no age at all — this is the one surface where a person decides whether
+  // to release a claim.
+  const now = useFreshnessNow();
+  const lease = deriveLease(action, now);
   const epicTitle = isTask && p.epicId ? epicTitleById.get(p.epicId) : undefined;
   // The last edit that cost an approval, if any — epics are gated the same way,
   // so this reads through the shared payload shape too.
@@ -1609,6 +2323,15 @@ function TaskDetail({
     dialogRef.current?.focus();
     return () => opener?.focus?.();
   }, []);
+
+  // The panel reads the LIVE action, so the task can move under an open move
+  // strip — an agent completes it, or another tab releases it. Disarm when that
+  // happens: a "Mark done" confirm still sitting on a task that is already done
+  // would send a move the API now (correctly) refuses.
+  useEffect(() => {
+    setPendingMove(null);
+    setMoveNote("");
+  }, [action.state]);
 
   function trapTab(e: ReactKeyboardEvent) {
     if (e.key !== "Tab") return;
@@ -1697,19 +2420,50 @@ function TaskDetail({
     });
   }
 
-  function release() {
+  // ── Human state moves (E10) ───────────────────────────────────────────────
+  // One call for every move — start, complete, mark failed, release, re-queue,
+  // reopen, reconsider. The legal set comes from lib/taskMoves (the client's
+  // mirror of the API matrix) and the API re-validates it, so this panel cannot
+  // offer a move the server will refuse.
+
+  function goMove(move: HumanMove) {
     void run(async () => {
-      await releaseTask(code, action.id);
-      setConfirm(null);
+      const from = action.state;
+      await moveTask(code, action.id, move.to, moveNote.trim() || undefined);
+      posthog.capture("task_moved", {
+        canvas_code: code,
+        from,
+        to: move.to,
+        assignee: p.assignee ?? "agent",
+        noted: moveNote.trim().length > 0,
+        surface: "board_detail",
+      });
+      // The requeue funnel predates this control; keep feeding it so the
+      // existing analytics don't silently go to zero.
+      if (from === "failed" && move.to === "approved") {
+        posthog.capture("agent_task_requeued", { canvas_code: code });
+      }
+      setPendingMove(null);
+      setMoveNote("");
     });
   }
 
-  function requeue() {
-    void run(async () => {
-      await requeueTask(code, action.id);
-      posthog.capture("agent_task_requeued", { canvas_code: code });
-      setConfirm(null);
-    });
+  // A move fires immediately when it is plain and forward (Start). Anything
+  // that takes a note, and every rewind — which discards the last attempt's
+  // result — gets the strip first.
+  function startMove(move: HumanMove) {
+    setConfirm(null);
+    if (move.notePrompt || move.kind === "rewind") {
+      setMoveNote("");
+      setPendingMove(move);
+      return;
+    }
+    goMove(move);
+  }
+
+  function cancelMove() {
+    setPendingMove(null);
+    setMoveNote("");
   }
 
   function doDelete() {
@@ -1723,30 +2477,89 @@ function TaskDetail({
   // Two-step confirm strip for a destructive move (mirrors the board's reject).
   function confirmStrip(kind: Exclude<DetailConfirm, null>, message: string, label: string, onGo: () => void) {
     if (confirm !== kind) return null;
+    // Below sm the question takes its own line: a destructive confirm must be
+    // readable before it is tappable, and squeezing prose + two buttons into a
+    // 390px row leaves the prose one word wide.
     return (
-      <div className="flex items-center gap-1.5">
+      <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center">
         <span className="min-w-0 flex-1 text-[12px] leading-snug text-ink/60">{message}</span>
-        <button
-          onClick={onGo}
-          disabled={busy}
-          className="shrink-0 rounded-md bg-rose-600 px-2.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-rose-700 disabled:opacity-40"
-        >
-          {label}
-        </button>
-        <button
-          onClick={() => setConfirm(null)}
-          className="shrink-0 rounded-md border border-ink/15 px-2.5 py-1.5 text-xs font-medium text-ink/60 hover:border-ink/30"
-        >
-          Cancel
-        </button>
+        <div className="flex shrink-0 gap-1.5">
+          <button
+            onClick={onGo}
+            disabled={busy}
+            className={`flex flex-1 items-center justify-center rounded-md bg-rose-600 px-2.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-rose-700 disabled:opacity-40 sm:flex-none ${TAP}`}
+          >
+            {label}
+          </button>
+          <button
+            onClick={() => setConfirm(null)}
+            className={`flex flex-1 items-center justify-center rounded-md border border-ink/15 px-2.5 py-1.5 text-xs font-medium text-ink/60 hover:border-ink/30 sm:flex-none ${TAP}`}
+          >
+            Cancel
+          </button>
+        </div>
       </div>
     );
   }
 
-  const primaryBtn =
-    "flex flex-1 items-center justify-center gap-1 rounded-md bg-accent px-2.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40";
-  const quietBtn =
-    "flex items-center justify-center gap-1 rounded-md border border-ink/15 px-2.5 py-1.5 text-xs font-medium text-ink/60 transition-colors hover:border-ink/30 disabled:opacity-40";
+  // The step-in controls. `TAP` matters most HERE: this footer is where a
+  // person moves a task by hand, and on a phone the row is three ~30px buttons
+  // side by side unless the floor is applied. `flex-1` on the quiet buttons too
+  // below sm — three equal thirds beat one wide button and two slivers.
+  const primaryBtn = `flex flex-1 items-center justify-center gap-1 rounded-md bg-accent px-2.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40 ${TAP}`;
+  const quietBtn = `flex flex-1 items-center justify-center gap-1 rounded-md border border-ink/15 px-2.5 py-1.5 text-xs font-medium text-ink/60 transition-colors hover:border-ink/30 disabled:opacity-40 sm:flex-none ${TAP}`;
+
+  // The state's legal human moves — or, once one is armed, its confirm strip
+  // with the optional note. Reads entirely off the shared matrix: a move added
+  // in lib/taskMoves (and the API's) appears here with no change below.
+  function renderMoves() {
+    if (!isTask) return null;
+    const moves = humanMovesFor(action.state);
+    if (moves.length === 0) return null; // 'proposed' — the gate is above
+    if (pendingMove) {
+      return (
+        <div className="flex flex-col gap-2">
+          <p className="text-[12px] leading-snug text-ink/60">{pendingMove.hint}.</p>
+          {pendingMove.notePrompt && (
+            <input
+              autoFocus
+              value={moveNote}
+              onChange={(e) => setMoveNote(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") goMove(pendingMove);
+                if (e.key === "Escape") cancelMove();
+              }}
+              placeholder={pendingMove.notePrompt}
+              className={`w-full rounded-md border border-ink/15 bg-surface px-2.5 py-1.5 text-[12.5px] text-ink outline-none placeholder:text-ink/30 focus:border-accent/50 focus:ring-2 focus:ring-accent/40 ${TAP}`}
+            />
+          )}
+          <div className="flex gap-1.5">
+            <button onClick={() => goMove(pendingMove)} disabled={busy} className={primaryBtn}>
+              {busy ? "Working…" : pendingMove.label}
+            </button>
+            <button onClick={cancelMove} className={quietBtn}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div className="flex flex-wrap gap-1.5">
+        {moves.map((m, i) => (
+          <button
+            key={`${m.to}-${m.label}`}
+            onClick={() => startMove(m)}
+            disabled={busy}
+            title={m.hint}
+            className={i === 0 && m.kind === "forward" ? primaryBtn : quietBtn}
+          >
+            {moveIcon(m)} {m.label}
+          </button>
+        ))}
+      </div>
+    );
+  }
 
   return (
     <div
@@ -1765,11 +2578,23 @@ function TaskDetail({
       >
         {/* Header: ticket + state + close. */}
         <div className="flex shrink-0 items-center gap-2 border-b border-ink/10 px-4 py-3">
-          {action.ticketId && (
-            <span className="shrink-0 font-code text-[12px] font-medium tracking-tight text-ink/50">
-              {action.ticketId}
-            </span>
-          )}
+          {action.ticketId &&
+            (onOpenTicket ? (
+              /* The slide-over is a step-in panel over the board; this is the
+                 way out to the ticket's own page — the linkable, full record. */
+              <a
+                href={`/c/${code}/ticket/${action.ticketId}`}
+                onClick={spaLink(() => onOpenTicket(action.ticketId as string))}
+                title={`Open ${action.ticketId} as its own page`}
+                className="shrink-0 rounded-[3px] font-code text-[12px] font-medium tracking-tight text-ink/50 transition-colors hover:text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              >
+                {action.ticketId}
+              </a>
+            ) : (
+              <span className="shrink-0 font-code text-[12px] font-medium tracking-tight text-ink/50">
+                {action.ticketId}
+              </span>
+            ))}
           {!isTask && (
             <span className="inline-flex shrink-0 items-center gap-1 rounded-[4px] border border-ink/10 bg-ink/[0.03] px-1.5 py-px text-[10px] font-semibold uppercase tracking-[0.08em] text-ink/50">
               <Layers size={10} /> Epic
@@ -1784,16 +2609,22 @@ function TaskDetail({
               needs approval
             </span>
           )}
+          {/* On a phone this slide-over is the whole screen, so its close button
+              is the only way out — it gets the touch floor, not the dense
+              desktop 28px. */}
           <button
             onClick={onClose}
-            className="ml-auto flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink/40 transition-colors hover:bg-ink/5 hover:text-ink/70"
+            className="ml-auto flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-ink/40 transition-colors hover:bg-ink/5 hover:text-ink/70 sm:h-7 sm:w-7"
             aria-label="Close"
           >
             <X size={15} />
           </button>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+        {/* --tandem-pb-base = the py-3 this surface would have had; the safe-area
+            strip is added on top so the provenance footer clears the iOS home
+            indicator when there are no step-in controls under it. */}
+        <div className="tandem-safe-pb-plus min-h-0 flex-1 overflow-y-auto px-4 pt-3 [--tandem-pb-base:0.75rem]">
           {/* Title + body — inline edit while proposed. */}
           {editing ? (
             <div className="flex flex-col gap-2">
@@ -1893,15 +2724,35 @@ function TaskDetail({
             </div>
           )}
 
-          {/* Claim: who holds it, and for how long. */}
+          {/* Claim: who holds it, how recently they said anything, and how much
+              lease they have left.
+
+              NOTE on the wording. `claimedAt` is not "when they started" for a
+              task in flight — every heartbeat pushes it forward (it IS the lease
+              stamp), so the honest reading of its age is "silent for", which is
+              what the lease chip says. Only a task that has LEFT executing has a
+              claimedAt that still means the moment it was taken, so that's the
+              only case that keeps the plain "claimed Xm ago". */}
           {action.claimedBy && (action.state === "executing" || action.claimedAt) && (
-            <div className="mt-3 flex items-center gap-1.5">
+            <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1">
               <ClaimantChip name={action.claimedBy} />
-              {action.claimedAt && (
-                <span className="text-[11px] text-ink/50" title={fullDate(action.claimedAt)}>
-                  {action.state === "executing" ? "working for" : "claimed"} {ageOf(action.claimedAt)}
-                  {action.state === "executing" ? "" : " ago"}
-                </span>
+              {action.state === "executing" ? (
+                <>
+                  <LeaseChip lease={lease} />
+                  {lease.health !== "none" && (
+                    <span className="text-[11px] text-ink/45">
+                      {lease.reclaimable
+                        ? `lease lapsed ${leaseAge(lease.overdueMs)} ago`
+                        : `lease good for ${leaseAge(lease.remainingMs)}`}
+                    </span>
+                  )}
+                </>
+              ) : (
+                action.claimedAt && (
+                  <span className="text-[11px] text-ink/50" title={fullDate(action.claimedAt)}>
+                    claimed {ageOf(action.claimedAt)} ago
+                  </span>
+                )
               )}
             </div>
           )}
@@ -1983,7 +2834,7 @@ function TaskDetail({
 
         {/* Step-in controls: exactly the current state's legal human moves. */}
         {!readOnly && !editing && (
-          <div className="shrink-0 border-t border-ink/10 px-4 py-3">
+          <div className="tandem-safe-pb-plus shrink-0 border-t border-ink/10 px-4 pt-3 [--tandem-pb-base:0.75rem]">
             {error && (
               <div className="mb-2 rounded-md border border-rose-500/20 bg-rose-500/10 px-2.5 py-1.5 text-[12px] text-rose-600 dark:text-rose-400">
                 {error}
@@ -1994,25 +2845,32 @@ function TaskDetail({
                 confirmStrip("reject", `Reject this ${isTask ? "task" : "epic"}?`, "Reject", reject)
               ) : (
                 <div className="flex flex-col gap-2">
+                  {/* One control, not a 14px box with a label loosely wired to
+                      it: the whole row is the switch, so the tap area is the
+                      full width at the touch floor instead of a checkbox you
+                      have to hit dead centre. */}
                   {isTask && (
-                    <div className="flex cursor-pointer items-center gap-2 text-[12px] text-ink/60">
-                      <button
-                        onClick={toggleRequiresApproval}
-                        disabled={busy}
-                        role="switch"
-                        aria-checked={!!p.requiresApproval}
-                        className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+                    <button
+                      onClick={toggleRequiresApproval}
+                      disabled={busy}
+                      role="switch"
+                      aria-checked={!!p.requiresApproval}
+                      className={`flex w-full items-center gap-2 rounded-md text-left text-[12px] text-ink/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60 ${TAP}`}
+                    >
+                      <span
+                        aria-hidden="true"
+                        className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border transition-colors ${
                           p.requiresApproval
                             ? "border-accent bg-accent"
                             : "border-ink/25 bg-transparent"
                         }`}
                       >
                         {p.requiresApproval && <Check size={10} className="text-white" />}
-                      </button>
-                      <span onClick={toggleRequiresApproval}>
+                      </span>
+                      <span className="min-w-0">
                         Requires explicit approval (won't auto-flow with its epic)
                       </span>
-                    </div>
+                    </button>
                   )}
                   <div className="flex gap-1.5">
                     <button onClick={approve} disabled={busy} className={primaryBtn}>
@@ -2029,44 +2887,19 @@ function TaskDetail({
                   </div>
                 </div>
               ))}
-            {isTask &&
-              action.state === "executing" &&
-              (confirm === "release" ? (
-                confirmStrip(
-                  "release",
-                  `Clear ${action.claimedBy ?? "the agent"}'s claim and return this task to the queue?`,
-                  "Release",
-                  release,
-                )
-              ) : (
-                <button
-                  onClick={() => setConfirm("release")}
-                  disabled={busy}
-                  title="For when the agent session died mid-task"
-                  className={`${quietBtn} w-full`}
-                >
-                  <RotateCcw size={13} /> Release stuck claim
-                </button>
-              ))}
-            {isTask &&
-              action.state === "failed" &&
-              (confirm === "requeue" ? (
-                confirmStrip(
-                  "requeue",
-                  "Clear the error and send this task back to the queue for another attempt?",
-                  "Re-queue",
-                  requeue,
-                )
-              ) : (
-                <button
-                  onClick={() => setConfirm("requeue")}
-                  disabled={busy}
-                  title="failed → ready: clears the error and the claim so an agent session can retry"
-                  className={`${quietBtn} w-full`}
-                >
-                  <RotateCcw size={13} /> Re-queue for another attempt
-                </button>
-              ))}
+            {/* The lapsed-lease explainer, immediately above the moves — and
+                Release is one of them. "Another agent is about to take this
+                over" and "you can put it back in the queue yourself" are one
+                decision, so they are one block on the screen. Suppressed while a
+                move is armed: the confirm strip replaces the buttons, and a
+                paragraph above a live confirm is competition, not context. */}
+            {!pendingMove && <LeaseNotice lease={lease} canRelease className="mb-2" />}
+            {/* Every legal human move out of this state, from one matrix —
+                start / mark done / mark failed on a task in flight, release a
+                claim, re-queue a failure, reopen a done task, reconsider a
+                rejected one. 'proposed' renders nothing here: the approval
+                controls above are its only exit. */}
+            {renderMoves()}
             {/* Delete — available in every state. Quiet by default, two-step
                 like the other destructive moves. */}
             {isTask &&
@@ -2078,7 +2911,7 @@ function TaskDetail({
                 <button
                   onClick={() => setConfirm("delete")}
                   disabled={busy}
-                  className="mt-2 flex w-full items-center justify-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium text-ink/40 transition-colors hover:bg-rose-500/10 hover:text-rose-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40 dark:hover:text-rose-400"
+                  className={`mt-2 flex w-full items-center justify-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium text-ink/40 transition-colors hover:bg-rose-500/10 hover:text-rose-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40 dark:hover:text-rose-400 ${TAP}`}
                 >
                   <Trash2 size={12} /> Delete task
                 </button>

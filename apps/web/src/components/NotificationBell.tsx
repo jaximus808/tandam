@@ -48,7 +48,10 @@ export default function NotificationBell({ log, unread, muted, toggleMute, markR
       <button
         onClick={toggleOpen}
         className={[
-          "relative grid h-8 w-8 place-items-center rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
+          // h-9 below sm: the canvas header is a row of adjacent icon buttons on
+          // a phone (bell, fleet chip, account), and 32px squares 8px apart is
+          // where mis-taps live. Dense 32px returns above sm.
+          "relative grid h-9 w-9 place-items-center rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-8 sm:w-8",
           open ? "bg-ink/[0.06] text-ink" : "text-ink/55 hover:bg-ink/5 hover:text-ink/80",
         ].join(" ")}
         title={muted ? "Agent alerts — popups muted" : "Agent activity"}

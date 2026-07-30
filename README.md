@@ -9,10 +9,10 @@ Live at **[tandemcanvas.com](https://tandemcanvas.com)**.
 ## How it works
 
 1. The spec lives in your repo, like it always has.
-2. An agent session proposes an epic as tasks (`canvas_task_add`), which land as *proposed*.
+2. An agent session proposes an epic and its tasks (`epic_propose`), which land as *proposed*.
 3. You approve them once in the web UI — no per-step pinging after that.
-4. N parallel sessions (Claude Code, Cursor, any MCP client) each pull the approved queue (`canvas_task_list`), claim a task (`canvas_task_start`) so the others skip it, and do the work.
-5. Each finished task is completed with a result (`canvas_task_complete`) that says what was done and where — commit, PR, files — while you watch the board move in the browser.
+4. N parallel sessions (Claude Code, Cursor, any MCP client) each pull the approved queue (`queue_next`), claim a task (`task_claim`) so the others skip it, and do the work.
+5. Each finished task is completed with a result (`task_complete`) that says what was done and where — commit, PR, files — while you watch the board move in the browser.
 
 ## Quickstart
 
@@ -50,34 +50,46 @@ The shared work queue for this repo is Tandem canvas `AB3XK9QZ`.
 
 Every session:
 
-1. `canvas_connect` with code `AB3XK9QZ` (once per session).
-2. `canvas_task_list` with `state: "approved"` — the ready-to-work queue.
-   Do not open with `canvas_state_read`; it pulls the entire canvas.
-3. Pick a task, `canvas_task_get` for its hydrated context, then
-   `canvas_task_start` to claim it. The claim is atomic: if it returns
-   `{ claimed: false, claimedBy }`, another session won — do NOT work on
-   that task; go back to the list and take the next one.
+1. `canvas_connect` with code `AB3XK9QZ` — once per session. Pass `role`
+   ("executor" if you'll work tasks yourself, "planner" if you'll dispatch
+   them to subagents) and a `name`. Keep the `session` handle it returns and
+   pass it as `session` on every later Tandem call.
+2. `queue_next` — the approved, ready-to-work queue. That is the entry point
+   for work; don't go looking for it by reading the canvas. (`context_get`
+   once if you need to orient on what this canvas is.)
+3. Pick one task, `task_get` for its hydrated context (linked notes, roadmap
+   items, its epic), then `task_claim` to claim it. The claim is atomic: if
+   it returns `{ claimed: false, claimedBy }`, another session won — do NOT
+   work on that task; go back to `queue_next` and take the next one.
 4. Do the work. Every commit message for the task starts with its ticket
-   ID, e.g. `TDM-7: add rate limiter`.
-5. `canvas_task_complete` with a `result` saying what was done and where —
-   always include the commit hash(es).
+   ID, e.g. `TDM-7: add rate limiter`. On long work, `task_progress` with
+   one line per meaningful step — it doubles as a heartbeat, so a task that
+   runs past ~15 minutes doesn't become reclaimable underneath you.
+5. `task_complete` with a `result` saying what was done and where — always
+   include the commit hash(es) — plus `links` to the commit or PR.
 
 Planning from a spec: when asked to decompose SPEC.md (or any spec file)
-into work, propose one epic per spec section with `canvas_epic_add`, then
-that section's tasks in ONE call with `canvas_task_add_batch`, passing the
-epic's id as `epicId` on each. In the epic body, record the spec file path,
-the section heading,
-and the current commit SHA of the spec file. One human approval of the epic
-approves its tasks (canvas approval policy `epic`, the default). Before
-working a claimed task that belongs to an epic, diff the spec section
-against the SHA recorded in the epic body: if the section changed since the
-epic was planned, do not proceed — flag the task back with
-`canvas_task_complete` using `status: "failed"` and an `error` noting the
-spec drift, so the plan gets redone against the current spec.
+into work, use `epic_propose` — one epic per spec section, with that
+section's tasks passed in the SAME call via `tasks`, so the human approves
+once instead of task by task. In the epic body, record the spec file path,
+the section heading, and the current commit SHA of the spec file. One human
+approval of the epic approves its tasks (canvas approval policy `epic`, the
+default); add more tasks to an existing epic later with `task_propose` and
+that `epicId`. Before working a claimed task that belongs to an epic, diff
+the spec section against the SHA recorded in the epic body: if the section
+changed since the epic was planned, do not proceed — flag the task back
+with `task_complete` using `status: "failed"` and an `error` noting the spec
+drift, so the plan gets redone against the current spec.
 
 If a task needs to deviate from the approved plan, don't silently do it —
-propose the deviation as a new task with `requiresApproval: true` so a
+propose the deviation with `task_propose` and `requiresApproval: true` so a
 human gates it.
+
+Dispatching subagents instead of working tasks yourself? Connect with
+`role: "planner"` and paste each ready task's `handoff` block from
+`queue_next` into one subagent per task — you dispatch, they claim. Never
+claim a task you won't personally do, and never hand a subagent your
+`session` handle; the canvas code is what travels.
 ````
 
 ### 4. Go parallel
@@ -131,3 +143,5 @@ npx @jaximus/tandem-mcp
 ```
 
 Or use the hosted Streamable-HTTP endpoint at `https://tandemcanvas.com/api/mcp`. Vendor-neutral by design: anything that speaks MCP can join the same queue.
+
+The default surface on both transports is the same **12-tool intent facade**, shaped like the work loop rather than the API: `canvas_connect`, `agent_register`, `context_get`, `queue_next`, `task_get`, `task_claim`, `task_progress`, `task_complete`, `task_propose`, `epic_propose`, `doc_write`, `board_status`. The ~80-tool CRUD surface (maps, sheets, charts, forms, …) is additive and one opt-in away — `TANDEM_FULL_TOOLS=1` or `tandem-mcp --full-tools`. Nothing in the quickstart needs it. See [apps/mcp-gateway/README.md](apps/mcp-gateway/README.md#tools) for the per-tool reference.

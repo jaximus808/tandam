@@ -120,7 +120,7 @@ export default function ImportBriefingModal({
         aria-modal="true"
         aria-labelledby="import-briefing-title"
         onKeyDown={onFormKeyDown}
-        className="relative flex max-h-[88vh] w-full max-w-lg flex-col overflow-hidden rounded-[10px] border border-ink/10 bg-surface text-ink shadow-lg"
+        className="relative flex max-h-[88dvh] w-full max-w-lg flex-col overflow-hidden rounded-[10px] border border-ink/10 bg-surface text-ink shadow-lg"
       >
         <div className="tandem-scroll overflow-y-auto px-5 pb-5 pt-5">
           <span className="text-xs font-medium uppercase tracking-wide text-ink/50">

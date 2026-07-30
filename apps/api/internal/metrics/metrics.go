@@ -157,6 +157,7 @@ type counters struct {
 	claims         atomic.Uint64
 	claimConflicts atomic.Uint64
 	ttlExpiries    atomic.Uint64
+	fencedWrites   atomic.Uint64
 	webhookOK      atomic.Uint64
 	webhookFailed  atomic.Uint64
 	webhookDead    atomic.Uint64
@@ -276,6 +277,19 @@ func (reg *Registry) IncTTLExpiry() {
 	}
 }
 
+// IncFencedWrite counts a write REFUSED because the caller did not hold the
+// claim: a non-holder reaching for someone else's task, or a worker writing under
+// a lease that has since been reclaimed (TDM-98). Distinct from claimConflicts,
+// which counts a claim lost at the door — this one counts an agent that believed
+// it still owned work it had lost, i.e. the double-execution that would have
+// happened without the fence. A rate that climbs with ttl_expiries means workers
+// are outliving their leases and the TTL is too short for the work.
+func (reg *Registry) IncFencedWrite() {
+	if reg != nil {
+		reg.counts.fencedWrites.Add(1)
+	}
+}
+
 // ObserveWebhookDelivery counts one terminal webhook delivery outcome. It is
 // the method the webhooks worker's observer seam calls; unknown outcomes are
 // ignored rather than silently miscounted.
@@ -340,6 +354,7 @@ type Counters struct {
 	Claims         uint64 `json:"claims"`
 	ClaimConflicts uint64 `json:"claim_conflicts"`
 	TTLExpiries    uint64 `json:"ttl_expiries"`
+	FencedWrites   uint64 `json:"fenced_writes"`
 	WebhookOK      uint64 `json:"webhook_ok"`
 	WebhookFailed  uint64 `json:"webhook_failed"`
 	WebhookDead    uint64 `json:"webhook_dead"`
@@ -429,6 +444,7 @@ func (reg *Registry) Snapshot() Snapshot {
 			Claims:         reg.counts.claims.Load(),
 			ClaimConflicts: reg.counts.claimConflicts.Load(),
 			TTLExpiries:    reg.counts.ttlExpiries.Load(),
+			FencedWrites:   reg.counts.fencedWrites.Load(),
 			WebhookOK:      reg.counts.webhookOK.Load(),
 			WebhookFailed:  reg.counts.webhookFailed.Load(),
 			WebhookDead:    reg.counts.webhookDead.Load(),

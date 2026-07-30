@@ -1,6 +1,46 @@
 import type { Gateway } from "./gateway.js";
+import {
+  alreadyFinishedMessage,
+  bumpLoss,
+  claimReason,
+  fenceRejectionMessage,
+  findLoss,
+  forgetLoss,
+  notYourClaimMessage,
+  readConflict,
+  recordLoss,
+  repeatClaimRejectionMessage,
+  tapOutBlock,
+  writeReason,
+  type ConflictBody,
+} from "./tapout.js";
 
 type Args = Record<string, unknown>;
+
+/**
+ * Path-encodes an action reference for a /api/canvas/actions/{id} URL.
+ *
+ * The API accepts either a uuid or a ticket ref ("TDM-21", "#21", "21") in that
+ * slot and resolves it server-side (see internal/api/ticket_ref.go), which is
+ * why this can't stay a bare interpolation: "#21" would truncate the path at the
+ * fragment and silently address the collection instead of the task.
+ */
+/**
+ * The `id` property shared by every tool that addresses one task. Spelled out
+ * because the identifier an agent is HANDED is almost always the ticket ("take
+ * on TDM-21"), not the uuid, and before the server resolved both a session had
+ * to list the whole board to translate one into the other.
+ */
+const TASK_ID_PROP = {
+  type: "string" as const,
+  description:
+    "The task's uuid OR its ticket ref — 'TDM-21', 'tdm-21', '#21' and '21' all resolve to the " +
+    "same task. Use whichever you were given; no lookup call needed.",
+};
+
+function actionRef(id: unknown): string {
+  return encodeURIComponent(String(id ?? ""));
+}
 
 // Contextual fan-out nudge for single-item updates (mirrors the task fan-out
 // nudge above). A model that's editing several elements of one type tends to
@@ -189,6 +229,28 @@ async function registerOnConnect(gateway: Gateway, args: Args): Promise<Args | u
       problem: `Connected, but registration failed: ${why}. Retry with agent_register.`,
     };
   }
+}
+
+/**
+ * What a losing claimant is told (TDM-72). ONE string for BOTH surfaces, and it
+ * names `queue_next` on purpose.
+ *
+ * This message is returned by canvas_task_start, which the facade's `task_claim`
+ * delegates to — so the same words reach a session that can only see the 12-tool
+ * facade. It used to say "call canvas_task_list with state approved", a tool the
+ * default manifest does not advertise: the one instruction the loser gets, naming
+ * something it cannot see. `queue_next` is advertised on the facade AND in
+ * full-tools mode (that manifest is facade + CRUD, see manifestFor), so it is the
+ * only ready-queue tool that is always in front of the caller.
+ *
+ * The opening clause is load-bearing beyond the code: `already claimed by "<name>"`
+ * is the frozen frame in docs/demo-script.md §3. Keep it verbatim.
+ */
+export function claimRejectionMessage(claimedBy: string): string {
+  return (
+    `This task is already claimed by "${claimedBy}" — another session got it first. ` +
+    `Do NOT work on it. Call queue_next and pick the next ready task.`
+  );
 }
 
 export async function handleTool(
@@ -906,14 +968,14 @@ export async function handleTool(
     }
 
     case "canvas_action_read":
-      return gateway.get(`/api/canvas/actions/${args.id}`);
+      return gateway.get(`/api/canvas/actions/${actionRef(args.id)}`);
 
     case "canvas_action_approve": {
       // Epic approval is the human gate the whole policy cascade hangs on: one
       // approved epic unlocks every task under it. An agent must never pull
       // that lever itself — refuse here at the MCP surface (the API cannot
       // distinguish callers; the gateway is the agent-facing door).
-      const { action } = (await gateway.get(`/api/canvas/actions/${args.id}`)) as {
+      const { action } = (await gateway.get(`/api/canvas/actions/${actionRef(args.id)}`)) as {
         action: { type?: string };
       };
       if (action?.type === "epic") {
@@ -921,28 +983,67 @@ export async function handleTool(
           approved: false,
           error: "epic_requires_human_approval",
           message:
-            "Epics are approved by a human in the web Tasks panel — approving one " +
-            "batch-approves every task under it, which is exactly the gate agents " +
-            "must not open themselves. Ask the human to approve it on the board.",
+            "Epics are approved by a human on the board, in the Proposed column — " +
+            "approving one batch-approves every task under it, which is exactly the " +
+            "gate agents must not open themselves. Ask the human to approve it there.",
         };
       }
-      return gateway.post(`/api/canvas/actions/${args.id}/approve`, {
+      return gateway.post(`/api/canvas/actions/${actionRef(args.id)}/approve`, {
         approvedBy: gateway.getSession().agentId,
       });
     }
 
     case "canvas_action_reject":
-      return gateway.post(`/api/canvas/actions/${args.id}/reject`, {
+      return gateway.post(`/api/canvas/actions/${actionRef(args.id)}/reject`, {
         reason: args.reason,
       });
 
-    case "canvas_action_update_state":
-      return gateway.patch(`/api/canvas/actions/${args.id}`, {
-        state: args.state,
-        result: args.result,
-        error: args.error,
-        payload: args.payload,
-      });
+    case "canvas_action_update_state": {
+      // The generic state MOVE. It used to let a 409 throw, which made "you tried
+      // to move a task someone else holds" arrive as a protocol error mid-run —
+      // the one shape a model cannot route on. Now it taps out like every other
+      // losing path (TDM-99): same block, same `next`, same recorded loss.
+      const res = await gateway.patchWithConflict<Record<string, unknown>, ConflictBody>(
+        `/api/canvas/actions/${actionRef(args.id)}`,
+        {
+          state: args.state,
+          result: args.result,
+          error: args.error,
+          payload: args.payload,
+          // Present our identity, like task_start and task_complete already do.
+          // Without it the API has no caller to compare against claimed_by and
+          // its holder guard cannot fire at all — so "move a task another agent
+          // holds" quietly succeeded, and there was no rejection to tap out on.
+          agentName: (args.agentName as string | undefined) ?? gateway.claimant(),
+        }
+      );
+      if (res.conflict) {
+        const c = readConflict(res.conflict);
+        const reason = writeReason(c);
+        // No holder and not finished ⇒ nobody beat you here; it is an illegal
+        // transition, not a contention loss. Surface it as the error it is
+        // rather than sending a session away from work it could still do.
+        if (!reason) {
+          throw new Error(
+            `Cannot move this action to "${String(args.state)}": ` +
+              (c.message ?? c.code ?? "the API rejected the transition") +
+              `. Re-read it (canvas_action_read) and move it from the state it is actually in.`
+          );
+        }
+        const loss = recordLoss(gateway, String(args.id ?? ""), { holder: c.holder, reason, claimGeneration: c.claimGeneration });
+        return {
+          moved: false,
+          ...(c.holder ? { claimedBy: c.holder } : {}),
+          ...tapOutBlock(loss),
+          message: c.fenced
+            ? fenceRejectionMessage(String(args.id ?? ""), c.holder)
+            : reason === "already_finished"
+              ? alreadyFinishedMessage(c.state ?? "finished")
+              : notYourClaimMessage(c.holder ?? "another agent", "move"),
+        };
+      }
+      return res.data;
+    }
 
     // ── Epics (actions of type "epic": a batch of tasks approved as one) ───────
     case "canvas_epic_add":
@@ -1046,7 +1147,7 @@ export async function handleTool(
     }
 
     case "canvas_task_get":
-      return gateway.get(`/api/canvas/actions/${args.id}`);
+      return gateway.get(`/api/canvas/actions/${actionRef(args.id)}`);
 
     case "canvas_task_start": {
       // The claim is atomic server-side: exactly one concurrent task_start wins.
@@ -1060,20 +1161,51 @@ export async function handleTool(
       const claimant = session.agentName
         ? gateway.claimant()
         : ((args.agentName as string | undefined) ?? gateway.claimant());
-      const res = await gateway.patchWithConflict<Record<string, unknown>, { claimedBy?: string }>(
-        `/api/canvas/actions/${args.id}`,
+
+      // ANTI-LOOP (TDM-99): a task this session already lost is refused HERE,
+      // without touching the API. Re-racing a claim you lost is a loop — and
+      // one that costs the API a write attempt per turn. The refusal carries the
+      // same tapOut shape as the first loss, only firmer, and the way back in is
+      // queue_next: it clears the loss the moment the server says the task is
+      // ready and unheld again (see the facade's queue_next).
+      const requested = String(args.id ?? "");
+      const prior = findLoss(gateway, requested);
+      if (prior) {
+        const again = bumpLoss(gateway, prior);
+        return {
+          claimed: false,
+          ...(again.holder ? { claimedBy: again.holder } : {}),
+          ...tapOutBlock({ ...again, reason: "already_lost" }),
+          message: repeatClaimRejectionMessage(again),
+        };
+      }
+
+      const res = await gateway.patchWithConflict<Record<string, unknown>, ConflictBody>(
+        `/api/canvas/actions/${actionRef(args.id)}`,
         { state: "executing", agentName: claimant }
       );
       if (res.conflict) {
-        const claimedBy = res.conflict.claimedBy || "another agent";
+        // The API's contention body is {error, claimedBy}; claim-generation
+        // fencing (TDM-98) adds {fenced:true, holder}. readConflict accepts both
+        // spellings so this branch behaves the same before and after that lands.
+        const c = readConflict(res.conflict);
+        const claimedBy = c.holder || "another agent";
+        const reason = claimReason(c);
+        const loss = recordLoss(gateway, requested, { holder: c.holder, reason, claimGeneration: c.claimGeneration });
         return {
           claimed: false,
           claimedBy,
-          message:
-            `This task is already claimed by "${claimedBy}" — another session got it first. ` +
-            `Do NOT work on it. Call canvas_task_list with state "approved" and pick the next task.`,
+          ...tapOutBlock(loss),
+          // The human sentence stays VERBATIM (docs/demo-script.md §3 freezes on
+          // it); the tapOut block above is what a model branches on.
+          message: c.fenced
+            ? fenceRejectionMessage(requested, c.holder)
+            : claimRejectionMessage(claimedBy),
         };
       }
+      // Winning clears any stale record of this task — e.g. a loss whose holder
+      // released it, re-claimed here rather than through queue_next.
+      forgetLoss(gateway, requested);
       return { claimed: true, ...res.data };
     }
 
@@ -1082,11 +1214,11 @@ export async function handleTool(
       // a completion whose identity doesn't match the claim, so the caller must
       // be able to present the exact name it claimed with.
       const claimant = (args.agentName as string | undefined) ?? gateway.claimant();
-      const { action } = (await gateway.get(`/api/canvas/actions/${args.id}`)) as {
+      const { action } = (await gateway.get(`/api/canvas/actions/${actionRef(args.id)}`)) as {
         action: { state: string; claimedBy?: string };
       };
       if (action.state === "approved") {
-        await gateway.patch(`/api/canvas/actions/${args.id}`, {
+        await gateway.patch(`/api/canvas/actions/${actionRef(args.id)}`, {
           state: "executing",
           agentName: claimant,
         });
@@ -1103,8 +1235,8 @@ export async function handleTool(
       const links = Array.isArray(args.links)
         ? args.links.filter((l): l is string => typeof l === "string" && l.trim() !== "")
         : undefined;
-      const res = await gateway.patchWithConflict<Record<string, unknown>, { claimedBy?: string }>(
-        `/api/canvas/actions/${args.id}`,
+      const res = await gateway.patchWithConflict<Record<string, unknown>, ConflictBody>(
+        `/api/canvas/actions/${actionRef(args.id)}`,
         {
           state: args.status ?? "done",
           result: args.result,
@@ -1114,13 +1246,23 @@ export async function handleTool(
         }
       );
       if (res.conflict) {
-        const claimedBy = res.conflict.claimedBy || "another agent";
+        // Finishing work you do not hold is a losing path too (TDM-99), so it
+        // taps out in exactly the same shape a lost claim does — and the loss is
+        // recorded, so the session cannot follow a refused completion with a
+        // claim attempt on the same task.
+        const c = readConflict(res.conflict);
+        const claimedBy = c.holder || "another agent";
+        const reason = writeReason(c) ?? "not_your_claim";
+        const loss = recordLoss(gateway, String(args.id ?? ""), { holder: c.holder, reason, claimGeneration: c.claimGeneration });
         return {
           completed: false,
           claimedBy,
-          message:
-            `This task is claimed by "${claimedBy}" — it is not yours to complete. ` +
-            `If that session is dead, a human can release the task from the web Tasks panel.`,
+          ...tapOutBlock(loss),
+          message: c.fenced
+            ? fenceRejectionMessage(String(args.id ?? ""), c.holder)
+            : reason === "already_finished"
+              ? alreadyFinishedMessage(c.state ?? "finished")
+              : notYourClaimMessage(claimedBy, "complete"),
         };
       }
       return res.data;
@@ -1218,7 +1360,7 @@ const RAW_TOOLS = [
       "fields:[\"sheets\",\"sheetRows\"]. Valid kinds: pins, events, notes, roadmapItems, sheets, " +
       "sheetRows, charts, forms, actions, agents. Reading a sheet? request BOTH \"sheets\" and " +
       "\"sheetRows\". Only pass full:true if you truly need the entire canvas. If you're looking " +
-      "for work to do, start with canvas_task_list instead.",
+      "for work to do, start with queue_next (the ready-work queue) instead.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -2883,7 +3025,7 @@ const RAW_TOOLS = [
     description: "Read a single action by id (poll for state changes / outcome).",
     inputSchema: {
       type: "object" as const,
-      properties: { id: { type: "string" } },
+      properties: { id: TASK_ID_PROP },
       required: ["id"],
     },
   },
@@ -2894,7 +3036,7 @@ const RAW_TOOLS = [
       "the browser; exposed here for testing. Only then may the executor run it.",
     inputSchema: {
       type: "object" as const,
-      properties: { id: { type: "string" } },
+      properties: { id: TASK_ID_PROP },
       required: ["id"],
     },
   },
@@ -2904,7 +3046,7 @@ const RAW_TOOLS = [
     inputSchema: {
       type: "object" as const,
       properties: {
-        id: { type: "string" },
+        id: TASK_ID_PROP,
         reason: { type: "string" },
       },
       required: ["id"],
@@ -2928,7 +3070,7 @@ const RAW_TOOLS = [
     inputSchema: {
       type: "object" as const,
       properties: {
-        id: { type: "string" },
+        id: TASK_ID_PROP,
         state: { type: "string", enum: ["executing", "done", "failed"] },
         result: { type: "string" },
         error: { type: "string" },
@@ -2941,8 +3083,8 @@ const RAW_TOOLS = [
     name: "canvas_epic_add",
     description:
       "Create an EPIC — a named batch of related tasks approved as ONE unit. The flow: " +
-      "propose the epic (it enters state 'proposed'), the human approves it ONCE in the " +
-      "web UI, and from then on tasks you add with epicId under it are born approved " +
+      "propose the epic (it enters state 'proposed'), the human approves it ONCE on the " +
+      "board, and from then on tasks you add with epicId under it are born approved " +
       "(under the canvas's default 'epic' approval policy) instead of each awaiting its " +
       "own approval. Tasks added while the epic is still proposed land proposed and are " +
       "batch-approved the moment the human approves the epic. Prefer one epic per " +
@@ -2965,7 +3107,7 @@ const RAW_TOOLS = [
     name: "canvas_task_add",
     description:
       "Add a task to the canvas work queue for a future agent session to implement. " +
-      "Enters state 'proposed'; a human approves it in the web UI before any session " +
+      "Enters state 'proposed'; a human approves it on the board before any session " +
       "picks it up — UNLESS the canvas approval policy auto-approves it: under the " +
       "default 'epic' policy, pass epicId of an already-APPROVED epic and the task is " +
       "born approved (propose the epic with canvas_epic_add, the human approves once, " +
@@ -3017,7 +3159,7 @@ const RAW_TOOLS = [
       "persists via a single write and fires one live update, instead of one round trip " +
       "per task. Each task takes the SAME fields as canvas_task_add (title, body, " +
       "linkedIds, assignee, epicId, requiresApproval) and enters state 'proposed' — a " +
-      "human approves each in the web UI before any session picks it up, unless the " +
+      "human approves each on the board before any session picks it up, unless the " +
       "canvas approval policy auto-approves it (e.g. tasks under an already-approved " +
       "epic; see canvas_epic_add).",
     inputSchema: {
@@ -3101,7 +3243,7 @@ const RAW_TOOLS = [
       "Everything a session needs to start work — no full state pull required.",
     inputSchema: {
       type: "object" as const,
-      properties: { id: { type: "string" } },
+      properties: { id: TASK_ID_PROP },
       required: ["id"],
     },
   },
@@ -3111,7 +3253,9 @@ const RAW_TOOLS = [
       "Claim an approved task before working on it (approved → executing) so other " +
       "sessions listing the queue skip it. The claim is ATOMIC: if another session " +
       "already claimed it you get { claimed: false, claimedBy } back — do not work " +
-      "on that task; call canvas_task_list (state 'approved') and pick the next one. " +
+      "on that task; call queue_next and pick the next ready task. That answer also carries " +
+      "`tapOut: true` with a `reason` and `next: \"queue_next\"`: it is the flag to branch on, and " +
+      "it means stop, not retry — a second claim on a task you already lost is refused outright. " +
       "The claimant name (agentName, or your agent_register identity) shows on the board. " +
       "Success returns { claimed: true, action } — action.ticketId (e.g. 'TDM-142') is " +
       "the task's ticket; include it in any commit messages for this work so the " +
@@ -3119,7 +3263,7 @@ const RAW_TOOLS = [
     inputSchema: {
       type: "object" as const,
       properties: {
-        id: { type: "string" },
+        id: TASK_ID_PROP,
         agentName: {
           type: "string",
           description:
@@ -3135,7 +3279,7 @@ const RAW_TOOLS = [
       "Finish a task with a result summary. Marks it 'done' (or 'failed' via status) — " +
       "auto-claims first if you skipped canvas_task_start. `result` should be a short " +
       "human-readable summary of what was done, INCLUDING the commit hash(es) of the " +
-      "work when commits were made; it shows in the web Tasks panel. Pass `links` with " +
+      "work when commits were made; it shows on the board. Pass `links` with " +
       "the GitHub URLs your work produced (commit / PR / branch) — the board resolves " +
       "them live, so the human sees whether the PR merged or the checks went red instead " +
       "of only your summary of it. If you passed an " +
@@ -3144,7 +3288,7 @@ const RAW_TOOLS = [
     inputSchema: {
       type: "object" as const,
       properties: {
-        id: { type: "string" },
+        id: TASK_ID_PROP,
         result: { type: "string", description: "What was done / where — include the commit hash(es), PR, or files touched." },
         links: {
           type: "array",
@@ -3171,12 +3315,16 @@ const RAW_TOOLS = [
 // The optional handle every non-connector tool accepts so the model can re-bind
 // a call to its canvas even after the hosted MCP connection resets. See the
 // model-carried binding note in handleTool and Gateway.exportSession.
+//
+// It says "when you connected to (or created) the canvas" rather than naming
+// canvas_create: this argument is on every facade tool, and canvas_create is a
+// CRUD-only tool the default manifest doesn't advertise (TDM-72).
 const SESSION_ARG = {
   type: "string",
   description:
-    "Session handle returned by canvas_connect / canvas_create. Pass it on EVERY call so this " +
-    "operation still targets your canvas even if the hosted MCP connection was reset between " +
-    "calls. Omit only if you have not connected yet.",
+    "Session handle returned by canvas_connect (or whichever call created this canvas). Pass it " +
+    "on EVERY call so this operation still targets your canvas even if the hosted MCP connection " +
+    "was reset between calls. Omit only if you have not connected yet.",
 } as const;
 
 const CONNECTORS = new Set(["canvas_connect", "canvas_create"]);

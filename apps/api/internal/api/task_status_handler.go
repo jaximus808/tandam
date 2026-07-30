@@ -50,6 +50,12 @@ type taskStatusBody struct {
 	Summary string   `json:"summary"`
 	Error   string   `json:"error"`
 	Links   []string `json:"links"`
+	// ClaimGeneration is the fencing token the caller holds (TDM-98): the
+	// `claim.generation` the "started" response handed back. Optional — a CI job
+	// that never reads it keeps working on the holder-identity check alone — but
+	// once presented it must be the live one, or the write is refused. See
+	// claim_fence.go.
+	ClaimGeneration int `json:"claimGeneration"`
 }
 
 // writeTaskStatusError writes this endpoint's machine-readable error shape:
@@ -125,7 +131,7 @@ func (h *Handler) ReportTaskStatus(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		writeTaskStatusError(w, http.StatusBadRequest, "invalid_id",
-			"the {id} in the path must be a task id (uuid) — GET /api/canvas/actions?type=task lists them", nil)
+			"the {id} in the path must be a task uuid or an existing ticket ref like TDM-21 — GET /api/canvas/actions?type=task lists both", nil)
 		return
 	}
 	var body taskStatusBody
@@ -140,19 +146,23 @@ func (h *Handler) ReportTaskStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// This endpoint ALWAYS has a claim identity (agent defaults to "external"), so
+	// every non-start report below is fenced — on identity, and on the generation
+	// too when the caller presents one.
+	caller := claimant{name: agent, generation: body.ClaimGeneration}
 	switch body.State {
 	case "started":
 		h.statusStarted(w, r, canvasID, id, agent, body.Summary, links)
 	case "progress":
-		h.statusProgress(w, r, canvasID, id, agent, body.Summary, links)
+		h.statusProgress(w, r, canvasID, id, caller, body.Summary, links)
 	case "completed":
-		h.statusTerminal(w, r, canvasID, id, agent, "done", body.Summary, links)
+		h.statusTerminal(w, r, canvasID, id, caller, "done", body.Summary, links)
 	case "failed":
 		reason := body.Error
 		if reason == "" {
 			reason = body.Summary
 		}
-		h.statusTerminal(w, r, canvasID, id, agent, "failed", reason, links)
+		h.statusTerminal(w, r, canvasID, id, caller, "failed", reason, links)
 	default:
 		writeTaskStatusError(w, http.StatusBadRequest, "invalid_state",
 			"state must be one of: started, progress, completed, failed", nil)
@@ -242,24 +252,26 @@ func (h *Handler) statusStarted(w http.ResponseWriter, r *http.Request, canvasID
 		}
 	}
 	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
-	writeJSON(w, http.StatusOK, map[string]any{"action": action})
+	// Same claim response shape as the MCP/web claim: the action plus the fencing
+	// token this lease minted, which every later report should present.
+	writeClaimed(w, action)
 }
 
 // statusProgress appends a progress entry (and any links) to the task payload.
 // It is deliberately NOT a state transition and fires no webhook: the task
 // hasn't moved, and a receiver subscribed to task.* must not be woken by a
 // heartbeat. Live viewers still see it — the state broadcast carries the payload.
-func (h *Handler) statusProgress(w http.ResponseWriter, r *http.Request, canvasID, id uuid.UUID, agent, note string, links []string) {
+func (h *Handler) statusProgress(w http.ResponseWriter, r *http.Request, canvasID, id uuid.UUID, caller claimant, note string, links []string) {
 	if note == "" && len(links) == 0 {
 		writeTaskStatusError(w, http.StatusBadRequest, "nothing_to_report",
 			"a progress report needs a summary, links, or both", nil)
 		return
 	}
-	current, ok := h.loadClaimedTask(w, r, canvasID, id, agent)
+	current, ok := h.loadClaimedTask(w, r, canvasID, id, caller)
 	if !ok {
 		return
 	}
-	if !h.applyStatusPayload(r, canvasID, id, current, agent, note, links) {
+	if !h.applyStatusPayload(r, canvasID, id, current, caller.name, note, links) {
 		writeError(w, http.StatusInternalServerError, "could not record progress")
 		return
 	}
@@ -271,7 +283,7 @@ func (h *Handler) statusProgress(w http.ResponseWriter, r *http.Request, canvasI
 	// "agent") extends nothing. Best-effort — the note has already landed, and
 	// answering 500 over a lease refresh would send a live worker round the
 	// retry loop for a report that succeeded.
-	if fresh, extended, err := h.store.TouchActionClaim(r.Context(), canvasID, id, agent); err != nil {
+	if fresh, extended, err := h.store.TouchActionClaim(r.Context(), canvasID, id, caller.name); err != nil {
 		log.Printf("task status %s: progress recorded but extending the claim lease failed: %v", id, err)
 	} else if extended {
 		current.ClaimedAt = fresh.ClaimedAt
@@ -284,7 +296,7 @@ func (h *Handler) statusProgress(w http.ResponseWriter, r *http.Request, canvasI
 // function the MCP/web PATCH uses — and fires task.completed exactly where
 // UpdateActionState does. `to` is the stored state ('done' | 'failed'); the
 // caller's vocabulary was translated one level up.
-func (h *Handler) statusTerminal(w http.ResponseWriter, r *http.Request, canvasID, id uuid.UUID, agent, to, summary string, links []string) {
+func (h *Handler) statusTerminal(w http.ResponseWriter, r *http.Request, canvasID, id uuid.UUID, caller claimant, to, summary string, links []string) {
 	current, err := h.store.GetAction(r.Context(), canvasID, id)
 	if err != nil {
 		writeTaskStatusError(w, http.StatusNotFound, "task_not_found",
@@ -298,7 +310,7 @@ func (h *Handler) statusTerminal(w http.ResponseWriter, r *http.Request, canvasI
 		writeJSON(w, http.StatusOK, map[string]any{"action": current})
 		return
 	}
-	if !h.guardClaimedTask(w, current, agent) {
+	if !h.guardClaimedTask(w, current, caller) {
 		return
 	}
 	patch := store.ActionStatePatch{}
@@ -314,7 +326,7 @@ func (h *Handler) statusTerminal(w http.ResponseWriter, r *http.Request, canvasI
 	// payload) — one round trip, and no window where a task is done but its
 	// evidence hasn't landed yet.
 	if len(links) > 0 {
-		merged, changed, err := mergeTaskStatusPayload(current.Payload, agent, "", links, time.Now().UTC())
+		merged, changed, err := mergeTaskStatusPayload(current.Payload, caller.name, "", links, time.Now().UTC())
 		if err != nil {
 			writeTaskStatusError(w, http.StatusBadRequest, "invalid_payload", err.Error(), nil)
 			return
@@ -323,7 +335,7 @@ func (h *Handler) statusTerminal(w http.ResponseWriter, r *http.Request, canvasI
 			patch.Payload = merged
 		}
 	}
-	fresh, moved := h.transitionAction(w, r, to, patch)
+	fresh, moved := h.transitionAction(w, r, to, patch, caller)
 	if moved {
 		h.emitTaskEvent(canvasID, webhooks.EventTaskCompleted, fresh)
 	}
@@ -332,27 +344,29 @@ func (h *Handler) statusTerminal(w http.ResponseWriter, r *http.Request, canvasI
 // loadClaimedTask reads the task and enforces "executing, and mine" — the two
 // preconditions every non-start report has. Writes the error and returns
 // ok=false on any failure.
-func (h *Handler) loadClaimedTask(w http.ResponseWriter, r *http.Request, canvasID, id uuid.UUID, agent string) (*store.Action, bool) {
+func (h *Handler) loadClaimedTask(w http.ResponseWriter, r *http.Request, canvasID, id uuid.UUID, caller claimant) (*store.Action, bool) {
 	current, err := h.store.GetAction(r.Context(), canvasID, id)
 	if err != nil {
 		writeTaskStatusError(w, http.StatusNotFound, "task_not_found",
 			"no task with that id on this canvas", nil)
 		return nil, false
 	}
-	if !h.guardClaimedTask(w, current, agent) {
+	if !h.guardClaimedTask(w, current, caller) {
 		return nil, false
 	}
 	return current, true
 }
 
-// guardClaimedTask enforces that a task is executing and held by this agent.
+// guardClaimedTask enforces the two preconditions every non-start report has:
+// the task is executing, and the caller still holds the claim.
 //
-// The claim rule mirrors UpdateActionState's: a holder of "" or the generic
-// "agent" is not an exclusive identity and doesn't block anyone (that's the
-// anonymous web/MCP path), but a NAMED holder does. Since this endpoint always
-// resolves an agent name (defaulting to "external"), a CI job can never finish
-// another named member's work.
-func (h *Handler) guardClaimedTask(w http.ResponseWriter, current *store.Action, agent string) bool {
+// The state checks are this endpoint's own (they answer in its error vocabulary);
+// the ownership question is delegated to the shared fence, so a CI curl, an MCP
+// task_complete and the board's Done button all refuse for the same reasons with
+// the same body. Since this endpoint always resolves an agent name (defaulting to
+// "external"), the fence is always engaged here — a CI job can never finish
+// another named member's work, nor its own after its lease was reclaimed.
+func (h *Handler) guardClaimedTask(w http.ResponseWriter, current *store.Action, caller claimant) bool {
 	if current.Type != "task" {
 		writeTaskStatusError(w, http.StatusBadRequest, "not_a_task",
 			"that id names a "+current.Type+", not a task", nil)
@@ -364,13 +378,7 @@ func (h *Handler) guardClaimedTask(w http.ResponseWriter, current *store.Action,
 			map[string]string{"state": current.State})
 		return false
 	}
-	if holder := rivalClaimHolder(current, agent); holder != "" {
-		writeTaskStatusError(w, http.StatusConflict, "claimed_by_other",
-			"this task is claimed by another fleet member — it is not yours to report on",
-			map[string]string{"claimedBy": holder})
-		return false
-	}
-	return true
+	return h.fenceTaskWriteOrFail(w, current, caller)
 }
 
 // rivalClaimHolder names the agent holding an exclusive claim that is NOT

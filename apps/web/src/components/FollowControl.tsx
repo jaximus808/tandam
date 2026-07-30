@@ -68,7 +68,7 @@ export default function FollowControl({ agents, prefs, onChange, paused, pending
           !prefs.on
             ? "Agent changes happen quietly — turn following on to be taken to them"
             : paused
-              ? "Following is paused while you're typing — it resumes a few seconds after you stop"
+              ? "Following is paused while you're editing — it resumes when you click away"
               : all
                 ? "You're following every agent: their changes bring you to the board or the document they touch"
                 : `You're following ${prefs.agents!.join(", ")}`
@@ -99,7 +99,7 @@ export default function FollowControl({ agents, prefs, onChange, paused, pending
         <span className="hidden lg:inline">{paused && prefs.on ? "Paused" : followSummary(prefs)}</span>
         {pending > 0 && (
           <span
-            aria-label={`${pending} agent moves while you were typing`}
+            aria-label={`${pending} agent moves while you were editing`}
             className="flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-agent px-1 text-[10px] font-semibold leading-none text-white tabular-nums"
           >
             {pending > 9 ? "9+" : pending}
@@ -145,7 +145,7 @@ export default function FollowControl({ agents, prefs, onChange, paused, pending
             {prefs.on && paused && (
               <p className="flex items-center gap-1.5 border-b border-ink/10 bg-ink/[0.02] px-3 py-1.5 text-[11.5px] text-ink/60">
                 <PauseCircle size={12} className="shrink-0" />
-                Paused while you're typing
+                Paused while you're editing
                 {pending > 0 && ` — ${pending} move${pending === 1 ? "" : "s"} waiting`}
               </p>
             )}

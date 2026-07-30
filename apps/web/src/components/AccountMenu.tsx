@@ -162,7 +162,9 @@ export default function AccountMenu({
     <div ref={wrapRef} className="relative shrink-0">
       <button
         onClick={() => setMenuOpen((o) => !o)}
-        className="relative flex h-8 w-8 items-center justify-center rounded-full overflow-hidden bg-accent text-white text-sm font-semibold transition hover:ring-2 hover:ring-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        // h-9 below sm, matching the header's other icon buttons — this avatar
+        // is the last control in a tight row of them on a phone.
+        className="relative flex h-9 w-9 items-center justify-center rounded-full overflow-hidden bg-accent text-white text-sm font-semibold transition hover:ring-2 hover:ring-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-8 sm:w-8"
         title={unread > 0 ? `${unread} new notification${unread === 1 ? "" : "s"}` : user.email}
         aria-haspopup="menu"
         aria-expanded={menuOpen}

@@ -6,7 +6,7 @@ a live board of who's doing what, and every task traceable to a commit. The spec
 in git; the coordination churn moves out of TODO.md into Tandem.
 
 ## Mechanism (what only this product proves)
-Atomic task claiming over MCP: two sessions race `canvas_task_start`, exactly one wins,
+Atomic task claiming over MCP: two sessions race `task_claim`, exactly one wins,
 the loser is told who beat it and takes the next task. Epics gate batches with ONE human
 approval (`policy:epic` provenance). Tickets (TDM-n) tie tasks to commits both directions.
 

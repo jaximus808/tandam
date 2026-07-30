@@ -87,6 +87,21 @@ export function mintClaimantId(): string {
   return `session-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/**
+ * Statuses that mean "this is an OUTCOME to route on", not a failure to throw.
+ *
+ * 409 is what the API answers contention with today (already_claimed /
+ * claimed_by_other / not_executing). 412 is here on purpose and in advance:
+ * claim-generation fencing (TDM-98) is landing in parallel, and Precondition
+ * Failed is the natural status for "your claim generation is stale". Nothing
+ * returns 412 today, so accepting it costs nothing — and it means a fenced write
+ * reaches the tap-out contract as data whichever status that work picks, instead
+ * of surfacing as a thrown protocol error the moment it deploys.
+ */
+function isConflictStatus(status: number): boolean {
+  return status === 409 || status === 412;
+}
+
 export class Gateway {
   private config: GatewayConfig;
   private session: CanvasSession | null = null;
@@ -437,7 +452,7 @@ export class Gateway {
       headers: this.authHeaders(),
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
-    if (res.status === 409) return { conflict: (await res.json()) as C };
+    if (isConflictStatus(res.status)) return { conflict: (await res.json()) as C };
     await this.assertOk("POST", path, res);
     return { data: (await res.json()) as T };
   }
@@ -466,7 +481,7 @@ export class Gateway {
       headers: this.authHeaders(),
       body: JSON.stringify(body),
     });
-    if (res.status === 409) return { conflict: (await res.json()) as C };
+    if (isConflictStatus(res.status)) return { conflict: (await res.json()) as C };
     await this.assertOk("PATCH", path, res);
     return { data: (await res.json()) as T };
   }

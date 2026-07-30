@@ -246,6 +246,25 @@ func (f *eventFakeStore) ReleaseAction(_ context.Context, _ uuid.UUID, id uuid.U
 	return a, 1, nil
 }
 
+// AppendActionAudit is reached by every human board move (recordMove), which
+// includes the release/requeue transitions this file asserts fire NO webhook.
+// Modelled on the real store method — read, append through the REAL
+// store.AppendAudit, write back — so the fake can't drift from the rule.
+func (f *eventFakeStore) AppendActionAudit(_ context.Context, _ uuid.UUID, id uuid.UUID, entry store.ContentAudit) (json.RawMessage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	a, ok := f.actions[id]
+	if !ok {
+		return nil, store.ErrActionNotFound
+	}
+	next, err := store.AppendAudit(a.Payload, entry)
+	if err != nil {
+		return nil, err
+	}
+	a.Payload = next
+	return next, nil
+}
+
 func (f *eventFakeStore) RequeueAction(_ context.Context, _ uuid.UUID, id uuid.UUID) (*store.Action, int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
