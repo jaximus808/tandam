@@ -73,6 +73,31 @@ function rawOf(name: string): RawTool {
   return raw;
 }
 
+/**
+ * task_complete's schema is the CRUD one PLUS `epicSummary` (TDM-93) — the
+ * epic-level write path. Added here rather than on canvas_task_complete because
+ * the facade composes it: the CRUD tool finishes the task and knows nothing
+ * about the batch it belonged to.
+ */
+function withEpicSummaryArg(schema: RawTool["inputSchema"]) {
+  return {
+    ...schema,
+    properties: {
+      ...(schema as { properties?: Record<string, unknown> }).properties,
+      epicSummary: {
+        type: "string",
+        description:
+          "What the whole EPIC achieved, when this completion finishes the batch — the epic-level " +
+          "counterpart of `result`. One short paragraph a human can read instead of opening every " +
+          "ticket: what shipped, what changed, what was decided. It is stored on the epic (and " +
+          "shown on the board above its tickets), NOT on this task, and writing it does not " +
+          "disturb the epic's approval. Omit it when tasks in the epic are still open — the answer " +
+          "tells you how many are left. Rewriting an existing summary replaces it.",
+      },
+    },
+  };
+}
+
 // The one line every facade description repeats, because the handle is the
 // single thing a session must carry and the most common cause of a dead call.
 const SESSION_CONVENTION =
@@ -124,6 +149,125 @@ function countByState(tasks: TaskRow[]): Record<string, number> {
   const counts: Record<string, number> = {};
   for (const t of tasks) counts[t.state] = (counts[t.state] ?? 0) + 1;
   return counts;
+}
+
+// ── Epic rollups (TDM-93) ────────────────────────────────────────────────────
+
+/**
+ * What GET /api/canvas/epics answers: every batch with its SUMMARY (what it
+ * achieved) and its server-derived rollup. Composed API-side so a board-level
+ * question costs one round trip instead of one read per ticket.
+ */
+type EpicRollup = {
+  id: string;
+  title: string;
+  state: string;
+  summary?: string;
+  summaryBy?: string;
+  summaryAt?: string;
+  tasks: { total: number; byState: Record<string, number> };
+  firstActivity?: string;
+  lastActivity?: string;
+  done: Array<{ id: string; ticketId?: string; title: string; state: string; result?: string }>;
+  drained: boolean;
+  /** Drained with nobody saying what it delivered — the story is about to be lost. */
+  summaryNeeded: boolean;
+  truncated?: number;
+};
+
+/**
+ * Read the rollups, or null on an API deployed before the endpoint existed
+ * (same getIfAvailable contract context_get uses for /api/canvas/context).
+ */
+async function fetchEpicRollups(gateway: Gateway): Promise<EpicRollup[] | null> {
+  try {
+    const res = await gateway.getIfAvailable<{ epics?: EpicRollup[] }>("/api/canvas/epics");
+    return res?.epics ?? null;
+  } catch {
+    // SUPPLEMENTARY, so it fails soft. Every caller of this asks its real
+    // question through another endpoint (the board census, a task read, a
+    // completion) and uses the rollup to enrich the answer — so a rollup that
+    // 500s, times out, or isn't deployed must degrade the answer, never replace
+    // it with an error. A completion in particular has already written to the
+    // board by the time we get here: throwing would report a finished task as
+    // failed.
+    return null;
+  }
+}
+
+/** One rollup by id, or null when the endpoint or the epic is absent. */
+async function fetchEpicRollup(gateway: Gateway, epicId: string): Promise<EpicRollup | null> {
+  const all = await fetchEpicRollups(gateway);
+  return all?.find((e) => e.id === epicId) ?? null;
+}
+
+/**
+ * Terminal states, mirroring the API's epicTerminalStates (epic_rollup.go) and
+ * the web's TERMINAL_STATES. Duplicated across the three surfaces because each
+ * needs it locally; they must agree on WHICH states are over, or the three will
+ * disagree about whether a batch is finished.
+ */
+const EPIC_TERMINAL_STATES = ["done", "failed", "rejected"] as const;
+
+/** How many of an epic's tasks will never move again on their own. */
+function terminalCount(e: EpicRollup): number {
+  return EPIC_TERMINAL_STATES.reduce((n, s) => n + (e.tasks.byState[s] ?? 0), 0);
+}
+
+/**
+ * The compact epic block a task-shaped answer carries: what the batch is, what
+ * it achieved so far, and where it stands. Deliberately drops `done[]` — a
+ * worker finishing ONE ticket doesn't need forty of its siblings quoted back;
+ * board_status is where the full account belongs.
+ */
+function epicSnapshot(e: EpicRollup) {
+  return {
+    id: e.id,
+    title: e.title,
+    state: e.state,
+    ...(e.summary ? { summary: e.summary, ...(e.summaryBy ? { summaryBy: e.summaryBy } : {}) } : {}),
+    tasks: e.tasks,
+    drained: e.drained,
+    summaryNeeded: e.summaryNeeded,
+  };
+}
+
+/**
+ * Merge a summary into an epic's payload and PATCH it back.
+ *
+ * A payload PATCH REPLACES the payload, so the existing fields have to be read
+ * and carried — the same read-merge-write task_amend does. Safe against the
+ * approval gate by construction: `summary` is not a content field (title/body),
+ * so this write does NOT revert an approved epic to 'proposed', which is the
+ * only reason an agent can be trusted with it at all.
+ *
+ * summaryBy / summaryAt are deliberately NOT sent: the API stamps them from
+ * request provenance and discards anything a caller puts there.
+ */
+async function writeEpicSummary(
+  gateway: Gateway,
+  epicId: string,
+  summary: string
+): Promise<{ title: string; state: string }> {
+  const { action } = (await gateway.get(`/api/canvas/actions/${encodeURIComponent(epicId)}`)) as {
+    action?: { type?: string; state?: string; payload?: Record<string, unknown> };
+  };
+  if (!action) throw new Error(`No epic "${epicId}" found on this canvas.`);
+  if (action.type !== "epic") {
+    throw new Error(
+      `"${epicId}" is a ${action.type ?? "unknown"}, not an epic — epicId must name an epic ` +
+        `(board_status lists them). For a TASK's outcome use task_complete's \`result\`.`
+    );
+  }
+  const payload: Record<string, unknown> = { ...(action.payload ?? {}), summary };
+  await gateway.patch(`/api/canvas/actions/${encodeURIComponent(epicId)}`, {
+    payload,
+    agentName: gateway.claimant(),
+  });
+  return {
+    title: typeof action.payload?.title === "string" ? action.payload.title : "",
+    state: action.state ?? "",
+  };
 }
 
 // ── In-flight reporting (TDM-95) ─────────────────────────────────────────────
@@ -195,7 +339,6 @@ function inFlightRow(task: TaskRow) {
     ...(progress ? { lastProgress: progress } : {}),
   };
 }
-
 
 const BRIEFING_NAMES_PER_KIND = 20;
 
@@ -671,9 +814,36 @@ export async function handleFacadeTool(
       };
     }
 
-    case "task_get":
+    case "task_get": {
       requireTaskId(args);
-      return handleTool(gateway, "canvas_task_get", args);
+      const got = (await handleTool(gateway, "canvas_task_get", args)) as {
+        epic?: { id?: string };
+      };
+      // The API hydrates {id, title, state} for the task's epic. Deepen it into
+      // the batch's rollup (TDM-93) so the worker learns, BEFORE it starts, how
+      // much of the batch is left and whether finishing this task finishes the
+      // epic — which is the moment to say what the whole batch achieved. Told
+      // only afterwards, the answer arrives when there is no call left to put it
+      // on. One extra read, and only for a task that HAS an epic.
+      const epicId = typeof got?.epic?.id === "string" ? got.epic.id : "";
+      if (!epicId) return got;
+      const rollup = await fetchEpicRollup(gateway, epicId);
+      if (!rollup) return got;
+      const open = rollup.tasks.total - terminalCount(rollup);
+      return {
+        ...got,
+        epic: { ...got.epic, ...epicSnapshot(rollup), openTasks: open },
+        ...(open <= 1
+          ? {
+              _epic:
+                `This is the LAST unfinished task in "${rollup.title}". When you complete it, pass ` +
+                `\`epicSummary\` to task_complete — a short account of what the whole BATCH achieved, ` +
+                `not just this ticket. Nothing else records that, and after this completion there is ` +
+                `no call left to put it on.`,
+            }
+          : {}),
+      };
+    }
 
     case "task_claim":
       requireTaskId(args);
@@ -793,9 +963,84 @@ export async function handleFacadeTool(
       };
     }
 
-    case "task_complete":
+    case "task_complete": {
       requireTaskId(args);
-      return handleTool(gateway, "canvas_task_complete", args);
+      // `epicSummary` is the EPIC-level write path (TDM-93), and it is an
+      // argument here rather than a tool of its own on purpose: the moment an
+      // agent knows what a batch achieved is the moment it finishes the last
+      // task in it, and a write that costs a second call at that moment is a
+      // write that doesn't happen. So the account of the batch rides the same
+      // call as the account of the ticket.
+      const epicSummary = typeof args.epicSummary === "string" ? args.epicSummary.trim() : "";
+      const { epicSummary: _omit, ...forward } = args;
+      const done = (await handleTool(gateway, "canvas_task_complete", forward)) as
+        | { completed?: boolean; action?: { payload?: { epicId?: string } } }
+        | undefined;
+
+      // A refused completion (tap-out: someone else holds it, our lease was
+      // fenced, the work is already over) is not ours to summarize. Return it
+      // untouched — the model must route on that shape, not read past it.
+      if (!done || done.completed === false) return done;
+
+      const epicId =
+        typeof done.action?.payload?.epicId === "string" ? done.action.payload.epicId : "";
+      if (!epicId) {
+        if (epicSummary) {
+          // Honesty over silence: the caller wrote a batch summary and there is
+          // no batch. Saying nothing would let it believe the write landed.
+          return {
+            ...done,
+            epicSummary: {
+              written: false,
+              reason: "This task belongs to no epic, so there was no batch to summarize.",
+            },
+          };
+        }
+        return done;
+      }
+
+      let written: Record<string, unknown> | undefined;
+      if (epicSummary) {
+        try {
+          const epic = await writeEpicSummary(gateway, epicId, epicSummary);
+          written = { written: true, epicId, title: epic.title };
+        } catch (err) {
+          // The TASK is done — that write already landed and must not be
+          // reported as failed because the summary didn't. Degrade loudly.
+          written = {
+            written: false,
+            epicId,
+            error: err instanceof Error ? err.message : String(err),
+            note: "The task completed; only the epic summary failed to save.",
+          };
+        }
+      }
+
+      const rollup = await fetchEpicRollup(gateway, epicId);
+      if (!rollup) return { ...done, ...(written ? { epicSummary: written } : {}) };
+      const open = rollup.tasks.total - terminalCount(rollup);
+      return {
+        ...done,
+        ...(written ? { epicSummary: written } : {}),
+        epic: { ...epicSnapshot(rollup), openTasks: open },
+        ...(rollup.summaryNeeded
+          ? {
+              _epic:
+                `"${rollup.title}" has now DRAINED — every task in it is finished — and nothing ` +
+                `records what the batch achieved. You still hold the context: if any work in this ` +
+                `epic is yours, say so in your report to the human so they can write it on the ` +
+                `board, and pass \`epicSummary\` on your next task_complete in this epic if one is ` +
+                `left. Reading it back later costs a read of every ticket.`,
+            }
+          : open > 0
+            ? {
+                _epic:
+                  `${open} task(s) left in "${rollup.title}". Whoever finishes the last one should ` +
+                  `pass \`epicSummary\` to task_complete to record what the batch achieved.`,
+              }
+            : {}),
+      };
+    }
 
     case "task_propose": {
       // One tool, both shapes: a single task, or a whole plan in one round trip.
@@ -1027,22 +1272,42 @@ export async function handleFacadeTool(
     case "board_status": {
       // Deliberately NOT canvas_state_read: the whole point is a board-shaped
       // answer (states, epics, who holds what) without pulling the canvas.
-      const [tasks, epicsRes] = await Promise.all([
+      //
+      // The epic half comes from the server's ROLLUP endpoint (TDM-93) when the
+      // API has it: each batch's persisted `summary` — what it ACHIEVED — plus
+      // counts, the activity window, and one line per finished ticket. That is
+      // the answer this tool could not give before: counting task states says
+      // how MUCH happened in an epic and nothing about what, so "what did E5
+      // deliver?" meant opening all six of its tickets.
+      const [tasks, rollups, epicsRes] = await Promise.all([
         listAgentTasks(gateway),
+        fetchEpicRollups(gateway),
+        // The fallback list, for an API deployed before /api/canvas/epics
+        // existed. Read in the same wave so the fallback costs no extra round
+        // trip when the rollup turns out to be absent.
         gateway.get("/api/canvas/actions?type=epic") as Promise<{
           actions?: Array<{ id: string; state: string; payload?: { title?: string } }>;
         }>,
       ]);
 
-      const epics = (epicsRes.actions ?? []).map((e) => {
-        const mine = tasks.filter((t) => t.payload?.epicId === e.id);
-        return {
-          id: e.id,
-          title: e.payload?.title ?? "",
-          state: e.state,
-          tasks: countByState(mine),
-        };
-      });
+      const epics =
+        rollups ??
+        (epicsRes.actions ?? []).map((e) => {
+          const mine = tasks.filter((t) => t.payload?.epicId === e.id);
+          return {
+            id: e.id,
+            title: e.payload?.title ?? "",
+            state: e.state,
+            tasks: countByState(mine),
+          };
+        });
+
+      // Batches that drained with nobody recording what they delivered. Named
+      // rather than left for the reader to notice: an unwritten summary only
+      // ever gets written while somebody still remembers the work.
+      const unsummarized = (rollups ?? [])
+        .filter((e) => e.summaryNeeded)
+        .map((e) => ({ id: e.id, title: e.title, doneTasks: e.tasks.byState.done ?? 0 }));
 
       // Each in-flight row is a REPORT line, not just a name (TDM-95): ticket,
       // holder, how long they have held it, whether the claim outlived its lease,
@@ -1058,6 +1323,7 @@ export async function handleFacadeTool(
         inFlight,
         epics,
         unassignedTasks: tasks.filter((t) => !t.payload?.epicId).length,
+        ...(unsummarized.length > 0 ? { unsummarizedEpics: unsummarized } : {}),
         ...(stale.length > 0
           ? {
               _staleClaims:
@@ -1065,6 +1331,15 @@ export async function handleFacadeTool(
                 `reported on them for over ${DEFAULT_CLAIM_LEASE_MINUTES} minutes, so their ` +
                 `holder has probably gone dark and the task is reclaimable. Report them as at ` +
                 `risk — do NOT complete them on the holder's behalf.`,
+            }
+          : {}),
+        ...(unsummarized.length > 0
+          ? {
+              _unsummarizedEpics:
+                `${unsummarized.length} epic(s) have DRAINED with nothing recording what the batch ` +
+                `achieved. Report them: the account only gets written while someone still remembers ` +
+                `the work. An agent finishing remaining work in one passes \`epicSummary\` to ` +
+                `task_complete; otherwise the human writes it on the board.`,
             }
           : {}),
         _next:
@@ -1245,8 +1520,12 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
       "request / branch). The board resolves those live — merged, open, checks failing — so the " +
       "human reads what HAPPENED, not just what you said. " +
       "Failed? pass status:'failed' with `error` rather than leaving it hanging. " +
-      "Complete under the SAME identity you claimed with.",
-    inputSchema: schemaOf("canvas_task_complete"),
+      "Complete under the SAME identity you claimed with. " +
+      "FINISHING A BATCH: if this is the last unfinished task in its epic (task_get says so, and " +
+      "the answer here reports what is left), also pass `epicSummary` — what the whole BATCH " +
+      "achieved. A task's `result` is per-ticket; without an epic summary the only way to learn " +
+      "what an epic delivered is to open every ticket in it.",
+    inputSchema: withEpicSummaryArg(schemaOf("canvas_task_complete")),
   },
   {
     name: "task_propose",
@@ -1443,7 +1722,10 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
     name: "board_status",
     description:
       "A compact read of the BOARD, not the canvas: task counts by state, epics with their approval " +
-      "state and per-epic task counts, and every in-flight task as a report line — ticketId, " +
+      "state, per-epic task counts and — the batch-level answer — each epic's `summary` of what it " +
+      "ACHIEVED plus one line per finished ticket, so 'what did E5 deliver?' costs this one call " +
+      "instead of opening all six of its tasks. An epic marked `summaryNeeded` has drained with " +
+      "nobody recording that. And every in-flight task as a report line — ticketId, " +
       "holder, how many minutes they have held the claim, their last progress note, and " +
       "`staleClaim: true` once nothing has been reported for longer than the claim lease (~15 min), " +
       "meaning the holder has probably gone dark. THIS IS THE ORCHESTRATOR'S REPORT: it is enough " +

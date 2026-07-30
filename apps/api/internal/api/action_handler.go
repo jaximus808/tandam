@@ -129,8 +129,8 @@ func canonicalizeTaskPayload(raw json.RawMessage) (json.RawMessage, error) {
 }
 
 // canonicalizeEpicPayload validates an epic payload: title is required. An epic
-// is a batch of related work ({title, body, linkedIds[]}); tasks reference it
-// via their payload epicId. Unknown fields pass through untouched.
+// is a batch of related work ({title, body, linkedIds[], summary}); tasks
+// reference it via their payload epicId. Unknown fields pass through untouched.
 func canonicalizeEpicPayload(raw json.RawMessage) (json.RawMessage, error) {
 	var p map[string]any
 	if err := json.Unmarshal(raw, &p); err != nil {
@@ -140,6 +140,10 @@ func canonicalizeEpicPayload(raw json.RawMessage) (json.RawMessage, error) {
 	if title == "" {
 		return nil, fmt.Errorf("epic payload requires a non-empty title")
 	}
+	// `summary` — what this batch achieved (TDM-93). Trimmed and capped here;
+	// its provenance stamp is applied against the STORED row by
+	// stampEpicSummary, which is the only writer of summaryBy / summaryAt.
+	normalizeEpicSummary(p)
 	return json.Marshal(p)
 }
 
@@ -272,7 +276,14 @@ func (h *Handler) ProposeAction(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		body.Payload = canonical
+		// An epic born WITH a summary still gets a server stamp, and one born
+		// with a forged summaryBy/summaryAt is stripped of it — same rule as the
+		// PATCH path, against an empty stored payload (TDM-93).
+		author := ""
+		if a := AuthorFromCtx(r.Context()); a != nil {
+			author = *a
+		}
+		body.Payload = stampEpicSummary(nil, canonical, author, time.Now().UTC())
 	}
 	action := &store.Action{
 		ID: uuid.New(), Kind: "action",
@@ -396,7 +407,11 @@ func (h *Handler) ProposeActionsBatch(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
 			}
-			item.Payload = canonical
+			stamper := ""
+			if author != nil {
+				stamper = *author
+			}
+			item.Payload = stampEpicSummary(nil, canonical, stamper, time.Now().UTC())
 		}
 		action := &store.Action{
 			ID: uuid.New(), Kind: "action",
@@ -1188,6 +1203,13 @@ func (h *Handler) updateActionPayload(w http.ResponseWriter, r *http.Request, pa
 	if !h.fenceTaskWriteOrFail(w, r, current, caller) {
 		return
 	}
+	// The actor is the SERVER's conclusion about who is calling (E4.1), never
+	// anything the body said — an audit trail whose actor is self-reported is
+	// decoration. nil (no Provenance middleware on the route) records "unknown".
+	actor := ""
+	if a := AuthorFromCtx(r.Context()); a != nil {
+		actor = *a
+	}
 	if current.Type == "task" {
 		canonical, err := canonicalizeTaskPayload(payload)
 		if err != nil {
@@ -1202,14 +1224,11 @@ func (h *Handler) updateActionPayload(w http.ResponseWriter, r *http.Request, pa
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		payload = canonical
-	}
-	// The actor is the SERVER's conclusion about who is calling (E4.1), never
-	// anything the body said — an audit trail whose actor is self-reported is
-	// decoration. nil (no Provenance middleware on the route) records "unknown".
-	actor := ""
-	if a := AuthorFromCtx(r.Context()); a != nil {
-		actor = *a
+		// Stamp the summary's provenance against the STORED row (TDM-93): a
+		// changed summary gets this caller and this instant, an unchanged one
+		// keeps the stamp it already had, and summaryBy/summaryAt a caller sent
+		// are discarded either way.
+		payload = stampEpicSummary(current.Payload, canonical, actor, time.Now().UTC())
 	}
 	outcome, err := h.store.UpdateActionPayload(r.Context(), canvasID, id, payload, actor)
 	if err != nil {

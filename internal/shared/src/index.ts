@@ -329,6 +329,20 @@ export interface EpicPayload {
   linkedIds?: EntityId[];
   /** Server-owned edit log — see ContentAuditEntry. Never write this. */
   audit?: ContentAuditEntry[];
+  // What this batch ACHIEVED (TDM-93) — the epic-level answer to the question a
+  // task's `result` answers per ticket. Written by a human in the board's epic
+  // panel, or by an agent via task_complete's `epicSummary` when it finishes the
+  // last task in the batch.
+  //
+  // NOT content: `summary` is outside the approval gate's title/body pair, so
+  // writing one to an approved epic is a silent bookkeeping write and does NOT
+  // revert the epic (which would revoke the approval its tasks inherit).
+  summary?: string;
+  /** Server-stamped provenance for `summary` ("human" | "agent:<name>"), set
+   *  only when the text actually changes. Never write these two — the API
+   *  discards a caller's value and re-derives them. */
+  summaryBy?: string;
+  summaryAt?: string;
 }
 
 export interface Action {

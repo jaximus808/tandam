@@ -800,6 +800,10 @@ export default function TaskBoard({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
+  // Whether the scoped epic's finished-ticket rollup is expanded (TDM-93).
+  // Collapsed by default: the summary above it is the answer, and the receipts
+  // are for when you want to check it.
+  const [achievedOpen, setAchievedOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // The "New task" composer (toolbar button / empty-state CTA) — humans author
   // tasks HERE; the Board is the one home for task work.
@@ -1645,6 +1649,18 @@ export default function TaskBoard({
             {plan.goalTitle}
           </div>
         )}
+        {/* What it achieved, clamped to two lines (TDM-93). The sidebar is a
+            timeline of batches, and for a finished one the interesting fact is
+            the outcome, not the ticket count — this is where you notice it
+            without selecting the epic. The full text is in the scoped header. */}
+        {(p.summary ?? "").trim() && (
+          <div
+            className={`mt-1 line-clamp-2 pl-[18px] leading-snug text-ink/55 ${T_HEAD}`}
+            title={p.summary}
+          >
+            {p.summary}
+          </div>
+        )}
         <ProgressBar done={done} working={working} total={total} className="mt-1.5 h-1.5" />
         <div className={`mt-1 flex items-center justify-between font-code text-ink/50 ${T_META}`}>
           <span>
@@ -1654,6 +1670,110 @@ export default function TaskBoard({
         </div>
         {/* The sidebar doubles as the approval inbox. */}
         {renderApproveReject(e, "Approve epic")}
+      </div>
+    );
+  }
+
+  /* ── "What this batch achieved" (TDM-93) ───────────────────────────────────
+     A task says what it did in its `result`; an epic said nothing at all, so
+     the batch-level answer only existed as six ticket results nobody had read
+     together. This is that answer, above the tickets rather than inside them:
+     the epic's own summary first, then the ticket-by-ticket rollup COLLAPSED
+     underneath — the prose is what you want on arrival, the receipts are what
+     you open when you don't believe it.
+
+     The rollup is derived here from the board's own state (the same tasks the
+     kanban is drawing), so it stays live with the socket and costs no fetch.
+     The API's /api/canvas/epics computes the same shape for agents. */
+  function renderAchieved(e: Action) {
+    const p = epicPayload(e);
+    const { list } = epicStats(e);
+    // done AND failed: "we tried and it broke" is part of what a batch
+    // achieved, and hiding it would make this panel flattering rather than
+    // honest. Rejected tasks are excluded — nobody worked them.
+    const finished = list
+      .filter((t) => t.state === "done" || t.state === "failed")
+      .sort((a, b) => (a.ticket ?? 0) - (b.ticket ?? 0));
+    const summary = (p.summary ?? "").trim();
+    // Nothing has finished and nobody has written anything: an empty
+    // "achieved" panel on a batch that hasn't started is pure chrome.
+    if (!summary && finished.length === 0) return null;
+
+    return (
+      <div className="mt-2 rounded-md border border-ink/10 bg-ink/[0.02] px-2.5 py-2">
+        {summary ? (
+          <>
+            <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink/45">
+              What this batch achieved
+            </div>
+            <p className="mt-1 whitespace-pre-wrap text-[12.5px] leading-relaxed text-ink/75">
+              {summary}
+            </p>
+            {(p.summaryBy || p.summaryAt) && (
+              <div className="mt-1 font-code text-[10.5px] text-ink/40">
+                {p.summaryBy ?? "unknown"}
+                {p.summaryAt && (
+                  <span title={fullDate(p.summaryAt)}> · {ageOf(p.summaryAt)} ago</span>
+                )}
+              </div>
+            )}
+          </>
+        ) : (
+          // The prompt IS the write path's discoverability: a summary nobody is
+          // asked for stays unwritten, and this is the moment it's cheapest to
+          // write (the work just landed and is still on screen).
+          <button
+            onClick={() => setDetailId(e.id)}
+            className="text-left text-[12px] text-ink/50 transition-colors hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          >
+            {finished.length} ticket{finished.length === 1 ? "" : "s"} finished and nothing says
+            what the batch achieved — write it
+          </button>
+        )}
+
+        {finished.length > 0 && (
+          <>
+            <button
+              onClick={() => setAchievedOpen((v) => !v)}
+              aria-expanded={achievedOpen}
+              className={`mt-1.5 inline-flex items-center gap-1 rounded-[3px] font-code text-ink/45 transition-colors hover:text-ink/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${T_META}`}
+            >
+              <ChevronDown
+                size={11}
+                className={`shrink-0 transition-transform ${achievedOpen ? "" : "-rotate-90"}`}
+              />
+              {finished.length} finished ticket{finished.length === 1 ? "" : "s"}
+            </button>
+            {achievedOpen && (
+              <ul className="mt-1 flex flex-col gap-1 border-l border-ink/10 pl-2">
+                {finished.map((t) => {
+                  // One line each — the headline of the result, not the essay.
+                  // The whole result is one click away in the ticket itself.
+                  const first = (t.result ?? "").trim().split("\n")[0].trim();
+                  return (
+                    <li key={t.id} className="min-w-0 text-[12px] leading-snug">
+                      <button
+                        onClick={() =>
+                          t.ticketId && onOpenTicket ? onOpenTicket(t.ticketId) : setDetailId(t.id)
+                        }
+                        className="min-w-0 max-w-full text-left transition-colors hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                        title={t.result || undefined}
+                      >
+                        {t.ticketId && (
+                          <span className="font-code text-[11px] text-ink/45">{t.ticketId} </span>
+                        )}
+                        <span className={t.state === "failed" ? "text-ink/55 line-through" : "text-ink/70"}>
+                          {taskPayload(t).title || "Untitled task"}
+                        </span>
+                        {first && <span className="text-ink/45"> — {first}</span>}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </>
+        )}
       </div>
     );
   }
@@ -1708,6 +1828,9 @@ export default function TaskBoard({
             {p.body}
           </p>
         )}
+        {/* What the batch ACHIEVED, above its tickets — the answer you came for,
+            with the receipts collapsed under it. */}
+        {renderAchieved(e)}
         {finished ? (
           <div className="mt-2 h-1.5 rounded-full bg-emerald-500" />
         ) : (
@@ -2391,6 +2514,14 @@ function TaskDetail({
   const [editing, setEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(p.title ?? "");
   const [editBody, setEditBody] = useState(p.body ?? "");
+  // The epic summary editor (TDM-93) — separate from the title/body editor
+  // above on purpose. Title and body are CONTENT: editing them on an approved
+  // epic revokes the approval its tasks inherit. `summary` is not, so it is the
+  // one field a human can write on a finished batch without disturbing it, and
+  // bundling the two into one Save would have made the safe edit dangerous.
+  const epicSummary = ((action.payload ?? {}) as EpicPayload).summary ?? "";
+  const [summaryEditing, setSummaryEditing] = useState(false);
+  const [summaryDraft, setSummaryDraft] = useState(epicSummary);
   // The state move waiting on its confirm (and its note), or null.
   const [pendingMove, setPendingMove] = useState<HumanMove | null>(null);
   const [moveNote, setMoveNote] = useState("");
@@ -2491,6 +2622,17 @@ function TaskDetail({
     void run(async () => {
       await updateTask(code, action.id, draftFrom({ title, body: editBody.trim() || undefined }));
       setEditing(false);
+    });
+  }
+
+  // Writes ONLY `summary`, carrying the rest of the payload through draftFrom.
+  // Because title/body are untouched, the server's content gate reads this as a
+  // bookkeeping write: no re-approval, no released claim (see content_gate.go).
+  function saveSummary() {
+    const next = summaryDraft.trim();
+    void run(async () => {
+      await updateTask(code, action.id, draftFrom({ summary: next || undefined } as Partial<TaskPayload>));
+      setSummaryEditing(false);
     });
   }
 
@@ -2774,6 +2916,86 @@ function TaskDetail({
               be further down the panel than the thing it qualifies. */}
           {!editing && action.state === "proposed" && reapproval && (
             <ReapprovalNotice edit={reapproval} />
+          )}
+
+          {/* What this BATCH achieved (TDM-93) — epics only, and the one place a
+              human writes it. Read by the board header above its tickets, by
+              board_status, and by the connect briefing, so this field is how the
+              batch-level answer gets to every reader at once. */}
+          {!isTask && !editing && (
+            <div className="mt-3 rounded-md border border-ink/10 bg-ink/[0.02] px-2.5 py-2">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink/45">
+                  What this batch achieved
+                </span>
+                {!readOnly && !summaryEditing && (
+                  <button
+                    onClick={() => {
+                      setSummaryDraft(epicSummary);
+                      setSummaryEditing(true);
+                    }}
+                    className="ml-auto shrink-0 text-[11px] font-medium text-ink/50 transition-colors hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                  >
+                    {epicSummary ? "Edit" : "Write it"}
+                  </button>
+                )}
+              </div>
+              {summaryEditing ? (
+                <div className="mt-1.5 flex flex-col gap-2">
+                  <textarea
+                    autoFocus
+                    value={summaryDraft}
+                    onChange={(ev) => setSummaryDraft(ev.target.value)}
+                    placeholder="What did this batch deliver? What shipped, what changed, what was decided — a paragraph a reader can trust instead of opening every ticket."
+                    rows={6}
+                    className="w-full resize-y rounded-md border border-ink/15 bg-surface px-2.5 py-1.5 text-[13px] leading-relaxed text-ink outline-none placeholder:text-ink/30 focus:border-accent/50 focus:ring-2 focus:ring-accent/40"
+                  />
+                  <div className="flex items-center gap-1.5">
+                    <button onClick={saveSummary} disabled={busy} className={primaryBtn}>
+                      {busy ? "Saving…" : "Save"}
+                    </button>
+                    <button
+                      onClick={() => {
+                        setSummaryEditing(false);
+                        setSummaryDraft(epicSummary);
+                      }}
+                      className={quietBtn}
+                    >
+                      Cancel
+                    </button>
+                    {/* The reassurance that makes this editable at all: unlike
+                        the title/body above, saving here costs nothing. */}
+                    <span className="ml-1 text-[11px] text-ink/40">
+                      Doesn't affect approval
+                    </span>
+                  </div>
+                </div>
+              ) : epicSummary ? (
+                <>
+                  <p className="mt-1 whitespace-pre-wrap text-[13px] leading-relaxed text-ink/75">
+                    {epicSummary}
+                  </p>
+                  {(() => {
+                    const ep = (action.payload ?? {}) as EpicPayload;
+                    if (!ep.summaryBy && !ep.summaryAt) return null;
+                    return (
+                      <div className="mt-1.5 font-code text-[10.5px] text-ink/40">
+                        {ep.summaryBy ?? "unknown"}
+                        {ep.summaryAt && (
+                          <span title={fullDate(ep.summaryAt)}> · {ageOf(ep.summaryAt)} ago</span>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </>
+              ) : (
+                <p className="mt-1 text-[12.5px] leading-relaxed text-ink/45">
+                  Nothing recorded yet. An agent can write this when it finishes the last task in
+                  the batch (task_complete's <code className="font-code">epicSummary</code>) — or
+                  write it here.
+                </p>
+              )}
+            </div>
           )}
 
           {/* Epic membership. */}

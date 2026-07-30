@@ -144,6 +144,7 @@ func (h *Handler) GetContext(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, taskErr.Error())
 		return
 	}
+	bundle.Epics = epics
 	for _, e := range epics {
 		bundle.EpicTitles[e.ID] = decodeTaskPayload(e.Payload).Title
 	}

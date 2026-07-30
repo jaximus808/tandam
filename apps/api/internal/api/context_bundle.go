@@ -48,6 +48,10 @@ type contextBundle struct {
 	// EpicTitles maps epic action id → title, so a task's epic can be named
 	// without a per-task lookup.
 	EpicTitles map[uuid.UUID]string
+	// Epics are the type="epic" actions in creation order — rendered as the
+	// batch-level "what has this board achieved" section (TDM-93). The same rows
+	// EpicTitles is built from, so this costs no extra read.
+	Epics []*store.Action
 	// Task and TaskLinks are populated only for a ?taskId= request: that one
 	// task hydrated with its linked notes / roadmap items.
 	Task      *store.Action
@@ -91,6 +95,7 @@ func renderContextMarkdown(b contextBundle, now time.Time) string {
 		now.UTC().Format(time.RFC3339))
 
 	renderBriefingSection(&sb, b, now)
+	renderEpicsSection(&sb, b)
 	renderQueueSection(&sb, b)
 	if b.Task != nil {
 		renderTaskSection(&sb, b, now)
@@ -128,6 +133,44 @@ func renderBriefingSection(sb *strings.Builder, b contextBundle, now time.Time) 
 			sb.WriteString(ann + "\n\n")
 		}
 		sb.WriteString(strings.TrimRight(n.Body, "\n") + "\n")
+	}
+}
+
+// renderEpicsSection renders the board's batches and what each one achieved
+// (TDM-93). The SUMMARY is the point: an agent orienting on a canvas should learn
+// "E5 shipped the metrics endpoint and the loadtest" from the briefing, instead
+// of having to open six tickets to reconstruct it.
+//
+// Deliberately NOT the per-epic task rollup (counts, drained, done lines): that
+// needs every task on the canvas, and the briefing's whole discipline is two
+// waves of reads. The rollup has its own one-call endpoint —
+// GET /api/canvas/epics, which is what the MCP's board_status reads.
+//
+// An epic with no summary is listed anyway, marked as such. Hiding it would let
+// a reader mistake "nobody wrote it down" for "nothing happened", and the
+// unwritten summary is exactly the thing worth prompting about.
+func renderEpicsSection(sb *strings.Builder, b contextBundle) {
+	epics := sortedEpics(b.Epics)
+	if len(epics) == 0 {
+		return
+	}
+	sb.WriteString("\n## Epics\n\n")
+	fmt.Fprintf(sb, "%s on this board, oldest first. For task counts and the ticket-by-ticket "+
+		"account, read the epic rollup (board_status).\n",
+		plural(len(epics), "batch", "batches"))
+	for _, e := range epics {
+		p := decodeTaskPayload(e.Payload)
+		fmt.Fprintf(sb, "\n**%s** (%s)\n",
+			orFallback(strings.TrimSpace(p.Title), "(untitled epic)"), e.State)
+		sum := readEpicSummary(e.Payload)
+		if sum.Summary == "" {
+			sb.WriteString("\n_No summary yet — what this batch achieved is unrecorded._\n")
+			continue
+		}
+		fmt.Fprintf(sb, "\n%s\n", strings.TrimRight(sum.Summary, "\n"))
+		if by := strings.TrimSpace(sum.SummaryBy); by != "" {
+			fmt.Fprintf(sb, "\n_— %s_\n", by)
+		}
 	}
 }
 
@@ -330,6 +373,24 @@ func sortedTasks(in []*store.Action) []*store.Action {
 		default:
 			return out[i].CreatedAt.Before(out[j].CreatedAt)
 		}
+	})
+	return out
+}
+
+// sortedEpics copies and orders epics oldest-first — the same order the board's
+// epic timeline reads in, and (id as tiebreak) deterministic for the tests.
+func sortedEpics(in []*store.Action) []*store.Action {
+	out := make([]*store.Action, 0, len(in))
+	for _, e := range in {
+		if e != nil {
+			out = append(out, e)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.Before(out[j].CreatedAt)
+		}
+		return out[i].ID.String() < out[j].ID.String()
 	})
 	return out
 }
