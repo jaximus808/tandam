@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -38,6 +39,17 @@ import (
 //     writes to GitHub: no comment, no status, no webhook registration, no
 //     dispatch. This is not a sync engine and must not become one — Tandem does
 //     not own anything in GitHub, it reads.
+//
+// ── CONFIDENTIALITY: the token must be PUBLIC-SCOPE (TDM-140) ──────────────────
+// The lookups this file serves are cached PROCESS-WIDE (keyed by owner/repo/ref,
+// not by canvas or viewer) and any board can query any URL. That is fine for
+// PUBLIC ground truth — but a classic PAT carrying `repo` (or `repo:status`)
+// scope also grants PRIVATE-repo read, which would turn this into a way for any
+// viewer on any canvas to pull a private repo's PR title / CI state via the
+// server's token. So the token is VETTED at startup (VetGitHubTokenEnv): a
+// private-capable classic token is dropped, and the proxy runs unauthenticated
+// (public repos only) rather than leak. Deploy a public-scope token (public_repo,
+// or a fine-grained token restricted to public repos) to keep the rate-limit lift.
 //
 // ── RATE LIMIT ───────────────────────────────────────────────────────────────
 // Unauthenticated api.github.com allows 60 requests/hour PER IP — for the whole
@@ -306,6 +318,70 @@ func newGitHubClient() *githubClient {
 		},
 		cache: newTTLCache(githubCacheTTL, githubCacheMax, time.Now),
 	}
+}
+
+// VetGitHubTokenEnv enforces the status proxy's confidentiality contract at
+// STARTUP (TDM-140): if the configured GITHUB_TOKEN can read PRIVATE repos, it is
+// unset so the proxy runs unauthenticated (public repos only) rather than leak
+// private-repo state cross-canvas. Call it once, before the router is built, so
+// the lazily-constructed client (which reads the env) never sees a unsafe token.
+//
+// Best-effort: a network error verifying scopes leaves the token in place (with a
+// warning) rather than knocking out the rate-limit lift over a transient blip —
+// the same posture the rest of this file takes toward an unreachable GitHub.
+func VetGitHubTokenEnv() {
+	token := strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
+	if token == "" {
+		return
+	}
+	if !githubTokenIsPublicSafe(githubAPIDefaultBase, token, &http.Client{Timeout: githubHTTPTimeout}) {
+		log.Printf("github_status: GITHUB_TOKEN grants PRIVATE-repo read — DISABLING it so private-repo " +
+			"state cannot leak cross-canvas via the status proxy (TDM-140). Deploy a public-scope token " +
+			"(public_repo, or a fine-grained token limited to public repos) to keep the rate-limit lift.")
+		_ = os.Unsetenv("GITHUB_TOKEN")
+	}
+}
+
+// githubTokenIsPublicSafe returns false ONLY when it can POSITIVELY confirm the
+// token grants private-repo read. It probes /rate_limit (which does not itself
+// count against the limit) purely to read the granted scopes from the classic
+// PAT's X-OAuth-Scopes response header. A network/parse failure returns true
+// (fail-open on availability, since the safe default for confidentiality is
+// handled by requiring a positive private-scope signal to disable).
+func githubTokenIsPublicSafe(base, token string, client *http.Client) bool {
+	req, err := http.NewRequest(http.MethodGet, base+"/rate_limit", nil)
+	if err != nil {
+		return true
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("User-Agent", "tandem-canvas")
+	res, err := client.Do(req)
+	if err != nil {
+		log.Printf("github_status: could not verify GITHUB_TOKEN scopes (%v) — leaving it set; "+
+			"ensure the deployed token is PUBLIC-scope only (TDM-140)", err)
+		return true
+	}
+	defer res.Body.Close()
+	io.Copy(io.Discard, io.LimitReader(res.Body, 4096))
+	return !githubScopesGrantPrivateRead(res.Header.Get("X-OAuth-Scopes"))
+}
+
+// githubScopesGrantPrivateRead reports whether a classic PAT's X-OAuth-Scopes
+// header grants read of PRIVATE repositories. `repo` is full private control and
+// `repo:status` grants commit-status read on private repos too — both would let
+// this proxy surface private state. `public_repo` is explicitly public-only and
+// safe. A fine-grained token sends no scopes here (empty header) and is treated
+// as safe: its access is constrained at creation, not advertised in this header.
+func githubScopesGrantPrivateRead(header string) bool {
+	for _, s := range strings.Split(header, ",") {
+		s = strings.TrimSpace(s)
+		if s == "repo" || strings.HasPrefix(s, "repo:") {
+			return true
+		}
+	}
+	return false
 }
 
 // status resolves a ref, serving from cache when it can.
