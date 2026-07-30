@@ -33,6 +33,11 @@ func (h *Handler) ExportItineraryICS(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "canvas not found")
 		return
 	}
+	// Enforce visibility, same gate as the WS layer (TDM-130): the code alone must
+	// not expose a PRIVATE canvas's itinerary to a caller with no grant.
+	if _, ok := h.resolveCanvasReadRole(w, r, canvas); !ok {
+		return
+	}
 	_, state, _, err := h.store.GetCanvasState(r.Context(), canvas.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load canvas state")

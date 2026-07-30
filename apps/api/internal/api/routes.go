@@ -47,6 +47,11 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 	}))
 
 	var hOpts []HandlerOption
+	// The exports are public-by-code but must still honour a private canvas's
+	// visibility (TDM-130); they read the session cookie via this validator.
+	if authSvc != nil {
+		hOpts = append(hOpts, WithAuthService(authSvc))
+	}
 	if emitter != nil {
 		hOpts = append(hOpts, WithTaskEvents(emitter))
 	}

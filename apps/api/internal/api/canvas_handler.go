@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agentcanvas/api/internal/auth"
 	"github.com/agentcanvas/api/internal/maps"
 	"github.com/agentcanvas/api/internal/metrics"
 	"github.com/agentcanvas/api/internal/store"
@@ -51,6 +52,11 @@ type Handler struct {
 	// githubClient(), so a Handler built without it still answers; tests replace
 	// it with one pointed at an httptest server (nothing calls real GitHub).
 	github *githubClient
+	// authSvc validates the session cookie on the PUBLIC-by-code endpoints that
+	// carry no JWT middleware — the exports (TDM-130). OPTIONAL: nil means no
+	// session can be read, so those endpoints see every caller as anonymous (public
+	// canvases only), which is the safe default for a Handler built without it.
+	authSvc *auth.Service
 }
 
 // HandlerOption customizes NewHandler. Optional dependencies go here rather than
@@ -69,6 +75,39 @@ func WithTaskEvents(e TaskEventEmitter) HandlerOption {
 // rather than an interface so a nil stays a usable nil.
 func WithMetrics(reg *metrics.Registry) HandlerOption {
 	return func(h *Handler) { h.metrics = reg }
+}
+
+// WithAuthService attaches the session validator so the public-by-code endpoints
+// (the exports) can resolve a caller's role from the cookie and enforce a private
+// canvas's visibility, the same gate ServeWS applies (TDM-130).
+func WithAuthService(a *auth.Service) HandlerOption {
+	return func(h *Handler) { h.authSvc = a }
+}
+
+// resolveCanvasReadRole enforces a canvas's visibility on a public-by-code
+// endpoint (the exports), exactly as ServeWS does before upgrading a socket
+// (TDM-130): resolve the caller's role from the session cookie (anonymous → nil →
+// public canvases only) and refuse a private canvas the caller holds no grant on.
+// Returns (role, true) to proceed; on refusal it writes the HTTP response and
+// returns false, so the caller just `return`s. The 8-char code alone must never
+// be enough to read a PRIVATE canvas's contents.
+func (h *Handler) resolveCanvasReadRole(w http.ResponseWriter, r *http.Request, canvas *store.Canvas) (string, bool) {
+	var uid *uuid.UUID
+	if h.authSvc != nil {
+		if id, ok := sessionUserID(h.authSvc, r); ok {
+			uid = &id
+		}
+	}
+	role, err := h.store.ResolveCanvasRole(r.Context(), canvas, uid)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not resolve canvas access")
+		return "", false
+	}
+	if role == "none" {
+		writeError(w, http.StatusForbidden, "this canvas is private — sign in with an account it's shared with")
+		return "", false
+	}
+	return role, true
 }
 
 func NewHandler(s store.Store, hub *ws.Hub, mapsReg *maps.Registry, opts ...HandlerOption) *Handler {
