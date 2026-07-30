@@ -118,7 +118,7 @@ func main() {
 	log.Printf("loaded %d map presets: %v", len(mapsReg.IDs()), mapsReg.IDs())
 
 	// Confidentiality gate for the GitHub status proxy (TDM-140): drop a
-	// GITHUB_TOKEN that can read PRIVATE repos BEFORE the (lazily-built) client
+	// GH_STATUS_TOKEN that can read PRIVATE repos BEFORE the (lazily-built) client
 	// reads the env, so the proxy can never surface private-repo state cross-canvas.
 	api.VetGitHubTokenEnv()
 

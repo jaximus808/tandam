@@ -35,7 +35,7 @@ import (
 //     construct ourselves from a parsed owner/repo/ref against api.github.com
 //     (githubRef.endpoint) — the caller's URL is never dereferenced, so there is
 //     no SSRF surface here at all and no user-controlled host;
-//   - GITHUB_TOKEN, when set, is used ONLY as a rate-limit lift. Nothing here
+//   - GH_STATUS_TOKEN, when set, is used ONLY as a rate-limit lift. Nothing here
 //     writes to GitHub: no comment, no status, no webhook registration, no
 //     dispatch. This is not a sync engine and must not become one — Tandem does
 //     not own anything in GitHub, it reads.
@@ -57,7 +57,7 @@ import (
 // is load-bearing rather than an optimisation: a board with six evidence links
 // open in three tabs would exhaust an hour's budget in a minute without it.
 // Hence also the strict one-call-per-ref rule (see githubRef.endpoint) and the
-// single extra call for an OPEN pr's checks. With GITHUB_TOKEN set the ceiling
+// single extra call for an OPEN pr's checks. With GH_STATUS_TOKEN set the ceiling
 // is 5,000/hour and the cache merely stops being critical.
 //
 // Being rate-limited is NOT an error the board should shout about: the lookup
@@ -299,13 +299,13 @@ type githubClient struct {
 	cache *ttlCache
 }
 
-// newGitHubClient builds the process-wide client. GITHUB_TOKEN is optional and
+// newGitHubClient builds the process-wide client. GH_STATUS_TOKEN is optional and
 // read once here: with it the rate limit is 5,000/hour instead of 60, and that
 // is the ONLY thing it does — see the fence note at the top of this file.
 func newGitHubClient() *githubClient {
 	return &githubClient{
 		base:  githubAPIDefaultBase,
-		token: strings.TrimSpace(os.Getenv("GITHUB_TOKEN")),
+		token: strings.TrimSpace(os.Getenv("GH_STATUS_TOKEN")),
 		http: &http.Client{
 			Timeout: githubHTTPTimeout,
 			// api.github.com does not redirect for these reads; a redirect would
@@ -321,7 +321,7 @@ func newGitHubClient() *githubClient {
 }
 
 // VetGitHubTokenEnv enforces the status proxy's confidentiality contract at
-// STARTUP (TDM-140): if the configured GITHUB_TOKEN can read PRIVATE repos, it is
+// STARTUP (TDM-140): if the configured GH_STATUS_TOKEN can read PRIVATE repos, it is
 // unset so the proxy runs unauthenticated (public repos only) rather than leak
 // private-repo state cross-canvas. Call it once, before the router is built, so
 // the lazily-constructed client (which reads the env) never sees a unsafe token.
@@ -330,15 +330,15 @@ func newGitHubClient() *githubClient {
 // warning) rather than knocking out the rate-limit lift over a transient blip —
 // the same posture the rest of this file takes toward an unreachable GitHub.
 func VetGitHubTokenEnv() {
-	token := strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
+	token := strings.TrimSpace(os.Getenv("GH_STATUS_TOKEN"))
 	if token == "" {
 		return
 	}
 	if !githubTokenIsPublicSafe(githubAPIDefaultBase, token, &http.Client{Timeout: githubHTTPTimeout}) {
-		log.Printf("github_status: GITHUB_TOKEN grants PRIVATE-repo read — DISABLING it so private-repo " +
+		log.Printf("github_status: GH_STATUS_TOKEN grants PRIVATE-repo read — DISABLING it so private-repo " +
 			"state cannot leak cross-canvas via the status proxy (TDM-140). Deploy a public-scope token " +
 			"(public_repo, or a fine-grained token limited to public repos) to keep the rate-limit lift.")
-		_ = os.Unsetenv("GITHUB_TOKEN")
+		_ = os.Unsetenv("GH_STATUS_TOKEN")
 	}
 }
 
@@ -359,7 +359,7 @@ func githubTokenIsPublicSafe(base, token string, client *http.Client) bool {
 	req.Header.Set("User-Agent", "tandem-canvas")
 	res, err := client.Do(req)
 	if err != nil {
-		log.Printf("github_status: could not verify GITHUB_TOKEN scopes (%v) — leaving it set; "+
+		log.Printf("github_status: could not verify GH_STATUS_TOKEN scopes (%v) — leaving it set; "+
 			"ensure the deployed token is PUBLIC-scope only (TDM-140)", err)
 		return true
 	}

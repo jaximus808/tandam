@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// TDM-140: a GITHUB_TOKEN that can read private repos must not power the
+// TDM-140: a GH_STATUS_TOKEN that can read private repos must not power the
 // process-wide, cross-canvas status proxy. The scope check is a pure function of
 // the classic PAT's X-OAuth-Scopes header.
 func TestGithubScopesGrantPrivateRead(t *testing.T) {
