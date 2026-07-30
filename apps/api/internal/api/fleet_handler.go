@@ -84,13 +84,64 @@ type rosterAgent struct {
 // rosterTask is the in-flight work an agent holds — a compact projection, not
 // the stored payload (which can carry a whole task body plus linkedIds).
 type rosterTask struct {
-	ID        uuid.UUID  `json:"id"`
-	TicketID  string     `json:"ticketId,omitempty"`
-	Title     string     `json:"title,omitempty"`
-	Type      string     `json:"type"`
-	State     string     `json:"state"`
-	EpicID    string     `json:"epicId,omitempty"`
+	ID       uuid.UUID `json:"id"`
+	TicketID string    `json:"ticketId,omitempty"`
+	Title    string    `json:"title,omitempty"`
+	Type     string    `json:"type"`
+	State    string    `json:"state"`
+	EpicID   string    `json:"epicId,omitempty"`
+	// ClaimedBy is the holder — the SAME string the roster grouped this task
+	// under. Carried on the task so the fleet view can derive the lease with the
+	// same lib/lease.ts deriveLease the board uses (it reads action.claimedBy).
+	ClaimedBy string `json:"claimedBy,omitempty"`
+	// ClaimedAt is the LEASE stamp: set on claim and pushed forward by every
+	// heartbeat (TouchActionClaim / statusProgress). It is what the lease health
+	// (live / slipping / stale) is measured against — NOT a start time.
 	ClaimedAt *time.Time `json:"claimedAt,omitempty"`
+	// FirstClaimedAt is the STABLE start of the current lease generation, taken
+	// from the claim record (payload.claim.at), which heartbeats do NOT move — so
+	// the fleet view can honestly say "working for X" instead of the frozen,
+	// heartbeat-reset ClaimedAt the old UI mistakenly showed (TDM-112).
+	FirstClaimedAt *time.Time `json:"firstClaimedAt,omitempty"`
+	// Progress is the mid-flight heartbeat log, compacted to what the client lease
+	// needs (when each report landed). deriveLease uses the newest to tell "still
+	// filing reports but the lease isn't moving" (a non-exclusive holder) apart
+	// from a truly silent one.
+	Progress []rosterProgress `json:"progress,omitempty"`
+}
+
+// rosterProgress is one heartbeat, compacted for the fleet view — the instant it
+// landed (what the lease reads) plus a short note for the tooltip.
+type rosterProgress struct {
+	At   time.Time `json:"at"`
+	Note string    `json:"note,omitempty"`
+}
+
+// rosterProgressOf parses a task payload's progress[] into the compact fleet
+// shape, dropping entries with an unparseable timestamp (the lease only cares
+// about when a report landed). nil when there are none, so the key is omitted.
+func rosterProgressOf(payload json.RawMessage) []rosterProgress {
+	var p struct {
+		Progress []struct {
+			At   string `json:"at"`
+			Note string `json:"note"`
+		} `json:"progress"`
+	}
+	if json.Unmarshal(payload, &p) != nil {
+		return nil
+	}
+	out := make([]rosterProgress, 0, len(p.Progress))
+	for _, e := range p.Progress {
+		ts, err := time.Parse(time.RFC3339, e.At)
+		if err != nil {
+			continue
+		}
+		out = append(out, rosterProgress{At: ts.UTC(), Note: e.Note})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // actionPayloadFields are the only payload keys these reads look at.
@@ -201,7 +252,8 @@ func buildRoster(agents []*store.Agent, executing []*store.Action, now time.Time
 		f := payloadFields(act)
 		t := rosterTask{
 			ID: act.ID, Title: f.Title, Type: act.Type,
-			State: act.State, EpicID: f.EpicID,
+			State: act.State, EpicID: f.EpicID, ClaimedBy: name,
+			Progress: rosterProgressOf(act.Payload),
 		}
 		if act.Ticket != nil {
 			t.TicketID = store.TicketID(*act.Ticket)
@@ -210,6 +262,14 @@ func buildRoster(agents []*store.Agent, executing []*store.Action, now time.Time
 			at := act.ClaimedAt.UTC()
 			t.ClaimedAt = &at
 			entry.LastActivityAt = laterOf(entry.LastActivityAt, &at)
+		}
+		// The claim record's `at` is the current lease generation's start, which
+		// heartbeats never move — the honest "working for X" anchor (TDM-112).
+		if rec := store.ReadClaimRecord(act.Payload); rec.At != "" {
+			if ts, err := time.Parse(time.RFC3339, rec.At); err == nil {
+				u := ts.UTC()
+				t.FirstClaimedAt = &u
+			}
 		}
 		entry.Tasks = append(entry.Tasks, t)
 	}

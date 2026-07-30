@@ -624,3 +624,47 @@ func TestFleetReadsReachableWithReadOnlyToken(t *testing.T) {
 		}
 	}
 }
+
+// TDM-112: the roster carries what the fleet view needs to derive the claim
+// lease the same way the board does — claimedBy, the heartbeat-pushed ClaimedAt
+// (lease stamp), a STABLE FirstClaimedAt (the claim record's `at`, which
+// heartbeats don't move), and the compacted progress[] log.
+func TestBuildRosterExposesLeaseFields(t *testing.T) {
+	now := time.Now().UTC()
+	claimedAt := now.Add(-3 * time.Minute)           // lease stamp (heartbeat-pushed)
+	firstClaim := now.Add(-10 * time.Minute).Truncate(time.Second) // stable start
+	progAt := now.Add(-2 * time.Minute).Truncate(time.Second)
+	payload := json.RawMessage(fmt.Sprintf(
+		`{"title":"ship it","claim":{"generation":2,"holder":"worker-a","at":%q},"progress":[{"at":%q,"note":"halfway"}]}`,
+		firstClaim.Format(time.RFC3339), progAt.Format(time.RFC3339)))
+
+	agents := []*store.Agent{{ID: uuid.New(), Name: "worker-a", Role: "executor", CreatedAt: now}}
+	executing := []*store.Action{{
+		ID: uuid.New(), Type: "task", State: "executing", Ticket: ptr(7),
+		ClaimedBy: ptr("worker-a"), ClaimedAt: &claimedAt, Payload: payload,
+	}}
+
+	roster := buildRoster(agents, executing, now)
+	var entry *rosterAgent
+	for _, e := range roster.Agents {
+		if e.Name == "worker-a" {
+			entry = e
+		}
+	}
+	if entry == nil || len(entry.Tasks) != 1 {
+		t.Fatalf("expected worker-a to hold 1 task, got %+v", roster.Agents)
+	}
+	task := entry.Tasks[0]
+	if task.ClaimedBy != "worker-a" {
+		t.Errorf("claimedBy = %q, want worker-a", task.ClaimedBy)
+	}
+	if task.ClaimedAt == nil || !task.ClaimedAt.Equal(claimedAt.UTC()) {
+		t.Errorf("claimedAt = %v, want the lease stamp %v", task.ClaimedAt, claimedAt.UTC())
+	}
+	if task.FirstClaimedAt == nil || !task.FirstClaimedAt.Equal(firstClaim) {
+		t.Errorf("firstClaimedAt = %v, want the stable claim-record start %v", task.FirstClaimedAt, firstClaim)
+	}
+	if len(task.Progress) != 1 || !task.Progress[0].At.Equal(progAt) || task.Progress[0].Note != "halfway" {
+		t.Errorf("progress = %+v, want one entry at %v note 'halfway'", task.Progress, progAt)
+	}
+}

@@ -13,8 +13,39 @@ import { useFleetRoster } from "../lib/useFleetRoster";
 import { useActivityFeed } from "../lib/useActivityFeed";
 import { contentionByAgent, type ContentionTally } from "../lib/contention";
 import { ageOf, fullDate } from "../lib/relativeTime";
+import { deriveLease } from "../lib/lease";
+import { LeaseChip } from "./TaskBoard";
+import { useFreshnessNow } from "./Freshness";
 import ActivityFeed from "./ActivityFeed";
 import posthog from "../lib/posthog";
+
+// The roster's in-flight task carries the extra lease fields the fleet view
+// needs to read the claim the SAME way the board does (TDM-112). They live on
+// the roster JSON (fleet_handler.go rosterTask) but aren't on the shared
+// FleetTask type, so this local view names them where they're used.
+//   - claimedBy       — the holder (deriveLease reads action.claimedBy).
+//   - claimedAt        — the LEASE stamp, pushed by heartbeats: what health is
+//                        measured against.
+//   - firstClaimedAt   — the STABLE start of this lease generation (heartbeats
+//                        don't move it): the honest "working for X".
+//   - progress[].at    — when each heartbeat landed, for the silent-vs-slipping read.
+type LeaseTask = FleetTask & {
+  claimedBy?: string;
+  firstClaimedAt?: string;
+  progress?: { at: string; note?: string }[];
+};
+
+// Adapt a roster task to the minimal Action shape deriveLease reads, so the
+// fleet view and the board compute one identical lease from one function.
+function leaseActionOf(task: LeaseTask): Action {
+  return {
+    type: task.type,
+    state: task.state,
+    claimedBy: task.claimedBy,
+    claimedAt: task.claimedAt,
+    payload: { progress: task.progress ?? [] },
+  } as unknown as Action;
+}
 
 /* ─────────────────────────────────────────────────────────────────────────────
    FleetView — the header's fleet trigger + the roster panel it opens (TDM-47).
@@ -787,11 +818,26 @@ function TaskLine({
   onOpen: (taskId: string) => void;
 }) {
   const title = task.title || "Untitled task";
+  const lt = task as LeaseTask;
+  // Ticking clock so a stalled worker's lease slips visibly with nothing arriving
+  // over the socket — the same clock the board's chips use.
+  const now = useFreshnessNow(TICK_MS);
+  const lease = deriveLease(leaseActionOf(lt), now);
+  // "Working for X" is anchored to the STABLE first-claim time, not the
+  // heartbeat-pushed claimedAt the old UI showed (which froze/reset and lied
+  // about duration). Fall back to claimedAt only for pre-claim-record rows.
+  const startedAt = lt.firstClaimedAt ?? task.claimedAt;
   return (
     <button
       onClick={() => onOpen(task.id)}
       title={`${task.ticketId ? `${task.ticketId} — ` : ""}${title}\nOpen on the Board`}
-      aria-label={`${agentName} is working ${task.ticketId ?? "a task"}, ${title}, for ${ageOf(task.claimedAt)}. Open it on the board.`}
+      aria-label={`${agentName} is working ${task.ticketId ?? "a task"}, ${title}, for ${ageOf(startedAt)}${
+        lease.health === "stale"
+          ? " — claim lapsed, reclaimable"
+          : lease.health === "slipping"
+            ? " — no recent heartbeat"
+            : ""
+      }. Open it on the board.`}
       className="-mx-1 flex w-[calc(100%+0.5rem)] items-center gap-2 rounded-[4px] px-1 py-px text-left transition-colors hover:bg-ink/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
     >
       <span className="w-[52px] shrink-0 text-[11px] text-ink/55">working</span>
@@ -801,11 +847,14 @@ function TaskLine({
         </span>
       )}
       <span className="min-w-0 flex-1 truncate text-[11.5px] text-ink/70">{title}</span>
+      {/* Live/slipping/stale — the honesty signal, ticking on its own so a
+          stalled worker becomes visually distinct within one lease window. */}
+      <LeaseChip lease={lease} />
       <span
         className="shrink-0 font-code text-[10.5px] text-ink/50"
-        title={task.claimedAt ? `Claimed ${fullDate(task.claimedAt)}` : undefined}
+        title={startedAt ? `Working since ${fullDate(startedAt)}` : undefined}
       >
-        {ageOf(task.claimedAt)}
+        {ageOf(startedAt)}
       </span>
     </button>
   );
