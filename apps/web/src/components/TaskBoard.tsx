@@ -806,23 +806,46 @@ function MoveMark({ move }: { move: ContentAuditEntry }) {
   );
 }
 
-// Approve / Reject pair for a proposed task or epic. Reject is two-step (the
-// confirm replaces the pair) — no reason field here; the sidebar keeps the
-// full reject-with-reason form. stopPropagation so the card click-through to
-// the detail panel doesn't fire.
-function ApproveRejectControls({
+/* ── The triage controls (TDM-160) ───────────────────────────────────────────
+   The three verbs a person needs at the plan gate, on ONE row of a proposed
+   card: approve it, reject it, or amend it. All three are inline — leaving the
+   list to make a decision is what turns an eleven-ticket epic into a desktop
+   chore, and the gate has to survive being worked one-handed on a phone.
+
+   REJECT COSTS EXACTLY WHAT APPROVE COSTS. It used to be two taps (Reject →
+   Confirm reject) against approve's one, which is not a neutral gate: the
+   cheaper button wins, and a board where every ticket gets approved is a board
+   with no gate on it. So on a TASK reject fires on the first tap and the board
+   arms an Undo strip (rejected → proposed is a legal move — lib/taskMoves'
+   RECONSIDER), which is the same safety at equal cost. Same geometry, same tap
+   count, and reject carries its own rose so it reads as a real decision rather
+   than as the Cancel of the pair.
+
+   EPICS KEEP THE CONFIRM (`confirmReject`). Rejecting an epic archives a whole
+   batch, and the undo for that is not one move — the asymmetry there is
+   earned. Neither path takes a reason; the detail panel keeps the long form.
+
+   stopPropagation so the card's click-through to the detail panel doesn't fire
+   underneath the buttons. */
+function TriageControls({
   busy,
   rejecting,
   approveLabel = "Approve",
+  confirmReject = false,
   onApprove,
   onReject,
+  onAmend,
   setRejecting,
 }: {
   busy: boolean;
   rejecting: boolean;
   approveLabel?: string;
+  /** Two-step reject (epics). Tasks reject on the first tap and offer Undo. */
+  confirmReject?: boolean;
   onApprove: () => void;
   onReject: () => void;
+  /** Opens the in-place editor. Omitted where amending makes no sense (epics). */
+  onAmend?: () => void;
   setRejecting: (v: boolean) => void;
 }) {
   return (
@@ -853,14 +876,111 @@ function ApproveRejectControls({
             <Check size={12} /> {approveLabel}
           </button>
           <button
-            onClick={() => setRejecting(true)}
+            onClick={() => (confirmReject ? setRejecting(true) : onReject())}
             disabled={busy}
-            className={`flex flex-1 items-center justify-center gap-1 rounded-md border border-ink/15 px-2 py-1 font-medium text-ink/60 transition-colors hover:border-ink/30 disabled:opacity-40 ${T_BTN} ${TAP}`}
+            title={confirmReject ? undefined : "Reject this ticket — you can undo it"}
+            className={`flex flex-1 items-center justify-center gap-1 rounded-md border border-rose-500/30 px-2 py-1 font-medium text-rose-600 transition-colors hover:border-rose-500/60 hover:bg-rose-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500/40 disabled:opacity-40 dark:text-rose-400 ${T_BTN} ${TAP}`}
           >
             <X size={12} /> Reject
           </button>
+          {onAmend && (
+            <button
+              onClick={onAmend}
+              disabled={busy}
+              title="Amend this ticket — fix the title or body without leaving the list"
+              aria-label="Amend this ticket"
+              className={`flex shrink-0 items-center justify-center rounded-md border border-ink/15 px-2 py-1 text-ink/55 transition-colors hover:border-ink/30 hover:text-ink/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40 ${T_BTN} ${TAP}`}
+            >
+              <Pencil size={12} />
+            </button>
+          )}
         </>
       )}
+    </div>
+  );
+}
+
+/* Amend a proposed ticket IN PLACE (TDM-160) — the third triage verb, and the
+   one the gate was missing. "Right idea, wrong scope" is the commonest verdict
+   on a generated plan, and until now the only ways to act on it were approve
+   (let a too-broad ticket run) or reject (throw away a good idea). Sending the
+   person through the detail slide-over for a one-line fix is what made
+   widening ticket 7 cost more than approving all eleven.
+
+   Title and body only: everything else on a proposed ticket is the proposer's
+   to state. The payload ROUND-TRIPS WHOLE — a PATCH replaces the payload, so
+   spreading the stored one is what keeps epicId, linkedIds and requiresApproval
+   from silently vanishing (same rule as TaskDetail's draftFrom).
+
+   Drafts live here rather than on the board so they die with the editor; the
+   caller keys this on the action id, so opening a different ticket remounts it
+   with that ticket's text instead of the previous one's. */
+function InlineAmend({
+  action,
+  busy,
+  onSave,
+  onCancel,
+}: {
+  action: Action;
+  busy: boolean;
+  onSave: (title: string, body: string) => void;
+  onCancel: () => void;
+}) {
+  const p = taskPayload(action);
+  const [title, setTitle] = useState(p.title ?? "");
+  const [body, setBody] = useState(p.body ?? "");
+  const changed = title.trim() !== (p.title ?? "").trim() || body.trim() !== (p.body ?? "").trim();
+  const canSave = !busy && title.trim().length > 0 && changed;
+  const field =
+    "w-full rounded-md border border-ink/15 bg-paper px-2 py-1.5 text-ink placeholder:text-ink/35 focus:border-accent/50 focus:outline-none focus:ring-2 focus:ring-accent/20";
+  // Cmd/Ctrl+Enter saves and Escape backs out, so amending never needs a second
+  // hand on a phone keyboard — and Enter inside the body stays a newline.
+  function keys(e: ReactKeyboardEvent) {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      onCancel();
+    } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && canSave) {
+      e.preventDefault();
+      onSave(title, body);
+    }
+  }
+  return (
+    <div
+      className="mt-2 flex flex-col gap-1.5"
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={keys}
+    >
+      <input
+        autoFocus
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        placeholder="Ticket title"
+        aria-label="Ticket title"
+        className={`${field} font-semibold ${T_TITLE}`}
+      />
+      <textarea
+        value={body}
+        onChange={(e) => setBody(e.target.value)}
+        rows={3}
+        placeholder="What this ticket covers (optional)"
+        aria-label="Ticket body"
+        className={`${field} resize-y leading-relaxed ${T_BTN}`}
+      />
+      <div className="flex gap-1.5">
+        <button
+          onClick={() => onSave(title, body)}
+          disabled={!canSave}
+          className={`flex flex-1 items-center justify-center gap-1 rounded-md bg-accent px-2 py-1 font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40 ${T_BTN} ${TAP}`}
+        >
+          <Check size={12} /> Save
+        </button>
+        <button
+          onClick={onCancel}
+          className={`flex-1 rounded-md border border-ink/15 px-2 py-1 font-medium text-ink/60 transition-colors hover:border-ink/30 ${T_BTN} ${TAP}`}
+        >
+          Cancel
+        </button>
+      </div>
     </div>
   );
 }
@@ -1029,6 +1149,14 @@ export default function TaskBoard({
   const [spotlightGlow, setSpotlightGlow] = useState<{ id: string; nonce: number } | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [rejectingId, setRejectingId] = useState<string | null>(null);
+  // The proposed ticket being amended in place (TDM-160) — at most one at a
+  // time, so a half-finished edit can never be left behind on a card scrolled
+  // off screen.
+  const [amendingId, setAmendingId] = useState<string | null>(null);
+  // The last one-tap task rejection, offering Undo (TDM-160). Rejecting a task
+  // is a single tap precisely BECAUSE this exists; if you remove the strip,
+  // put the confirm back or the gate stops being reversible.
+  const [undoReject, setUndoReject] = useState<{ id: string; label: string } | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
   // Whether the scoped epic's finished-ticket rollup is expanded (TDM-93).
   // Collapsed by default: the summary above it is the answer, and the receipts
@@ -1448,13 +1576,17 @@ export default function TaskBoard({
       ?.scrollIntoView({ inline: "nearest", block: "nearest", behavior: "smooth" });
   }, [activeCol]);
 
-  async function run(id: string, fn: () => Promise<void>) {
+  // Returns whether the write landed, so a caller that only wants to follow up
+  // on SUCCESS (arming the reject Undo) doesn't act on a failed one.
+  async function run(id: string, fn: () => Promise<void>): Promise<boolean> {
     setBusyId(id);
     setError(null);
     try {
       await fn();
+      return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
+      return false;
     } finally {
       setBusyId(null);
     }
@@ -1482,6 +1614,23 @@ export default function TaskBoard({
     }
   }
 
+  /* ── Per-ticket triage (TDM-160) ───────────────────────────────────────────
+     The three decisions a person makes at the plan gate, one ticket at a time:
+     approve, reject (+ undo), amend. Everything the board renders on a proposed
+     card routes through exactly these four functions, so a surface that wants
+     to triage MANY tickets at once (TDM-164's multi-select) extends these
+     rather than reimplementing the writes: approve maps onto the existing
+     approveBatch (see approveAllProposed above, one request for N ids), and
+     reject has no batch endpoint yet, so a selection rejects by calling
+     rejectOne per id — the undo strip's shape is what would have to grow, from
+     one id to a list.
+
+     Note on the epic cascade: approving the epic AFTER partial triage cannot
+     resurrect anything decided here. Both server paths (ApproveEpicTasks and
+     approve-batch, store/supabase.go) filter on state='proposed', so a rejected
+     ticket simply stops matching. There is deliberately no client-side guard —
+     duplicating that rule here would just be a second place for it to drift. */
+
   function approve(a: Action) {
     void run(a.id, async () => {
       await approveAction(code, a.id);
@@ -1492,12 +1641,68 @@ export default function TaskBoard({
     });
   }
 
-  function reject(a: Action) {
-    void run(a.id, async () => {
-      await rejectAction(code, a.id);
+  // The write itself, id-only: the one place the board rejects anything.
+  function rejectOne(id: string) {
+    return run(id, async () => {
+      await rejectAction(code, id);
       setRejectingId(null);
+      posthog.capture("agent_task_rejected", { canvas_code: code, surface: "board" });
     });
   }
+
+  // One tap on a TASK — no confirm, but the strip that arms Undo. The label is
+  // captured before the write because the card leaves the Proposed lane the
+  // moment the broadcast lands, and "Rejected TDM-163" has to survive that.
+  function reject(a: Action) {
+    if (a.type === "epic") {
+      void run(a.id, async () => {
+        await rejectAction(code, a.id);
+        setRejectingId(null);
+      });
+      return;
+    }
+    const label = a.ticketId || taskPayload(a).title || "that ticket";
+    if (amendingId === a.id) setAmendingId(null);
+    void rejectOne(a.id).then((ok) => {
+      if (ok) setUndoReject({ id: a.id, label });
+    });
+  }
+
+  // rejected → proposed (lib/taskMoves' RECONSIDER). Puts the ticket back in
+  // triage exactly as it was, NOT back in the queue — undoing a rejection
+  // returns a decision to you, it does not make it for you.
+  function undoLastReject() {
+    const target = undoReject;
+    if (!target) return;
+    void run(target.id, async () => {
+      await moveTask(code, target.id, "proposed");
+      setUndoReject(null);
+      posthog.capture("agent_task_reject_undone", { canvas_code: code, surface: "board" });
+    });
+  }
+
+  // Amend in place. The payload PATCH replaces what's stored, so the whole
+  // stored payload rides along and only title/body change.
+  function amend(a: Action, title: string, body: string) {
+    const next: TaskPayload = {
+      ...taskPayload(a),
+      title: title.trim(),
+      body: body.trim() || undefined,
+    };
+    void run(a.id, async () => {
+      await updateTask(code, a.id, next);
+      setAmendingId(null);
+      posthog.capture("agent_task_amended", { canvas_code: code, surface: "board" });
+    });
+  }
+
+  // The Undo offer is a moment, not a state: it expires on its own so it can't
+  // sit on the board offering to undo something you decided a while ago.
+  useEffect(() => {
+    if (!undoReject) return;
+    const t = setTimeout(() => setUndoReject(null), 12_000);
+    return () => clearTimeout(t);
+  }, [undoReject]);
 
   // A human state move from a CARD: no note, no confirm — the whole point is
   // that marking your own todo started or done is one click. The card doesn't
@@ -1688,15 +1893,32 @@ export default function TaskBoard({
     return <PrimaryMoveControl move={move} busy={busyId === t.id} onGo={() => moveCard(t, move)} />;
   }
 
+  // The triage row on a proposed card or epic header — swapped for the in-place
+  // editor while that ticket is being amended, so the decision and the edit
+  // occupy the same slot instead of stacking two rows of controls on a card.
   function renderApproveReject(a: Action, approveLabel?: string) {
     if (readOnly || a.state !== "proposed") return null;
+    const isEpic = a.type === "epic";
+    if (!isEpic && amendingId === a.id) {
+      return (
+        <InlineAmend
+          key={a.id}
+          action={a}
+          busy={busyId === a.id}
+          onSave={(title, body) => amend(a, title, body)}
+          onCancel={() => setAmendingId(null)}
+        />
+      );
+    }
     return (
-      <ApproveRejectControls
+      <TriageControls
         busy={busyId === a.id}
         rejecting={rejectingId === a.id}
         approveLabel={approveLabel}
+        confirmReject={isEpic}
         onApprove={() => approve(a)}
         onReject={() => reject(a)}
+        onAmend={isEpic ? undefined : () => setAmendingId(a.id)}
         setRejecting={(v) => setRejectingId(v ? a.id : null)}
       />
     );
@@ -2126,6 +2348,26 @@ export default function TaskBoard({
         ) : (
           <>
             <ProgressBar done={done} working={working} total={total} className="mt-2 h-1.5" />
+            {/* What partial triage already decided (TDM-160). Approving the epic
+                cascades to its tickets, and the honest question at that moment
+                is "what does this actually let through?" — the cascade only
+                touches tickets still in 'proposed' (both server paths filter on
+                it), so anything rejected one card up stays rejected. Saying so
+                is the difference between trusting the cascade and re-checking
+                every card before pressing the button. Shown only once a
+                decision has been made, so an untouched epic is unchanged. */}
+            {e.state === "proposed" &&
+              (() => {
+                const waiting = list.filter((t) => t.state === "proposed").length;
+                const turnedDown = list.filter((t) => t.state === "rejected").length;
+                if (turnedDown === 0) return null;
+                return (
+                  <p className={`mt-1.5 text-ink/55 ${T_META}`}>
+                    {turnedDown} rejected — approving the epic releases the {waiting} still
+                    waiting and leaves {turnedDown === 1 ? "it" : "them"} rejected.
+                  </p>
+                );
+              })()}
             <div className="max-w-xs">{renderApproveReject(e, "Approve epic")}</div>
           </>
         )}
@@ -2544,6 +2786,36 @@ export default function TaskBoard({
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* What makes one-tap reject safe (TDM-160). It sits in the board's own
+          column flow rather than floating over the lanes: on a phone the
+          Proposed lane IS the screen, and a toast pinned over it would cover
+          the next card you were about to decide on. */}
+      {undoReject && (
+        <div
+          role="status"
+          className="mx-4 mt-2 flex shrink-0 items-center gap-2 rounded-md border border-ink/10 bg-surface px-2.5 py-1.5 text-[12px] text-ink/70"
+        >
+          <Ban size={12} className="shrink-0 text-rose-500" aria-hidden="true" />
+          <span className="min-w-0 truncate">
+            Rejected <span className="font-code font-medium text-ink/85">{undoReject.label}</span>
+          </span>
+          <button
+            onClick={undoLastReject}
+            disabled={busyId === undoReject.id}
+            className={`ml-auto shrink-0 rounded-md border border-ink/15 px-2 py-1 font-medium text-ink/75 transition-colors hover:border-ink/30 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40 sm:py-0.5 ${T_BTN} ${TAP}`}
+          >
+            Undo
+          </button>
+          <button
+            onClick={() => setUndoReject(null)}
+            aria-label="Dismiss"
+            className="shrink-0 rounded p-1 text-ink/40 transition-colors hover:text-ink/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          >
+            <X size={12} />
+          </button>
         </div>
       )}
 
