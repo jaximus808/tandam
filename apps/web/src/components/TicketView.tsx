@@ -48,6 +48,7 @@ import TandemLogo from "./TandemLogo";
 import { useFreshnessNow } from "./Freshness";
 import {
   ageOf,
+  ApprovalLine,
   ClaimantChip,
   extractCommits,
   fullDate,
@@ -57,6 +58,7 @@ import {
   ProvenanceChip,
   StateChip,
 } from "./TaskBoard";
+import { parseApproval } from "../lib/provenance";
 
 /* ─────────────────────────────────────────────────────────────────────────────
    TicketView — the whole ticket, at its own URL: /c/CODE/ticket/TDM-n.
@@ -644,6 +646,9 @@ export default function TicketView({
       : undefined;
   const commits = extractCommits(task?.result);
   const reapproval = lastReapprovalEdit(p);
+  // Which gate this task passed — human, peer agent, or a policy that let it
+  // through without anyone looking (TDM-147).
+  const approval = parseApproval(task?.approvedBy);
   const progress = useMemo(
     () =>
       [...(p?.progress ?? [])].sort(
@@ -1028,9 +1033,27 @@ export default function TicketView({
                     </div>
                   </Field>
 
-                  {task.approvedBy && (
+                  {/* WHICH GATE it passed (TDM-147). Since peer approval landed,
+                      "approved" has more than one meaning, and this page is
+                      where someone lands from a pasted link to find out what
+                      happened to one piece of work — so the surprising cases (a
+                      peer agent, or a policy that let it through unlooked-at)
+                      are spelt out in words rather than left to a tooltip. A
+                      person approving their own board's task is the expected
+                      case and stays one quiet line. */}
+                  {approval && (
                     <Field label="Approved by">
-                      <span className="break-words">{task.approvedBy}</span>
+                      <ApprovalLine approvedBy={task.approvedBy} prefix={false} />
+                      {!approval.byHuman && (
+                        <p className="mt-1 text-[11px] leading-snug text-ink/45">
+                          {approval.title}
+                        </p>
+                      )}
+                      {/* The stamp itself, like Proposed by pairs the caller's
+                          label with what the server concluded. */}
+                      <div className="mt-1 font-code text-[10.5px] text-ink/35">
+                        {task.approvedBy}
+                      </div>
                     </Field>
                   )}
 

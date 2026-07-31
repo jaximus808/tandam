@@ -10,8 +10,13 @@ export type ChartType = "bar" | "line" | "area" | "pie";
 export type ActionType = "navigate" | "task" | "epic";
 // How much human gating agent-proposed tasks get on a canvas (migration 0033):
 // 'strict' = every agent task lands proposed; 'epic' (default) = tasks under an
-// APPROVED epic are born approved; 'auto' = every agent task born approved.
-export type ApprovalPolicy = "strict" | "epic" | "auto";
+// APPROVED epic are born approved; 'auto' = every agent task born approved;
+// 'peer' (migration 0041) = gates exactly like 'strict', except a REGISTERED
+// agent may approve a task a DIFFERENT agent proposed. Nothing is born approved
+// under 'peer' and epics stay human-only; what changes is WHO can open the gate,
+// which is why a peer approval is stamped approved_by = "agent:<identity>" and
+// never "human" — see Action.approvedBy.
+export type ApprovalPolicy = "strict" | "epic" | "auto" | "peer";
 export type ActionState =
   | "proposed"
   | "approved"
@@ -352,7 +357,17 @@ export interface Action {
   state: ActionState;
   payload: NavigatePayload | TaskPayload | EpicPayload;
   proposedBy: string;        // freeform label the CALLER sent — see authoredBy
-  approvedBy?: string;       // human/agent id that approved
+  // WHICH GATE this row passed, server-stamped (never read off the body):
+  //   "human"            a signed-in person pressed Approve
+  //   "agent:<identity>" a peer agent approved it under the 'peer' policy
+  //                      (TDM-145) — a different agent than the one that
+  //                      proposed it, enforced from stored provenance
+  //   "policy:epic"      born approved because its epic was approved
+  //   "policy:auto"      born approved: this canvas has no gate
+  // Older rows may carry a freeform label instead. Absent = never approved.
+  // The web app parses this with lib/provenance.parseApproval — the same
+  // "agent:<identity>" grammar as authoredBy, on purpose.
+  approvedBy?: string;
   claimedBy?: string;        // agent holding the executing claim (task_start)
   claimedAt?: string;        // when the claim was taken
   result?: string;           // execution outcome summary

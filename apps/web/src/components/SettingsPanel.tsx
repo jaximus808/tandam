@@ -2,6 +2,12 @@ import { useEffect, useState } from "react";
 import { ChevronsLeft, Trash2, Webhook } from "lucide-react";
 import type { CanvasMeta } from "../types";
 import { deleteCanvas } from "../lib/api";
+import {
+  approvalPolicyLabel,
+  approvalPolicySentence,
+  policyIsLoose,
+  policyOf,
+} from "../lib/provenance";
 import { listWebhookDeliveries, listWebhooks } from "../lib/webhooks";
 import DeleteCanvasModal from "./DeleteCanvasModal";
 import FollowStyleControl from "./FollowStyleControl";
@@ -25,6 +31,11 @@ export default function SettingsPanel({
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // What this canvas will do to the NEXT agent-proposed task. Absent reads as
+  // the server default, 'epic'.
+  const policy = policyOf(canvas.approvalPolicy);
+  const loose = policyIsLoose(policy);
 
   // Webhooks. The dock only ever shows a one-line summary — the management UI is
   // a modal, because a URL, three event names and an error message don't fit in
@@ -95,6 +106,42 @@ export default function SettingsPanel({
             {canvas.name || "Untitled canvas"}
           </p>
           <p className="mt-0.5 font-code text-[11px] tracking-[0.14em] text-ink/40">{canvas.code}</p>
+        </div>
+
+        {/* Approval gate (TDM-147) — READ-ONLY, and shown to everyone who can
+            open this canvas, not just the owner.
+
+            The control that CHANGES this lives in the Share dialog, which is
+            owner-only; the consequence of it is borne by every person reading
+            the board. Since peer approval landed (TDM-145) a canvas can be
+            configured so agents approve each other's work, and 'auto' has always
+            meant no gate at all — a board running either of those without
+            saying so is exactly the failure this disclosure exists to prevent.
+            So the policy is stated in words wherever a human can reach it,
+            rather than living only in the database and in a dialog they may not
+            be allowed to open. */}
+        <div className="mt-6 border-t border-ink/10 pt-4">
+          <div className="flex items-center gap-2">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-ink/40">
+              Approval gate
+            </p>
+            <span
+              className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+                loose ? "bg-ink/10 text-ink/70" : "bg-ink/[0.06] text-ink/50"
+              }`}
+            >
+              {approvalPolicyLabel(policy)}
+            </span>
+          </div>
+          <p className="mt-2 text-[12px] leading-relaxed text-ink/45">
+            {approvalPolicySentence(policy)}
+            {loose && " Work can reach an agent on this board without you seeing it first."}
+          </p>
+          {!isOwner && (
+            <p className="mt-1.5 text-[12px] leading-relaxed text-ink/35">
+              Only the canvas owner can change this.
+            </p>
+          )}
         </div>
 
         <div className="mt-6 border-t border-ink/10 pt-4">

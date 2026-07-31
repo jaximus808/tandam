@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ApprovalPolicy, CanvasMeta } from "../types";
 import posthog from "../lib/posthog";
+import { approvalPolicySentence, policyIsLoose, policyOf } from "../lib/provenance";
 import {
   addCanvasAccess,
   listCanvasAccess,
@@ -236,17 +237,13 @@ export default function ShareDialog({ code, canvas, onClose }: Props) {
             {postureError && <p className="mt-2 text-[12px] text-rose-600 dark:text-rose-400">{postureError}</p>}
           </div>
 
-          {/* ── Agent task approval policy (migration 0033) ────────────────── */}
+          {/* ── Agent task approval policy (migrations 0033 + 0041) ────────── */}
           <div className="mt-4 rounded-md border border-ink/15 bg-paper p-3">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
               <div className="min-w-0">
                 <p className="text-[13px] font-medium text-ink">Agent task approval</p>
                 <p className="mt-0.5 text-[12px] leading-relaxed text-ink/55">
-                  {approvalPolicy === "strict"
-                    ? "Every agent-proposed task waits for your approval."
-                    : approvalPolicy === "auto"
-                      ? "Agent tasks are ready immediately — no approval gate."
-                      : "Approve an epic once; its tasks flow without per-task approval."}
+                  {approvalPolicySentence(policyOf(approvalPolicy))}
                 </p>
               </div>
               <Segmented<ApprovalPolicy>
@@ -256,10 +253,21 @@ export default function ShareDialog({ code, canvas, onClose }: Props) {
                 options={[
                   { value: "strict", label: "Strict" },
                   { value: "epic", label: "Epic" },
+                  { value: "peer", label: "Peer" },
                   { value: "auto", label: "Auto" },
                 ]}
               />
             </div>
+            {/* The two settings that can pass agent work with no human in the
+                loop say so out loud, here, at the moment you pick them —
+                a board running one of these silently is the whole hazard. */}
+            {policyIsLoose(policyOf(approvalPolicy)) && (
+              <p className="mt-2 border-t border-ink/10 pt-2 text-[12px] leading-relaxed text-ink/55">
+                {approvalPolicy === "peer"
+                  ? "A registered agent may approve a task a different agent proposed. Those approvals are stamped with the approving agent's name and show as such on the board — you can always tell one from your own."
+                  : "Nothing waits for you. Every agent-proposed task is ready to work the moment it is created, and the board marks it as never reviewed."}
+              </p>
+            )}
             {policyError && <p className="mt-2 text-[12px] text-rose-600 dark:text-rose-400">{policyError}</p>}
           </div>
 

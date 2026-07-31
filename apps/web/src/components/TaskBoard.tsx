@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import {
   ArrowRight,
+  BadgeCheck,
   Ban,
   Bot,
   Check,
@@ -64,7 +65,12 @@ import posthog from "../lib/posthog";
 import TaskComposer, { linkTargets } from "./TaskComposer";
 import { epicLifecycle, TERMINAL_STATES } from "../lib/epicLifecycle";
 import { CHIP_BASE, STATE_CHIP } from "../lib/stateChips";
-import { parseAuthoredBy, provenanceTitle } from "../lib/provenance";
+import {
+  parseApproval,
+  parseAuthoredBy,
+  provenanceTitle,
+  type Approval,
+} from "../lib/provenance";
 import {
   auditActorLabel,
   auditChangeLabel,
@@ -618,6 +624,108 @@ export function ProvenanceChip({
       {/* Only the agent case spends width on a label — it's the only one whose
           glyph leaves a real question ("which agent?") unanswered. */}
       {p.kind === "agent" && <span className="max-w-[7rem] truncate">{p.label}</span>}
+    </span>
+  );
+}
+
+// Approval provenance (TDM-147): WHICH GATE this task passed.
+//
+// Since TDM-145 "approved" is no longer one thing — under the canvas 'peer'
+// policy a registered agent can approve a task another agent proposed, and two
+// more rows never passed a gate at all (born approved by policy). Rendering all
+// of those identically would quietly devalue the one approval that cost a
+// person's attention, so each kind gets its own glyph and its own weight.
+//
+// Hue: NONE, same rule as ProvenanceChip and ContentionMark. The six semantic
+// hues belong to STATE and amber is spoken for by re-approval; an approval stamp
+// is a record fact, so the distinction is carried by GLYPH and WEIGHT:
+//
+//   human     Check, firmer ink, NO label — an unqualified approval is a
+//             person's, and it is the only kind that needs no qualifier. That
+//             absence is what makes it read as the strongest claim.
+//   agent     BadgeCheck + the agent's own name. Dim, like every other record
+//             fact: on a peer canvas this is the NORMAL path and a card that
+//             shouted would be shouting all day. The name is the information —
+//             "approved" you already knew from the column.
+//   auto      Zap + "auto" — born approved, nobody looked.
+//   legacy    the raw stamp, verbatim, because we can't say what it meant.
+//
+// The 'epic' policy stamp renders NOTHING here. It is the canvas DEFAULT, its
+// card already carries the epic chip that explains it, and a badge on every card
+// on every default board would be noise standing in for information. It is spelt
+// out in full in the detail panel and on the ticket page, where there is room.
+export function ApprovalMark({
+  approvedBy,
+  className = "",
+}: {
+  approvedBy?: string;
+  className?: string;
+}) {
+  const a = parseApproval(approvedBy);
+  if (!a || a.kind === "epic") return null;
+
+  const Glyph = approvalGlyph(a);
+  return (
+    <span
+      className={`inline-flex min-w-0 items-center gap-1 ${
+        a.byHuman ? "font-medium text-ink/60" : "text-ink/45"
+      } ${T_META} ${className}`}
+      title={a.title}
+      aria-label={`Approved by ${a.phrase}`}
+    >
+      <Glyph size={10} className="shrink-0" aria-hidden="true" />
+      {/* Tighter than ProvenanceChip's 7rem on purpose: on a peer canvas a card
+          can carry BOTH names (agent wrote it, agent passed it) and the record
+          group does not shrink — the second name is the one that yields. The
+          full identity is in the title and on the ticket page. */}
+      {a.label && <span className="max-w-[5rem] truncate">{a.label}</span>}
+    </span>
+  );
+}
+
+function approvalGlyph(a: Approval) {
+  switch (a.kind) {
+    case "human":
+      return Check;
+    case "agent":
+      return BadgeCheck;
+    case "auto":
+      return Zap;
+    case "epic":
+      return Layers;
+    default:
+      return CircleDashed;
+  }
+}
+
+/** Sentence form for the detail panel and the ticket page: the same four facts,
+ *  spelt out, where there is room to say them. */
+export function ApprovalLine({
+  approvedBy,
+  /** False under a field already labelled "Approved by", where the prefix would
+   *  say it twice. */
+  prefix = true,
+  className = "",
+}: {
+  approvedBy?: string;
+  prefix?: boolean;
+  className?: string;
+}) {
+  const a = parseApproval(approvedBy);
+  if (!a) return null;
+  const Glyph = approvalGlyph(a);
+  return (
+    <span
+      className={`inline-flex min-w-0 items-center gap-1 ${
+        a.byHuman ? "text-ink/65" : "text-ink/50"
+      } ${className}`}
+      title={a.title}
+    >
+      <Glyph size={11} className="shrink-0" aria-hidden="true" />
+      <span className="min-w-0 break-words">
+        {prefix ? "approved by " : ""}
+        {a.phrase}
+      </span>
     </span>
   );
 }
@@ -1720,13 +1828,16 @@ export default function TaskBoard({
               the row, and it yields its width to the epic chip beside it. */}
           {handMove && <MoveMark move={handMove} />}
           {/* Record metadata, right-aligned as one group: who else went for it,
-              who wrote it, when. All three are facts about the row rather than
-              its status, so they read at the same dim weight — and the collision
-              marker leads the group because it is the only one of the three that
-              is ever news. */}
+              who wrote it, which gate let it through, when. All four are facts
+              about the row rather than its status, so they read at the same dim
+              weight — and the collision marker leads the group because it is the
+              only one that is ever news. Authorship then approval, in that
+              order: it is a chain, and reading "planner-1 wrote it → reviewer-b
+              passed it" backwards would make the pair harder, not easier. */}
           <div className="ml-auto flex shrink-0 items-center gap-1.5">
             <TaskContentionMark action={t} />
             <ProvenanceChip authoredBy={t.authoredBy} />
+            <ApprovalMark approvedBy={t.approvedBy} />
             <span className={`font-code text-ink/50 ${T_META}`} title={fullDate(t.createdAt)}>
               {ageOf(t.createdAt)}
             </span>
@@ -3481,7 +3592,10 @@ function TaskDetail({
                 </>
               )}
             </span>
-            {action.approvedBy && <span>→ approved by {action.approvedBy}</span>}
+            {/* Which gate it passed (TDM-147). The raw stamp used to be printed
+                here verbatim, which said "approved by policy:epic" to a person
+                who wanted to know whether anyone had actually looked. */}
+            <ApprovalLine approvedBy={action.approvedBy} />
             {/* The claimed label above is whatever the caller sent; this is what
                 the server derived from how the request authenticated. Sitting
                 them side by side is the point. */}

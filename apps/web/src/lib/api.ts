@@ -1,4 +1,4 @@
-import type { Action, ActionState, CanvasMeta } from "../types";
+import type { Action, ActionState, ApprovalPolicy, CanvasMeta } from "../types";
 import type { FleetActivityAction } from "./ws";
 
 // Image upload is disabled for v1 (no durable-storage story yet). Reading
@@ -541,11 +541,13 @@ export async function setCanvasVisibility(
 }
 
 // Set the canvas approval policy for agent-proposed tasks (owner-only,
-// migration 0033): 'strict' = every agent task awaits approval; 'epic'
-// (default) = approving an epic lets its tasks flow; 'auto' = no gate.
+// migrations 0033 + 0041): 'strict' = every agent task awaits approval; 'epic'
+// (default) = approving an epic lets its tasks flow; 'auto' = no gate; 'peer' =
+// gates like 'strict', but a registered agent may approve another agent's task
+// (stamped approved_by = "agent:<identity>", never "human").
 export async function setCanvasApprovalPolicy(
   code: string,
-  approvalPolicy: "strict" | "epic" | "auto",
+  approvalPolicy: ApprovalPolicy,
 ): Promise<void> {
   const res = await fetch(`/api/canvases/${code}/approval-policy`, {
     method: "PATCH",
