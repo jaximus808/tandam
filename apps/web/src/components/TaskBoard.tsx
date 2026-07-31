@@ -3336,8 +3336,24 @@ function TaskDetail({
             </div>
           ) : (
             <>
+              {/* The title is the thing a reader actually aims at, so it is the
+                  link out to the ticket's own page — not just the monospace ref
+                  in the header, which reads as a label. Unticketed actions have
+                  no page to open, so they stay plain text rather than a dead
+                  link. A real <a>, so cmd/middle-click opens a new tab. */}
               <h2 className="text-[16px] font-semibold leading-snug text-ink">
-                {p.title || "Untitled"}
+                {action.ticketId && onOpenTicket ? (
+                  <a
+                    href={`/c/${code}/ticket/${action.ticketId}`}
+                    onClick={spaLink(() => onOpenTicket(action.ticketId as string))}
+                    title={`Open ${action.ticketId} as its own page`}
+                    className="rounded-[3px] decoration-ink/25 underline-offset-[3px] transition-colors hover:text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                  >
+                    {p.title || "Untitled"}
+                  </a>
+                ) : (
+                  p.title || "Untitled"
+                )}
               </h2>
               {p.body && (
                 <p className="mt-2 whitespace-pre-wrap text-[13px] leading-relaxed text-ink/70">

@@ -613,7 +613,9 @@ export default function TicketView({
   state,
   ticketRef,
   readOnly = false,
+  userCrumb,
   onOpenBoard,
+  onOpenDashboard,
   onOpenEpic,
   onOpenDocument,
   onHome,
@@ -628,8 +630,16 @@ export default function TicketView({
   ticketRef: string;
   /** Viewer holds the read role: the page renders the record, not the moves. */
   readOnly?: boolean;
+  /**
+   * Short name of the signed-in user, or null when nobody is. Present → the
+   * trail carries a crumb to /dashboard, same as the canvas header. Already
+   * shortened by the caller (App owns that rule for both headers).
+   */
+  userCrumb?: string | null;
   /** Leave the ticket page for the Board surface. */
   onOpenBoard: () => void;
+  /** Leave for /dashboard — the user's canvases. */
+  onOpenDashboard?: () => void;
   /** Board, scoped to this task's epic. */
   onOpenEpic?: (epicId: string) => void;
   /** Open the document a linked goal / note / pin lives in. */
@@ -693,6 +703,21 @@ export default function TicketView({
       {/* Breadcrumb chrome. Deliberately thinner than the canvas header: this
           page has one subject, and everything up here is a way back to it. */}
       <header className="relative z-10 flex shrink-0 items-center gap-1.5 border-b border-ink/10 bg-paper px-3 py-2.5 sm:gap-2 sm:px-4">
+        {/* The way back, first thing on the row. The crumb trail beside it also
+            leads to the board, but a trail is a location readout that happens to
+            be clickable — someone who just wants OUT scans the top-left for an
+            arrow, not the far end of a 1400px bar, which is where this control
+            used to sit. */}
+        <button
+          onClick={onOpenBoard}
+          className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border border-ink/15 bg-surface px-2.5 text-[13px] font-medium text-ink/75 transition-colors hover:border-ink/25 hover:bg-ink/[0.03] hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-8"
+          title="Back to the board"
+        >
+          <ArrowLeft size={14} />
+          <span className="hidden sm:inline">Back to board</span>
+          <span className="sm:hidden">Board</span>
+        </button>
+        <span className="hidden shrink-0 text-ink/15 sm:inline">|</span>
         <button
           onClick={onHome}
           disabled={!onHome}
@@ -705,6 +730,22 @@ export default function TicketView({
           </span>
         </button>
         <span className="hidden shrink-0 text-ink/20 sm:inline">/</span>
+        {/* Same crumb as the canvas header: the one door from a piece of work
+            back to your canvases. One breakpoint later than the rest of the
+            trail — this row already seats a back button, and the crumb that
+            matters at 640px is the ticket id, not whose board it is. */}
+        {userCrumb && onOpenDashboard && (
+          <>
+            <button
+              onClick={onOpenDashboard}
+              title="Your canvases"
+              className="hidden max-w-[8rem] shrink-0 truncate rounded-md text-sm font-medium text-ink/60 transition-colors hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 md:inline"
+            >
+              {userCrumb}
+            </button>
+            <span className="hidden shrink-0 text-ink/20 md:inline">/</span>
+          </>
+        )}
         <button
           onClick={onOpenBoard}
           className="hidden min-w-0 max-w-[14rem] truncate rounded-md text-sm font-medium text-ink/70 transition-colors hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:inline"
@@ -712,10 +753,11 @@ export default function TicketView({
         >
           {canvasName || code}
         </button>
-        {/* The "Board" crumb is desktop-only: below sm the pill on the right is
-            already labelled "Board", and two identical controls in one 390px bar
-            is a bar that reads as broken. On a phone the crumb trail is just the
-            ticket id — which is the one thing that says where you are. */}
+        {/* The "Board" crumb is desktop-only: below sm the back button at the
+            head of this row is already labelled "Board", and two identical
+            controls in one 390px bar is a bar that reads as broken. On a phone
+            the crumb trail is just the ticket id — which is the one thing that
+            says where you are. */}
         <span className="hidden shrink-0 text-ink/20 sm:inline">/</span>
         <button
           onClick={onOpenBoard}
@@ -728,14 +770,6 @@ export default function TicketView({
         <span className="shrink-0 font-code text-[12px] font-medium tracking-tight text-ink/60">
           {task?.ticketId || ticketRef}
         </span>
-        <button
-          onClick={onOpenBoard}
-          className="ml-auto inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border border-ink/15 bg-surface px-2.5 text-[13px] font-medium text-ink/75 transition-colors hover:border-ink/25 hover:bg-ink/[0.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-8"
-        >
-          <ArrowLeft size={14} />
-          <span className="hidden sm:inline">Back to board</span>
-          <span className="sm:hidden">Board</span>
-        </button>
       </header>
 
       <div className="tandem-scroll min-h-0 flex-1 overflow-y-auto">

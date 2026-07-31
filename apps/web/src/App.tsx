@@ -292,7 +292,9 @@ function setMCPInURL() {
                                               (lives in the mobile nav drawer)
      7. Fleet chip's label ....... below sm   (·) components/FleetView.tsx
                                               (collapses to gauge + count)
-     8. "Tandem" wordmark + "/" .. below sm   HEADER_DROP.wordmark / .breadcrumbSlash
+     8. The breadcrumb trail ..... below sm   HEADER_DROP.wordmark / .breadcrumbSlash
+        ("Tandem", the "/"s, and the                / .userCrumb
+        signed-in user crumb)
    NEVER DROPPED, at any width: the canvas name (it truncates instead), the
    bell, the fleet chip, whichever of Copy/Share is showing, and the account
    control. Those five are the floor — if the row still doesn't fit once the
@@ -322,7 +324,25 @@ const HEADER_DROP = {
   /** Rank 8 — the breadcrumb separator is meaningless once the wordmark on its
       left is gone, so the two share a rung. */
   breadcrumbSlash: "hidden sm:inline",
+  /** Rank 8 — the "Jaxon" crumb between Tandem and the canvas: the way from a
+      canvas back to /dashboard. Shares the trail's rung because a trail with a
+      hole in it is worse than no trail, and because this is a shortcut, not the
+      only door — the account menu keeps "My canvases" at every width. */
+  userCrumb: "hidden sm:inline",
 } as const;
+
+/**
+ * The name to show in that crumb. First word only: the header's job here is to
+ * say WHOSE canvases the crumb leads to, and "Jaxon" does that in a third of
+ * the width "Jaxon Poentis" wants. Falls back through the email's local part so
+ * a display-name-less account still gets a crumb rather than a blank one.
+ */
+function crumbName(user: { displayName?: string; email?: string } | null): string {
+  const full = (user?.displayName || "").trim();
+  if (full) return full.split(/\s+/)[0];
+  const local = (user?.email || "").split("@")[0];
+  return local || "You";
+}
 
 export default function App() {
   const [route, setRoute] = useState<Route>(routeFromPath);
@@ -1354,10 +1374,14 @@ export default function App() {
         // rides in with the first snapshot, i.e. alongside the state the page
         // needs to render anything but its skeleton.
         readOnly={canvas?.yourRole === "read"}
+        // Same crumb rule as the canvas header — App owns the shortening so the
+        // two trails can't drift apart.
+        userCrumb={me ? crumbName(me) : null}
         onOpenBoard={() => {
           setSurface("board");
           closeTicket();
         }}
+        onOpenDashboard={showMyCanvases}
         onOpenEpic={(epicId) => {
           openBoardForEpic(epicId);
           closeTicket();
@@ -1506,6 +1530,26 @@ export default function App() {
           </span>
         </button>
         <span className={`${HEADER_DROP.breadcrumbSlash} text-ink/20 shrink-0`}>/</span>
+        {/* ZONE 3 (control) — the way from a canvas to /dashboard, which the
+            header otherwise has no door to: the logo goes to the landing page,
+            not to your canvases. Signed-out viewers have no dashboard, so they
+            get no crumb rather than a control that bounces them to sign-in.
+            Rank 8 (see HEADER_DROP.userCrumb) — it rides with the rest of the
+            trail. shrink-0 and outside Zone 1's containment, like the wordmark
+            beside it; its own max-w keeps a long name from crowding the canvas
+            name, which is the crumb that must never drop. */}
+        {me && (
+          <>
+            <button
+              onClick={showMyCanvases}
+              title="Your canvases"
+              className={`${HEADER_DROP.userCrumb} max-w-[8rem] shrink-0 truncate rounded-md text-sm font-medium text-ink/60 transition-colors hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40`}
+            >
+              {crumbName(me)}
+            </button>
+            <span className={`${HEADER_DROP.breadcrumbSlash} text-ink/20 shrink-0`}>/</span>
+          </>
+        )}
         {/* ZONE 1 · IDENTITY — the row's shock absorber. `min-w-0` lets it
             narrow all the way; `overflow-hidden` is the guarantee that came out
             of TDM-152, because flex shrinks this BOX and not its contents:
