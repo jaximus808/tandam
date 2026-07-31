@@ -10,6 +10,7 @@ import {
   GitCommitHorizontal,
   Layers,
   Link2,
+  Maximize2,
   Milestone,
   Pencil,
   PenLine,
@@ -2891,16 +2892,36 @@ function TaskDetail({
               needs approval
             </span>
           )}
-          {/* On a phone this slide-over is the whole screen, so its close button
-              is the only way out — it gets the touch floor, not the dense
-              desktop 28px. */}
-          <button
-            onClick={onClose}
-            className="ml-auto flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-ink/40 transition-colors hover:bg-ink/5 hover:text-ink/70 sm:h-7 sm:w-7"
-            aria-label="Close"
-          >
-            <X size={15} />
-          </button>
+          <div className="ml-auto flex shrink-0 items-center gap-1">
+            {/* The ref above is the address, but it reads as a label — a
+                monospace chip nobody thinks to click. This is the same
+                destination said out loud, so the way OUT of the step-in panel
+                to the ticket's own page is visible without a hover. Unticketed
+                actions have no page to open, so they get no control at all
+                rather than a dead one. */}
+            {action.ticketId && onOpenTicket && (
+              <a
+                href={`/c/${code}/ticket/${action.ticketId}`}
+                onClick={spaLink(() => onOpenTicket(action.ticketId as string))}
+                title={`Open ${action.ticketId} as its own page`}
+                aria-label={`Open ${action.ticketId} as its own page`}
+                className="flex h-11 items-center gap-1.5 rounded-md px-2 text-[11px] font-medium text-ink/45 transition-colors hover:bg-ink/5 hover:text-ink/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-7"
+              >
+                <Maximize2 size={13} />
+                <span className="hidden sm:inline">Full page</span>
+              </a>
+            )}
+            {/* On a phone this slide-over is the whole screen, so its close
+                button is the only way out — it gets the touch floor, not the
+                dense desktop 28px. */}
+            <button
+              onClick={onClose}
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-ink/40 transition-colors hover:bg-ink/5 hover:text-ink/70 sm:h-7 sm:w-7"
+              aria-label="Close"
+            >
+              <X size={15} />
+            </button>
+          </div>
         </div>
 
         {/* --tandem-pb-base = the py-3 this surface would have had; the safe-area
