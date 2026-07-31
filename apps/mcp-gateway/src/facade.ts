@@ -874,6 +874,235 @@ function composeMarkdown(title: unknown, body: unknown): string {
   return t ? `## ${t}\n\n${b}` : b;
 }
 
+// ── Ticket quality (epic_propose) ────────────────────────────────────────────
+
+/**
+ * The ticket-quality contract for a proposed plan (TDM-159).
+ *
+ * The pitch of the plan gate is "the decomposition is worth reviewing" — and
+ * eleven mushy tickets kill it. Until now ticket quality rode entirely on
+ * whichever model happened to be orchestrating; this makes it product surface.
+ * The contract itself is stated in the epic_propose tool DESCRIPTION, because
+ * shaping generation is where most of the leverage is; this is the backstop.
+ *
+ * The split is deliberate, by what a server can honestly judge:
+ *  - HARD FAIL (`ticketContractFailures`) on objective, cheap checks only, and
+ *    before any write, so a refused plan leaves no half-written epic behind.
+ *  - WARN (`ticketQualityWarnings`), never block, on the soft ones. They ride
+ *    back on the response so the proposing agent sees its own slop and can
+ *    amend before the human ever looks.
+ *
+ * There is deliberately NO model judging ticket quality here: an LLM in the
+ * write path of the gate is slow, unpredictable, and puts an opinion where a
+ * rule belongs. If quality needs a model's opinion, that is the reviewer role's
+ * job (task_approve), not this call's.
+ */
+
+/** Below either of these a `body` is a title with extra whitespace, not a ticket. */
+const TICKET_MIN_BODY_CHARS = 24;
+const TICKET_MIN_BODY_WORDS = 5;
+/** Past this, a body is heavy enough that its context belongs in `linkedIds`. */
+const TICKET_CONTEXT_CHARS = 1200;
+/** Past this, one ticket is very unlikely to be one sitting of work. */
+const TICKET_SPRAWL_CHARS = 3000;
+/** A numbered plan this long inside ONE ticket is an epic wearing a ticket. */
+const TICKET_SPRAWL_STEPS = 6;
+/** A line repeated verbatim across tickets counts as pasted context at this length. */
+const PASTED_LINE_CHARS = 80;
+
+type TicketWarningCode =
+  | "no_surface_named"
+  | "no_done_condition"
+  | "may_exceed_one_sitting"
+  | "context_not_linked"
+  | "context_duplicated";
+
+/** One non-blocking quality smell, always about exactly ONE ticket in the batch. */
+type TicketWarning = {
+  code: TicketWarningCode;
+  /** 0-based position in the `tasks` array as it was passed in. */
+  index: number;
+  title: string;
+  /** One line: what is missing and what to do about it. */
+  message: string;
+  /** Filled in once the batch has landed, so the agent can task_amend it. */
+  taskId?: string;
+  ticketId?: string;
+};
+
+/** Anything that names a concrete surface: a path, a file, an endpoint, an identifier. */
+const NAMES_A_SURFACE: RegExp[] = [
+  /[\w@.-]+\/[\w@./-]+/, // apps/api/internal/..., /api/canvas/state
+  /\.(?:ts|tsx|js|jsx|mjs|cjs|go|sql|json|css|scss|md|py|rs|rb|java|kt|swift|sh|ya?ml|toml)\b/i,
+  /`[^`]+`/, // a backticked identifier
+  /\b(?:GET|POST|PUT|PATCH|DELETE)\s+\//, // an endpoint
+  /\w\(\)/, // a function call
+  /\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b/, // snake_case identifier
+  /\b[A-Z][a-z0-9]+[A-Z][A-Za-z0-9]*\b/, // CamelCase identifier
+];
+
+/**
+ * Phrases that state something a third party could CHECK. Deliberately not
+ * "must" / "should": those state intent, and intent is what a vague ticket has
+ * plenty of. A missed smell is cheap here; a warning on a good ticket is not.
+ */
+const STATES_DONE_CONDITION =
+  /\b(?:done when|acceptance|verif(?:y|ies|ied|ication)|pass(?:es|ing)|green|assert\w*|expect\w*|returns?|renders?|succeeds?|exits?|no longer|results in|such that|so that)\b/i;
+
+/** Two clauses of work bolted into one title. */
+const TITLE_CONJUNCTION = /\s(?:and|&|\+|plus|then)\s/i;
+
+/** Lowercased, punctuation-free and epic-prefix-free — for comparing two titles. */
+function normalizeTitle(s: string): string {
+  return s
+    .replace(/^\s*E\d+\s*[·.:•\-–—]\s*/i, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+/** The distinct top-level packages a ticket's text names, e.g. `apps/api`. */
+function namedPackages(text: string): Set<string> {
+  const out = new Set<string>();
+  for (const m of text.matchAll(/\b(apps|internal|packages|services|libs|supabase)\/([\w.-]+)/g)) {
+    out.add(`${m[1]}/${m[2]}`);
+  }
+  return out;
+}
+
+/** How many `1.` / `2)` steps a body enumerates. */
+function numberedSteps(body: string): number {
+  return (body.match(/^\s*\d+[.)]\s+\S/gm) ?? []).length;
+}
+
+/** The body's substantial lines, normalized — the unit we compare across tickets. */
+function longLines(body: string): string[] {
+  return body
+    .split(/\n+/)
+    .map((l) => l.trim().replace(/\s+/g, " "))
+    .filter((l) => l.length >= PASTED_LINE_CHARS);
+}
+
+/**
+ * The HARD half: objective, cheap, and run before anything is written. Every
+ * failure is collected so a lazy plan gets fixed in one pass instead of one
+ * round-trip per ticket. Returns the messages; the caller throws.
+ */
+function ticketContractFailures(epicTitle: string, tasks: Args[]): string[] {
+  const failures: string[] = [];
+
+  // One ticket is a task, not an epic: the container buys an approval step and
+  // an epic summary that a single unit of work has no use for.
+  if (tasks.length === 1) {
+    failures.push(
+      "This epic has exactly ONE ticket, which makes it a task, not an epic — propose it with " +
+        "task_propose (passing `epicId` to file it under an existing batch), or split the work " +
+        "into the several tickets it actually is."
+    );
+  }
+
+  const epicKey = normalizeTitle(epicTitle);
+  for (const [i, t] of tasks.entries()) {
+    const title = typeof t.title === "string" ? t.title.trim() : "";
+    const body = typeof t.body === "string" ? t.body.trim() : "";
+    const where = `tasks[${i}] ("${title}")`;
+
+    if (body.length < TICKET_MIN_BODY_CHARS || body.split(/\s+/).filter(Boolean).length < TICKET_MIN_BODY_WORDS) {
+      failures.push(
+        `${where} has no real \`body\` — a title on its own is not a ticket. Say what changes, ` +
+          `on which surface, and how someone else would know it is done.`
+      );
+    }
+    if (epicKey && normalizeTitle(title) === epicKey) {
+      failures.push(
+        `${where} just restates the epic title — a ticket has to name its own slice of the work, ` +
+          `not the batch it sits in.`
+      );
+    }
+  }
+  return failures;
+}
+
+/**
+ * The SOFT half: everything a rule can smell but not prove. Non-blocking on
+ * purpose — a heuristic that blocks is a heuristic you learn to route around.
+ */
+function ticketQualityWarnings(tasks: Args[], callHasLinkedContext: boolean): TicketWarning[] {
+  const warnings: TicketWarning[] = [];
+
+  // A substantial line repeated verbatim across tickets is context that was
+  // pasted rather than linked. Counted across the whole batch, flagged per ticket.
+  const lineCounts = new Map<string, number>();
+  for (const t of tasks) {
+    for (const line of new Set(longLines(typeof t.body === "string" ? t.body : ""))) {
+      lineCounts.set(line, (lineCounts.get(line) ?? 0) + 1);
+    }
+  }
+
+  for (const [index, t] of tasks.entries()) {
+    const title = typeof t.title === "string" ? t.title.trim() : "";
+    const body = typeof t.body === "string" ? t.body.trim() : "";
+    const text = `${title}\n${body}`;
+    const linked = Array.isArray(t.linkedIds) && t.linkedIds.length > 0;
+    const add = (code: TicketWarningCode, message: string) =>
+      warnings.push({ code, index, title, message });
+
+    if (!NAMES_A_SURFACE.some((re) => re.test(text))) {
+      add(
+        "no_surface_named",
+        "Names no surface — say which file, package, endpoint or component this touches. " +
+          "'Improve auth' is an area, not a ticket."
+      );
+    }
+    if (!STATES_DONE_CONDITION.test(body)) {
+      add(
+        "no_done_condition",
+        "No done condition a third party could check — say what is true when it is finished " +
+          "(a test, a build, an observable behaviour), not just what to go do."
+      );
+    }
+    if (
+      body.length > TICKET_SPRAWL_CHARS ||
+      numberedSteps(body) >= TICKET_SPRAWL_STEPS ||
+      (TITLE_CONJUNCTION.test(title) && namedPackages(text).size >= 2)
+    ) {
+      add(
+        "may_exceed_one_sitting",
+        "Reads like more than one sitting of work — one ticket is one sitting. If it needs " +
+          "three, it is an epic of its own, so split it."
+      );
+    }
+    if (body.length > TICKET_CONTEXT_CHARS && !linked && !callHasLinkedContext) {
+      add(
+        "context_not_linked",
+        `Heavy body (${body.length} chars) with nothing in \`linkedIds\` — link the note or ` +
+          `roadmap item instead of pasting it; task_get hydrates links for whoever picks this up.`
+      );
+    }
+    if (longLines(body).some((l) => (lineCounts.get(l) ?? 0) > 1)) {
+      add(
+        "context_duplicated",
+        "Repeats context verbatim from another ticket in this batch — write it once as a note " +
+          "and link it from each ticket with `linkedIds`."
+      );
+    }
+  }
+  return warnings;
+}
+
+/** How to read a batch's warnings — what they are, and what they are not. */
+function ticketWarningsNote(warnings: TicketWarning[], total: number): string {
+  const tickets = new Set(warnings.map((w) => w.index)).size;
+  return (
+    `${warnings.length} quality warning(s) across ${tickets} of ${total} ticket(s). The batch WAS ` +
+    `created and these do NOT block approval — they are the slop a rule can see, handed back to ` +
+    `you before a human reads it. Each carries a \`code\`, the ticket it is about (\`ticketId\` / ` +
+    `\`taskId\` / \`index\`) and one line on what is missing. Fix the ones you agree with using ` +
+    `task_amend — the tickets are still 'proposed', so they are yours to edit — and leave the ` +
+    `rest: a warning is a smell, not a verdict.`
+  );
+}
+
 // ── Dispatch ─────────────────────────────────────────────────────────────────
 
 const FACADE_NAMES = new Set([
@@ -1618,6 +1847,24 @@ export async function handleFacadeTool(
         }
       }
 
+      // The ticket-quality contract (TDM-159), split by what a rule can honestly
+      // judge. The hard half runs HERE, before any write, so a refused plan
+      // leaves nothing behind; it is collected, not thrown per ticket, so a lazy
+      // plan is fixed in one pass.
+      const failures = ticketContractFailures(title, many);
+      if (failures.length > 0) {
+        throw new Error(
+          `This plan does not meet the ticket-quality contract, so NOTHING was written — no ` +
+            `epic, no tickets. Fix these and call epic_propose again:\n- ${failures.join("\n- ")}`
+        );
+      }
+      // The soft half is computed off the same inputs but never blocks: it rides
+      // back on the response below so the proposer sees its own slop first.
+      const warnings = ticketQualityWarnings(
+        many,
+        Array.isArray(args.linkedIds) && args.linkedIds.length > 0
+      );
+
       // Started HERE, not where it is read: the policy decides what the answer
       // promises about approval (below), and it is independent of the writes, so
       // running it alongside them keeps this call the same wall-clock cost it was.
@@ -1645,6 +1892,14 @@ export async function handleFacadeTool(
           title: a.payload?.title ?? "",
           state: a.state,
         }));
+        // The warnings were computed off the REQUEST, so they only know a
+        // ticket's position. Now that the batch has landed, point each one at
+        // the ticket it is about — without an id there is nothing to amend.
+        for (const w of warnings) {
+          const row = tasks[w.index] as Record<string, unknown> | undefined;
+          if (typeof row?.id === "string") w.taskId = row.id;
+          if (typeof row?.ticketId === "string") w.ticketId = row.ticketId;
+        }
       }
 
       // What ONE approval buys is per-canvas (TDM-146). Under the default 'epic'
@@ -1667,6 +1922,9 @@ export async function handleFacadeTool(
         epicId: epic.id,
         state: epic.state ?? "proposed",
         ...(many.length > 0 ? { tasks } : {}),
+        ...(warnings.length > 0
+          ? { warnings, _warnings: ticketWarningsNote(warnings, many.length) }
+          : {}),
         url: canvasBlock(gateway).url,
         _next:
           epicApproval +
@@ -2191,7 +2449,20 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
       "Propose an EPIC — the named container a plan hangs off — and, in the SAME call, the tasks " +
       "under it via `tasks` (same item shape as task_propose). Use this whenever you're asked to " +
       "'write an epic' or plan a feature: tasks proposed without one are unparented and each need " +
-      "their own approval. The epic lands as 'proposed'; a HUMAN approves it ONCE on the board " +
+      "their own approval. " +
+      "TICKET QUALITY IS THE POINT HERE, not a nicety: the PLAN is what the human reviews, so " +
+      "eleven mushy tickets waste the whole gate. Every ticket you write must (1) NAME THE " +
+      "SURFACE it touches — a file, a package, an endpoint, a component, never 'improve auth'; " +
+      "(2) carry a DONE CONDITION someone else could check without asking you — a test, a build, " +
+      "an observable behaviour; (3) be ONE SITTING of work — if it needs three, it is its own " +
+      "epic, so split it; (4) LINK heavy context with `linkedIds` instead of pasting the same " +
+      "background into every body (task_get hydrates links for whoever picks the ticket up). " +
+      "The cheap, objective half of that is ENFORCED: a ticket with no real body, a ticket whose " +
+      "title just restates the epic's, or an epic with exactly one ticket is REFUSED and nothing " +
+      "is written — fix them all and call again. The rest comes back as non-blocking `warnings` " +
+      "on the response, each naming a ticket and what it is missing: read them and amend with " +
+      "task_amend while the tickets are still 'proposed'. Warnings never block approval. " +
+      "The epic lands as 'proposed'; a HUMAN approves it ONCE on the board " +
       "and that single approval cascades to every task under it. You must NOT try to approve " +
       "it yourself — that gate is the human's on every canvas, epics included, and the server " +
       "refuses agent approval of an epic even where it allows peer review of a task (there the " +
@@ -2215,13 +2486,31 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
           type: "array",
           description:
             "The plan, created under the new epic in one write — each item takes the same fields " +
-            "as task_propose. Any `epicId` on an item is overridden with the new epic's id.",
+            "as task_propose. Any `epicId` on an item is overridden with the new epic's id. " +
+            "Two or more: an epic with a single ticket is refused, because that is a task " +
+            "(use task_propose). Each one is a slice of the batch, not a restatement of it.",
           items: {
             type: "object" as const,
             properties: {
-              title: { type: "string" },
-              body: { type: "string" },
-              linkedIds: { type: "array", items: { type: "string" } },
+              title: {
+                type: "string",
+                description:
+                  "One line naming this ticket's own slice of the work — not the epic's title again.",
+              },
+              body: {
+                type: "string",
+                description:
+                  "What changes, on WHICH surface (file / package / endpoint / component), and " +
+                  "the DONE CONDITION someone else could check without asking you. Required in " +
+                  "substance: a near-empty body is refused. One sitting of work per ticket.",
+              },
+              linkedIds: {
+                type: "array",
+                items: { type: "string" },
+                description:
+                  "Ids of the notes / roadmap items carrying the heavy context — link it here " +
+                  "rather than pasting the same background into every ticket body.",
+              },
               assignee: { type: "string", enum: ["agent", "human"] },
               requiresApproval: { type: "boolean" },
             },
