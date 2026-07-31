@@ -49,8 +49,15 @@ type rosterCounts struct {
 	Registered   int `json:"registered"`
 	Unregistered int `json:"unregistered"`
 	Working      int `json:"working"` // holding at least one executing claim
-	Idle         int `json:"idle"`
-	Claims       int `json:"claims"` // executing actions with a claimant
+	// Waiting is agents parked on the long poll and holding no claim (TDM-151) —
+	// present and blocked, which is neither working nor idle.
+	Waiting int `json:"waiting"`
+	Idle    int `json:"idle"`
+	Claims  int `json:"claims"` // executing actions with a claimant
+	// WaitingUnattributed is parked waits that asserted no identity, so they
+	// belong to no row above. Counted rather than dropped: they are real agents,
+	// and a board that silently ignored them would under-report presence.
+	WaitingUnattributed int `json:"waitingUnattributed"`
 }
 
 // rosterAgent is one fleet member. Everything below `Registered` is nil/empty
@@ -79,6 +86,31 @@ type rosterAgent struct {
 	// read, and no new write, to compute this.
 	LastActivityAt *time.Time   `json:"lastActivityAt,omitempty"`
 	Tasks          []rosterTask `json:"tasks"`
+	// Waiting is set ONLY while this identity is genuinely parked on the queue
+	// long poll right now (TDM-151). Absent is the default and the safe answer:
+	// nothing infers waiting, so a board with no live waiter shows none.
+	Waiting *rosterWait `json:"waiting,omitempty"`
+}
+
+// rosterWait is "this agent is blocked on approval, since when, and for what".
+//
+// It is LIVE PRESENCE, not stored state: it comes from the in-process long-poll
+// registry (queue_wait.go), never from a table. Everything follows from that —
+// it cannot survive the connection (a waiter that hung up is out of the registry
+// before this is computed), it cannot survive a restart (the registry starts
+// empty, and so did every connection), and it cannot be asserted by a client
+// that isn't actually holding a wait open.
+type rosterWait struct {
+	// Since is the start of this agent's continuous wait, held stable across the
+	// re-polls a long wait is made of — so "waiting 6m" means six minutes, not
+	// "since the last 25-second window".
+	Since time.Time `json:"since"`
+	// EpicID is set when the agent narrowed its wait to one batch (the shape an
+	// orchestrator uses after epic_propose: "wake me when MY tasks are approved").
+	EpicID string `json:"epicId,omitempty"`
+	// Scope names that in one word for a UI: "queue" (anything approved) or
+	// "epic".
+	Scope string `json:"scope"`
 }
 
 // rosterTask is the in-flight work an agent holds — a compact projection, not
@@ -189,7 +221,13 @@ func (h *Handler) ListAgentRoster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, buildRoster(agents, executing, now))
+	// Who is parked on the queue right now (TDM-151). A process-local read, not a
+	// third round trip: waiting is a live connection, so it is known here and
+	// nowhere else, and it is read AFTER the store fetches so the answer is as
+	// late as possible.
+	waiting, anonWaits := h.waiters.waitingOn(canvasID, now)
+
+	writeJSON(w, http.StatusOK, buildRoster(agents, executing, waiting, anonWaits, now))
 }
 
 // buildRoster is the join, kept out of the handler so it is directly testable.
@@ -200,7 +238,21 @@ func (h *Handler) ListAgentRoster(w http.ResponseWriter, r *http.Request) {
 // becomes its own registered:false entry — including the generic "agent"
 // sentinel the web surface uses when it completes a task with no identity, which
 // is a real (if anonymous) holder and is reported as such rather than dropped.
-func buildRoster(agents []*store.Agent, executing []*store.Action, now time.Time) rosterMsg {
+//
+// WAITING (TDM-151) is joined by the SAME two-step, from the live long-poll
+// registry rather than from any row: `waiting` maps an asserted identity to the
+// wait it is parked on, and `anonWaits` counts the parked waits that named
+// nobody. The rule the ticket turns on: an entry appears here only while a
+// connection is genuinely held open, so a waiter that hung up or a process that
+// restarted reports nothing — better to show nothing than to imply an agent is
+// waiting when it is gone.
+func buildRoster(
+	agents []*store.Agent,
+	executing []*store.Action,
+	waiting map[string]waitingWatch,
+	anonWaits int,
+	now time.Time,
+) rosterMsg {
 	out := make([]*rosterAgent, 0, len(agents))
 	byName := make(map[string]*rosterAgent, len(agents))
 	byID := make(map[string]*rosterAgent, len(agents))
@@ -274,16 +326,53 @@ func buildRoster(agents []*store.Agent, executing []*store.Action, now time.Time
 		entry.Tasks = append(entry.Tasks, t)
 	}
 
-	counts := rosterCounts{Agents: len(out), Claims: claims}
+	// Waiting, attributed the same way a claim is: by name, then by id string. An
+	// identity that is waiting but has no agents row gets an entry of its own —
+	// the same call the claim join makes above, for the same reason. It is holding
+	// a connection open on this canvas right now; hiding it would leave the human
+	// with the exact silence this is meant to break.
+	for name, watch := range waiting {
+		entry := byName[name]
+		if entry == nil {
+			entry = byID[name]
+		}
+		if entry == nil {
+			entry = &rosterAgent{
+				Name: name, Status: "unknown", Registered: false, Tasks: []rosterTask{},
+			}
+			out = append(out, entry)
+			byName[name] = entry
+		}
+		scope := "queue"
+		if watch.EpicID != "" {
+			scope = "epic"
+		}
+		entry.Waiting = &rosterWait{Since: watch.Since.UTC(), EpicID: watch.EpicID, Scope: scope}
+		// A held-open wait is proof of life at least as recent as its start, so it
+		// counts as activity — otherwise an orchestrator that has waited an hour
+		// without claiming anything ages into "dormant" while it is demonstrably
+		// there. Deliberately `since` and not `now`: what is provable is when the
+		// wait began.
+		at := watch.Since.UTC()
+		entry.LastActivityAt = laterOf(entry.LastActivityAt, &at)
+	}
+
+	counts := rosterCounts{Agents: len(out), Claims: claims, WaitingUnattributed: anonWaits}
 	for _, e := range out {
 		if e.Registered {
 			counts.Registered++
 		} else {
 			counts.Unregistered++
 		}
-		if len(e.Tasks) > 0 {
+		switch {
+		case len(e.Tasks) > 0:
 			counts.Working++
-		} else {
+		case e.Waiting != nil:
+			// Blocked on the human, not idle — the distinction the whole feature
+			// exists to draw. (An agent holding a claim reads as working even if it
+			// is also waiting: what it holds is the more urgent fact.)
+			counts.Waiting++
+		default:
 			counts.Idle++
 		}
 		// Newest claim first inside an agent that holds several.
@@ -292,12 +381,16 @@ func buildRoster(agents []*store.Agent, executing []*store.Action, now time.Time
 		})
 	}
 
-	// Working agents first (that's the question the roster answers), then most
+	// Working agents first (that's the question the roster answers), then the ones
+	// parked on the queue (present, blocked, and the human's move), then most
 	// recently active, then name for a stable order across refreshes.
 	sort.SliceStable(out, func(i, j int) bool {
 		ai, aj := out[i], out[j]
 		if (len(ai.Tasks) > 0) != (len(aj.Tasks) > 0) {
 			return len(ai.Tasks) > 0
+		}
+		if (ai.Waiting != nil) != (aj.Waiting != nil) {
+			return ai.Waiting != nil
 		}
 		if !sameTime(ai.LastActivityAt, aj.LastActivityAt) {
 			return afterTime(ai.LastActivityAt, aj.LastActivityAt)
@@ -310,7 +403,11 @@ func buildRoster(agents []*store.Agent, executing []*store.Action, now time.Time
 		Hint: "registered:false = a claimant with no agents row (never called " +
 			"agent_register), listed so the roster matches who actually holds work. " +
 			"lastActivityAt = max(registeredAt, lastSeen, claimedAt) — the claim and " +
-			"complete paths both refresh lastSeen, so completions are folded in.",
+			"complete paths both refresh lastSeen, so completions are folded in. " +
+			"waiting = this agent is holding the queue long poll open RIGHT NOW " +
+			"(live connection, in-process, never stored): absent means nobody is " +
+			"waiting, and a waiter that disconnected or a server that restarted " +
+			"reports nothing rather than a ghost.",
 	}
 }
 

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -93,6 +94,46 @@ const (
 	// maxQueueWaitersTotal bounds the whole process, so many small canvases can't
 	// do what one canvas is capped from doing.
 	maxQueueWaitersTotal = 512
+
+	// queueWaitStreakGrace bridges the GAP BETWEEN POLLS (TDM-151).
+	//
+	// A waiting agent is not one connection, it is a chain of them: the wait
+	// answers "timeout" at 25s and the agent immediately calls again, so for a few
+	// hundred milliseconds nothing is registered even though the agent never
+	// stopped waiting. Reporting that gap as "not waiting" would make the fleet
+	// view flicker waiting → idle → waiting once per poll, and would reset the
+	// "waiting for 4m" clock every 25 seconds — the same lie about duration TDM-112
+	// fixed for claims.
+	//
+	// So a wait that ends in a TIMEOUT keeps its identity's streak alive for this
+	// long. Every other ending — the caller disconnected, the caller got work, the
+	// read failed — ends the streak IMMEDIATELY, because in none of those cases is
+	// anyone still parked. That asymmetry is the whole honesty argument: the grace
+	// only ever covers a gap the agent has already announced it will close, and an
+	// agent that dies mid-wait (the failure this exists to catch) stops reading as
+	// waiting within one roster read, not within this window.
+	//
+	// 10s is ~40% of the default timeout: far longer than any real re-call gap,
+	// far shorter than the wait itself, so a dead orchestrator cannot hide in it.
+	queueWaitStreakGrace = 10 * time.Second
+	// maxWaitStreaksPerCanvas bounds the identity bookkeeping above, which — unlike
+	// the waiter registry — outlives its connection by `grace`. A caller cycling
+	// through invented agent names can't grow it without bound: past the cap,
+	// waits still work, they just aren't attributed to a name on the roster.
+	maxWaitStreaksPerCanvas = 128
+)
+
+// How a wait ended. The ONLY input to whether the identity keeps reading as
+// waiting — see queueWaitStreakGrace.
+type waitEnd int
+
+const (
+	// waitEndGone: nobody is parked any more, full stop. Disconnect, an answer
+	// carrying work, or an error. The identity stops reading as waiting at once.
+	waitEndGone waitEnd = iota
+	// waitEndTimeout: answered "nothing yet, call again". The agent is expected
+	// back within milliseconds, so its streak survives the gap.
+	waitEndTimeout
 )
 
 // The two statuses this endpoint answers with. THE distinguishing field: both
@@ -117,19 +158,61 @@ type queueWaiters struct {
 	mu    sync.Mutex
 	rooms map[uuid.UUID]map[chan struct{}]struct{}
 	total int
+	// streaks is the IDENTITY side of the registry (TDM-151): canvas → asserted
+	// agent name → the continuous wait that name is on. Separate from `rooms`
+	// because a waiting AGENT and a parked CONNECTION are not the same lifetime —
+	// see queueWaitStreakGrace. Purely in-process, like the rooms above: a
+	// restart forgets every wait, which is the correct answer, because a restart
+	// also dropped every connection.
+	streaks map[uuid.UUID]map[string]*waitStreak
+}
+
+// waitStreak is one identity's continuous wait: when it started, what it is
+// waiting for, and whether it is parked right now.
+type waitStreak struct {
+	// since is the start of the CURRENT streak and is never pushed forward by a
+	// re-poll — the honest "waiting for 4m", for the same reason firstClaimedAt
+	// exists on a claim (TDM-112).
+	since time.Time
+	// epicID is the narrowing this identity last waited with ("" = the whole
+	// queue), so the board can say what it is parked on and not just that it is.
+	epicID string
+	// parked is how many of this identity's connections are registered right now.
+	// Normally 0 or 1; >1 only if one name runs two waits at once.
+	parked int
+	// endedAt is when the last of them ended in a TIMEOUT — the start of the
+	// grace window. Zero while parked > 0.
+	endedAt time.Time
+}
+
+// waiting reports whether this streak still reads as waiting at `now`.
+func (s *waitStreak) waiting(now time.Time) bool {
+	return s.parked > 0 || now.Sub(s.endedAt) < queueWaitStreakGrace
 }
 
 // add registers a waiter for a canvas and returns its channel plus the release
 // func that removes it. ok=false means a cap was hit and NOTHING was registered.
 //
+// `agent` is the caller's asserted identity (the X-Tandem-Agent header, the same
+// string it claims tasks under) and may be empty: a wait with no identity still
+// works, it just can't be attributed to a row on the roster. `epicID` is the
+// narrowing it is waiting on, for display only.
+//
 // The release func is idempotent, and is the ONLY way a waiter leaves the
 // registry — every caller defers it, so an abandoned wait cleans up on the same
-// path as a satisfied one.
-func (q *queueWaiters) add(canvasID uuid.UUID) (<-chan struct{}, func(), bool) {
+// path as a satisfied one. It takes how the wait ENDED, which is what decides
+// whether the identity keeps reading as waiting; the deferred call passes
+// waitEndGone, so a path that forgets to say otherwise fails towards "not
+// waiting" rather than towards a ghost.
+//
+// started (and release's own bool) report whether the canvas's WAITING SET
+// actually moved — this identity was not waiting a moment ago, or has stopped —
+// so the board is told when the answer changed and not once per re-poll.
+func (q *queueWaiters) add(canvasID uuid.UUID, agent, epicID string) (ready <-chan struct{}, release func(waitEnd) bool, started, ok bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.total >= maxQueueWaitersTotal || len(q.rooms[canvasID]) >= maxQueueWaitersPerCanvas {
-		return nil, nil, false
+		return nil, nil, false, false
 	}
 	if q.rooms == nil {
 		q.rooms = make(map[uuid.UUID]map[chan struct{}]struct{})
@@ -143,8 +226,36 @@ func (q *queueWaiters) add(canvasID uuid.UUID) (<-chan struct{}, func(), bool) {
 	room[ch] = struct{}{}
 	q.total++
 
+	now := time.Now().UTC()
+	// An anonymous wait has no identity to attribute, so it moves the count and
+	// nothing else — hence `started` is true for it, and no streak is kept.
+	started = agent == ""
+	if agent != "" {
+		q.pruneStreaksLocked(canvasID, now)
+		byName := q.streaks[canvasID]
+		s := byName[agent]
+		if s == nil && (byName == nil || len(byName) < maxWaitStreaksPerCanvas) {
+			if q.streaks == nil {
+				q.streaks = make(map[uuid.UUID]map[string]*waitStreak)
+			}
+			if byName == nil {
+				byName = make(map[string]*waitStreak)
+				q.streaks[canvasID] = byName
+			}
+			s = &waitStreak{since: now}
+			byName[agent] = s
+			started = true
+		}
+		if s != nil {
+			s.parked++
+			s.epicID = epicID
+			s.endedAt = time.Time{}
+		}
+	}
+
 	var once sync.Once
-	return ch, func() {
+	ended := false
+	return ch, func(how waitEnd) bool {
 		once.Do(func() {
 			q.mu.Lock()
 			defer q.mu.Unlock()
@@ -157,8 +268,92 @@ func (q *queueWaiters) add(canvasID uuid.UUID) (<-chan struct{}, func(), bool) {
 					delete(q.rooms, canvasID)
 				}
 			}
+			ended = agent == ""
+			s := q.streaks[canvasID][agent]
+			if agent == "" || s == nil {
+				return
+			}
+			if s.parked > 0 {
+				s.parked--
+			}
+			if s.parked > 0 {
+				return // another connection under this name is still parked
+			}
+			if how == waitEndTimeout {
+				// Answered "nothing yet" — the agent calls straight back, so hold
+				// the streak open across the gap rather than blinking it off.
+				s.endedAt = time.Now().UTC()
+				return
+			}
+			// Gone: disconnected, or handed work. Not waiting, as of now.
+			delete(q.streaks[canvasID], agent)
+			if len(q.streaks[canvasID]) == 0 {
+				delete(q.streaks, canvasID)
+			}
+			ended = true
 		})
-	}, true
+		return ended
+	}, started, true
+}
+
+// pruneStreaksLocked drops identities whose grace window has passed. Called on
+// every add and every read, so the bookkeeping is cleaned by use rather than by
+// a sweeper goroutine. Caller holds q.mu.
+func (q *queueWaiters) pruneStreaksLocked(canvasID uuid.UUID, now time.Time) {
+	byName := q.streaks[canvasID]
+	for name, s := range byName {
+		if !s.waiting(now) {
+			delete(byName, name)
+		}
+	}
+	if len(byName) == 0 {
+		delete(q.streaks, canvasID)
+	}
+}
+
+// waitingWatch is one identity's live wait, as the roster reads it.
+type waitingWatch struct {
+	Since  time.Time
+	EpicID string
+}
+
+// waitingOn is the roster's read: who is parked on this canvas's queue right
+// now, keyed by the identity they asserted, plus how many parked waiters carried
+// NO identity (real waits nobody can name, counted so the board never has to
+// choose between inventing an agent and pretending nothing is there).
+//
+// Computed at read time from live connections, so it cannot outlive them: a
+// waiter that disconnected is already out of `rooms`, an identity past its grace
+// window is pruned here, and a restarted process answers "nobody".
+func (q *queueWaiters) waitingOn(canvasID uuid.UUID, now time.Time) (map[string]waitingWatch, int) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.pruneStreaksLocked(canvasID, now)
+	attributed := 0
+	out := make(map[string]waitingWatch, len(q.streaks[canvasID]))
+	for name, s := range q.streaks[canvasID] {
+		out[name] = waitingWatch{Since: s.since, EpicID: s.epicID}
+		attributed += s.parked
+	}
+	// Parked connections minus the ones an identity accounts for. Never negative:
+	// every streak's `parked` counts a connection that is still in the room.
+	anonymous := len(q.rooms[canvasID]) - attributed
+	if anonymous < 0 {
+		anonymous = 0
+	}
+	return out, anonymous
+}
+
+// isWaiting answers the one question the delayed push needs: does this identity
+// still read as waiting? (Cheap map lookup, no allocation.)
+func (q *queueWaiters) isWaiting(canvasID uuid.UUID, agent string, now time.Time) bool {
+	if agent == "" {
+		return false
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	s := q.streaks[canvasID][agent]
+	return s != nil && s.waiting(now)
 }
 
 // signal wakes every waiter on a canvas.
@@ -209,6 +404,61 @@ func (h *Handler) signalQueueReady(canvasID uuid.UUID) {
 // is published.
 func (h *Handler) QueueWaiterCount() int { return h.waiters.count() }
 
+// ── Telling the board (TDM-151) ──────────────────────────────────────────────
+//
+// An agent parked here and an agent that quietly died look identical to a human
+// unless the board is told, and told BOTH ways. So the waiting set is pushed
+// when it changes: someone starts waiting, and — the direction that matters —
+// someone stops. The message carries no roster; it says "the waiting set moved",
+// and the client re-reads GET /api/canvas/agents, which computes waiting from
+// live connections and therefore can't disagree with the server.
+
+// fleetWaitingMsg is that ping. Its own `type`, deliberately NOT the "activity"
+// lifecycle message: no action moved, and an activity feed listing "an agent
+// waited" over and over would bury the facts that are about work.
+type fleetWaitingMsg struct {
+	Type string    `json:"type"` // "fleet.waiting"
+	At   time.Time `json:"at"`
+	// Waiting is parked connections on this canvas at the moment of the push —
+	// a hint for a client that only wants a number, not the roster's answer.
+	Waiting int `json:"waiting"`
+}
+
+func (h *Handler) broadcastFleetWaiting(canvasID uuid.UUID) {
+	if h.hub == nil {
+		return // no WS surface (handler tests, or a hub-less build)
+	}
+	data, err := json.Marshal(fleetWaitingMsg{
+		Type: "fleet.waiting", At: time.Now().UTC(), Waiting: h.waiters.countFor(canvasID),
+	})
+	if err != nil {
+		return
+	}
+	h.hub.Broadcast(canvasID, data)
+}
+
+// waitRecheckSlack keeps the delayed check strictly AFTER the grace window it is
+// checking, so a streak that expired at the boundary is already gone when we look.
+const waitRecheckSlack = 500 * time.Millisecond
+
+// recheckFleetWaiting handles the one transition nothing else observes: a wait
+// that timed out and never came back. The streak is held open for `grace` on the
+// assumption the agent re-calls immediately; if it doesn't, no connection opens
+// and no connection closes, so there is no event to push from. This one timer,
+// armed per timeout answer, closes that hole — and only pushes if the identity
+// really did stop waiting, so a healthy poll loop generates no extra traffic.
+func (h *Handler) recheckFleetWaiting(canvasID uuid.UUID, agent string) {
+	if h.hub == nil || agent == "" {
+		return
+	}
+	time.AfterFunc(queueWaitStreakGrace+waitRecheckSlack, func() {
+		if h.waiters.isWaiting(canvasID, agent, time.Now().UTC()) {
+			return // came back, as a live agent does
+		}
+		h.broadcastFleetWaiting(canvasID)
+	})
+}
+
 // queueWaitMsg is the response. Both statuses use this one shape, so a caller
 // parses once and branches on `status`.
 type queueWaitMsg struct {
@@ -255,12 +505,19 @@ func (h *Handler) WaitForQueue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	start := time.Now()
+	// WHO is waiting (TDM-151). The same identity the caller claims tasks under
+	// (X-Tandem-Agent — see provenance.go), read straight off the request rather
+	// than via the author context, so this works with or without the Provenance
+	// middleware. Client-asserted, exactly like claimedBy: an agent picks its own
+	// name here as it does everywhere else. Empty is fine — the wait works, it
+	// just shows on the board as an unattributed waiter instead of a named row.
+	agent, _ := assertedAgent(r)
 
 	// ── Register BEFORE the first read. This is the race the ticket is about ──
 	// Ordering here is what makes an approval that lands mid-request impossible to
 	// miss: registered-then-read means an approval either shows up in the read or
 	// is already buffered in `ready`.
-	ready, release, ok := h.waiters.add(canvasID)
+	ready, release, started, ok := h.waiters.add(canvasID, agent, epicID)
 	if !ok {
 		// Deliberately an ERROR, not a "timeout": a timeout invites an immediate
 		// re-call, and re-calling into a full registry is a hot loop. 429 tells the
@@ -272,7 +529,24 @@ func (h *Handler) WaitForQueue(w http.ResponseWriter, r *http.Request) {
 			map[string]string{"retryAfterSeconds": "5"})
 		return
 	}
-	defer release()
+	// How this wait ended decides whether the agent keeps reading as waiting on
+	// the board. It stays waitEndGone unless a path below says otherwise, so a
+	// disconnect — or any future early return — leaves NO ghost behind.
+	ending := waitEndGone
+	defer func() {
+		if release(ending) {
+			h.broadcastFleetWaiting(canvasID)
+		}
+		if ending == waitEndTimeout {
+			// The streak is alive on grace, betting the agent calls straight back.
+			// If it doesn't (the "said it would wait, then ended its turn" failure),
+			// nothing else would tell the board — so check once the window closes.
+			h.recheckFleetWaiting(canvasID, agent)
+		}
+	}()
+	if started {
+		h.broadcastFleetWaiting(canvasID)
+	}
 
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
@@ -301,6 +575,7 @@ func (h *Handler) WaitForQueue(w http.ResponseWriter, r *http.Request) {
 			// re-checks the deadline rather than answering "ready" on the signal.
 		case <-deadline.C:
 			// NOT an error. The queue is empty, the caller should call again.
+			ending = waitEndTimeout
 			writeQueueWait(w, queueWaitTimeout, nil, time.Since(start), timeout)
 			return
 		case <-ctx.Done():

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchAgentRoster, type FleetRoster } from "./api";
-import { onFleetActivity } from "./ws";
+import { onFleetActivity, onFleetWaiting } from "./ws";
 
 /* useFleetRoster — the live "who is working on what" read (TDM-47).
  *
@@ -73,6 +73,17 @@ export function useFleetRoster(code: string | undefined, open: boolean, agentCou
 
   useEffect(() => {
     return onFleetActivity(() => {
+      clearTimeout(coalesce.current);
+      coalesce.current = setTimeout(() => void load(), PING_COALESCE_MS);
+    });
+  }, [load]);
+
+  // An agent parked on (or left) the queue long poll — a presence change with no
+  // action behind it, so it has its own ping (TDM-151). Coalesced through the
+  // same timer: an agent that starts waiting the instant another stops costs one
+  // refetch, not two.
+  useEffect(() => {
+    return onFleetWaiting(() => {
       clearTimeout(coalesce.current);
       coalesce.current = setTimeout(() => void load(), PING_COALESCE_MS);
     });

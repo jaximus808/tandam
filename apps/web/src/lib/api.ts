@@ -177,6 +177,20 @@ export type FleetTask = {
   claimedAt?: string;
 };
 
+/* An agent parked on the queue long poll, blocked until a human approves work
+ * (TDM-151). LIVE PRESENCE, never stored: the server sets this only while it is
+ * holding that agent's connection open, so absent means nobody is waiting —
+ * a waiter that died, and a server that restarted, both report nothing rather
+ * than a ghost. */
+export type FleetWait = {
+  /** Start of the continuous wait — stable across the re-polls it's made of. */
+  since: string;
+  /** Set when the agent narrowed its wait to one batch. */
+  epicId?: string;
+  /** "queue" (anything approved) | "epic". */
+  scope: string;
+};
+
 export type FleetAgent = {
   /** Absent for an unregistered claimant — it has no `agents` row. */
   id?: string;
@@ -193,6 +207,8 @@ export type FleetAgent = {
   /** max(registeredAt, lastSeen, claimedAt) — newest provable activity. */
   lastActivityAt?: string;
   tasks: FleetTask[];
+  /** Set ONLY while this agent is holding a queue wait open right now. */
+  waiting?: FleetWait;
 };
 
 export type FleetCounts = {
@@ -202,6 +218,10 @@ export type FleetCounts = {
   working: number;
   idle: number;
   claims: number;
+  /** Agents parked on the queue and holding no claim — blocked, not idle. */
+  waiting?: number;
+  /** Live waits that asserted no identity, so they belong to no row above. */
+  waitingUnattributed?: number;
 };
 
 export type FleetRoster = {

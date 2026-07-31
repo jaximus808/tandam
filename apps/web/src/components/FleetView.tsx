@@ -8,7 +8,7 @@ import {
 } from "react";
 import { Shield, Users, X } from "lucide-react";
 import type { Action } from "../types";
-import type { FleetAgent, FleetTask } from "../lib/api";
+import type { FleetAgent, FleetTask, FleetWait } from "../lib/api";
 import { useFleetRoster } from "../lib/useFleetRoster";
 import { useActivityFeed } from "../lib/useActivityFeed";
 import { contentionByAgent, type ContentionTally } from "../lib/contention";
@@ -202,16 +202,32 @@ export default function FleetView({
   useEffect(() => setActorFilter(null), [code]);
 
   const all = useMemo(() => roster?.agents ?? [], [roster]);
-  // Working, or online and recently active. Everything else is dormant history.
+  // Working, waiting, or online and recently active. Everything else is dormant
+  // history. A parked waiter is active by the strongest evidence there is — the
+  // server is holding its connection open as we read — so it counts even if it
+  // has never claimed anything and its lastSeen is stale.
   const isActive = useCallback(
     (a: FleetAgent) =>
       a.tasks.length > 0 ||
+      !!a.waiting ||
       (a.registered ? a.status === "online" && within(a.lastActivityAt, ACTIVE_MS) : within(a.lastActivityAt, ACTIVE_MS)),
     [],
   );
   const active = useMemo(() => all.filter(isActive), [all, isActive]);
   const dormant = useMemo(() => all.filter((a) => !isActive(a)), [all, isActive]);
   const workingCount = useMemo(() => active.filter((a) => a.tasks.length > 0).length, [active]);
+  // Parked on the queue and holding nothing: present, blocked, and the human is
+  // the blocker. Counted off the same rows the panel renders, so the chip and
+  // the list can never disagree — and it is zero unless the server is holding a
+  // live wait, which is the whole point (see FleetWait).
+  const waitingCount = useMemo(
+    () => active.filter((a) => a.tasks.length === 0 && a.waiting).length,
+    [active],
+  );
+  // Live waits nobody can name (no X-Tandem-Agent on the poll). Real presence
+  // with no row to sit on, so it's reported as a number rather than invented
+  // into an agent.
+  const unnamedWaiting = roster?.counts?.waitingUnattributed ?? 0;
 
   // "Just finished": the newest done/failed task each identity completed, taken
   // straight from canvas state we already hold — no second fetch, and it stays
@@ -319,12 +335,17 @@ export default function FleetView({
 
   const counts = roster?.counts;
   const total = active.length;
+  // The chip says the most urgent true thing: work in flight beats work blocked,
+  // and blocked beats idle. "2 agents · 1 waiting" is the reading that makes an
+  // orchestrator parked on your approval visible without opening anything.
   const chipLabel =
     total === 0
       ? "Fleet"
       : workingCount > 0
         ? `${total} agent${total === 1 ? "" : "s"} · ${workingCount} working`
-        : `${total} agent${total === 1 ? "" : "s"} · idle`;
+        : waitingCount > 0
+          ? `${total} agent${total === 1 ? "" : "s"} · ${waitingCount} waiting`
+          : `${total} agent${total === 1 ? "" : "s"} · idle`;
 
   // ZONE 3 · CONTROLS of the canvas header's collapse contract (see the block
   // comment above `HEADER_DROP` in App.tsx): `shrink-0`, and never inside an
@@ -352,12 +373,16 @@ export default function FleetView({
         aria-label={
           total === 0
             ? "Fleet — no agents on this canvas"
-            : `Fleet — ${total} agent${total === 1 ? "" : "s"}, ${workingCount} working`
+            : `Fleet — ${total} agent${total === 1 ? "" : "s"}, ${workingCount} working${
+                waitingCount > 0 ? `, ${waitingCount} waiting on your approval` : ""
+              }`
         }
         title={
           total === 0
             ? "No agents on this canvas yet — open the fleet for how to connect one"
-            : "Who's on this canvas and what they're working on"
+            : waitingCount > 0
+              ? `Who's on this canvas — ${waitingCount} parked on the queue waiting for you to approve work`
+              : "Who's on this canvas and what they're working on"
         }
         className={[
           // h-9 below sm, matching the header's other controls; on a phone this
@@ -366,7 +391,7 @@ export default function FleetView({
           open ? "bg-accent/[0.08] text-accent" : "text-ink/60 hover:bg-ink/5 hover:text-ink/85",
         ].join(" ")}
       >
-        <FleetGauge total={total} working={workingCount} />
+        <FleetGauge total={total} working={workingCount} waiting={waitingCount} />
         {/* Ladder rank 7 — see the header contract in App.tsx. */}
         <span className="hidden sm:inline">{chipLabel}</span>
         {total > 0 && <span className="sm:hidden tabular-nums">{total}</span>}
@@ -474,8 +499,14 @@ export default function FleetView({
               {total > 0 && (
                 <p className="border-b border-ink/[0.07] px-3 py-1.5 text-[11px] text-ink/50">
                   {workingCount} working
-                  {total - workingCount > 0 ? ` · ${total - workingCount} idle` : ""}
+                  {waitingCount > 0 ? ` · ${waitingCount} waiting` : ""}
+                  {total - workingCount - waitingCount > 0
+                    ? ` · ${total - workingCount - waitingCount} idle`
+                    : ""}
                   {counts && counts.unregistered > 0 ? ` · ${counts.unregistered} external` : ""}
+                  {/* A wait that named nobody still happened — say so rather than
+                      leave the count short by one. */}
+                  {unnamedWaiting > 0 ? ` · ${unnamedWaiting} unnamed waiting` : ""}
                 </p>
               )}
               {/* A failed refresh keeps the last roster on screen — stale rows
@@ -588,10 +619,22 @@ export default function FleetView({
                   <span className="block text-[12px] font-medium text-ink/80">
                     {proposedCount} task{proposedCount === 1 ? "" : "s"} awaiting your approval
                   </span>
-                  {workingCount === 0 && (
+                  {/* With a live waiter this stops being a figure of speech: an
+                      agent is parked on the queue and wakes the moment you
+                      approve. Without one, the older, weaker sentence — nobody
+                      is standing there, whatever the queue says. */}
+                  {waitingCount + unnamedWaiting > 0 ? (
                     <span className="mt-px block text-[11px] text-ink/50">
-                      Nothing is running — the fleet is waiting on you.
+                      {waitingCount + unnamedWaiting} agent
+                      {waitingCount + unnamedWaiting === 1 ? " is" : "s are"} parked on the queue —
+                      approving wakes {waitingCount + unnamedWaiting === 1 ? "it" : "them"}.
                     </span>
+                  ) : (
+                    workingCount === 0 && (
+                      <span className="mt-px block text-[11px] text-ink/50">
+                        Nothing is running — the fleet is waiting on you.
+                      </span>
+                    )
                   )}
                 </span>
                 <span className="shrink-0 text-[11.5px] font-medium text-accent">Review</span>
@@ -605,22 +648,44 @@ export default function FleetView({
 }
 
 /* FleetGauge — the trigger's mark. One bar per active agent (capped at five):
-   tall + violet while it holds a claim, short + neutral while idle. It carries
-   the same fact as the label, in a shape you can read without reading. The
-   working bars are the one pulse this surface is allowed. */
-function FleetGauge({ total, working }: { total: number; working: number }) {
+   tall + violet while it holds a claim, half-height + amber while it is parked
+   on the queue, short + neutral while idle. It carries the same fact as the
+   label, in a shape you can read without reading.
+
+   Amber is already the board's "the blocker is you" token (the approval foot
+   below, and the proposed state on the cards), so a waiting agent is drawn in
+   the colour of the thing it is waiting for. Half height, not full: waiting is
+   presence without progress, and it must not read as work getting done.
+   Working and waiting are the two pulses this surface allows — both are live
+   states a human is meant to notice. */
+function FleetGauge({
+  total,
+  working,
+  waiting,
+}: {
+  total: number;
+  working: number;
+  waiting: number;
+}) {
   const shown = Math.min(Math.max(total, 1), 5);
   return (
     <span className="flex h-3.5 shrink-0 items-end gap-[2px]" aria-hidden="true">
       {Array.from({ length: shown }, (_, i) => {
         const busy = i < working;
+        const parked = !busy && i < working + waiting;
         return (
           <span
             key={i}
-            style={busy ? { animationDelay: `${i * 300}ms` } : undefined}
+            style={busy || parked ? { animationDelay: `${i * 300}ms` } : undefined}
             className={[
               "w-[2px] rounded-full transition-all duration-200",
-              busy ? "h-3.5 bg-violet-500 tandem-breathe" : total === 0 ? "h-1.5 bg-ink/20" : "h-1.5 bg-ink/30",
+              busy
+                ? "h-3.5 bg-violet-500 tandem-breathe"
+                : parked
+                  ? "h-2 bg-amber-500 tandem-breathe"
+                  : total === 0
+                    ? "h-1.5 bg-ink/20"
+                    : "h-1.5 bg-ink/30",
             ].join(" ")}
           />
         );
@@ -653,6 +718,10 @@ function AgentRow({
   const kids = depth < MAX_DEPTH ? (agent.id ? (childrenById.get(agent.id) ?? []) : []) : [];
   const done = lastDone.get(agent.name) ?? (agent.id ? lastDone.get(agent.id) : undefined);
   const working = agent.tasks.length > 0;
+  // Parked on the queue long poll RIGHT NOW (TDM-151). Server-set only while it
+  // is holding the connection, so this is presence, not a guess — and it ranks
+  // below a claim, because what an agent holds matters more than what it awaits.
+  const waiting = !working ? agent.waiting : undefined;
   // Matched by NAME first then by id, the same two-step the roster join uses:
   // `claimed_by` and the contention trail both record the free-text identity, so
   // the two agree without a lookup table.
@@ -665,7 +734,12 @@ function AgentRow({
       <div className={dormant ? "px-3 py-1.5" : "px-3 py-2"}>
         {/* Identity line: state · name · role · vendor. */}
         <div className="flex items-center gap-1.5">
-          <StatusDot working={working} done={!working && !!done} dormant={dormant} />
+          <StatusDot
+            working={working}
+            waiting={!!waiting}
+            done={!working && !waiting && !!done}
+            dormant={dormant}
+          />
           <span
             className="truncate font-code text-[11.5px] font-medium text-ink"
             title={agent.name}
@@ -688,12 +762,18 @@ function AgentRow({
           </span>
         </div>
 
-        {/* Status lines: one per claim, or a single idle/just-finished line. */}
+        {/* Status lines: one per claim, or a single waiting/idle/just-finished
+            line. Waiting outranks "just finished" — an agent that completed a
+            task and then parked on the queue is waiting NOW; its last completion
+            is history, and history was already what made a parked agent
+            indistinguishable from a dead one. */}
         <div className="mt-0.5 pl-[14px]">
           {working ? (
             agent.tasks.map((t) => (
               <TaskLine key={t.id} task={t} agentName={agent.name} onOpen={onOpenTask} />
             ))
+          ) : waiting ? (
+            <WaitingLine wait={waiting} agentName={agent.name} />
           ) : done ? (
             <DoneLine action={done} agentName={agent.name} onOpen={onOpenTask} />
           ) : (
@@ -788,10 +868,12 @@ function ContentionCount({ tally, name }: { tally: ContentionTally; name: string
 
 function StatusDot({
   working,
+  waiting,
   done,
   dormant,
 }: {
   working: boolean;
+  waiting: boolean;
   done: boolean;
   dormant: boolean;
 }) {
@@ -800,6 +882,17 @@ function StatusDot({
       <span
         aria-hidden="true"
         className="tandem-breathe h-1.5 w-1.5 shrink-0 rounded-full bg-violet-500"
+      />
+    );
+  }
+  // Amber, and breathing: parked on the queue is a LIVE state — the agent is
+  // there, on the other end of an open connection. A still dot would read as the
+  // thing this exists to disprove.
+  if (waiting) {
+    return (
+      <span
+        aria-hidden="true"
+        className="tandem-breathe h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500"
       />
     );
   }
@@ -864,6 +957,39 @@ function TaskLine({
         {ageOf(startedAt)}
       </span>
     </button>
+  );
+}
+
+/* Parked on the queue, blocked on a human (TDM-151).
+
+   The line this whole feature is for. Until it existed, an orchestrator sitting
+   on the approval queue and one that quietly ended its turn rendered the same —
+   both just "idle" — and a real one went unnoticed until a person happened to
+   look. The three columns say the three things that distinguish them: that it IS
+   waiting, WHAT for, and SINCE WHEN, in the same verb · detail · age grid every
+   other row uses.
+
+   Deliberately NOT a button: unlike a claim, a wait points at no one task. The
+   action for a human is the approval foot at the bottom of this panel, which
+   already goes to the Board. */
+function WaitingLine({ wait, agentName }: { wait: FleetWait; agentName: string }) {
+  const what = wait.scope === "epic" ? "for its batch to be approved" : "for approved work";
+  const since = ageOf(wait.since);
+  return (
+    <div
+      className="flex items-center gap-2 py-px"
+      title={`${agentName} is holding the queue open, waiting ${what} — since ${fullDate(wait.since)}.\nIt is blocked on you: approve something on the Board and it wakes.`}
+    >
+      <span className="w-[52px] shrink-0 text-[11px] text-amber-600 dark:text-amber-400">
+        waiting
+      </span>
+      <span className="min-w-0 flex-1 truncate text-[11.5px] text-ink/60">{what}</span>
+      <span className="shrink-0 font-code text-[10.5px] text-ink/50">
+        {/* Same right-hand "how long" column as every other row. */}
+        <span className="sr-only">waiting for </span>
+        {since}
+      </span>
+    </div>
   );
 }
 

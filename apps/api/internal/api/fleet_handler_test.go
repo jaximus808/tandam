@@ -644,7 +644,7 @@ func TestBuildRosterExposesLeaseFields(t *testing.T) {
 		ClaimedBy: ptr("worker-a"), ClaimedAt: &claimedAt, Payload: payload,
 	}}
 
-	roster := buildRoster(agents, executing, now)
+	roster := buildRoster(agents, executing, nil, 0, now)
 	var entry *rosterAgent
 	for _, e := range roster.Agents {
 		if e.Name == "worker-a" {

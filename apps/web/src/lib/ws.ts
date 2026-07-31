@@ -108,6 +108,23 @@ export function onFleetActivity(fn: FleetHandler): () => void {
   };
 }
 
+/* Somebody started — or stopped — waiting on this canvas's queue (TDM-151).
+ *
+ * Its own message type, NOT an `activity` fact: no action moved, and an agent
+ * parking on the queue every 25 seconds would bury the feed. It carries no
+ * roster, only "the waiting set changed"; the subscriber re-reads the roster,
+ * which computes waiting from live connections and so can't disagree with the
+ * server. The direction that matters is the second one — a waiter that stops
+ * has to disappear from the board without anyone refreshing the page. */
+export type FleetWaiting = { waiting: number; at: string };
+let waitingHandlers: ((w: FleetWaiting) => void)[] = [];
+export function onFleetWaiting(fn: (w: FleetWaiting) => void): () => void {
+  waitingHandlers.push(fn);
+  return () => {
+    waitingHandlers = waitingHandlers.filter((h) => h !== fn);
+  };
+}
+
 // Access outcome for a canvas we can't open (or were just kicked from). A failed
 // WS upgrade is invisible to the browser (close 1006, no status), so we probe
 // HTTP to learn the real reason and surface a proper screen instead of an
@@ -278,6 +295,8 @@ function connect(code: string) {
         } else {
           activityHandlers.forEach((h) => h({ action: msg.action as AgentActivity["action"] }));
         }
+      } else if (msg.type === "fleet.waiting") {
+        waitingHandlers.forEach((h) => h(msg as FleetWaiting));
       } else if (msg.type === "access") {
         // The owner changed sharing while we're connected.
         const role = msg.role as "write" | "read" | "none";

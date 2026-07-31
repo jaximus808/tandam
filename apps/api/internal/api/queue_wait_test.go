@@ -276,9 +276,9 @@ func TestQueueWaitReleasesTheWaiterWhenTheClientDisconnects(t *testing.T) {
 func TestQueueWaiterRegistryEmptiesCompletely(t *testing.T) {
 	var q queueWaiters
 	canvasID := uuid.New()
-	releases := make([]func(), 0, 20)
+	releases := make([]func(waitEnd) bool, 0, 20)
 	for i := 0; i < 20; i++ {
-		_, release, ok := q.add(canvasID)
+		_, release, _, ok := q.add(canvasID, "", "")
 		if !ok {
 			t.Fatalf("waiter %d refused below the cap", i)
 		}
@@ -288,8 +288,8 @@ func TestQueueWaiterRegistryEmptiesCompletely(t *testing.T) {
 		t.Fatalf("count = %d, want 20", q.count())
 	}
 	for _, release := range releases {
-		release()
-		release() // idempotent: a double release must not corrupt the count
+		release(waitEndGone)
+		release(waitEndGone) // idempotent: a double release must not corrupt the count
 	}
 	if q.count() != 0 || q.countFor(canvasID) != 0 {
 		t.Fatalf("registry not empty: total=%d canvas=%d", q.count(), q.countFor(canvasID))
@@ -314,9 +314,9 @@ func TestQueueWaitBoundsConcurrentWaitersPerCanvas(t *testing.T) {
 	h := NewHandler(f, nil, nil)
 
 	// Fill the canvas's cap without spawning 64 goroutines.
-	releases := make([]func(), 0, maxQueueWaitersPerCanvas)
+	releases := make([]func(waitEnd) bool, 0, maxQueueWaitersPerCanvas)
 	for i := 0; i < maxQueueWaitersPerCanvas; i++ {
-		_, release, ok := h.waiters.add(canvasID)
+		_, release, _, ok := h.waiters.add(canvasID, "", "")
 		if !ok {
 			t.Fatalf("waiter %d refused below the per-canvas cap", i)
 		}
@@ -348,7 +348,7 @@ func TestQueueWaitBoundsConcurrentWaitersPerCanvas(t *testing.T) {
 	}
 
 	for _, release := range releases {
-		release()
+		release(waitEndGone)
 	}
 	if n := h.waiters.count(); n != 0 {
 		t.Fatalf("%d waiter(s) left after releasing the cap", n)
@@ -508,11 +508,11 @@ func TestOnlyApprovalWakesQueueWaiters(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := NewHandler(&queueFakeStore{}, nil, nil) // no emitter wired
-			ready, release, ok := h.waiters.add(canvasID)
+			ready, release, _, ok := h.waiters.add(canvasID, "", "")
 			if !ok {
 				t.Fatal("could not register a waiter")
 			}
-			defer release()
+			defer release(waitEndGone)
 			h.emitTaskEvent(canvasID, tc.eventType, tc.action)
 			select {
 			case <-ready:
@@ -536,11 +536,11 @@ func TestReleasingATaskWakesQueueWaiters(t *testing.T) {
 	task.ClaimedBy = ptr("worker-that-died")
 	h := NewHandler(newMoveStore(task), nil, nil)
 
-	ready, release, ok := h.waiters.add(canvasID)
+	ready, release, _, ok := h.waiters.add(canvasID, "", "")
 	if !ok {
 		t.Fatal("could not register a waiter")
 	}
-	defer release()
+	defer release(waitEndGone)
 
 	w := httptest.NewRecorder()
 	r := canvasRequest(t, "POST", "/api/canvas/actions/"+task.ID.String()+"/release", nil, canvasID, task.ID.String())
@@ -620,5 +620,312 @@ func TestQueueWaitActionsMatchTheListShape(t *testing.T) {
 	}
 	if fmt.Sprint(envelope.Actions) != fmt.Sprint(listed.Actions) {
 		t.Fatalf("the wait's actions diverge from the list endpoint's:\n wait: %v\n list: %v", envelope.Actions, listed.Actions)
+	}
+}
+
+// ── 8. WHO is waiting (TDM-151) ──────────────────────────────────────────────
+//
+// The board's claim is that you can look at it and see what the fleet is doing.
+// An agent parked on the queue and an agent that silently died were, until this,
+// the same picture — which is how an orchestrator that said it would wait and
+// then ended its turn went unnoticed until a human happened to look.
+//
+// So these tests are written against the INVERSE failure, which is the dangerous
+// one: waiting that is displayed but not real. Showing nothing is always
+// recoverable; showing a waiting agent that isn't there recreates the exact bug.
+// Every case below therefore asks "does this stop reading as waiting" first.
+
+// waitRequestAs is a wait that asserts an agent identity, the way the gateway
+// does on every canvas call (X-Tandem-Agent — see provenance.go).
+func waitRequestAs(t *testing.T, canvasID uuid.UUID, agent, query string) *http.Request {
+	t.Helper()
+	r := waitRequest(t, canvasID, query)
+	r.Header.Set(AgentIdentityHeader, agent)
+	return r
+}
+
+// The happy path: a parked orchestrator is visibly parked, under its own name,
+// with what it is waiting for and since when.
+func TestWaitingAgentIsVisibleOnTheRoster(t *testing.T) {
+	canvasID := uuid.New()
+	h := NewHandler(&queueFakeStore{}, nil, nil)
+
+	r := waitRequestAs(t, canvasID, "opus-orchestrator", "?timeout=60")
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	_, done := runWait(h, r.WithContext(ctx))
+	awaitParked(t, h, canvasID, 1)
+
+	waiting, anon := h.waiters.waitingOn(canvasID, time.Now().UTC())
+	if anon != 0 {
+		t.Fatalf("anonymous waits = %d, want 0 — the identity was asserted", anon)
+	}
+	watch, ok := waiting["opus-orchestrator"]
+	if !ok {
+		t.Fatalf("the parked agent is not in the waiting set: %+v", waiting)
+	}
+	if watch.Since.IsZero() {
+		t.Fatal("a wait with no start time can't answer 'waiting since when'")
+	}
+	if watch.EpicID != "" {
+		t.Fatalf("epicId = %q, want empty — this wait named no epic", watch.EpicID)
+	}
+
+	// And it lands on the roster as a WAITING agent: not working, not idle.
+	agents := []*store.Agent{{ID: uuid.New(), Name: "opus-orchestrator", Role: "planner", CreatedAt: time.Now().UTC()}}
+	roster := buildRoster(agents, nil, waiting, anon, time.Now().UTC())
+	if len(roster.Agents) != 1 || roster.Agents[0].Waiting == nil {
+		t.Fatalf("roster does not show the agent waiting: %+v", roster.Agents[0])
+	}
+	if got := roster.Agents[0].Waiting.Scope; got != "queue" {
+		t.Fatalf("scope = %q, want queue", got)
+	}
+	if roster.Counts.Waiting != 1 || roster.Counts.Idle != 0 || roster.Counts.Working != 0 {
+		t.Fatalf("counts = %+v, want exactly one waiting agent", roster.Counts)
+	}
+
+	cancel()
+	mustAnswer(t, done, 2*time.Second, "waiting agent")
+}
+
+// THE TICKET'S OWN CONDITION, stated as a test: with nobody parked, the board
+// must not imply anyone is. No agent carries a waiting block and no count is
+// non-zero — including for an agent that is registered, online, and idle.
+func TestNothingWaitingImpliesNobodyWaiting(t *testing.T) {
+	canvasID := uuid.New()
+	h := NewHandler(&queueFakeStore{}, nil, nil)
+
+	waiting, anon := h.waiters.waitingOn(canvasID, time.Now().UTC())
+	if len(waiting) != 0 || anon != 0 {
+		t.Fatalf("a canvas nobody is waiting on reported %d waits (+%d anonymous)", len(waiting), anon)
+	}
+	agents := []*store.Agent{{ID: uuid.New(), Name: "idle-agent", Status: "online", CreatedAt: time.Now().UTC()}}
+	roster := buildRoster(agents, nil, waiting, anon, time.Now().UTC())
+	if roster.Agents[0].Waiting != nil {
+		t.Fatalf("an idle agent must not read as waiting: %+v", roster.Agents[0].Waiting)
+	}
+	if roster.Counts.Waiting != 0 || roster.Counts.WaitingUnattributed != 0 {
+		t.Fatalf("counts = %+v, want no waiting", roster.Counts)
+	}
+	if roster.Counts.Idle != 1 {
+		t.Fatalf("idle = %d, want 1", roster.Counts.Idle)
+	}
+}
+
+// A waiter that hangs up must stop reading as waiting AT ONCE — no grace, no
+// lingering row. This is the ghost the feature would otherwise create: the agent
+// is gone, and the board would still be pointing at it.
+func TestDisconnectedWaiterStopsReadingAsWaiting(t *testing.T) {
+	canvasID := uuid.New()
+	h := NewHandler(&queueFakeStore{}, nil, nil)
+
+	r := waitRequestAs(t, canvasID, "ghost-orchestrator", "?timeout=60")
+	ctx, cancel := context.WithCancel(r.Context())
+	_, done := runWait(h, r.WithContext(ctx))
+	awaitParked(t, h, canvasID, 1)
+
+	cancel() // the agent's process died / the connection dropped
+	mustAnswer(t, done, 2*time.Second, "disconnect")
+
+	waiting, anon := h.waiters.waitingOn(canvasID, time.Now().UTC())
+	if len(waiting) != 0 || anon != 0 {
+		t.Fatalf("a disconnected agent still reads as waiting: %+v (+%d anonymous)", waiting, anon)
+	}
+}
+
+// The same rule for the other non-timeout ending: a wait that ANSWERS with work
+// is over. The agent is claiming, not waiting.
+func TestAnsweredWaitStopsReadingAsWaiting(t *testing.T) {
+	canvasID := uuid.New()
+	f := &queueFakeStore{}
+	f.publish(readyQueueTask("already approved", ""))
+	h := NewHandler(f, nil, nil)
+
+	_, done := runWait(h, waitRequestAs(t, canvasID, "worker-1", "?timeout=60"))
+	mustAnswer(t, done, 2*time.Second, "ready answer")
+
+	if waiting, _ := h.waiters.waitingOn(canvasID, time.Now().UTC()); len(waiting) != 0 {
+		t.Fatalf("an agent that was handed work still reads as waiting: %+v", waiting)
+	}
+}
+
+// A long wait is a CHAIN of polls, and the gap between them is not a pause in
+// waiting. The streak has to survive it — otherwise the fleet view blinks
+// waiting → idle → waiting every 25 seconds and the "waiting for 6m" clock
+// resets each time, which is the duration lie TDM-112 already fixed for claims.
+func TestWaitingSurvivesTheGapBetweenPolls(t *testing.T) {
+	canvasID := uuid.New()
+	h := NewHandler(&queueFakeStore{}, nil, nil)
+
+	_, done := runWait(h, waitRequestAs(t, canvasID, "patient-planner", "?timeout=1"))
+	mustAnswer(t, done, 3*time.Second, "first poll")
+	if n := h.waiters.count(); n != 0 {
+		t.Fatalf("%d connection(s) still parked after the answer", n)
+	}
+
+	waiting, _ := h.waiters.waitingOn(canvasID, time.Now().UTC())
+	first, ok := waiting["patient-planner"]
+	if !ok {
+		t.Fatal("the agent stopped reading as waiting in the gap between two polls")
+	}
+
+	// The re-call must not restart the clock.
+	_, done2 := runWait(h, waitRequestAs(t, canvasID, "patient-planner", "?timeout=1"))
+	mustAnswer(t, done2, 3*time.Second, "second poll")
+	waiting, _ = h.waiters.waitingOn(canvasID, time.Now().UTC())
+	second, ok := waiting["patient-planner"]
+	if !ok {
+		t.Fatal("the agent vanished from the waiting set on its second poll")
+	}
+	if !second.Since.Equal(first.Since) {
+		t.Fatalf("waiting-since moved from %s to %s — each re-poll must not reset the clock",
+			first.Since, second.Since)
+	}
+}
+
+// …but the gap is BOUNDED. An agent that times out and never calls back (it
+// said it would wait, then ended its turn — the failure this whole ticket
+// exists to catch) drops out of the waiting set when the grace window passes.
+func TestAWaiterThatNeverComesBackExpires(t *testing.T) {
+	canvasID := uuid.New()
+	h := NewHandler(&queueFakeStore{}, nil, nil)
+
+	_, done := runWait(h, waitRequestAs(t, canvasID, "quitter", "?timeout=1"))
+	mustAnswer(t, done, 3*time.Second, "only poll")
+	if waiting, _ := h.waiters.waitingOn(canvasID, time.Now().UTC()); len(waiting) != 1 {
+		t.Fatalf("inside the grace window the agent should still read as waiting, got %+v", waiting)
+	}
+
+	// Age the streak past its grace rather than sleeping through it.
+	h.waiters.mu.Lock()
+	h.waiters.streaks[canvasID]["quitter"].endedAt = time.Now().UTC().Add(-queueWaitStreakGrace - time.Second)
+	h.waiters.mu.Unlock()
+
+	waiting, anon := h.waiters.waitingOn(canvasID, time.Now().UTC())
+	if len(waiting) != 0 || anon != 0 {
+		t.Fatalf("an agent that never came back still reads as waiting: %+v", waiting)
+	}
+	// …and the bookkeeping is gone with it, not just hidden from the answer.
+	h.waiters.mu.Lock()
+	leftover := len(h.waiters.streaks)
+	h.waiters.mu.Unlock()
+	if leftover != 0 {
+		t.Fatalf("%d expired streak map(s) left behind", leftover)
+	}
+}
+
+// Waiting is per-PROCESS liveness and must not outlive the process, because the
+// connections it describes didn't either. A restart is modelled here the only
+// honest way: a new registry, which is exactly what a new process gets.
+func TestWaitingDoesNotSurviveARestart(t *testing.T) {
+	canvasID := uuid.New()
+	h := NewHandler(&queueFakeStore{}, nil, nil)
+
+	r := waitRequestAs(t, canvasID, "pre-restart", "?timeout=60")
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	_, done := runWait(h, r.WithContext(ctx))
+	awaitParked(t, h, canvasID, 1)
+	if waiting, _ := h.waiters.waitingOn(canvasID, time.Now().UTC()); len(waiting) != 1 {
+		t.Fatalf("setup: expected one waiter, got %+v", waiting)
+	}
+
+	restarted := NewHandler(&queueFakeStore{}, nil, nil)
+	waiting, anon := restarted.waiters.waitingOn(canvasID, time.Now().UTC())
+	if len(waiting) != 0 || anon != 0 {
+		t.Fatalf("a fresh process reported %d waiting agent(s) — waiting must not be stored", len(waiting))
+	}
+	roster := buildRoster(
+		[]*store.Agent{{ID: uuid.New(), Name: "pre-restart", CreatedAt: time.Now().UTC()}},
+		nil, waiting, anon, time.Now().UTC())
+	if roster.Agents[0].Waiting != nil {
+		t.Fatal("a restarted server must not resurrect a wait it is not holding")
+	}
+
+	cancel()
+	mustAnswer(t, done, 2*time.Second, "pre-restart wait")
+}
+
+// A wait that asserts no identity is real but unattributable. It is COUNTED, so
+// the board doesn't under-report presence — and no agent is invented for it,
+// because a name nobody sent is the one thing worse than no name at all.
+func TestAnonymousWaitIsCountedNotInvented(t *testing.T) {
+	canvasID := uuid.New()
+	h := NewHandler(&queueFakeStore{}, nil, nil)
+
+	r := waitRequest(t, canvasID, "?timeout=60") // no X-Tandem-Agent
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	_, done := runWait(h, r.WithContext(ctx))
+	awaitParked(t, h, canvasID, 1)
+
+	waiting, anon := h.waiters.waitingOn(canvasID, time.Now().UTC())
+	if len(waiting) != 0 {
+		t.Fatalf("an anonymous wait was attributed to %+v", waiting)
+	}
+	if anon != 1 {
+		t.Fatalf("anonymous waits = %d, want 1", anon)
+	}
+	roster := buildRoster(nil, nil, waiting, anon, time.Now().UTC())
+	if len(roster.Agents) != 0 {
+		t.Fatalf("an anonymous wait invented an agent row: %+v", roster.Agents)
+	}
+	if roster.Counts.WaitingUnattributed != 1 || roster.Counts.Waiting != 0 {
+		t.Fatalf("counts = %+v, want one unattributed wait", roster.Counts)
+	}
+
+	cancel()
+	mustAnswer(t, done, 2*time.Second, "anonymous wait")
+}
+
+// An orchestrator waiting on ITS batch says so: "waiting for TDM-… to be
+// approved" is a different fact from "waiting for anything at all".
+func TestWaitScopedToAnEpicSaysWhatItIsWaitingFor(t *testing.T) {
+	canvasID := uuid.New()
+	epicID := uuid.New().String()
+	h := NewHandler(&queueFakeStore{}, nil, nil)
+
+	r := waitRequestAs(t, canvasID, "epic-planner", "?timeout=60&epicId="+epicID)
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	_, done := runWait(h, r.WithContext(ctx))
+	awaitParked(t, h, canvasID, 1)
+
+	waiting, anon := h.waiters.waitingOn(canvasID, time.Now().UTC())
+	roster := buildRoster(nil, nil, waiting, anon, time.Now().UTC())
+	if len(roster.Agents) != 1 || roster.Agents[0].Waiting == nil {
+		t.Fatalf("expected one waiting agent, got %+v", roster.Agents)
+	}
+	// Waiting with no agents row still lists: an unregistered identity that is
+	// holding a connection open is exactly who a human needs to see.
+	if roster.Agents[0].Registered {
+		t.Fatal("an identity with no agents row must be reported registered:false")
+	}
+	if got := roster.Agents[0].Waiting; got.Scope != "epic" || got.EpicID != epicID {
+		t.Fatalf("waiting = %+v, want scope=epic on %s", got, epicID)
+	}
+
+	cancel()
+	mustAnswer(t, done, 2*time.Second, "epic-scoped wait")
+}
+
+// A waiting agent also holding a claim reads as WORKING: what it holds is the
+// more urgent fact, and it must not be double-counted.
+func TestWorkingBeatsWaitingInTheCounts(t *testing.T) {
+	now := time.Now().UTC()
+	claimedAt := now.Add(-time.Minute)
+	agents := []*store.Agent{{ID: uuid.New(), Name: "busy", CreatedAt: now}}
+	executing := []*store.Action{{
+		ID: uuid.New(), Type: "task", State: "executing",
+		ClaimedBy: ptr("busy"), ClaimedAt: &claimedAt, Payload: json.RawMessage(`{"title":"in flight"}`),
+	}}
+	waiting := map[string]waitingWatch{"busy": {Since: now.Add(-2 * time.Minute)}}
+
+	roster := buildRoster(agents, executing, waiting, 0, now)
+	if roster.Counts.Working != 1 || roster.Counts.Waiting != 0 || roster.Counts.Idle != 0 {
+		t.Fatalf("counts = %+v, want the agent counted once, as working", roster.Counts)
+	}
+	if roster.Agents[0].Waiting == nil {
+		t.Fatal("the wait itself should still be reported on the row")
 	}
 }
