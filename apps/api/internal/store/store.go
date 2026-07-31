@@ -132,9 +132,12 @@ type Canvas struct {
 	Visibility string `json:"visibility,omitempty"`
 	PublicRole string `json:"publicRole,omitempty"`
 	YourRole   string `json:"yourRole,omitempty"`
-	// ApprovalPolicy ('strict'|'epic'|'auto', migration 0033) sets how much human
-	// gating agent-proposed tasks get. Empty (legacy row) is treated as 'epic',
-	// the DB default. Enforced in the action create/approve handlers.
+	// ApprovalPolicy ('strict'|'epic'|'auto', migration 0033; 'peer', migration
+	// 0041) sets how much human gating agent-proposed tasks get. Empty (legacy
+	// row) is treated as 'epic', the DB default. Enforced in the action
+	// create/approve handlers. 'peer' is the opt-in under which a REGISTERED agent
+	// may approve a task a DIFFERENT agent proposed (TDM-145, see
+	// api/peer_approval.go); nothing defaults to it.
 	ApprovalPolicy string `json:"approvalPolicy,omitempty"`
 	// BriefingDocID is the document designated as this canvas's briefing — the
 	// read-me-first context an agent pulls on connect (migration 0037). At most

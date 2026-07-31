@@ -161,6 +161,10 @@ type taskPolicyFields struct {
 //     self-flags deviations), regardless of policy.
 //   - 'strict': every agent task lands proposed.
 //   - 'auto':   every agent task is born approved.
+//   - 'peer' (TDM-145): every agent task lands proposed, like 'strict' — what
+//     'peer' changes is WHO may approve it afterwards (a different agent may),
+//     never whether it needs approving. Nothing is born approved under it; a
+//     reviewer gate the birth path could walk around would be decoration.
 //   - 'epic' (default, incl. legacy empty): approved iff the task carries an
 //     epicId naming an approved epic; no epic / proposed epic → proposed.
 func policyApproval(policy string, payload json.RawMessage, epicApproved func(uuid.UUID) bool) string {
@@ -170,7 +174,7 @@ func policyApproval(policy string, payload json.RawMessage, epicApproved func(uu
 		return ""
 	}
 	switch policy {
-	case "strict":
+	case "strict", policyPeer:
 		return ""
 	case "auto":
 		return "policy:auto"
@@ -639,7 +643,7 @@ func (h *Handler) transitionAction(w http.ResponseWriter, r *http.Request, to st
 	return &fresh, true
 }
 
-// POST /api/canvas/actions/{id}/approve  — human gate: proposed → approved.
+// POST /api/canvas/actions/{id}/approve  — the approval gate: proposed → approved.
 // Approving an EPIC also batch-approves its currently-proposed tasks (payload
 // epicId = the epic's id) with the 'policy:epic' provenance stamp — the
 // one-time gate that lets the whole batch flow.
@@ -649,14 +653,23 @@ func (h *Handler) ApproveAction(w http.ResponseWriter, r *http.Request) {
 	// curl holding the code — no longer approves. The gateway declining agent
 	// self-approval client-side was the ONLY thing standing here; a raw curl or
 	// TANDEM_FULL_TOOLS walked straight past it. Now the server refuses.
-	if !callerIsHuman(r.Context()) {
-		writeError(w, http.StatusForbidden, "only a signed-in human can approve an action")
+	//
+	// The SECOND door, closed unless the canvas owner opened it (TDM-145): under
+	// the 'peer' approval policy a registered agent may approve a task a DIFFERENT
+	// agent proposed. Both identities are server-derived and the non-self rule is
+	// enforced from them, never from the body — see peer_approval.go, which also
+	// documents what 'peer' deliberately does NOT relax (born-approved, reject,
+	// epics, bulk approve). On every other policy authorizePeerApproval writes the
+	// byte-identical legacy refusal, so nothing about an existing canvas changes.
+	if !callerIsHuman(r.Context()) && !h.authorizePeerApproval(w, r) {
 		return
 	}
 	// approvedBy is stamped from server-derived provenance, NEVER from the request
 	// body: defaulting a missing value to "human" was how an agent-driven approve
-	// recorded a fabricated human stamp on the board. It is "human" here by
-	// construction (the gate above).
+	// recorded a fabricated human stamp on the board. It is "human" for a human
+	// approval by construction (the gate above), and "agent:<identity>" for a peer
+	// approval — the "agent:" prefix is server-stamped, so a reader can tell the
+	// two apart from the stored row alone, with no extra column and no guessing.
 	approvedBy := AuthorHuman
 	if a := AuthorFromCtx(r.Context()); a != nil {
 		approvedBy = *a
@@ -687,10 +700,11 @@ func (h *Handler) ApproveAction(w http.ResponseWriter, r *http.Request) {
 		go func() {
 			// The batch flow is a property of the 'epic' (and 'auto') policies.
 			// Under 'strict' every agent task keeps its own gate — approving the
-			// epic must not mass-approve its tasks. Unreadable policy fails
-			// closed, like the birth-time cascade.
+			// epic must not mass-approve its tasks — and under 'peer' (TDM-145)
+			// the same holds, that gate simply being the reviewer's. Unreadable
+			// policy fails closed, like the birth-time cascade.
 			canvas, err := h.store.GetCanvasByID(ctx, canvasID)
-			if err != nil || canvas.ApprovalPolicy == "strict" {
+			if err != nil || !policyCascadesToEpicTasks(canvas.ApprovalPolicy) {
 				if err != nil {
 					log.Printf("approve epic %s: reading approval policy (cascade skipped): %v", epicID, err)
 				}
@@ -736,6 +750,11 @@ func (h *Handler) ApproveActionsBatch(w http.ResponseWriter, r *http.Request) {
 	}
 	// THE APPROVAL GATE (TDM-129): bulk approve is still approve — same human-only
 	// rule and same server-stamped approvedBy as the single-approve path.
+	//
+	// Peer approval (TDM-145) does NOT reach this door, on any policy: this endpoint
+	// flips every listed row in one conditional UPDATE that knows nothing about
+	// per-row authorship, so it could not enforce the non-self rule even in
+	// principle. A reviewer agent approves one task at a time, through …/{id}/approve.
 	if !callerIsHuman(r.Context()) {
 		writeError(w, http.StatusForbidden, "only a signed-in human can approve actions")
 		return
@@ -800,11 +819,11 @@ func (h *Handler) ApproveActionsBatch(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := context.WithoutCancel(r.Context())
 	go func() {
-		// Policy check mirrors ApproveAction: under 'strict' approving an epic is
-		// bookkeeping — its tasks keep their individual gates. Unreadable policy
-		// fails closed (cascade skipped).
+		// Policy check mirrors ApproveAction: under 'strict' (and 'peer') approving
+		// an epic is bookkeeping — its tasks keep their individual gates.
+		// Unreadable policy fails closed (cascade skipped).
 		canvas, err := h.store.GetCanvasByID(ctx, canvasID)
-		if err != nil || canvas.ApprovalPolicy == "strict" {
+		if err != nil || !policyCascadesToEpicTasks(canvas.ApprovalPolicy) {
 			if err != nil {
 				log.Printf("approve-batch: reading approval policy (epic cascade skipped): %v", err)
 			}
@@ -834,7 +853,10 @@ func (h *Handler) ApproveActionsBatch(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) RejectAction(w http.ResponseWriter, r *http.Request) {
 	// The other exit from the human gate (TDM-129): rejecting is a human decision
 	// on proposed work, refused for anyone the server can't see as a human — an
-	// agent must not clear a peer's proposal out of the queue.
+	// agent must not clear a peer's proposal out of the queue. The 'peer' policy
+	// (TDM-145) does not change this and is not an oversight: peer approval lets a
+	// reviewer let work THROUGH, which a human can undo by moving the task back;
+	// rejection kills it, and killing a peer's proposal stays a human decision.
 	if !callerIsHuman(r.Context()) {
 		writeError(w, http.StatusForbidden, "only a signed-in human can reject an action")
 		return

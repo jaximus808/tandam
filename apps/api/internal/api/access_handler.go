@@ -72,10 +72,16 @@ func (h *Handler) SetCanvasVisibility(w http.ResponseWriter, r *http.Request) {
 
 // PATCH /api/canvases/{code}/approval-policy — body { approvalPolicy }.
 // Owner-only, like the other canvas settings. Sets how much human gating
-// agent-proposed tasks get ('strict' | 'epic' | 'auto', migration 0033); the
-// cascade itself is enforced in the action create/approve handlers. Reading the
-// policy needs no dedicated endpoint — it rides on the canvas meta (GET
-// /api/canvases/{code} and every WS state push).
+// agent-proposed tasks get ('strict' | 'epic' | 'auto', migration 0033; 'peer',
+// migration 0041); the cascade itself is enforced in the action create/approve
+// handlers. Reading the policy needs no dedicated endpoint — it rides on the
+// canvas meta (GET /api/canvases/{code} and every WS state push).
+//
+// 'peer' is the opt-in that lets a REVIEWER agent approve another agent's task
+// (TDM-145). It is owner-only to set precisely because it is the one policy that
+// moves an approval out of human hands, so the decision to allow that has to be
+// a human's — and it is the ONLY way a canvas ever enters that mode. Nothing
+// defaults to it and no migration moves an existing canvas onto it.
 func (h *Handler) SetCanvasApprovalPolicy(w http.ResponseWriter, r *http.Request) {
 	canvas, ok := h.requireCanvasOwner(w, r)
 	if !ok {
@@ -89,9 +95,9 @@ func (h *Handler) SetCanvasApprovalPolicy(w http.ResponseWriter, r *http.Request
 		return
 	}
 	switch body.ApprovalPolicy {
-	case "strict", "epic", "auto":
+	case "strict", "epic", "auto", policyPeer:
 	default:
-		writeError(w, http.StatusBadRequest, "approvalPolicy must be 'strict', 'epic', or 'auto'")
+		writeError(w, http.StatusBadRequest, "approvalPolicy must be 'strict', 'epic', 'auto', or 'peer'")
 		return
 	}
 	if _, err := h.store.SetCanvasApprovalPolicy(r.Context(), canvas.ID, body.ApprovalPolicy); err != nil {
