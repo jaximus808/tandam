@@ -1,16 +1,19 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   ArrowLeft,
   ArrowRight,
+  Ban,
   Bot,
+  Check,
   Compass,
   GitCommitHorizontal,
   Layers,
   Link2,
   MapPin,
   Milestone,
+  Play,
   RotateCcw,
   SearchX,
   Shield,
@@ -37,6 +40,9 @@ import {
 } from "../lib/taskAudit";
 import { deriveLease, leaseAge } from "../lib/lease";
 import { eventLabel, eventSentence, repeatsOf, tallyContention } from "../lib/contention";
+import { humanMovesFor, type HumanMove } from "../lib/taskMoves";
+import { moveTask } from "../lib/api";
+import posthog from "../lib/posthog";
 import TaskLinks from "./TaskLinks";
 import TandemLogo from "./TandemLogo";
 import { useFreshnessNow } from "./Freshness";
@@ -449,6 +455,154 @@ function LinkedContext({
   );
 }
 
+// ── Human state moves (TDM-104) ──────────────────────────────────────────────
+// The page used to be read-only: you could follow a link to a ticket, read the
+// whole record of it, and then had to go BACK to the board to say "I started
+// this". A page that is the shareable address of one piece of work has to be the
+// place you can act on that piece of work, or the link is a dead end.
+//
+// Same matrix, same verbs, same server call as the board's detail panel
+// (TaskBoard's renderMoves): lib/taskMoves is the client mirror of
+// apps/api/internal/api/task_move.go, and the API re-validates every move, so
+// this strip cannot offer one the server will refuse. 'proposed' renders NOTHING
+// — the approval gate is the only way out of triage and no move control may
+// route around it, here any more than there.
+//
+// It is deliberately NOT a copy of the panel's whole footer: no approve/reject
+// (this page is not the triage surface) and no delete (deleting the thing you
+// are looking at leaves you on the address of something that no longer exists).
+function moveIcon(move: HumanMove) {
+  if (move.kind === "rewind") return <RotateCcw size={12} />;
+  if (move.to === "executing") return <Play size={12} />;
+  if (move.to === "failed") return <Ban size={12} />;
+  return <Check size={12} />;
+}
+
+const MOVE_PRIMARY =
+  "tandem-tap flex flex-1 items-center justify-center gap-1 rounded-md bg-accent px-2.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40 sm:flex-none";
+const MOVE_QUIET =
+  "tandem-tap flex flex-1 items-center justify-center gap-1 rounded-md border border-ink/15 px-2.5 py-1.5 text-xs font-medium text-ink/60 transition-colors hover:border-ink/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40 sm:flex-none";
+
+function MoveControls({
+  code,
+  task,
+  assignee,
+  className = "",
+}: {
+  code: string;
+  task: Action;
+  assignee: string;
+  className?: string;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // The armed move, waiting on its confirm (and optionally a note).
+  const [pending, setPending] = useState<HumanMove | null>(null);
+  const [note, setNote] = useState("");
+
+  const moves = humanMovesFor(task.state);
+  // The task moved underneath us — a socket push landed a state whose armed move
+  // is no longer legal — so drop the armed strip rather than fire a stale move.
+  useEffect(() => {
+    setPending(null);
+    setNote("");
+    setError(null);
+  }, [task.state]);
+
+  if (moves.length === 0) return null;
+
+  async function go(move: HumanMove) {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const from = task.state;
+      await moveTask(code, task.id, move.to, note.trim() || undefined);
+      posthog.capture("task_moved", {
+        canvas_code: code,
+        from,
+        to: move.to,
+        assignee,
+        noted: note.trim().length > 0,
+        // The board's two move surfaces already report themselves; this is the
+        // third, and the point of the property is telling them apart.
+        surface: "ticket_page",
+      });
+      if (from === "failed" && move.to === "approved") {
+        posthog.capture("agent_task_requeued", { canvas_code: code });
+      }
+      setPending(null);
+      setNote("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not move this task");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Plain and forward (Start) fires straight away. Anything worth annotating,
+  // and every rewind — which discards the last attempt's result — arms first.
+  function arm(move: HumanMove) {
+    if (move.notePrompt || move.kind === "rewind") {
+      setNote("");
+      setError(null);
+      setPending(move);
+      return;
+    }
+    void go(move);
+  }
+
+  return (
+    <div className={className}>
+      {error && (
+        <div className="mb-2 rounded-md border border-rose-500/20 bg-rose-500/10 px-2.5 py-1.5 text-[12px] text-rose-600 dark:text-rose-400">
+          {error}
+        </div>
+      )}
+      {pending ? (
+        <div className="flex flex-col gap-2">
+          <p className="text-[12px] leading-snug text-ink/60">{pending.hint}.</p>
+          {pending.notePrompt && (
+            <input
+              autoFocus
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void go(pending);
+                if (e.key === "Escape") setPending(null);
+              }}
+              placeholder={pending.notePrompt}
+              className="tandem-tap w-full rounded-md border border-ink/15 bg-surface px-2.5 py-1.5 text-[12.5px] text-ink outline-none placeholder:text-ink/30 focus:border-accent/50 focus:ring-2 focus:ring-accent/40"
+            />
+          )}
+          <div className="flex gap-1.5">
+            <button onClick={() => void go(pending)} disabled={busy} className={MOVE_PRIMARY}>
+              {busy ? "Working…" : pending.label}
+            </button>
+            <button onClick={() => setPending(null)} className={MOVE_QUIET}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-wrap gap-1.5">
+          {moves.map((m, i) => (
+            <button
+              key={`${m.to}-${m.label}`}
+              onClick={() => arm(m)}
+              disabled={busy}
+              title={m.hint}
+              className={i === 0 && m.kind === "forward" ? MOVE_PRIMARY : MOVE_QUIET}
+            >
+              {moveIcon(m)} {m.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export default function TicketView({
@@ -456,6 +610,7 @@ export default function TicketView({
   canvasName,
   state,
   ticketRef,
+  readOnly = false,
   onOpenBoard,
   onOpenEpic,
   onOpenDocument,
@@ -469,6 +624,8 @@ export default function TicketView({
   state: CanvasState | null;
   /** The ticket string as it appeared in the URL, e.g. "TDM-7". */
   ticketRef: string;
+  /** Viewer holds the read role: the page renders the record, not the moves. */
+  readOnly?: boolean;
   /** Leave the ticket page for the Board surface. */
   onOpenBoard: () => void;
   /** Board, scoped to this task's epic. */
@@ -627,11 +784,93 @@ export default function TicketView({
                   {p.title || "Untitled task"}
                 </h1>
 
+                {/* ── Claim summary, narrow screens only (TDM-104) ─────────
+                    The record rail is a RAIL only from lg up; below that the
+                    grid collapses and it stacks under the ENTIRE main column —
+                    past the brief, the progress log, the result and both
+                    histories. On a phone that put "who is holding this" a dozen
+                    screens from the title, which is the one question a pasted
+                    ticket link is usually opened to answer.
+
+                    So the rail's headline facts come up here instead, and only
+                    where they'd otherwise be unreachable (lg:hidden — the
+                    breakpoint the grid actually changes at, not md, or the
+                    tablet gets the same long scroll). State is NOT repeated:
+                    the identity row two lines above already carries the state
+                    chip and the lease, and a second copy inside 100px reads as
+                    a rendering bug. The full rail stays exactly where it was.
+
+                    Nothing to hoist, nothing drawn: an unclaimed task with no
+                    epic has only its assignee to report, and the identity row
+                    already said "for an agent" one line up. */}
+                {(task.claimedBy || (epicTitle && p.epicId)) && (
+                  <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-ink/10 bg-surface px-3 py-2 lg:hidden">
+                    <span className="inline-flex min-w-0 items-center gap-1.5 text-[12px] text-ink/70">
+                      <span className={EYEBROW}>Holder</span>
+                      {task.claimedBy ? (
+                        <ClaimantChip name={task.claimedBy} />
+                      ) : p.assignee === "human" ? (
+                        <span className="inline-flex items-center gap-1">
+                          <User size={11} className="shrink-0 text-ink/45" /> You
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-ink/55">
+                          <Bot size={11} className="shrink-0 text-ink/45" /> Unclaimed
+                        </span>
+                      )}
+                    </span>
+                    {/* When it was taken — but only once the stamp MEANS that. On
+                        an executing task claimedAt is the lease heartbeat, so the
+                        chip in the identity row is the honest reading and this
+                        stays quiet rather than claiming "claimed 40s ago" on work
+                        that has been running for an hour. */}
+                    {task.claimedAt && task.state !== "executing" && <Stamp at={task.claimedAt} />}
+                    {epicTitle && p.epicId && (
+                      <span className="inline-flex min-w-0 items-center gap-1.5">
+                        <span className={EYEBROW}>Epic</span>
+                        {onOpenEpic ? (
+                          <button
+                            onClick={() => onOpenEpic(p.epicId as string)}
+                            title={`Open the board scoped to "${epicTitle}"`}
+                            className="tandem-tap inline-flex min-w-0 items-center gap-1 rounded-md text-[12px] text-ink/70 underline decoration-ink/20 underline-offset-2 transition-colors hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                          >
+                            <Layers size={11} className="shrink-0 text-ink/45" />
+                            <span className="min-w-0 truncate">{epicTitle}</span>
+                          </button>
+                        ) : (
+                          <span className="inline-flex min-w-0 items-center gap-1 text-[12px] text-ink/70">
+                            <Layers size={11} className="shrink-0 text-ink/45" />
+                            <span className="min-w-0 truncate">{epicTitle}</span>
+                          </span>
+                        )}
+                      </span>
+                    )}
+                  </div>
+                )}
+
                 {/* A lapsed lease outranks the brief, for the same reason the
                     re-approval notice does: it changes what you are reading the
-                    ticket FOR. No release control on this page — moves live on
-                    the board — so the notice says where to go for one. */}
-                <LeaseNotice lease={lease} className="mt-4" />
+                    ticket FOR. Release is now one of the moves directly below
+                    (TDM-104), so the notice can offer it here rather than
+                    sending the reader back to the board — except for a viewer
+                    with the read role, for whom the moves don't render at all. */}
+                <LeaseNotice lease={lease} canRelease={!readOnly} className="mt-4" />
+
+                {/* The moves, high: this page's whole job is "one piece of
+                    work", and the act it exists to support is walking that work
+                    along. Under the title (and under the lapsed-lease notice,
+                    because Release is one of these buttons) means a phone can
+                    Start / Mark done without scrolling past the brief. Renders
+                    nothing at all on a proposed task — approval is the board's,
+                    deliberately. */}
+                {!readOnly && (
+                  <MoveControls
+                    code={code}
+                    task={task}
+                    assignee={p.assignee ?? "agent"}
+                    className="mt-4"
+                  />
+                )}
 
                 {/* Why this is back in triage — above the brief, because it
                     changes how you read every word of it. */}

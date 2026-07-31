@@ -1250,6 +1250,11 @@ export default function App() {
         canvasName={canvas?.name ?? null}
         state={canvasState}
         ticketRef={ticketRef}
+        // The ticket page carries the same human move strip as the board's
+        // detail panel (TDM-104), so it needs the same gate on it. yourRole
+        // rides in with the first snapshot, i.e. alongside the state the page
+        // needs to render anything but its skeleton.
+        readOnly={canvas?.yourRole === "read"}
         onOpenBoard={() => {
           setSurface("board");
           closeTicket();
