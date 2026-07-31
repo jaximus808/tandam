@@ -57,6 +57,12 @@ export default function FollowControl({ agents, prefs, onChange, paused, pending
   // Live state of the camera, in priority order: off → paused → armed.
   const live = prefs.on && !paused;
 
+  // ZONE 3 · CONTROLS of the canvas header's collapse contract (see the block
+  // comment above `HEADER_DROP` in App.tsx): `shrink-0`, and never inside an
+  // overflow-hidden ancestor — the panel below is absolutely positioned and
+  // would be clipped by one. This control owns two rungs of the header's drop
+  // ladder: rank 3 hides the text label below lg (the eye carries the state on
+  // its own), rank 4 hides the whole control below md.
   return (
     <div className="relative hidden shrink-0 md:block">
       <button

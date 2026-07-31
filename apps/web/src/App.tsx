@@ -225,6 +225,105 @@ function setMCPInURL() {
   window.history.pushState(null, "", "/mcp");
 }
 
+/* ─────────────────────────────────────────────────────────────────────────────
+   THE CANVAS HEADER'S COLLAPSE CONTRACT
+
+   The header is one non-wrapping flex row that has to seat identity (which
+   canvas am I on) and controls (what can I do here) at every width from a
+   375px phone up. Left to itself, flexbox decides what gets crushed by
+   whichever element happens to be shrinkable — which is how the canvas code
+   chip ended up spilling out of its own group and painted under the
+   notification bell (TDM-152). So this row is governed, not emergent.
+   Three zones, three behaviours:
+
+   ZONE 1 · IDENTITY — truncates; never disappears.  (the name + code group)
+     `min-w-0 overflow-hidden`. This is the row's shock absorber: no minimum
+     width, it just gets narrower and the canvas name truncates. It gets no
+     floor on purpose — a floor doesn't create space, it only decides who
+     goes without, and the only candidate left is the right edge where the
+     controls live. Clipped to its own box, nothing in here can reach a
+     sibling at any width, whatever the rest of the row grows to.
+
+   ZONE 2 · AMBIENT — clips, and clips FIRST.  (the agent presence block)
+     `min-w-0 overflow-hidden` on the block, and a huge `shrink` factor on
+     the zone that carries it, so this is the first thing in the row to give
+     up space — before the canvas name starts truncating. It's allowed to be
+     clipped because it's pure status: the same facts are one click away in
+     the fleet panel and on the board. It clips from the right, so its DOM
+     order IS its collapse order — the live status word goes first, then the
+     ticket chip, and the avatars ("agents are here") survive longest.
+
+   ZONE 3 · CONTROLS — never clipped, never squeezed; drops whole or not at
+     all.  (bell, follow, fleet, the copy/Share CTA, Connect, account)
+     Every member is `shrink-0`. Two reasons, and the second is the one that
+     bites: (a) they are the only way to DO anything from here, and (b) the
+     bell, follow, fleet and account controls each render an
+     absolutely-positioned popover, so an `overflow-hidden` ancestor would
+     clip the open PANEL, not just the trigger. That is precisely why TDM-152's
+     containment fix cannot simply be pulled up to wrap the whole row, and why
+     Zone 3 must stay uncontained. The zone as a whole is allowed to shrink,
+     but its automatic min-width (the sum of its shrink-0 children) freezes it
+     before any control is squeezed; past that the deficit falls back onto
+     Zone 1, which is contained and can absorb it safely.
+
+   THE INVARIANT, in one line: nothing in this row may be both shrinkable and
+   uncontained. That pair is exactly what let a shrink-0 chip spill out of its
+   collapsed parent and get painted over by a sibling. Zones 1 and 2 are
+   shrinkable and contained; Zone 3 is uncontained and unshrinkable. A flex
+   item that overflows its own box only ever overflows to the RIGHT, so an
+   over-budget Zone 3 runs off the window edge (clipped by the app shell's
+   `overflow-hidden`) rather than back over the canvas name.
+
+   ADDING SOMETHING TO THE HEADER: pick a zone; don't invent a breakpoint.
+   A status readout goes in Zone 2 and degrades for free. Anything clickable,
+   and anything with a popover, goes in Zone 3 with `shrink-0` — and then owes
+   the ladder below a rank, because a Zone 3 element with no rank is an
+   element that never disappears, and the row cannot afford many of those.
+
+   THE LADDER — what the header gives up, in order, as the window narrows.
+   Rank 1 goes first. Ranks marked (·) are owned by their own component and
+   annotated there; they're listed here so the order is readable in one place.
+     1. "View only" chip ......... below xl   HEADER_DROP.viewOnlyChip
+     2. Canvas code chip ......... below lg   HEADER_DROP.canvasCode
+     3. Follow control's label ... below lg   (·) components/FollowControl.tsx
+     4. Follow control ........... below md   (·) components/FollowControl.tsx
+     5. Agent presence block ..... below sm   (·) components/AgentPresence.tsx
+     6. "Connect" ................ below sm   HEADER_DROP.connectButton
+                                              (lives in the mobile nav drawer)
+     7. Fleet chip's label ....... below sm   (·) components/FleetView.tsx
+                                              (collapses to gauge + count)
+     8. "Tandem" wordmark + "/" .. below sm   HEADER_DROP.wordmark / .breadcrumbSlash
+   NEVER DROPPED, at any width: the canvas name (it truncates instead), the
+   bell, the fleet chip, whichever of Copy/Share is showing, and the account
+   control. Those five are the floor — if the row still doesn't fit once the
+   ladder is exhausted, the answer is to move something into the mobile nav
+   drawer, not to add a rank 9.
+   ──────────────────────────────────────────────────────────────────────── */
+
+/**
+ * The App.tsx-owned rungs of the ladder above. Elements cite a rung here
+ * rather than arguing a breakpoint at their own call site, so the order stays
+ * readable top-to-bottom in one place. Full literals, not composed strings —
+ * Tailwind only generates class names it can see verbatim in the source.
+ */
+const HEADER_DROP = {
+  /** Rank 1 — pure redundancy: the full-width view-only banner directly under
+      the header says the same thing at EVERY width. */
+  viewOnlyChip: "hidden xl:inline-flex",
+  /** Rank 2 — ~70px that's recoverable from the URL and from Share. Below lg
+      it's worth more to the canvas name than to a lookup value. */
+  canvasCode: "hidden lg:inline",
+  /** Rank 6 — on a phone the row can't seat Connect AND the copy CTA, and the
+      copy CTA is the one launch traffic must see. Connect is still reachable
+      from the mobile nav drawer (and still auto-opens on an empty canvas). */
+  connectButton: "hidden sm:inline-flex",
+  /** Rank 8 — the logo mark alone still says Tandem and still goes home. */
+  wordmark: "hidden sm:inline",
+  /** Rank 8 — the breadcrumb separator is meaningless once the wordmark on its
+      left is gone, so the two share a rung. */
+  breadcrumbSlash: "hidden sm:inline",
+} as const;
+
 export default function App() {
   const [route, setRoute] = useState<Route>(routeFromPath);
   const [canvasCode, setCanvasCode] = useState<string | null>(getCodeFromURL);
@@ -1385,41 +1484,40 @@ export default function App() {
   return (
     <ModeNavContext.Provider value={setMode}>
     <div className="flex flex-col h-app bg-paper text-ink overflow-hidden">
-      {/* z-[80] so the header (and its bell dropdown) sits above the agent
+      {/* This row obeys the header collapse contract — the block comment above
+          `HEADER_DROP` near the top of this file. Short version: Zone 1
+          (identity) truncates, Zone 2 (presence) clips first, Zone 3
+          (controls) is shrink-0 and never clipped. Nothing here may be both
+          shrinkable and uncontained.
+          z-[80] so the header (and its bell dropdown) sits above the agent
           cursor overlay (z-[70]); modals are z-[2000] and still cover it. */}
       <header className="relative z-[80] flex items-center gap-1.5 px-3 py-2.5 bg-paper border-b border-ink/10 shrink-0 sm:gap-2 sm:px-4">
-        {/* On mobile the nav-drawer trigger lives as a bottom-right FAB (see
-            below) — off the header so the canvas title has room. The desktop
-            left dock is `hidden sm:flex`. */}
+        {/* ZONE 3 (control) — home. On mobile the nav-drawer trigger lives as a
+            bottom-right FAB (see below) — off the header so the canvas title
+            has room. The desktop left dock is `hidden sm:flex`. */}
         <button
           onClick={() => handleJoin("")}
           className="group flex items-center gap-1.5 text-sm shrink-0 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
           title="Back to home"
         >
           <TandemLogo size={28} animate={false} />
-          <span className="hidden font-semibold tracking-tight text-ink transition-colors group-hover:text-accent sm:inline">
+          <span className={`${HEADER_DROP.wordmark} font-semibold tracking-tight text-ink transition-colors group-hover:text-accent`}>
             Tandem
           </span>
         </button>
-        <span className="hidden text-ink/20 shrink-0 sm:inline">/</span>
-        {/* Canvas identity. This group is the header row's ONLY shrinkable item,
-            so every bit of width pressure in the row lands here — which is why
-            what the header gives up first is decided HERE, explicitly, instead
-            of being whatever falls out of the flexbox:
-              1. "View only" goes first (below xl) — the full-width banner
-                 directly under the header says the same thing at every width,
-                 so the chip is pure redundancy.
-              2. The canvas code goes next (below lg) — it's recoverable from the
-                 URL and from Share, and at ~70px of shrink-0 it was what crushed
-                 the name into a single letter on a narrowed window.
-              3. The name NEVER goes. It only truncates: it's the one thing
-                 telling you which canvas you're looking at.
-            `overflow-hidden` is the guarantee under all of it (TDM-152). Flex
-            shrinks this BOX, not its contents, so without containment the
-            shrink-0 code chip kept its full width, spilled out of the collapsed
-            group and got painted over by the next shrink-0 sibling — the
-            notification bell. Clipped to its own box, nothing in here can reach a
-            sibling at any width, whatever the right-hand cluster grows to.
+        <span className={`${HEADER_DROP.breadcrumbSlash} text-ink/20 shrink-0`}>/</span>
+        {/* ZONE 1 · IDENTITY — the row's shock absorber. `min-w-0` lets it
+            narrow all the way; `overflow-hidden` is the guarantee that came out
+            of TDM-152, because flex shrinks this BOX and not its contents:
+            without containment the shrink-0 code chip kept its full width,
+            spilled out of the collapsed group, and got painted over by the next
+            shrink-0 sibling (the bell). Clipped to its own box, nothing in here
+            can reach a sibling at any width.
+            The name truncates but never drops; the two chips beside it are
+            rungs 1 and 2 of the ladder (see HEADER_DROP). Nothing else belongs
+            in this group — a control put in here would be clipped by the very
+            containment that protects the name, and a popover inside it would be
+            clipped too. Controls go in Zone 3.
             `pl-1 -ml-1` re-opens the 4px that the name button's own `-mx-1`
             bleeds to the left, so containment doesn't shave its hover highlight;
             it nets to the exact geometry as before at every breakpoint. */}
@@ -1441,18 +1539,14 @@ export default function App() {
               }
             }}
           />
-          {/* Wide windows only (was sm:). Below lg this chip's ~70px is worth
-              more to the canvas name than to a lookup value you can read off the
-              URL or copy from Share — see the collapse order above. */}
-          <span className="hidden rounded-[3px] border border-ink/10 bg-surface px-1.5 py-px font-code text-[10px] tracking-[0.14em] text-ink/40 shrink-0 lg:inline">
+          {/* Ladder rank 2. */}
+          <span className={`${HEADER_DROP.canvasCode} rounded-[3px] border border-ink/10 bg-surface px-1.5 py-px font-code text-[10px] tracking-[0.14em] text-ink/40 shrink-0`}>
             {canvas.code}
           </span>
-          {/* First thing the header drops (was sm:). The full-width view-only
-              banner under the header renders at EVERY width, so below xl this
-              chip costs the canvas name ~75px and tells you nothing new. */}
+          {/* Ladder rank 1 — the first thing the header gives up. */}
           {canvas.yourRole === "read" && (
             <span
-              className="hidden items-center gap-1 rounded-[4px] bg-ink/5 px-1.5 py-px text-[11px] font-medium text-ink/60 shrink-0 xl:inline-flex"
+              className={`${HEADER_DROP.viewOnlyChip} items-center gap-1 rounded-[4px] bg-ink/5 px-1.5 py-px text-[11px] font-medium text-ink/60 shrink-0`}
               title="You have view-only access to this canvas"
             >
               <span className="h-1 w-1 rounded-full bg-ink/35" />
@@ -1461,8 +1555,13 @@ export default function App() {
           )}
         </div>
 
-        {/* Agent-activity bell — rings + badges when an agent changes anything,
-            opens the recent-activity log, and toggles the popup alerts. */}
+        {/* ZONE 3 (control) — the agent-activity bell rings + badges when an
+            agent changes anything, opens the recent-activity log, and toggles
+            the popup alerts. It sits at the head of the row rather than in the
+            right-hand cluster, but it obeys the control-zone rule: shrink-0
+            (in the component), never clipped — it drops an absolutely-positioned
+            log panel, which an overflow-hidden ancestor would swallow. It has no
+            ladder rank: the activity log has no other door. */}
         <NotificationBell
           log={notify.log}
           unread={notify.unread}
@@ -1472,7 +1571,27 @@ export default function App() {
           clearLog={notify.clearLog}
         />
 
-        <div className="ml-auto flex items-center gap-2 shrink-0">
+        {/* ZONE 3 · CONTROLS — with ZONE 2 (the presence block) riding at its
+            head, because that's where the fleet readout it belongs beside sits.
+            `shrink-[999]` rather than the `shrink-0` this had: the zone yields
+            BEFORE the canvas name does, and the only thing in it that can
+            actually give ground is the presence block, which is contained and
+            safe to clip. Everything else here is individually `shrink-0`, so
+            the zone's automatic min-width is the sum of the controls — flexbox
+            freezes it there and pushes the rest of the deficit back onto Zone 1
+            instead of squeezing a button.
+            Deliberately NO `min-w-0` (it would defeat that freeze) and
+            deliberately NO `overflow-hidden`: FollowControl, FleetView and
+            AccountMenu each render their panel as an absolutely-positioned
+            child of this subtree, and containment here would clip the open
+            panel, not just its trigger. */}
+        <div className="ml-auto flex items-center gap-2 shrink-[999]">
+          {/* ZONE 2 · AMBIENT — the one item in this zone allowed to yield. It
+              carries `min-w-0 overflow-hidden` on its own root (see the
+              component) so it collapses and clips inside its own box instead of
+              reaching a neighbour, and it holds no popover of its own — which is
+              what makes clipping it safe. Ladder rank 5 (below sm) lives there
+              too. */}
           <AgentPresence
             agents={agentList}
             edit={agentEdit}
@@ -1511,8 +1630,13 @@ export default function App() {
             onOpenBoard={openBoard}
             onConnect={() => setConnectOpen(true)}
           />
+          {/* The copy/claim CTA and Share below it are Zone 3 with NO ladder
+              rank — they're the whole point of the page for the visitor who
+              sees them, and only one of the three ever renders at a time. Each
+              is `shrink-0`: they must never be squeezed into a two-line label,
+              which is what would silently blow up the header's height. */}
           {claiming ? (
-            <span className="inline-flex h-9 items-center rounded-md border border-ink/15 bg-surface px-3 text-[13px] font-medium text-ink/60 sm:h-8">
+            <span className="inline-flex h-9 shrink-0 items-center rounded-md border border-ink/15 bg-surface px-3 text-[13px] font-medium text-ink/60 sm:h-8">
               <span className="sm:hidden">Saving…</span>
               <span className="hidden sm:inline">Saving to your account…</span>
             </span>
@@ -1523,7 +1647,7 @@ export default function App() {
               <button
                 onClick={handleCopyToAccount}
                 disabled={copying}
-                className="inline-flex h-9 items-center rounded-md border border-ink/15 bg-surface px-3 text-[13px] font-medium text-ink/80 transition-colors hover:border-ink/25 hover:bg-ink/[0.03] disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper sm:h-8"
+                className="inline-flex h-9 shrink-0 items-center rounded-md border border-ink/15 bg-surface px-3 text-[13px] font-medium text-ink/80 transition-colors hover:border-ink/25 hover:bg-ink/[0.03] disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper sm:h-8"
                 title="Save a copy of this canvas to your account so it shows up in My canvases on every device"
               >
                 {copying ? "Copying…" : (
@@ -1544,7 +1668,7 @@ export default function App() {
               <button
                 onClick={handleSignedOutCopyClick}
                 disabled={copying}
-                className="inline-flex h-9 items-center rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-[filter] hover:brightness-[0.94] disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper sm:h-8"
+                className="inline-flex h-9 shrink-0 items-center rounded-md bg-accent px-3 text-[13px] font-medium text-white transition-[filter] hover:brightness-[0.94] disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper sm:h-8"
                 title="Sign in and get your own editable copy of this canvas"
               >
                 {copying ? "Copying…" : (
@@ -1561,24 +1685,25 @@ export default function App() {
               onClick={() => setShareOpen(true)}
               // h-9 below sm like the copy CTA beside it — this button is
               // visible at every width, so it needs the taller phone target.
-              className="inline-flex h-9 items-center rounded-md border border-ink/15 bg-surface px-3 text-[13px] font-medium text-ink/80 transition-colors hover:border-ink/25 hover:bg-ink/[0.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper sm:h-8"
+              className="inline-flex h-9 shrink-0 items-center rounded-md border border-ink/15 bg-surface px-3 text-[13px] font-medium text-ink/80 transition-colors hover:border-ink/25 hover:bg-ink/[0.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper sm:h-8"
               title="Control who can open and edit this canvas"
             >
               Share
             </button>
           )}
-          {/* Desktop-only in the header: on a 375px phone the header can't seat
-              the copy CTA AND Connect without clipping (overflow-hidden shell),
-              and the copy CTA is the one action launch traffic must see. On
-              phones Connect lives in the mobile nav drawer (and still auto-opens
-              on an empty canvas). */}
+          {/* Ladder rank 6 — the reasoning is on HEADER_DROP.connectButton. */}
           <button
             onClick={() => setConnectOpen(true)}
-            className="hidden h-8 items-center rounded-md bg-accent px-3.5 text-[13px] font-medium text-white transition-[filter] hover:brightness-[0.94] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper sm:inline-flex"
+            className={`${HEADER_DROP.connectButton} h-8 shrink-0 items-center rounded-md bg-accent px-3.5 text-[13px] font-medium text-white transition-[filter] hover:brightness-[0.94] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-paper`}
           >
             Connect
           </button>
-          {/* Keyed on the user so a sign-in completed OUTSIDE AccountMenu (the
+          {/* Zone 3, no ladder rank, and LAST in the row — so if the ladder is
+              ever exhausted and the row still overflows, this is what runs off
+              the right edge. It's `shrink-0` in the component (both the avatar
+              and the signed-out "Sign in" branch), so it can only ever be
+              clipped whole, never squeezed into a sliver.
+              Keyed on the user so a sign-in completed OUTSIDE AccountMenu (the
               copy-CTA modal below) remounts it out of its stale "Sign in"
               state — it rehydrates from the identity cache loginWithGoogle
               just wrote. */}

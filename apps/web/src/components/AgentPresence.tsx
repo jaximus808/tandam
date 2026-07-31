@@ -55,13 +55,31 @@ export default function AgentPresence({ agents, edit, reading, onJump, onOpenTas
         (Date.parse(y.taskClaimedAt ?? "") || 0) - (Date.parse(x.taskClaimedAt ?? "") || 0),
     )[0];
 
+  // ZONE 2 · AMBIENT of the canvas header's collapse contract — the block
+  // comment above `HEADER_DROP` in App.tsx is the whole rule; this is the one
+  // element in the header's right-hand zone that is allowed to give up space.
+  // `min-w-0 overflow-hidden` is what makes that safe: the block collapses and
+  // CLIPS inside its own box instead of spilling out over a neighbour (the
+  // failure TDM-152 fixed for the identity group). Two things earn it the job:
+  // it is pure status, re-readable in the fleet panel and on the board; and it
+  // holds no popover of its own, so nothing that must escape the box lives in
+  // here — don't add one.
+  // Because it clips from the RIGHT, the DOM order below IS the collapse order:
+  // the live status word goes first, then the ticket chip, and the avatars —
+  // the "agents are here" signal — survive longest. Keep that order.
+  // `px-1 -mx-1` re-opens the 4px the focus rings on the avatar cluster and the
+  // chips bleed outward, so containment doesn't shave them; it nets to the same
+  // outer geometry. `hidden ... sm:flex` is ladder rank 5.
   return (
-    <div className="relative hidden items-center gap-2 sm:flex">
+    <div className="relative hidden min-w-0 items-center gap-2 overflow-hidden px-1 -mx-1 sm:flex">
       {/* Avatar cluster — agents are square terracotta chips, like their tags.
           A scan-line sweeps across them while the agent is reading. Clicking
           anywhere but a mid-task chip opens the fleet roster. */}
       <div
-        className="flex -space-x-1 cursor-pointer rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        // shrink-0, like every sibling in this block: the block yields by being
+        // CLIPPED from the right, not by squashing its contents. Without it the
+        // avatars would compress into slivers before anything disappeared.
+        className="flex shrink-0 -space-x-1 cursor-pointer rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
         role="button"
         tabIndex={0}
         onClick={onOpenFleet}
@@ -116,7 +134,7 @@ export default function AgentPresence({ agents, edit, reading, onJump, onOpenTas
       {followed?.taskId && (
         <button
           onClick={() => onOpenTask(followed.taskId!)}
-          className={`inline-flex items-center gap-1 rounded-[4px] bg-violet-500/10 px-2 py-1 font-code text-[10.5px] font-medium ring-1 ring-inset ring-violet-500/20 transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${STATE_CHIP.executing.text}`}
+          className={`inline-flex shrink-0 items-center gap-1 rounded-[4px] bg-violet-500/10 px-2 py-1 font-code text-[10.5px] font-medium ring-1 ring-inset ring-violet-500/20 transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${STATE_CHIP.executing.text}`}
           title={`${followed.name} is working ${followed.taskLabel ?? "a task"} — open it on the Board`}
           aria-label={`Open ${followed.name}'s task ${followed.taskTicket ?? ""} on the Board`}
         >
@@ -133,7 +151,7 @@ export default function AgentPresence({ agents, edit, reading, onJump, onOpenTas
       {edit ? (
         <button
           onClick={() => onJump(edit.mode)}
-          className="inline-flex items-center gap-1.5 rounded-[4px] bg-agent/10 px-2 py-1 text-[10.5px] font-medium text-agent ring-1 ring-inset ring-agent/20 transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-[4px] bg-agent/10 px-2 py-1 text-[10.5px] font-medium text-agent ring-1 ring-inset ring-agent/20 transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           title={`Jump to ${MODE_LABEL[edit.mode]} — where it's writing`}
         >
           <span className="relative flex h-1.5 w-1.5">
@@ -144,7 +162,7 @@ export default function AgentPresence({ agents, edit, reading, onJump, onOpenTas
         </button>
       ) : showReading ? (
         <span
-          className="inline-flex items-center gap-1.5 rounded-[4px] bg-agent/10 px-2 py-1 text-[10.5px] font-medium text-agent ring-1 ring-inset ring-agent/20"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-[4px] bg-agent/10 px-2 py-1 text-[10.5px] font-medium text-agent ring-1 ring-inset ring-agent/20"
           title="The agent is reading the canvas"
         >
           {/* Three sweeping bars — a little "scanning" equaliser. */}
@@ -156,7 +174,7 @@ export default function AgentPresence({ agents, edit, reading, onJump, onOpenTas
           reading
         </span>
       ) : (
-        <span className="text-[10.5px] font-medium text-ink/50">here</span>
+        <span className="shrink-0 text-[10.5px] font-medium text-ink/50">here</span>
       )}
     </div>
   );

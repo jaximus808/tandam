@@ -326,6 +326,12 @@ export default function FleetView({
         ? `${total} agent${total === 1 ? "" : "s"} · ${workingCount} working`
         : `${total} agent${total === 1 ? "" : "s"} · idle`;
 
+  // ZONE 3 · CONTROLS of the canvas header's collapse contract (see the block
+  // comment above `HEADER_DROP` in App.tsx): `shrink-0`, and never inside an
+  // overflow-hidden ancestor — the roster panel below is absolutely positioned
+  // and would be clipped by one. The chip itself is never dropped (the roster
+  // has no other door); ladder rank 7 only sheds its label below sm, leaving
+  // the gauge + count.
   return (
     <div className="relative shrink-0">
       <button
@@ -361,6 +367,7 @@ export default function FleetView({
         ].join(" ")}
       >
         <FleetGauge total={total} working={workingCount} />
+        {/* Ladder rank 7 — see the header contract in App.tsx. */}
         <span className="hidden sm:inline">{chipLabel}</span>
         {total > 0 && <span className="sm:hidden tabular-nums">{total}</span>}
       </button>
