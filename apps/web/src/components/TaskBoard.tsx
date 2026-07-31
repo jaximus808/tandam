@@ -109,6 +109,13 @@ import { spaLink } from "../lib/spaNav";
    is genuinely browsable. "/" focuses search; Escape closes the detail panel,
    then clears filters. Filters are not persisted; the scope is.
 
+   Search reaches PAST the scope (TDM-144). The chip filters narrow what is on
+   screen; search is how you FIND something, and the two are not the same verb.
+   So a query also resolves ticket refs ("TDM-104" / "#104" / "104") straight to
+   their card, matches EPICS as their own result group (an epic hit scopes the
+   board to it), and reports the matches the current scope cannot show instead
+   of silently omitting them — see the search ladder below and renderSearchHits.
+
    Everything renders from the same version-gated canvas-state props as every
    other view, so claims/completions move cards live over WS — no polling, no
    local task cache. Mutations are the existing REST calls; fresh state comes
@@ -206,6 +213,78 @@ function taskPayload(a: Action): TaskPayload {
 
 function epicPayload(a: Action): EpicPayload {
   return (a.payload ?? {}) as EpicPayload;
+}
+
+/* ── Search (TDM-144) ─────────────────────────────────────────────────────────
+   Board search used to be ONE substring test over the tasks in the current
+   scope, which made three ordinary things impossible: finding an epic by name,
+   jumping to a ticket by its ref, and finding anything whatsoever while scoped
+   to an epic that does not contain it.
+
+   The matching ladder here is deliberately the same one the MCP's `task_find`
+   uses (apps/mcp-gateway/src/facade.ts, TDM-95): the query as a substring of
+   the title, then all its words in the title, then all its words across
+   title-or-body. Same rules on both surfaces means "does this match?" has one
+   answer whether a human typed it or an agent asked — and, as there, the ladder
+   is dumb and predictable on purpose, because a result you cannot explain is a
+   result you will not trust.
+
+   Above the ladder sits the ticket ref, which is not a fuzzy query at all:
+   "TDM-104", "tdm-104", "#104" and "104" are an ADDRESS. An address outranks
+   every guess, so it wins outright and gets the Enter key. */
+
+/** Match strength, best first. */
+const M_TICKET = 4;
+const M_TITLE_SUB = 3;
+const M_TITLE_WORDS = 2;
+const M_BODY = 1;
+
+/** How many epic / out-of-scope hits the results strip lists before it counts. */
+const SEARCH_HITS = 6;
+
+type SearchQuery = { needle: string; words: string[]; ticket: string | null };
+
+/** Parse the (already trimmed + lowercased) search text once per keystroke:
+ *  the needle, its words, and the ticket ref it spells if it spells one. */
+function parseSearch(raw: string): SearchQuery | null {
+  const needle = raw.trim().toLowerCase();
+  if (!needle) return null;
+  const m = /^(?:tdm-|#)?(\d{1,9})$/.exec(needle);
+  return {
+    needle,
+    // One-character words match nearly everything — they would turn the
+    // ladder's lower rungs into noise.
+    words: needle.split(/\s+/).filter((w) => w.length > 1),
+    ticket: m ? `TDM-${Number(m[1])}` : null,
+  };
+}
+
+/** The ladder over one title/body pair (both already lowercased). 0 = no match. */
+function scoreText(q: SearchQuery, title: string, body: string): number {
+  if (title.includes(q.needle)) return M_TITLE_SUB;
+  if (q.words.length === 0) return 0;
+  if (q.words.every((w) => title.includes(w))) return M_TITLE_WORDS;
+  if (q.words.every((w) => title.includes(w) || body.includes(w))) return M_BODY;
+  return 0;
+}
+
+/** Score a task: its own ticket ref wins outright, else the ladder. The result
+ *  text and ticket id fold into the body rung so the Done history stays
+ *  findable by what an agent actually wrote there (a commit hash, a file). */
+function scoreTask(q: SearchQuery, t: Action): number {
+  if (q.ticket && t.ticketId?.toUpperCase() === q.ticket) return M_TICKET;
+  const p = taskPayload(t);
+  return scoreText(
+    q,
+    (p.title ?? "").toLowerCase(),
+    `${p.body ?? ""}\n${t.result ?? ""}\n${t.ticketId ?? ""}`.toLowerCase(),
+  );
+}
+
+/** Score an epic — the same ladder, minus the ticket rung (epics carry none). */
+function scoreEpic(q: SearchQuery, e: Action): number {
+  const p = epicPayload(e);
+  return scoreText(q, (p.title ?? "").toLowerCase(), (p.body ?? "").toLowerCase());
 }
 
 // ── Commit-hash detection ─────────────────────────────────────────────────────
@@ -742,6 +821,12 @@ const FILTER_SELECT_CLS =
 const SHEET_SELECT_CLS =
   "h-11 w-full rounded-md border border-ink/15 bg-surface px-2 text-[13px] font-medium text-ink outline-none transition-colors focus:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/40";
 
+// One search hit in the results strip (TDM-144) — an epic to scope to, or a
+// task the current scope is hiding. Same quiet chip vocabulary as the epic's
+// plan chip in the scope header: these are navigation, not another filter row.
+const SEARCH_CHIP =
+  "inline-flex min-w-0 shrink items-center gap-1 rounded-[4px] border border-ink/10 bg-ink/[0.03] px-1.5 py-1 text-[11px] text-ink/60 transition-colors hover:border-ink/30 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:py-px sm:text-[10px]";
+
 export default function TaskBoard({
   code,
   state,
@@ -891,9 +976,15 @@ export default function TaskBoard({
     (filters.hasCommit ? 1 : 0);
 
   function clearFilters() {
+    clearSearch();
+    setFilters(NO_FILTERS);
+  }
+
+  // Just the query — used when a search result has been ACTED on (jumped to an
+  // epic), where the text has done its job but the chips on screen have not.
+  function clearSearch() {
     setSearchInput("");
     setQuery("");
-    setFilters(NO_FILTERS);
   }
 
   // Each filter's options, shared by the md+ inline row and the mobile sheet, so
@@ -1116,13 +1207,14 @@ export default function TaskBoard({
     return { groups, unlinked };
   }, [activeEpics, epicPlan, state.documents]);
 
+  // The typed query, parsed once (null when the box is empty). Declared here
+  // rather than with the hit memos below because taskMatches reads it.
+  const searchQuery = useMemo(() => parseSearch(query), [query]);
+
   // One predicate, AND-composed — applied WITHIN the selected scope.
   function taskMatches(t: Action): boolean {
     const p = taskPayload(t);
-    if (query) {
-      const hay = `${p.title ?? ""}\n${p.body ?? ""}\n${t.result ?? ""}\n${t.ticketId ?? ""}`.toLowerCase();
-      if (!hay.includes(query)) return false;
-    }
+    if (searchQuery && scoreTask(searchQuery, t) === 0) return false;
     if (filters.state !== "all" && t.state !== filters.state) return false;
     if (filters.claimant !== "all" && t.claimedBy !== filters.claimant) return false;
     if (filters.assignee !== "all" && (p.assignee ?? "agent") !== filters.assignee) return false;
@@ -1135,6 +1227,44 @@ export default function TaskBoard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [scopedTasks, filtering, query, filters],
   );
+
+  // ── What search found that the kanban is not showing (TDM-144) ─────────────
+  // The lanes below render the in-scope task hits, as they always did. These
+  // three are everything else the query resolved: the ticket it addresses, the
+  // epics it names, and the tasks the current scope is hiding.
+
+  // The task the query ADDRESSES. Not a ranked hit — an exact one, canvas-wide,
+  // which is why it ignores the scope AND the chip filters: you did not type a
+  // ticket number to be told a state filter disagrees with it.
+  const ticketHit = useMemo(() => {
+    const ref = searchQuery?.ticket;
+    if (!ref) return null;
+    return tasks.find((t) => t.ticketId?.toUpperCase() === ref) ?? null;
+  }, [tasks, searchQuery]);
+
+  // Epics matching the query, best rule first. Their own result group because an
+  // epic is a DESTINATION (it scopes the board), not a card in a lane.
+  const epicHits = useMemo(() => {
+    if (!searchQuery) return [];
+    return epics
+      .map((e) => ({ e, score: scoreEpic(searchQuery, e) }))
+      .filter((r) => r.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map((r) => r.e);
+  }, [epics, searchQuery]);
+
+  // Matches the current scope CANNOT show. Without these, searching inside one
+  // epic can never find anything outside it — and fails silently, which reads
+  // as "no such task" rather than "not here". Same AND-composed predicate as
+  // the lanes, so a chip filter still means what it says.
+  const outOfScopeHits = useMemo(() => {
+    if (!searchQuery || effectiveScope === "all") return [];
+    const inScope = new Set(scopedTasks.map((t) => t.id));
+    return tasks
+      .filter((t) => !inScope.has(t.id) && t.id !== ticketHit?.id && taskMatches(t))
+      .sort((a, b) => scoreTask(searchQuery, b) - scoreTask(searchQuery, a));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tasks, scopedTasks, effectiveScope, searchQuery, filters, ticketHit]);
 
   // One bucket per lane, computed once: the mobile switcher needs every lane's
   // counts before any lane renders, and the lanes themselves need the same
@@ -1300,38 +1430,43 @@ export default function TaskBoard({
     return () => onOverlayOpenChange?.(false);
   }, [overlayOpen, onOverlayOpenChange]);
 
-  // TDM-14: consume the one-shot focus handoff from the header agent presence.
-  // Scope the board to the task's epic (or "No epic" for epicless tasks, unless
-  // the All-tasks lens already shows it), open its detail slide-over, and scroll
-  // its card into view — then hand the token back so normal browsing resumes.
-  // If the task left `executing` meanwhile, this still opens it wherever it now
-  // sits; a task that vanished entirely just clears the handoff.
+  // Go to ONE task: scope the board to its epic (or "No epic" for epicless
+  // tasks, unless the All-tasks lens already shows it), open its detail
+  // slide-over, and scroll its card into view. Shared by the TDM-14 focus
+  // handoff and the search results strip (TDM-144) — "take me to that card" is
+  // one behaviour, and the two callers must not drift apart.
+  function revealTask(t: Action) {
+    // An unconditional jump: stale filters (a state or claimant filter from
+    // earlier browsing — or the very search that found it) would hide the card
+    // we are about to scroll to (QA wave-3 finding 6).
+    clearFilters();
+    const eid = taskPayload(t).epicId;
+    if (eid && epicIds.has(eid)) selectScope(eid);
+    else if (effectiveScope !== "all") selectScope("none");
+    // Mobile shows one lane at a time (TDM-86), so scoping is not enough —
+    // bring the lane this task actually sits in forward, or the card we are
+    // about to scroll to is in a `hidden` column.
+    setMobileCol(colKeyForState(t.state));
+    setDetailId(t.id);
+    // The card renders into the (possibly new) scope on the next paint —
+    // scroll once the DOM has settled. Deliberately not cleaned up: the focus
+    // handoff's reset re-runs its effect immediately, and a cleanup would
+    // cancel the scroll before it fires.
+    setTimeout(() => {
+      document
+        .querySelector(`[data-task-id="${CSS.escape(t.id)}"]`)
+        ?.scrollIntoView({ block: "center", behavior: "smooth" });
+    }, 80);
+  }
+
+  // TDM-14: consume the one-shot focus handoff from the header agent presence,
+  // then hand the token back so normal browsing resumes. If the task left
+  // `executing` meanwhile, this still opens it wherever it now sits; a task
+  // that vanished entirely just clears the handoff.
   useEffect(() => {
     if (!focusTaskId) return;
     const t = (state.actions ?? {})[focusTaskId];
-    if (t) {
-      // "Follow this agent" is an unconditional jump: stale filters (a state
-      // or claimant filter from earlier browsing) would hide the very card we
-      // are about to scroll to (QA wave-3 finding 6).
-      clearFilters();
-      const eid = taskPayload(t).epicId;
-      if (eid && epicIds.has(eid)) selectScope(eid);
-      else if (effectiveScope !== "all") selectScope("none");
-      // Mobile shows one lane at a time (TDM-86), so scoping is not enough —
-      // bring the lane this task actually sits in forward, or the card we are
-      // about to scroll to is in a `hidden` column.
-      setMobileCol(colKeyForState(t.state));
-      setDetailId(focusTaskId);
-      // The card renders into the (possibly new) scope on the next paint —
-      // scroll once the DOM has settled. Deliberately not cleaned up: the
-      // handoff reset below re-runs this effect immediately, and a cleanup
-      // would cancel the scroll before it fires.
-      setTimeout(() => {
-        document
-          .querySelector(`[data-task-id="${CSS.escape(focusTaskId)}"]`)
-          ?.scrollIntoView({ block: "center", behavior: "smooth" });
-      }, 80);
-    }
+    if (t) revealTask(t);
     onFocusHandled?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusTaskId]);
@@ -1887,6 +2022,121 @@ export default function TaskBoard({
     );
   }
 
+  /* What the query found that the LANES cannot show (TDM-144). The kanban below
+     still renders the in-scope task hits exactly as before; this strip is the
+     rest of the answer — the ticket the query addresses, the epics it names,
+     and the matches the current scope is hiding. It renders only when it has
+     something to say, so an ordinary search over an unscoped board is visually
+     unchanged. */
+  function renderSearchHits() {
+    if (!searchQuery) return null;
+    // A ref that resolves to nothing is worth SAYING: on a scoped, filtered
+    // board an empty result reads as "no such ticket" when the truth may be
+    // "not here". Only shown when the ref itself found nothing at all.
+    const missingRef = searchQuery.ticket && !ticketHit ? searchQuery.ticket : null;
+    if (!ticketHit && !missingRef && epicHits.length === 0 && outOfScopeHits.length === 0) {
+      return null;
+    }
+    const shownEpics = epicHits.slice(0, SEARCH_HITS);
+    const shownOut = outOfScopeHits.slice(0, SEARCH_HITS);
+    return (
+      <div className="flex shrink-0 flex-col gap-1.5 border-b border-ink/10 bg-accent/[0.03] px-4 py-2">
+        {/* The ticket ref: ONE exact card, canvas-wide, ahead of every fuzzy
+            hit — and it takes the Enter key straight from the search box. */}
+        {ticketHit && (
+          <button
+            onClick={() => revealTask(ticketHit)}
+            title={`Open ${ticketHit.ticketId}`}
+            className={`flex w-full min-w-0 items-center gap-2 rounded-md border border-accent/40 bg-accent/[0.08] px-2 py-1.5 text-left transition-colors hover:bg-accent/[0.14] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${TAP}`}
+          >
+            <ArrowRight size={12} className="shrink-0 text-accent" />
+            <span className={`shrink-0 font-code font-semibold text-accent ${T_META}`}>
+              {ticketHit.ticketId}
+            </span>
+            <span className={`min-w-0 flex-1 truncate font-medium text-ink ${T_BTN}`}>
+              {taskPayload(ticketHit).title || "Untitled task"}
+            </span>
+            <StateChip state={ticketHit.state} />
+            <span className={`hidden shrink-0 font-code text-ink/40 sm:inline ${T_META}`}>
+              Enter
+            </span>
+          </button>
+        )}
+        {missingRef && (
+          <p className={`text-ink/50 ${T_META}`}>No {missingRef} on this canvas.</p>
+        )}
+        {/* Epics as their own group: an epic is a destination, not a card, so
+            its hit does the one thing an epic does — scope the board. */}
+        {shownEpics.length > 0 && (
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+            <span
+              className={`shrink-0 font-medium uppercase tracking-wide text-ink/50 ${T_META}`}
+            >
+              Epics
+            </span>
+            {shownEpics.map((e) => (
+              <button
+                key={e.id}
+                onClick={() => {
+                  selectScope(e.id);
+                  clearSearch();
+                }}
+                title="Scope the board to this epic"
+                className={SEARCH_CHIP}
+              >
+                <Layers size={10} className="shrink-0" />
+                <span className="max-w-[13rem] truncate">
+                  {epicPayload(e).title || "Untitled epic"}
+                </span>
+                <span className="shrink-0 font-code opacity-70">
+                  {(tasksByEpic.get(e.id) ?? []).length}
+                </span>
+              </button>
+            ))}
+            {epicHits.length > shownEpics.length && (
+              <span className={`text-ink/45 ${T_META}`}>
+                +{epicHits.length - shownEpics.length} more
+              </span>
+            )}
+          </div>
+        )}
+        {/* Reach past the scope. Searching inside one epic used to be unable to
+            find anything outside it — and said nothing about it, which reads as
+            "no such task" rather than "not in this lens". */}
+        {outOfScopeHits.length > 0 && (
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+            <span className={`shrink-0 text-ink/50 ${T_META}`}>
+              {outOfScopeHits.length} match{outOfScopeHits.length === 1 ? "" : "es"} outside “
+              {scopeLabel}”
+            </span>
+            {shownOut.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => revealTask(t)}
+                title={`Open ${t.ticketId ?? "this task"} (${
+                  epicTitleById.get(taskPayload(t).epicId ?? "") ?? "No epic"
+                })`}
+                className={SEARCH_CHIP}
+              >
+                {t.ticketId && <span className="shrink-0 font-code">{t.ticketId}</span>}
+                <span className="max-w-[11rem] truncate">
+                  {taskPayload(t).title || "Untitled task"}
+                </span>
+              </button>
+            ))}
+            <button
+              onClick={() => selectScope("all")}
+              title="Widen the board to every task and keep searching"
+              className={`shrink-0 rounded-[4px] px-1.5 py-1 font-semibold text-accent transition-colors hover:bg-accent/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:py-px ${T_META}`}
+            >
+              Search all tasks
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
       {/* Toolbar: the mobile epic-scope affordance + a quiet census of the
@@ -1978,8 +2228,18 @@ export default function TaskBoard({
               ref={searchRef}
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
-              placeholder='Search tasks  ·  "/"'
-              className="h-9 w-full rounded-md border border-ink/15 bg-surface pl-[26px] pr-2 text-[12px] text-ink outline-none placeholder:text-ink/30 focus:border-accent/50 focus:ring-2 focus:ring-accent/40 md:h-7 md:w-52"
+              // Enter on a ticket ref goes STRAIGHT to the card. Typing an
+              // address and then having to aim at a result is a step the
+              // address already paid for. (Escape stays on the window handler.)
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && ticketHit) {
+                  e.preventDefault();
+                  revealTask(ticketHit);
+                }
+              }}
+              placeholder='Search tasks, epics, TDM-104  ·  "/"'
+              title="Search task and epic titles, bodies and results. A ticket ref (TDM-104, #104, 104) jumps straight to that ticket — press Enter."
+              className="h-9 w-full rounded-md border border-ink/15 bg-surface pl-[26px] pr-2 text-[12px] text-ink outline-none placeholder:text-ink/30 focus:border-accent/50 focus:ring-2 focus:ring-accent/40 md:h-7 md:w-64"
             />
           </div>
 
@@ -2345,6 +2605,7 @@ export default function TaskBoard({
           {/* Main area: ONE kanban, always scoped to the sidebar selection. */}
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             {scopedEpic && renderScopeHeader(scopedEpic)}
+            {renderSearchHits()}
             {/* Mobile lane switcher (TDM-86) — the navigation the single-column
                 board needs. Below md exactly one lane is on screen, so the strip
                 is also the only place every lane's count is visible; it doubles
