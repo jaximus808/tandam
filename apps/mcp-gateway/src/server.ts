@@ -47,7 +47,10 @@ export const SERVER_INSTRUCTIONS =
   "hydrates a task's full brief. " +
   "APPROVAL GATE: anything you propose (task_propose / epic_propose) lands as 'proposed' and a " +
   "HUMAN approves it on the board before it can be claimed — never work unapproved work, and " +
-  "never try to approve your own. " +
+  "never try to approve your own. The one exception, off unless the canvas owner turned it on: " +
+  "on a 'peer' canvas a REVIEWER agent may approve a task a DIFFERENT agent proposed " +
+  "(task_approve) — read the work first, epics stay human-only, and approving everything just " +
+  "makes you a slower 'auto'. " +
   "ORCHESTRATOR (dispatching to subagents): propose the epic, then WAIT for the human's approval " +
   "before dispatching — the approved board queue is the go signal, not your own plan; work must " +
   "exist, approved, on the board before you dispatch it. Dispatch ONLY tasks queue_next returns " +

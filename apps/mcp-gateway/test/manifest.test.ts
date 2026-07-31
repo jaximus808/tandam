@@ -32,15 +32,16 @@ const EXPECTED_FACADE = [
   "task_complete",
   "task_propose",
   "task_amend",
+  "task_approve",
   "epic_propose",
   "doc_write",
   "board_status",
 ];
 
-test("default manifest is exactly the 14-tool intent facade", () => {
+test("default manifest is exactly the 15-tool intent facade", () => {
   const names = manifestFor(false).map((t) => t.name);
   assert.deepEqual(names, EXPECTED_FACADE);
-  assert.equal(names.length, 14);
+  assert.equal(names.length, 15);
 });
 
 test("TANDEM_FULL_TOOLS adds the CRUD surface without dropping or duplicating", () => {
@@ -139,7 +140,14 @@ test("read-only facade tools are annotated read-only", () => {
   for (const n of ["context_get", "queue_next", "task_find", "task_get", "board_status"]) {
     assert.equal(byName.get(n)!.annotations.readOnlyHint, true, `${n} is a read`);
   }
-  for (const n of ["task_claim", "task_complete", "doc_write", "task_propose", "epic_propose"]) {
+  for (const n of [
+    "task_claim",
+    "task_complete",
+    "doc_write",
+    "task_propose",
+    "epic_propose",
+    "task_approve",
+  ]) {
     assert.equal(byName.get(n)!.annotations.readOnlyHint, false, `${n} writes`);
     assert.equal(byName.get(n)!.annotations.destructiveHint, false);
   }

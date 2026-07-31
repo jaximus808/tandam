@@ -353,7 +353,112 @@ Redirects are never followed and are treated as permanent failures.
 
 ---
 
-## 5. Troubleshooting
+## 5. Peer review: an agent as the second approval
+
+Everything above serializes on you clicking **Approve**. The `peer` approval
+policy is the one way that gate opens without you — not by removing it, but by
+letting a **second agent** stand in it.
+
+```
+  proposer (planner)            reviewer (its own identity)        workers
+  ──────────────────            ──────────────────────────        ───────
+  epic_propose / task_propose
+        │
+        └─ tasks land 'proposed'
+                    │
+                    └─ board_status → task_get → reads the work
+                                            │
+                                            ├─ task_approve  ─► ready queue ─► task_claim
+                                            └─ or leaves it, and says why
+```
+
+**It is off unless you turn it on.** `approval_policy` is `strict | epic | auto |
+peer`, it is set by the canvas **owner** only (`PATCH
+/api/canvases/{code}/approval-policy`), and nothing defaults to `peer` or
+migrates onto it. On every other canvas `task_approve` answers
+`approved:false, reason:"human_approval_only"` and the human gate is exactly what
+it always was.
+
+### The rule, and where it lives
+
+The server owns it (`apps/api/internal/api/peer_approval.go`). The gateway calls
+the endpoint and renders the answer; it does not re-implement the check, because
+a rule enforced in the client is a rule a raw `curl` walks past.
+
+Under `peer`, a **registered** agent may approve a **proposed task** that a
+**different** agent proposed. Both identities are derived server-side — the
+approver from the request's provenance, the proposer from the row's stored
+`authored_by` — so neither can be asserted in a request body. What `peer` does
+**not** relax:
+
+| Still human-only | Why |
+|---|---|
+| Approving an **epic** | One approval releases every task under it — far too large a blast radius for an agent. Under `peer` an epic approval also **stops cascading**: each task is approved on its own, which is the whole point. |
+| **Rejecting** | Approval lets work through and you can move it back; rejection kills a peer's proposal. |
+| **Bulk approve** | One conditional UPDATE over many rows, which cannot enforce per-row authorship even in principle. |
+| **Born-approved** | An agent still cannot create a task already approved, on any policy. |
+
+### The reviewer is a separate agent, not a subagent on your handle
+
+Register the reviewer the same way any worker registers: its **own**
+`canvas_connect` with `role: "executor"` and a name like `reviewer`. Give it the
+canvas **code**, never the orchestrator's `session` handle — the handle carries
+the orchestrator's identity, so a "reviewer" running on it *is* the proposer, and
+the server correctly refuses the approval as `peer_self_approval`. That refusal is
+the contract working, not a bug to route around.
+
+A reviewer prompt is short, because the judgement is the job:
+
+```
+You are the reviewer for canvas $TANDEM_CANVAS_CODE. You approve other agents work; you never
+write code and you never claim tasks.
+
+1. canvas_connect with code $TANDEM_CANVAS_CODE, role executor, name reviewer. Keep the session handle.
+2. board_status to see what is sitting in proposed.
+3. For each proposed task: task_get it and read it properly — is it the work that was actually
+   asked for, is it scoped to one unit, does it say what done means, does it collide with a task
+   already executing?
+4. task_approve only the ones that pass. Leave the rest alone and report, per task, what is wrong
+   with it. Leaving a task unapproved is a normal outcome, not a failure.
+5. You cannot approve your own proposals, you cannot approve epics, and you cannot reject
+   anything — those stay with the human. Report them instead.
+```
+
+### Not a rubber stamp
+
+This is the part that decides whether `peer` is worth having. **A reviewer that
+approves everything is indistinguishable from `approval_policy: auto`** — which
+already exists, costs no tokens, and is simpler. The only reason to spend a
+second agent on the gate is that it sometimes says *no*: wrong scope, no
+acceptance criteria, duplicate of something already executing, a plan that
+drifted from what was asked.
+
+So, when you run one: give it explicit criteria, keep it out of the work (a
+reviewer that also implements is one pair of eyes wearing two hats), and read
+what it *declined* — an audit that never declines anything is telling you to turn
+it off and set `auto`.
+
+`approved_by` records which it was: `human`, `agent:<name>` for a peer approval,
+`policy:auto` / `policy:epic` for the birth-time cascades. That is how you audit
+the gate afterwards from the board alone.
+
+### Refusals
+
+`task_approve` answers refusals as **data**, not errors — `approved:false` with a
+stable `reason` and a `_next`:
+
+| `reason` | Means |
+|---|---|
+| `peer_self_approval` | You proposed this task. A different agent (or the human) must approve it. |
+| `peer_epic_human_only` | It is an epic. Human-only everywhere. |
+| `peer_agent_unregistered` | Your identity is not on this canvas's roster — register and retry. |
+| `peer_identity_required` | The session has no agent identity at all (an anonymous canvas token). |
+| `peer_proposer_unknown` | The task predates provenance, so non-self cannot be proven. Fails closed. |
+| `human_approval_only` | This canvas is not on `peer`. Nothing to do but ask the human. |
+
+---
+
+## 6. Troubleshooting
 
 **401 from the listener** — the signature is missing, malformed, or does not
 match, which in practice means the secret is wrong. The listener reads
@@ -409,12 +514,15 @@ they are not actually in the ready queue. `board_status` answers the last one.
 
 ## Notes on the tool surface
 
-Everything the prompt above uses is on the **default** manifest — the 14-tool
+Everything the prompt above uses is on the **default** manifest — the 15-tool
 intent facade: `canvas_connect`, `agent_register`, `context_get`, `queue_next`,
 `task_find`, `task_get`, `task_claim`, `task_progress`, `task_complete`,
-`task_propose`, `task_amend`, `epic_propose`, `doc_write`, `board_status`. No
-`TANDEM_FULL_TOOLS=1` needed; that env var opens the full CRUD surface, which
-orchestration does not require.
+`task_propose`, `task_amend`, `task_approve`, `epic_propose`, `doc_write`,
+`board_status`. No `TANDEM_FULL_TOOLS=1` needed; that env var opens the full CRUD
+surface, which orchestration does not require.
+
+`task_approve` is the reviewer's tool and does nothing on a canvas that is not on
+the `peer` approval policy (§5) — it answers `approved:false` and says so.
 
 Registration is part of **`canvas_connect`**: pass `role` (plus `name`, `model`,
 and `parentAgentId` if an orchestrator spawned you) and the one call connects and

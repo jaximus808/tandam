@@ -508,6 +508,38 @@ export class Gateway {
     return { data: await this.parseJson<T>("POST", path, res) };
   }
 
+  /**
+   * POST that surfaces an HTTP 403 as structured data instead of throwing.
+   *
+   * The approval endpoint is the one route where "no" is an ANSWER a model must
+   * read rather than a failure to crash on (TDM-146): under the 'peer' policy the
+   * server refuses a self-approval, an unregistered approver, or an epic, and each
+   * refusal carries a stable `code` the tool renders into what to do next. Thrown
+   * as `POST … failed: 403 {json}` that would reach the model as an opaque error
+   * string with the code buried inside it.
+   *
+   * 403 ONLY. Everything else still goes through assertOk, so a 401 keeps its
+   * reconnect message and a 5xx still fails loudly. A non-JSON 403 (a proxy's HTML
+   * error page) is handed back as `{ error: "forbidden", message: <text> }` so the
+   * caller never has to care whether the body parsed.
+   */
+  async postWithRefusal<T, R>(path: string, body?: unknown): Promise<{ data?: T; refusal?: R }> {
+    const res = await this.safeFetch(path, {
+      method: "POST",
+      headers: this.authHeaders(),
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    if (res.status === 403) {
+      if ((res.headers.get("content-type") ?? "").includes("json")) {
+        return { refusal: (await res.json()) as R };
+      }
+      const text = await res.text();
+      return { refusal: { error: "forbidden", message: text } as R };
+    }
+    await this.assertOk("POST", path, res);
+    return { data: await this.parseJson<T>("POST", path, res) };
+  }
+
   async patch<T>(path: string, body: unknown): Promise<T> {
     const res = await this.safeFetch(path, {
       method: "PATCH",

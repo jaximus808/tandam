@@ -365,6 +365,156 @@ function canvasBlock(gateway: Gateway) {
   };
 }
 
+// ── Who may open the approval gate (TDM-145 / TDM-146) ───────────────────────
+//
+// The canvas approval policy decides it, and it is the SERVER's decision — the
+// gateway never re-implements the rule, it only stops SAYING the wrong thing.
+// On strict|epic|auto (every canvas by default) approval is human-only and the
+// surface's long-standing prose is exactly right. On 'peer' it is not: there, a
+// registered REVIEWER agent may approve a task a DIFFERENT agent proposed, so
+// "a human approves this" would send a reviewer away from work it is allowed to
+// do. Hence: read the policy, condition the prose, change no behaviour.
+
+/** The 'peer' approval policy (API: apps/api/internal/api/peer_approval.go). */
+const POLICY_PEER = "peer";
+
+/**
+ * Per-Gateway memo of the canvas's approval policy. A WeakMap rather than a field
+ * on CanvasSession ON PURPOSE: the session is serialized into the handle the model
+ * carries for the rest of its run, and a policy baked in there would go stale the
+ * moment the owner changed it — while this memo dies with the Gateway (per process
+ * on stdio, per call on the hosted sidecar, which is exactly when a re-read is
+ * cheap and correct). `""` records a LOOKUP THAT FAILED, so an API that cannot
+ * answer is asked once, not on every call.
+ */
+const approvalPolicyMemo = new WeakMap<Gateway, string>();
+
+/**
+ * Best-effort read of this canvas's approval policy. Returns undefined when it
+ * cannot be determined — and every caller treats undefined as "assume the human
+ * gate", which is both the default and the safe thing to say.
+ *
+ * Reads the cheap state SUMMARY (`fields=agents`: one small table plus the canvas
+ * row) rather than the whole board, and goes through getIfAvailable so an older
+ * API — or a 404 — degrades to undefined instead of failing the call the caller
+ * was actually making. Nothing here decides anything: the API refuses or allows
+ * the approval regardless of what this returns.
+ */
+async function approvalPolicyOf(gateway: Gateway): Promise<string | undefined> {
+  const memo = approvalPolicyMemo.get(gateway);
+  if (memo !== undefined) return memo || undefined;
+  let policy = "";
+  try {
+    const res = await gateway.getIfAvailable<{ canvas?: { approvalPolicy?: unknown } }>(
+      "/api/canvas/state?fields=agents"
+    );
+    if (typeof res?.canvas?.approvalPolicy === "string") policy = res.canvas.approvalPolicy;
+  } catch {
+    // NOTHING here may fail the caller's actual operation. This probe only picks
+    // which sentence to append to an answer that has already been computed, so a
+    // timeout, an expired token or an unreachable API costs a slightly less
+    // specific hint — never the queue read, the amend refusal, or the epic that
+    // was just created. Recorded as a failed lookup so it is tried once, not once
+    // per call in a polling loop that has lost the network.
+  }
+  approvalPolicyMemo.set(gateway, policy);
+  return policy || undefined;
+}
+
+/** Is this canvas the one place an agent may approve a peer's task? */
+async function canvasAllowsPeerApproval(gateway: Gateway): Promise<boolean> {
+  return (await approvalPolicyOf(gateway)) === POLICY_PEER;
+}
+
+/**
+ * The one sentence the MANIFEST can say about peer approval. Tool descriptions
+ * are built once, before any canvas is bound, so they cannot be conditioned the
+ * way the runtime answers above are — the qualifier has to be static, and has to
+ * stay TRUE on the three policies where approval really is human-only.
+ */
+const PEER_APPROVAL_CLAUSE =
+  "(One exception, off by default: on a canvas whose owner turned on the 'peer' approval policy, " +
+  "a reviewer agent may approve a task a DIFFERENT agent proposed — task_approve. Never your own " +
+  "work, and never on any other canvas.)";
+
+/**
+ * The refusal a coded 403 carries, normalized.
+ *
+ * THE SUBTLETY THAT MATTERS: a canvas that is NOT on 'peer' answers the legacy
+ * `{"error": "only a signed-in human can approve an action"}` — prose in `error`,
+ * no code, byte-identical to what it answered before peer approval existed (the
+ * API has a regression test pinning exactly that). A coded refusal instead puts a
+ * stable code in `error` and prose in `message`. So the presence of `message` is
+ * the discriminator; assuming a code would mislabel every strict/epic/auto canvas.
+ */
+type ApprovalRefusal = {
+  /** Stable server code (peer_self_approval, …), or undefined on a legacy refusal. */
+  code?: string;
+  message: string;
+  /** Whatever else the server attached — `approver`, `proposedBy`, `actionType`. */
+  extra: Record<string, string>;
+};
+
+function readApprovalRefusal(body: unknown): ApprovalRefusal {
+  const row = (body ?? {}) as Record<string, unknown>;
+  const error = typeof row.error === "string" ? row.error : "";
+  const message = typeof row.message === "string" ? row.message : "";
+  const extra: Record<string, string> = {};
+  for (const [k, v] of Object.entries(row)) {
+    if (k === "error" || k === "message") continue;
+    if (typeof v === "string") extra[k] = v;
+  }
+  // Coded envelope (error = code, message = prose) vs legacy (error = prose).
+  return message
+    ? { code: error || undefined, message, extra }
+    : { message: error || "the server refused this approval", extra };
+}
+
+/**
+ * What the reviewer should DO about a refusal. Keyed off the server's code so the
+ * gateway adds routing, not rules — every one of these is the server's decision
+ * restated as a next call.
+ */
+function approvalRefusalNext(refusal: ApprovalRefusal): string {
+  switch (refusal.code) {
+    case "peer_self_approval":
+      return (
+        "You proposed this task, so you cannot be the one who approves it — that is the whole " +
+        "point of peer review. A DIFFERENT registered agent has to approve it, or a human does " +
+        "on the board. Leave it and report it as awaiting review."
+      );
+    case "peer_identity_required":
+      return (
+        "This session has no agent identity the server can see. Reconnect with canvas_connect " +
+        "passing a `name` and `role` (that one call registers you), then approve under that " +
+        "identity."
+      );
+    case "peer_agent_unregistered":
+      return (
+        "Your identity is not on this canvas's roster. Register it — canvas_connect with a `name` " +
+        "and `role`, or agent_register — and try again under that name."
+      );
+    case "peer_epic_human_only":
+      return (
+        "Epics stay human-only everywhere: approving one releases every task under it. Ask the " +
+        "human to approve the epic on the board, or review its tasks one at a time."
+      );
+    case "peer_proposer_unknown":
+      return (
+        "The server cannot tell who proposed this task, so it cannot prove you are not the " +
+        "proposer, and it refuses rather than guess. A human approves this one on the board."
+      );
+    default:
+      // Includes the LEGACY refusal: this canvas is on strict | epic | auto, where
+      // approval is human-only and nothing an agent does changes that.
+      return (
+        "Approval on this canvas is the human's — it is not on the 'peer' approval policy, which " +
+        "is the only mode where an agent may approve another agent's task, and only the canvas " +
+        "owner can turn that on. Report the task as waiting for approval on the board and move on."
+      );
+  }
+}
+
 /**
  * The briefing bundle, composed from endpoints that exist TODAY: the canvas
  * state SUMMARY (counts + capped names — never the full board), the document
@@ -594,6 +744,7 @@ const FACADE_NAMES = new Set([
   "task_complete",
   "task_propose",
   "task_amend",
+  "task_approve",
   "epic_propose",
   "doc_write",
   "board_status",
@@ -703,6 +854,24 @@ export async function handleFacadeTool(
         }
         return { ...row, handoff: buildHandoff(row, session.canvasCode, session.agentId) };
       });
+      // An EMPTY queue is where the surface says who may open the approval gate,
+      // and that answer is per-canvas (TDM-146): on strict|epic|auto it is the
+      // human's, full stop; on 'peer' a reviewer agent is also a way through, and
+      // telling a reviewer "wait for a human" would park work it was spawned to
+      // release. Only asked when the queue came back empty — the branch this
+      // sentence is in — so the ready path never pays for it.
+      const emptyQueueNext =
+        shown.length > 0
+          ? ""
+          : (await canvasAllowsPeerApproval(gateway))
+            ? "Nothing approved. Tasks you propose land as 'proposed' and need approving on the " +
+              "board before anyone can claim them. This canvas is on the 'peer' approval policy, " +
+              "so a human is not the only way through: a REVIEWER agent may approve a task a " +
+              "DIFFERENT agent proposed, with task_approve (never its own, and epics stay " +
+              "human-only). Read board_status for what is waiting, or ask the human."
+            : "Nothing approved. Tasks you propose land as 'proposed' and need a human to " +
+              "approve them on the board — check board_status, or ask the human.";
+
       // canvas_task_list's fan-out `hint` is deliberately NOT passed through:
       // it says the same thing as `_dispatch` below, and the handoffs make it
       // concrete. The hint stays for sessions calling canvas_task_list directly
@@ -734,11 +903,7 @@ export async function handleFacadeTool(
                     'reconnect with canvas_connect role "planner" and call queue_next again ' +
                     "so your workers show up under you on the board."),
             }
-          : {
-              _next:
-                "Nothing approved. Tasks you propose land as 'proposed' and need a human to " +
-                "approve them on the board — check board_status, or ask the human.",
-            }),
+          : { _next: emptyQueueNext }),
       };
     }
 
@@ -1108,10 +1273,19 @@ export async function handleFacadeTool(
       if (!action) throw new Error(`No task "${id}" found on this canvas.`);
 
       // GUARD 1 — still a proposal. Approved / executing / done are off-limits.
+      // Who did the approving depends on the canvas (TDM-146): everywhere but a
+      // 'peer' canvas it was necessarily a human, and saying so is the clearest
+      // way to explain why the task is no longer the proposer's to edit. On 'peer'
+      // it may have been a reviewer agent, so the sentence names the approval
+      // rather than asserting a human made it.
       if (action.state !== "proposed") {
+        const approver = (await canvasAllowsPeerApproval(gateway))
+          ? "Once a task is approved — by a human, or by a reviewer agent under this canvas's " +
+            "'peer' policy — it is theirs"
+          : "Once a human approves a task it is theirs";
         throw new Error(
-          `This task is "${action.state}", not "proposed" — you cannot amend it. Once a human ` +
-            `approves a task it is theirs: propose a follow-up, or ask the human to reject this one.`
+          `This task is "${action.state}", not "proposed" — you cannot amend it. ${approver}: ` +
+            `propose a follow-up, or ask the human to reject this one.`
         );
       }
       // GUARD 2 — unclaimed. A proposed task normally has no holder; refuse if it does.
@@ -1157,6 +1331,65 @@ export async function handleFacadeTool(
       return { amended: true, id, url: canvasBlock(gateway).url };
     }
 
+    case "task_approve": {
+      // THE REVIEWER'S TOOL (TDM-146), and deliberately the thinnest thing on this
+      // surface: it POSTs the approve endpoint that already existed and renders the
+      // answer. The rule — a REGISTERED agent may approve a task a DIFFERENT agent
+      // proposed, and only on a canvas whose owner set the 'peer' approval policy —
+      // lives entirely in the API (apps/api/internal/api/peer_approval.go), decided
+      // from server-derived provenance on both sides.
+      //
+      // So there is deliberately NO local non-self check, no policy pre-flight, and
+      // no client-supplied approver. Re-implementing the rule here would buy nothing
+      // (the server refuses either way, and a raw curl walks past anything the
+      // gateway believes) while costing the property that makes the gate
+      // trustworthy: one place to get right. The approver identity is the
+      // X-Tandem-Agent header this gateway already sends on every call — which is
+      // also why an unregistered session is refused rather than approving as nobody.
+      //
+      // The body is empty on purpose: `approvedBy` in a request body is the forgery
+      // vector TDM-40 / TDM-129 closed, and the server ignores it.
+      const id = requireTaskId(args);
+      const { data, refusal } = await gateway.postWithRefusal<
+        { action?: TaskRow & { type?: string; approvedBy?: string } },
+        unknown
+      >(`/api/canvas/actions/${encodeURIComponent(id)}/approve`, {});
+
+      if (refusal) {
+        // A refusal is an ANSWER, not a crash — same reasoning as the tap-out
+        // contract on a lost claim. `reason` is the server's stable code, or
+        // "human_approval_only" for the legacy (non-'peer' canvas) refusal, which
+        // carries no code at all.
+        const parsed = readApprovalRefusal(refusal);
+        return {
+          approved: false,
+          id,
+          reason: parsed.code ?? "human_approval_only",
+          message: parsed.message,
+          ...parsed.extra,
+          _next: approvalRefusalNext(parsed),
+        };
+      }
+
+      const action = data?.action;
+      const approvedBy = typeof action?.approvedBy === "string" ? action.approvedBy : undefined;
+      return {
+        approved: true,
+        id,
+        ...(action?.ticketId ? { ticketId: action.ticketId } : {}),
+        ...(action?.payload?.title ? { title: action.payload.title } : {}),
+        state: action?.state ?? "approved",
+        ...(approvedBy ? { approvedBy } : {}),
+        url: canvasBlock(gateway).url,
+        _next:
+          "Approved: the task is in the ready queue and queue_next now returns it to any executor. " +
+          "`approvedBy` records WHO let it through — an 'agent:' prefix is a peer approval, " +
+          "'human' is a human's — so the board can tell the two apart later. You reviewed it, so " +
+          "hand it on rather than claiming it yourself: an agent that reviews and then works the " +
+          "same task is one pair of eyes wearing two hats.",
+      };
+    }
+
     case "epic_propose": {
       // The container a plan hangs off. Without this on the facade an agent
       // asked to "write an epic" could only propose loose tasks, which land
@@ -1172,6 +1405,11 @@ export async function handleFacadeTool(
           throw new Error(`tasks[${i}] needs a \`title\` — one line saying what to do`);
         }
       }
+
+      // Started HERE, not where it is read: the policy decides what the answer
+      // promises about approval (below), and it is independent of the writes, so
+      // running it alongside them keeps this call the same wall-clock cost it was.
+      const peerCanvas = canvasAllowsPeerApproval(gateway);
 
       const epic = (await handleTool(gateway, "canvas_epic_add", {
         title,
@@ -1197,6 +1435,21 @@ export async function handleFacadeTool(
         }));
       }
 
+      // What ONE approval buys is per-canvas (TDM-146). Under the default 'epic'
+      // policy approving the epic cascades to every task under it — one click for
+      // the batch. Under 'peer' that cascade is deliberately OFF (the API skips it,
+      // see policyCascadesToEpicTasks): the per-task gate IS the reviewer's, and a
+      // cascade would walk around it. Promising a cascade there would have the
+      // proposer poll for a queue that never fills.
+      const epicApproval = (await peerCanvas)
+        ? "The epic is 'proposed'. A HUMAN approves it on the board — epics stay human-only even " +
+          "here, and you must not try to approve it yourself. This canvas is on the 'peer' " +
+          "approval policy, so that approval does NOT cascade: each task still needs its own, " +
+          "which a REVIEWER agent (any registered agent other than the one that proposed it) can " +
+          "give with task_approve. "
+        : "The epic is 'proposed'. A HUMAN approves it once on the board and that approval " +
+          "cascades to every task under it — do not try to approve it yourself. ";
+
       return {
         created: true,
         epicId: epic.id,
@@ -1204,8 +1457,8 @@ export async function handleFacadeTool(
         ...(many.length > 0 ? { tasks } : {}),
         url: canvasBlock(gateway).url,
         _next:
-          "The epic is 'proposed'. A HUMAN approves it once on the board and that approval " +
-          "cascades to every task under it — do not try to approve it yourself. NOW LISTEN FOR " +
+          epicApproval +
+          "NOW LISTEN FOR " +
           "THAT APPROVAL instead of ending your turn: unless the user told you otherwise, poll " +
           "queue_next with this `epicId` on a backing-off interval (start ~15s, double to a ~2min " +
           "cap) and the moment tasks come back approved, work them — with subagents, dispatch one " +
@@ -1404,7 +1657,7 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
       "worker's behalf, and never passes on its `session` handle — the handle stays with you, the " +
       "CODE is what travels. WORKING ALONE: pick ONE, task_get it for the full brief, task_claim " +
       "it, then work. Empty means nothing is approved: tasks you propose sit at 'proposed' until " +
-      "a human approves them on the board. A task marked `lostByYou: true` carries NO handoff: you " +
+      "they are approved on the board. A task marked `lostByYou: true` carries NO handoff: you " +
       "raced for it and lost, so it is neither yours to claim nor yours to dispatch — take another.",
     inputSchema: {
       type: "object" as const,
@@ -1538,7 +1791,8 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
       "instead of doing it. Keep `body` a tight brief (what to do, acceptance criteria) and put " +
       "the heavy context in notes/roadmap items referenced by `linkedIds` — task_get hydrates " +
       "those for whoever picks it up. For a whole plan, prefer epic_propose: it creates the epic " +
-      "AND its tasks in one call, so the human approves once instead of task by task.",
+      "AND its tasks in one call, so the human approves once instead of task by task. " +
+      PEER_APPROVAL_CLAUSE,
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -1603,7 +1857,7 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
       "epic, typo'd title, a duplicate). Deliberately narrow: it works ONLY while the task is " +
       "still 'proposed' AND unclaimed AND was authored by you. Pass the fields to change " +
       "(title / body / epicId / linkedIds) to edit it, or `withdraw: true` to delete it. Once a " +
-      "human has approved a task it is THEIRS — this tool refuses, and the move is to propose a " +
+      "task has been approved it is THEIRS — this tool refuses, and the move is to propose a " +
       "follow-up or ask the human to reject it; once another agent has claimed it, its claim " +
       "owns it. Use this to re-parent tasks that landed unparented, not to rewrite work already " +
       "approved or in flight. " +
@@ -1639,6 +1893,40 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
     },
   },
   {
+    name: "task_approve",
+    description:
+      SESSION_CONVENTION +
+      " " +
+      "THE REVIEWER'S TOOL, and only usable on a canvas whose owner turned on the 'peer' approval " +
+      "policy (off by default — everywhere else approval is the human's and this answers " +
+      "approved:false). There, a REGISTERED agent may approve a proposed task that a DIFFERENT " +
+      "agent proposed, releasing it into the ready queue. The server enforces every part of that " +
+      "from provenance it derived itself: you cannot approve your own proposal, you cannot " +
+      "approve an epic (that cascade stays human-only), and you cannot approve as anyone but the " +
+      "identity you registered under. Rejecting is human-only too — you either approve or you " +
+      "leave it. " +
+      "BEING A REVIEWER MEANS READING THE WORK: task_get the task, judge whether it is right, " +
+      "correctly scoped and actually ready, and approve only then. Leaving a task unapproved and " +
+      "saying why is a legitimate outcome and often the correct one; a reviewer that approves " +
+      "everything is indistinguishable from the 'auto' policy, which already exists and is " +
+      "simpler. Refusals come back as data, not errors: `approved:false` with a stable `reason` " +
+      "(peer_self_approval, peer_epic_human_only, peer_agent_unregistered, " +
+      "peer_identity_required, peer_proposer_unknown, or human_approval_only when the canvas is " +
+      "not on 'peer') and a `_next` saying what to do about it.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        id: {
+          type: "string",
+          description:
+            "The proposed task to approve — its ticket ref (e.g. 'TDM-21') or uuid. One task per " +
+            "call: there is no bulk approve for agents, on purpose.",
+        },
+      },
+      required: ["id"],
+    },
+  },
+  {
     name: "epic_propose",
     description:
       SESSION_CONVENTION +
@@ -1648,7 +1936,9 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
       "'write an epic' or plan a feature: tasks proposed without one are unparented and each need " +
       "their own approval. The epic lands as 'proposed'; a HUMAN approves it ONCE on the board " +
       "and that single approval cascades to every task under it. You must NOT try to approve " +
-      "it yourself — that gate is the human's, and the gateway refuses agent approval of epics. " +
+      "it yourself — that gate is the human's on every canvas, epics included, and the server " +
+      "refuses agent approval of an epic even where it allows peer review of a task (there the " +
+      "cascade is off and each task is approved on its own; see task_approve). " +
       "After proposing, do not end your turn: LISTEN for the approval by polling queue_next with " +
       "the returned `epicId` on a backing-off interval, so the human's approval on the board — " +
       "not another prompt — is what starts the work. " +

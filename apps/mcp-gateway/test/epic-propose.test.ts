@@ -83,8 +83,12 @@ test("epic_propose posts an epic and projects id + state + url", async () => {
       linkedIds: ["note-1"],
     })) as Record<string, unknown>;
 
-    assert.equal(calls.length, 1, "no tasks means one write");
-    const post = calls[0];
+    // WRITES, not requests: the answer also probes the canvas's approval policy
+    // (TDM-146) to know whether one approval still cascades to the batch, and that
+    // read runs alongside the write. What must not grow is the write count.
+    const writes = calls.filter((c) => c.method === "POST");
+    assert.equal(writes.length, 1, "no tasks means one write");
+    const post = writes[0];
     assert.equal(post.method, "POST");
     assert.equal(post.path, "/api/canvas/actions");
     assert.equal(post.body.type, "epic");
@@ -115,8 +119,9 @@ test("epic + tasks is ONE round trip per side, with the new epic's id injected",
       ],
     })) as Record<string, unknown>;
 
-    assert.equal(calls.length, 2, "one epic write + one batch write");
-    const batch = calls[1];
+    const writes = calls.filter((c) => c.method === "POST");
+    assert.equal(writes.length, 2, "one epic write + one batch write");
+    const batch = writes[1];
     assert.equal(batch.path, "/api/canvas/actions/batch");
     assert.deepEqual(
       batch.body.actions.map((a: any) => a.payload.epicId),

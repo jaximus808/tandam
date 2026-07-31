@@ -18,13 +18,13 @@ Live at https://tandemcanvas.com. Deploy = push to `main` (GitHub Actions → GC
 The living roadmap for THIS project is itself a Tandem canvas: **code `TEGLQFXR`**
 ("tandem planning"). Dogfooding — we plan Tandem in Tandem.
 
-The tool names below are the **default MCP surface** — the 14-tool intent facade
+The tool names below are the **default MCP surface** — the 15-tool intent facade
 (`FACADE_NAMES` in `apps/mcp-gateway/src/facade.ts`): `canvas_connect`,
 `agent_register`, `context_get`, `queue_next`, `task_find`, `task_get`,
 `task_claim`, `task_progress`, `task_complete`, `task_propose`, `task_amend`,
-`epic_propose`, `doc_write`, `board_status`. The old ~80-tool `canvas_*` CRUD
-surface is still callable but is only *advertised* behind `TANDEM_FULL_TOOLS=1`,
-so write against these names.
+`task_approve`, `epic_propose`, `doc_write`, `board_status`. The old ~80-tool
+`canvas_*` CRUD surface is still callable but is only *advertised* behind
+`TANDEM_FULL_TOOLS=1`, so write against these names.
 
 Sessions start from the task queue, NOT a full canvas read:
 
@@ -87,7 +87,19 @@ Jaxon approves once instead of task by task. One task per unit of work, concise
 body, heavy context linked via `linkedIds` (`task_get` hydrates those for whoever
 picks it up). Add more tasks to an existing batch later with `task_propose` and
 that `epicId`. Everything lands as `proposed` for human approval in the web UI —
-never try to approve your own work; the gateway refuses agent approval of epics.
+never try to approve your own work; epic approval is the human's on every canvas.
+
+**The one exception — `approval_policy: 'peer'` (TDM-145/146), off by default.**
+A canvas the OWNER puts on `peer` lets a **reviewer agent** approve a *task* that
+a **different** agent proposed, via `task_approve`; the non-self rule is enforced
+server-side from provenance, so you cannot approve your own proposal and the
+gateway does not re-implement the check. Under `peer` nothing is born approved
+and an epic approval no longer cascades — each task is reviewed on its own.
+Rejecting, epics and bulk approval stay human-only. This canvas (`TEGLQFXR`) is
+**not** on `peer` unless Jaxon says so, so assume the human gate. And a reviewer
+that approves everything is just a slower `auto`: read the work, and leaving a
+task unapproved with a reason is a legitimate outcome. Full recipe:
+`docs/ORCHESTRATION.md` §5.
 
 **After proposing, LISTEN for the approval instead of ending your turn.** Unless
 told otherwise, poll `queue_next` with the returned `epicId` on a backing-off
