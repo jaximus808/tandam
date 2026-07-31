@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   ArrowLeft,
+  ArrowRight,
   Bot,
   Compass,
   GitCommitHorizontal,
@@ -26,7 +27,14 @@ import type {
   TaskProgressEntry,
 } from "../types";
 import { CHIP_BASE, STATE_CHIP } from "../lib/stateChips";
-import { auditActorLabel, auditChangeLabel, lastReapprovalEdit } from "../lib/taskAudit";
+import {
+  auditActorLabel,
+  auditChangeLabel,
+  isStateMove,
+  lastReapprovalEdit,
+  moveVerbLabel,
+  stateMoveNote,
+} from "../lib/taskAudit";
 import { deriveLease, leaseAge } from "../lib/lease";
 import { eventLabel, eventSentence, repeatsOf, tallyContention } from "../lib/contention";
 import TaskLinks from "./TaskLinks";
@@ -178,48 +186,98 @@ function ProgressLog({ entries }: { entries: TaskProgressEntry[] }) {
   );
 }
 
-// ── Edit history ─────────────────────────────────────────────────────────────
-// The server-owned audit trail. Entries that COST an approval (reverted) carry
-// the board's one attention hue; an ordinary pre-approval fix is a record fact
-// and reads at the same weight as a timestamp. The old→new hint is a quotation,
-// so it stays in the code face with its arrow intact.
-function EditHistory({ trail }: { trail: ContentAuditEntry[] }) {
+// ── History ──────────────────────────────────────────────────────────────────
+// The server-owned audit trail, which holds TWO kinds of entry and is typeset to
+// say which is which (TDM-97).
+//
+//   a content EDIT — someone rewrote the title or body. The ones that COST an
+//     approval (reverted) carry the board's one attention hue; an ordinary
+//     pre-approval fix is a record fact at the weight of a timestamp. The old→new
+//     hint is a quotation, so it stays in the code face with its arrow intact.
+//   a state MOVE — someone walked the card along by hand: Start, Mark done,
+//     Release, Re-queue, Reopen, Reconsider. Never amber: a move costs no
+//     approval, and borrowing the attention hue for a routine "I started this"
+//     would teach people to ignore it where it matters.
+//
+// Both were always in the log; only the edits were ever drawn. The move entries
+// are the more interesting half in practice — an agent's transitions leave no
+// audit entry at all, so everything here is a PERSON's hand on the work.
+function MoveEntry({ entry }: { entry: ContentAuditEntry }) {
+  const note = stateMoveNote(entry);
+  return (
+    <>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="inline-flex min-w-0 items-center gap-1.5 text-[12px] text-ink/70">
+          <ArrowRight size={11} className="shrink-0 text-ink/35" aria-hidden="true" />
+          <span className="min-w-0">
+            <span className="font-medium text-ink/80">{auditActorLabel(entry.actor)}</span>{" "}
+            {moveVerbLabel(entry)}
+          </span>
+        </span>
+        <span className="font-code text-[10.5px] text-ink/45">
+          {entry.fromState} → {entry.toState}
+        </span>
+        <Stamp at={entry.at} className="ml-auto" />
+      </div>
+      {/* The mover's own words, so they read as prose rather than as the
+          machine summary the from→to above already renders. */}
+      {note && (
+        <p className="mt-1.5 whitespace-pre-wrap text-[12.5px] leading-relaxed text-ink/70">
+          {note}
+        </p>
+      )}
+    </>
+  );
+}
+
+function EditEntry({ entry }: { entry: ContentAuditEntry }) {
+  return (
+    <>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        {entry.reverted && (
+          <span
+            className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-700 dark:text-amber-400"
+            title="This edit withdrew the approval: the task went back to proposed and its claim was released."
+          >
+            <RotateCcw size={11} className="shrink-0" aria-hidden="true" />
+            sent back for approval
+          </span>
+        )}
+        <span className="text-[12px] text-ink/70">
+          {auditActorLabel(entry.actor)} changed the {auditChangeLabel(entry.change)}
+        </span>
+        <span className="font-code text-[10.5px] text-ink/45">
+          {entry.fromState} → {entry.toState}
+        </span>
+        <Stamp at={entry.at} className="ml-auto" />
+      </div>
+      {entry.summary && (
+        <p className="mt-1.5 overflow-x-auto whitespace-pre font-code text-[10.5px] leading-relaxed text-ink/55">
+          {entry.summary}
+        </p>
+      )}
+    </>
+  );
+}
+
+function AuditHistory({ trail }: { trail: ContentAuditEntry[] }) {
   return (
     <ol className="flex flex-col gap-2.5">
-      {[...trail].reverse().map((e, i) => (
-        <li
-          key={`${e.at}-${i}`}
-          className={`rounded-md border px-2.5 py-2 ${
-            e.reverted
-              ? "border-amber-500/25 bg-amber-500/[0.07]"
-              : "border-ink/10 bg-ink/[0.02]"
-          }`}
-        >
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            {e.reverted && (
-              <span
-                className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-700 dark:text-amber-400"
-                title="This edit withdrew the approval: the task went back to proposed and its claim was released."
-              >
-                <RotateCcw size={11} className="shrink-0" aria-hidden="true" />
-                sent back for approval
-              </span>
-            )}
-            <span className="text-[12px] text-ink/70">
-              {auditActorLabel(e.actor)} changed the {auditChangeLabel(e.change)}
-            </span>
-            <span className="font-code text-[10.5px] text-ink/45">
-              {e.fromState} → {e.toState}
-            </span>
-            <Stamp at={e.at} className="ml-auto" />
-          </div>
-          {e.summary && (
-            <p className="mt-1.5 overflow-x-auto whitespace-pre font-code text-[10.5px] leading-relaxed text-ink/55">
-              {e.summary}
-            </p>
-          )}
-        </li>
-      ))}
+      {[...trail].reverse().map((e, i) => {
+        const move = isStateMove(e);
+        return (
+          <li
+            key={`${e.at}-${i}`}
+            className={`rounded-md border px-2.5 py-2 ${
+              e.reverted && !move
+                ? "border-amber-500/25 bg-amber-500/[0.07]"
+                : "border-ink/10 bg-ink/[0.02]"
+            }`}
+          >
+            {move ? <MoveEntry entry={e} /> : <EditEntry entry={e} />}
+          </li>
+        );
+      })}
     </ol>
   );
 }
@@ -520,8 +578,8 @@ export default function TicketView({
 
       <div className="tandem-scroll min-h-0 flex-1 overflow-y-auto">
         {/* The safe-area strip is ADDED to this page's own bottom padding
-            (--tandem-pb-base = the py-6 below), so the last line of the edit
-            history doesn't finish under the iOS home indicator. */}
+            (--tandem-pb-base = the py-6 below), so the last line of the history
+            doesn't finish under the iOS home indicator. */}
         <div className="tandem-safe-pb-plus mx-auto w-full max-w-5xl px-4 pt-6 [--tandem-pb-base:1.5rem] sm:px-6 sm:pt-8 sm:[--tandem-pb-base:2rem]">
           {loading ? (
             <TicketSkeleton ticketRef={ticketRef} code={code} />
@@ -667,9 +725,12 @@ export default function TicketView({
                   </Section>
                 )}
 
+                {/* One trail, both kinds — the section is "History" rather than
+                    "Edit history" because half of what the server records here
+                    is someone moving the card, not rewriting it. */}
                 {(p.audit ?? []).length > 0 && (
-                  <Section label="Edit history">
-                    <EditHistory trail={p.audit ?? []} />
+                  <Section label={`History · ${(p.audit ?? []).length}`}>
+                    <AuditHistory trail={p.audit ?? []} />
                   </Section>
                 )}
               </div>

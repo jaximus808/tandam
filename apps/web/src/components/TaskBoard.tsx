@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import {
+  ArrowRight,
   Ban,
   Bot,
   Check,
@@ -63,7 +64,15 @@ import TaskComposer, { linkTargets } from "./TaskComposer";
 import { epicLifecycle, TERMINAL_STATES } from "../lib/epicLifecycle";
 import { CHIP_BASE, STATE_CHIP } from "../lib/stateChips";
 import { parseAuthoredBy, provenanceTitle } from "../lib/provenance";
-import { auditActorLabel, auditChangeLabel, lastReapprovalEdit } from "../lib/taskAudit";
+import {
+  auditActorLabel,
+  auditChangeLabel,
+  lastReapprovalEdit,
+  lastStateMove,
+  moveVerbLabel,
+  moveVerbShort,
+  stateMoveNote,
+} from "../lib/taskAudit";
 import TaskLinks from "./TaskLinks";
 import { useCardFlight } from "../lib/useCardFlight";
 import { spaLink } from "../lib/spaNav";
@@ -579,6 +588,33 @@ function ReapprovalNotice({ edit }: { edit: ContentAuditEntry }) {
         </p>
       )}
     </div>
+  );
+}
+
+// Hand-moves (TDM-97). The server records every move a PERSON makes on the
+// board — Start, Mark done, Release, Re-queue, Reopen, Reconsider — and an
+// agent's own transitions record nothing, so this mark appearing at all is
+// exactly the fact "a human put this card where it is". On a Done card that is
+// the difference between work an agent finished and work someone ticked off,
+// which nothing else on the card can say once the claimant chip has gone.
+//
+// Record weight in dim ink, never the attention hue: a move costs no approval,
+// and the column the card is sitting in already says where the work ended up.
+// The tooltip carries the rest — the exact from→to, when, and any note typed at
+// the moment of the move; the full trail is on the ticket page.
+function MoveMark({ move }: { move: ContentAuditEntry }) {
+  const note = stateMoveNote(move);
+  const who = auditActorLabel(move.actor);
+  return (
+    <span
+      className={`inline-flex min-w-0 items-center gap-1 text-ink/45 ${T_META}`}
+      title={`${who} ${moveVerbLabel(move)} ${ageOf(move.at)} ago (${move.fromState} → ${move.toState})${note ? ` — ${note}` : ""}`}
+    >
+      <ArrowRight size={9} className="shrink-0" aria-hidden="true" />
+      <span className="truncate">
+        {moveVerbShort(move)} by {who}
+      </span>
+    </span>
   );
 }
 
@@ -1429,6 +1465,9 @@ export default function TaskBoard({
     const p = taskPayload(t);
     const terminal = t.state === "done" || t.state === "failed" || t.state === "rejected";
     const reapproval = lastReapprovalEdit(p);
+    // The last time a PERSON moved this card (TDM-97) — null for a task only
+    // agents have ever transitioned, which is most of them.
+    const handMove = lastStateMove(p);
     const epicId = p.epicId;
     const epicTitle = withEpicChip && epicId ? epicTitleById.get(epicId) : undefined;
     // Just flew in from another lane (or the camera brought us here for it) —
@@ -1540,6 +1579,10 @@ export default function TaskBoard({
           {p.assignee === "human" && (
             <User size={11} className="shrink-0 text-ink/40" aria-label="Your own todo" />
           )}
+          {/* Who last moved this by hand. Left of the record group because it is
+              a fact about the WORK (someone walked it here) rather than about
+              the row, and it yields its width to the epic chip beside it. */}
+          {handMove && <MoveMark move={handMove} />}
           {/* Record metadata, right-aligned as one group: who else went for it,
               who wrote it, when. All three are facts about the row rather than
               its status, so they read at the same dim weight — and the collision
