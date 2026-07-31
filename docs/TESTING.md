@@ -58,9 +58,10 @@ tests). Full recipe: `docs/ORCHESTRATION.md` (already committed).
 - [ ] Redeliver the same delivery id → deduped, command does NOT run twice
 - [ ] Without the env flag, delivery to the private address is refused
       non-retryably (guard's production posture — worth seeing once)
-- [ ] `/tandem-watch` skill (`.claude/skills/tandem-watch/`, TDM-57): in a CC
-      session, say "watch the queue" → it connects, polls `queue_next` with
-      backoff, dispatches a subagent per approved task
+- [ ] `/tandem-watch` skill (`.claude/skills/tandem-watch/`, TDM-57/TDM-150): in
+      a CC session, say "watch the queue" → it connects, waits on `queue_wait`
+      (no interval polling, no sleep loop), and dispatches a subagent per task
+      the moment you approve it
 
 ## C. `epic_propose` on the facade (no ticket — gap found proposing E9)
 

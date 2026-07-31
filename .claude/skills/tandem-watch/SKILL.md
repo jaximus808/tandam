@@ -1,6 +1,6 @@
 ---
 name: tandem-watch
-description: Wait for tasks to be approved on a Tandem canvas and orchestrate them the moment they appear — connect as a planner, poll queue_next on a backing-off interval, then dispatch one subagent per ready task with the handoff block it returns. You dispatch; the workers claim. Use when the user says to watch/wait for approvals, sit on the queue, or work tasks as they get approved.
+description: Wait for tasks to be approved on a Tandem canvas and orchestrate them the moment they appear — connect as a planner, wait on queue_wait (one call that returns when work is approved), then dispatch one subagent per ready task with the handoff block it returns. You dispatch; the workers claim. Use when the user says to watch/wait for approvals, sit on the queue, or work tasks as they get approved.
 ---
 
 # Tandem watch mode
@@ -11,8 +11,8 @@ you do not go looking for other work in the meantime.
 
 This is the in-session twin of the webhook loop in `docs/ORCHESTRATION.md`. Same
 job, different trigger: there a webhook relaunches Claude, here a live session
-stays awake. Use this one when the user is already in a session with you and
-wants you to keep working as they approve.
+stays awake on `queue_wait` (ORCHESTRATION.md §0). Use this one when the user is
+already in a session with you and wants you to keep working as they approve.
 
 **The one rule this whole skill hangs on:** *an agent claims only what it will
 personally do. An orchestrator dispatches; it never claims, never completes on a
@@ -56,49 +56,46 @@ say so.
 The role enum is `planner | executor`. There is no `orchestrator` role — you are
 the `planner`, your subagents are `executor`s.
 
-Tell the user, in one line, what you are about to do: which canvas, the poll
-interval, and that they can interrupt at any time.
+Tell the user, in one line, what you are about to do: which canvas, that you are
+waiting on the queue, and that they can interrupt at any time.
 
 ## 2. The wait loop
 
 ```
-poll → dispatch if there is work → wait → poll → …
+queue_wait → dispatch what comes back ready → queue_wait → …
 ```
 
-**Poll:**
+**Wait — one call, no interval, no sleep to arrange:**
 
 ```
-queue_next  { limit: 10 }
+queue_wait  { timeoutSeconds: 60, limit: 10 }
 ```
 
-Empty result means nothing is approved. Tasks the fleet proposed sit at
-`proposed` until a human approves them on the board — an empty queue is the
-normal state of this loop, not an error, and not a reason to invent work.
+`queue_wait` parks **on the server** and returns the instant a task passes the
+approval gate. Do not end your turn and do not hand-roll a poll interval: there
+is nothing to schedule, because the waiting is not happening here. Branch on
+`status`:
 
-**Wait between polls.** Never burn a turn on a foreground shell `sleep` loop.
-In order of preference:
+| `status` | Means | Do |
+|---|---|---|
+| `ready` | Approved tasks, each with its `handoff` block | §3 — dispatch |
+| `timeout` | Nothing approved inside the window. **Not an error, not a failure** — it is the normal state of this loop | Call `queue_wait` again, immediately |
+| `busy` | The canvas is at its waiter cap; the call read the queue for you instead | Dispatch anything it returned, then call again |
+| `unsupported` | This API predates the wait endpoint; it read the queue for you instead | Dispatch anything it returned. If it is empty, say the server cannot wait and ask the user to ping you when they approve — do not fake a wait with a sleep loop |
 
-1. **A scheduling / wake-up primitive, if this session has one** (e.g.
-   `ScheduleWakeup`). This is the right tool: it costs nothing while you wait
-   and wakes you on time. Delays of 60–300s.
-2. **`Bash` with `run_in_background: true` running `sleep <n>`.** The completion
-   notification when it exits is your wake-up. Works in any Claude Code session.
-3. Ask the user to ping you when they have approved, and stop. Only if neither
-   of the above is available.
-
-**Back off when it is quiet.** Start at 60s. After three consecutive empty
-polls, go to 120s; after six, 300s. Reset to 60s the moment a poll returns work
-— the human is at the board, so more is probably coming. Do not poll faster than
-30s under any circumstances.
+An empty queue is not a reason to invent work: tasks the fleet proposed sit at
+`proposed` until a human approves them on the board.
 
 **Stop when:**
 
 - The user interrupts or says stop. Immediate, no argument.
-- **10 consecutive empty polls.** At the default backoff that is roughly 35–40
-  minutes of silence. Stop and summarize rather than idling forever.
+- **About 30 minutes of unbroken `timeout` answers** (roughly 30 calls at 60s).
+  Stop and summarize rather than waiting forever. Reset that count the moment
+  anything comes back `ready` — the human is at the board, so more is probably
+  coming.
 
-Report the interval change when you back off, in a few words, so the user can
-see you are alive.
+Every few `timeout` answers, say so in a few words, so the user can see you are
+still alive and still waiting.
 
 ## 3. When tasks appear — dispatch, do not claim
 
@@ -148,8 +145,9 @@ So, for each ready task:
    for you. A task still `executing` with no worker behind it is a fact you
    report (and its claim expires on its own TTL); it is not yours to complete.
 
-Then re-run `queue_next` immediately (approvals often land while you work), and
-only go back to waiting when it comes back empty.
+Then call `queue_wait` again straight away. It returns immediately when work is
+already approved — approvals often land while you work — and parks when there is
+none, so the same call covers both without a separate `queue_next` read.
 
 **What this buys, and what it does not.** Claims at the edge give you a truthful
 `claimedBy`, failure isolation (one worker dying is one task `failed`, not a
@@ -201,9 +199,10 @@ orchestrator**. Both sets hold at once; when you work alone you are both.
 
 ## Stopping
 
-When you stop — interrupted or ten empty polls — give the user a short summary:
+When you stop — interrupted, or out of patience with the silence — give the user
+a short summary:
 
-- how long you watched and how many polls,
+- how long you watched,
 - every task you dispatched, with its ticket id, which worker took it, and
   whether it landed `done` or `failed` — one line each, from `board_status`, not
   from memory,

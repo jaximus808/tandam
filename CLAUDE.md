@@ -18,11 +18,11 @@ Live at https://tandemcanvas.com. Deploy = push to `main` (GitHub Actions → GC
 The living roadmap for THIS project is itself a Tandem canvas: **code `TEGLQFXR`**
 ("tandem planning"). Dogfooding — we plan Tandem in Tandem.
 
-The tool names below are the **default MCP surface** — the 15-tool intent facade
+The tool names below are the **default MCP surface** — the 16-tool intent facade
 (`FACADE_NAMES` in `apps/mcp-gateway/src/facade.ts`): `canvas_connect`,
-`agent_register`, `context_get`, `queue_next`, `task_find`, `task_get`,
-`task_claim`, `task_progress`, `task_complete`, `task_propose`, `task_amend`,
-`task_approve`, `epic_propose`, `doc_write`, `board_status`. The old ~80-tool
+`agent_register`, `context_get`, `queue_next`, `queue_wait`, `task_find`,
+`task_get`, `task_claim`, `task_progress`, `task_complete`, `task_propose`,
+`task_amend`, `task_approve`, `epic_propose`, `doc_write`, `board_status`. The old ~80-tool
 `canvas_*` CRUD surface is still callable but is only *advertised* behind
 `TANDEM_FULL_TOOLS=1`, so write against these names.
 
@@ -35,7 +35,8 @@ Sessions start from the task queue, NOT a full canvas read:
 2. `queue_next` — the approved, ready-to-work queue, and the entry point for
    work. Don't go hunting for it by reading the canvas: `context_get` is the
    cheap one-call briefing (identity, document tabs, per-kind counts, queue
-   state) if you need to orient first.
+   state) if you need to orient first. Comes back empty but work is expected?
+   `queue_wait` is the same read that *waits* — see below.
 3. `task_get` on the task you'll work on — it returns the task plus its linked
    roadmap items / notes hydrated, which is all the context you need.
    **`id` takes a ticket ref, not just a uuid:** told "take on TDM-21", pass
@@ -77,8 +78,11 @@ subagents to work the queue, you are the orchestrator, and steps 3–6 above are
 4. You claim nothing and complete nothing. Never hand a subagent your `session`
    handle — the canvas **code** is what travels. To report, read `board_status`;
    a task still `executing` is something you report, not something you close.
+   When the batch drains and more approvals are expected, `queue_wait` rather
+   than ending your turn.
 
-The full recipes: `docs/ORCHESTRATION.md` (webhook-triggered) and the
+The full recipes: `docs/ORCHESTRATION.md` — the live session that waits on
+`queue_wait` (§0) and the webhook-triggered relaunch (§1–4) — and the
 `tandem-watch` skill in `.claude/skills/tandem-watch/` (in-session watch loop).
 
 When asked to plan work rather than execute it, use `epic_propose`: it creates the
@@ -101,12 +105,12 @@ that approves everything is just a slower `auto`: read the work, and leaving a
 task unapproved with a reason is a legitimate outcome. Full recipe:
 `docs/ORCHESTRATION.md` §5.
 
-**After proposing, LISTEN for the approval instead of ending your turn.** Unless
-told otherwise, poll `queue_next` with the returned `epicId` on a backing-off
-interval (start ~15s, double to a ~2min cap). The moment tasks come back
-approved, work them — or, with subagents, dispatch one per task using the
-`handoff` blocks. Jaxon approving on the board **is** the go signal; he shouldn't
-have to prompt you a second time. (`epic_propose`'s own response says this too.)
+**After proposing, LISTEN for the approval.** Don't end your turn and don't poll
+on an interval — call `queue_wait` (optionally with the `epicId`); it returns the
+moment work is approved, and a `status: "timeout"` answer means nothing yet, not
+an error, so call it again. On `ready` you get the tasks with their `handoff`
+blocks: work them, or dispatch one subagent per task. Jaxon approving on the
+board **is** the go signal; he shouldn't have to prompt you a second time.
 
 Also keep the canvas current as you make meaningful progress (finish a feature,
 fix a notable bug, change direction) — as you go, not just at the end. Roadmap

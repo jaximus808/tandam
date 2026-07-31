@@ -1,9 +1,16 @@
 # Approval-triggered orchestration
 
-You approve tasks on the board. Tandem POSTs a signed `task.approved` to a listener
-on your machine. The listener runs one command. That command is a Claude
-orchestrator that pulls the queue and fans the work out to subagents — it
-dispatches; each subagent claims its own task.
+Human approval is the gate. Everything here is about one question: **how does an
+orchestrator find out the moment you open it?**
+
+There are two answers, and which one you want depends on whether an agent is
+already running. **A live session waits with `queue_wait` (§0). Nothing running
+waits with a webhook (§1 onward).** Neither one polls.
+
+For the webhook path: you approve tasks on the board, Tandem POSTs a signed
+`task.approved` to a listener on your machine, the listener runs one command, and
+that command is a Claude orchestrator that pulls the queue and fans the work out
+to subagents — it dispatches; each subagent claims its own task.
 
 That is the whole loop: **approve → webhook → exec → fleet.** Nothing polls, and
 Tandem never launches an agent itself — it hands your runner a signed nudge and
@@ -29,6 +36,61 @@ launcher*).
 Before you write the orchestrator prompt, read **[CONTENTION.md](CONTENTION.md)** —
 the claim lifecycle, the tap-out contract every loser follows, and why dispatching
 work that was never ticketed causes double implementation.
+
+---
+
+## 0. If an agent is already running, it waits: `queue_wait`
+
+The webhook exists to **start** an orchestrator. When one is already alive — you
+are in a session with it right now, it just proposed an epic, it just drained a
+batch — there is nothing to start. It should stay where it is and wait, and that
+is one call:
+
+```
+queue_wait  { timeoutSeconds: 60, epicId?: "<the epic you just proposed>" }
+```
+
+The wait happens **on the server** (`GET /api/canvas/queue/wait`,
+`apps/api/internal/api/queue_wait.go`): the call parks and returns the instant a
+task passes the approval gate. Answers come back on `status`:
+
+| `status` | Means | Do |
+|---|---|---|
+| `ready` | Approved tasks, each already carrying the same paste-ready `handoff` block `queue_next` attaches | Claim one (alone) or dispatch one subagent per task |
+| `timeout` | Nothing was approved inside the window. **Not an error** | Call `queue_wait` again |
+| `busy` | This canvas is at its waiter cap. The call read the queue for you first | Treat it as `queue_next`, then call again |
+| `unsupported` | The API is older than the endpoint. It read the queue for you first | Treat it as `queue_next` |
+
+Default wait is 25s, clamped 1–60. The tool is annotated read-only, so connectors
+can auto-approve it.
+
+**Say this to an agent, not "poll on a backing-off interval":**
+
+> Don't end your turn and don't poll on an interval — call `queue_wait`
+> (optionally with the `epicId`); it returns the moment work is approved, and a
+> `status: "timeout"` answer means nothing yet, not an error, so call it again.
+
+That phrasing is deliberate. The instruction it replaced asked an agent to sleep
+between polls, which an MCP session cannot do: on 2026-07-31 an orchestrator was
+told to poll, agreed, and then ended its turn — a human had to prompt it a second
+time to notice an approval that had already landed. It was not a wording failure;
+it was an instruction with no mechanism under it. Now there is one, so name the
+call.
+
+**Which path do I want?**
+
+| | Live session (`queue_wait`) | Webhook (`tandem-mcp listen`) |
+|---|---|---|
+| Precondition | An agent is already running | Nothing is running |
+| Latency to start | Instant — it is already there | One process launch |
+| Setup | None. It is on the default tool surface | Tunnel + signing secret + a listener process (§1–3) |
+| Good for | You are at the keyboard approving as you go; an agent that just proposed work and must not end its turn | You approve from your phone at 2am; you want work to start without a session open |
+| Ends when | The agent stops waiting, or you interrupt | You stop the listener |
+
+They compose: run the listener so approvals can start an orchestrator cold, and
+have live orchestrators use `queue_wait` so they never hand the wait back to you.
+The in-session version of the whole loop is the `tandem-watch` skill in
+`.claude/skills/tandem-watch/`.
 
 ---
 
@@ -514,12 +576,17 @@ they are not actually in the ready queue. `board_status` answers the last one.
 
 ## Notes on the tool surface
 
-Everything the prompt above uses is on the **default** manifest — the 15-tool
+Everything the prompt above uses is on the **default** manifest — the 16-tool
 intent facade: `canvas_connect`, `agent_register`, `context_get`, `queue_next`,
-`task_find`, `task_get`, `task_claim`, `task_progress`, `task_complete`,
-`task_propose`, `task_amend`, `task_approve`, `epic_propose`, `doc_write`,
-`board_status`. No `TANDEM_FULL_TOOLS=1` needed; that env var opens the full CRUD
-surface, which orchestration does not require.
+`queue_wait`, `task_find`, `task_get`, `task_claim`, `task_progress`,
+`task_complete`, `task_propose`, `task_amend`, `task_approve`, `epic_propose`,
+`doc_write`, `board_status`. No `TANDEM_FULL_TOOLS=1` needed; that env var opens
+the full CRUD surface, which orchestration does not require.
+
+`queue_wait` (§0) is `queue_next`'s waiting twin and needs no setup at all: it is
+what a live orchestrator calls instead of ending its turn. The webhook-launched
+orchestrator above deliberately does **not** use it — it drains the queue and
+exits, because the listener is what wakes it next.
 
 `task_approve` is the reviewer's tool and does nothing on a canvas that is not on
 the `peer` approval policy (§5) — it answers `approved:false` and says so.
@@ -545,6 +612,6 @@ Skipping registration still works — pass `agentName` on `task_claim` /
 `task_complete` — but you lose the fleet-tree grouping, and `queue_next`'s
 handoffs come back with a placeholder parent instead of your id.
 
-For an in-session version of this loop — a Claude Code session that idles waiting
-for approvals instead of being relaunched by a webhook — see the
+For an in-session version of this loop — a Claude Code session that waits on
+`queue_wait` (§0) instead of being relaunched by a webhook — see the
 `tandem-watch` skill in `.claude/skills/tandem-watch/`.
