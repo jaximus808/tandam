@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### `queue_wait` — wait for approval instead of ending your turn (TDM-149)
+
+- **New `queue_wait`** on the default surface: ONE call that returns the moment
+  approved work exists. An MCP agent has no sleep and no blocking call, so "poll
+  the queue on a backing-off interval" is an instruction it cannot follow — it
+  ends its turn instead, and the human has to prompt it a second time to notice
+  an approval that already landed. The waiting now happens on the server (the
+  API's `GET /api/canvas/queue/wait`), and this is the call that reaches it.
+- **Answers on `status`, always 200-shaped:** `ready` (approved tasks, each
+  already carrying the same paste-ready `handoff` block `queue_next` attaches, so
+  the next step is claim or dispatch with nothing to compose), or `timeout`
+  (nothing yet — stated plainly as *not* an error, with "call again" as the
+  instruction, because a timeout that reads like a failure trains agents out of
+  the one tool that keeps them alive).
+- **Degrades instead of throwing.** Against an API older than the gateway it
+  answers `status: "unsupported"`; against a canvas at its waiter cap,
+  `status: "busy"`. Both read the queue for you first, so the answer still
+  carries any work that was already there.
+- `timeoutSeconds` defaults to 25, clamped 1–60 client-side; `epicId` narrows the
+  wait to one batch (e.g. the epic you just proposed). The request's client
+  deadline is derived from the wait, so a long wait can no longer be aborted by
+  the shared 15s request budget.
+- `epic_propose` and the server instructions now point at `queue_wait` rather
+  than at interval polling. The default manifest is now **16 tools**.
+
 ### `task_find`, and a board read you can report from (TDM-95)
 
 - **New `task_find`** on the default surface: find a task by NAME when you have

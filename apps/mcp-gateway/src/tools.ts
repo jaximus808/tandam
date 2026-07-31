@@ -265,6 +265,72 @@ export function claimRejectionMessage(claimedBy: string): string {
   );
 }
 
+/**
+ * A task exactly as the API hands it back — the shape of every element in
+ * `GET /api/canvas/actions?type=task`, and (by the API's own test pinning the
+ * two together) of every element in the long poll's `actions`.
+ */
+export interface RawTaskAction {
+  id: string;
+  state: string;
+  payload?: { title?: string; assignee?: string; epicId?: string };
+  proposedBy: string;
+  claimedBy?: string;
+  result?: string;
+  ticketId?: string;
+  createdAt: string;
+}
+
+/** A projected queue row: compact, no bodies. */
+export type TaskListRow = Record<string, unknown> & { state: string; epicId?: string };
+
+/**
+ * THE queue projection — one function, two callers.
+ *
+ * canvas_task_list (and therefore queue_next) built this inline. queue_wait
+ * (TDM-149) needs the SAME rows from a different endpoint: the long poll answers
+ * with `actions` byte-identical to what the list endpoint returns, so the only
+ * honest way to project them is the projection that already exists. Two copies
+ * would drift, and the drift would show up as a task whose fields differ
+ * depending on whether the agent waited for it or read it — the one thing a
+ * dispatch payload cannot afford.
+ *
+ * Compact on purpose: no bodies, no linkedIds. canvas_task_get has the rest.
+ */
+export async function projectTaskRows(
+  gateway: Gateway,
+  actions: RawTaskAction[] | undefined,
+  epicId?: unknown
+): Promise<TaskListRow[]> {
+  let tasks = (actions ?? []).map((a) => ({
+    id: a.id,
+    ...(a.ticketId ? { ticketId: a.ticketId } : {}),
+    title: a.payload?.title ?? "",
+    state: a.state,
+    assignee: a.payload?.assignee ?? "agent",
+    proposedBy: a.proposedBy,
+    ...(a.claimedBy ? { claimedBy: a.claimedBy } : {}),
+    ...(a.payload?.epicId ? { epicId: a.payload.epicId } : {}),
+    ...(a.result ? { result: a.result } : {}),
+    createdAt: a.createdAt,
+  })) as TaskListRow[];
+  if (epicId) {
+    tasks = tasks.filter((t) => t.epicId === epicId);
+  }
+  // Hydrate each task's epic state (one extra read, only when epics are in
+  // play) so the queue shows which tasks sit under a still-proposed epic.
+  if (tasks.some((t) => t.epicId)) {
+    const epicsRes = (await gateway.get("/api/canvas/actions?type=epic")) as {
+      actions: Array<{ id: string; state: string }>;
+    };
+    const epicState = new Map((epicsRes.actions ?? []).map((e) => [e.id, e.state]));
+    tasks = tasks.map((t) =>
+      t.epicId && epicState.has(t.epicId) ? { ...t, epicState: epicState.get(t.epicId) } : t
+    );
+  }
+  return tasks;
+}
+
 export async function handleTool(
   gateway: Gateway,
   toolName: string,
@@ -1109,44 +1175,11 @@ export async function handleTool(
       let qs = assignee === "any" ? "" : `&assignee=${encodeURIComponent(assignee)}`;
       if (args.state) qs += `&state=${encodeURIComponent(String(args.state))}`;
       const res = (await gateway.get(`/api/canvas/actions?type=task${qs}`)) as {
-        actions: Array<{
-          id: string;
-          state: string;
-          payload?: { title?: string; assignee?: string; epicId?: string };
-          proposedBy: string;
-          claimedBy?: string;
-          result?: string;
-          ticketId?: string;
-          createdAt: string;
-        }>;
+        actions: RawTaskAction[];
       };
-      // Compact projection: no bodies, no linkedIds. canvas_task_get has the rest.
-      let tasks = (res.actions ?? []).map((a) => ({
-        id: a.id,
-        ...(a.ticketId ? { ticketId: a.ticketId } : {}),
-        title: a.payload?.title ?? "",
-        state: a.state,
-        assignee: a.payload?.assignee ?? "agent",
-        proposedBy: a.proposedBy,
-        ...(a.claimedBy ? { claimedBy: a.claimedBy } : {}),
-        ...(a.payload?.epicId ? { epicId: a.payload.epicId } : {}),
-        ...(a.result ? { result: a.result } : {}),
-        createdAt: a.createdAt,
-      })) as Array<Record<string, unknown> & { state: string; epicId?: string }>;
-      if (args.epicId) {
-        tasks = tasks.filter((t) => t.epicId === args.epicId);
-      }
-      // Hydrate each task's epic state (one extra read, only when epics are in
-      // play) so the queue shows which tasks sit under a still-proposed epic.
-      if (tasks.some((t) => t.epicId)) {
-        const epicsRes = (await gateway.get("/api/canvas/actions?type=epic")) as {
-          actions: Array<{ id: string; state: string }>;
-        };
-        const epicState = new Map((epicsRes.actions ?? []).map((e) => [e.id, e.state]));
-        tasks = tasks.map((t) =>
-          t.epicId && epicState.has(t.epicId) ? { ...t, epicState: epicState.get(t.epicId) } : t,
-        );
-      }
+      // Compact projection: no bodies, no linkedIds. canvas_task_get has the
+      // rest. Shared with queue_wait so the two can't drift — see projectTaskRows.
+      const tasks = await projectTaskRows(gateway, res.actions, args.epicId);
       // Contextual fan-out nudge: only when there's a real batch of ready work.
       // Subagents are a HARNESS capability (e.g. Claude Code's Agent tool), not
       // something this server can start — but where the harness HAS them, fan-out
@@ -3367,7 +3400,16 @@ const CONNECTORS = new Set(["canvas_connect", "canvas_create"]);
 // Read-only tools whose NAME doesn't end in _read/_list/_get. The intent facade
 // (facade.ts) names tools by intent, not by CRUD verb, so the regex below can't
 // classify them — list them explicitly rather than renaming for the regex's sake.
-const READ_ONLY_TOOLS = new Set(["queue_next", "board_status", "context_get", "task_find"]);
+const READ_ONLY_TOOLS = new Set([
+  "queue_next",
+  // The long poll is a READ that happens to take a while (TDM-149). Annotating
+  // it read-only is what lets a connector auto-approve it instead of putting a
+  // consent prompt in front of the one call an agent makes to avoid stopping.
+  "queue_wait",
+  "board_status",
+  "context_get",
+  "task_find",
+]);
 
 /**
  * MCP tool annotations (behaviour hints). Clients — notably the Claude.ai web

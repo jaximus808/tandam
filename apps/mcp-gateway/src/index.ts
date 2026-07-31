@@ -50,7 +50,7 @@ function printHelp() {
       `                             (\`tandem-mcp listen --help\` for its options.)\n` +
       `  tandem-mcp --full-tools    Also advertise the full CRUD tool surface\n` +
       `                             (maps, sheets, charts, forms, …) alongside\n` +
-      `                             the default 12-tool intent facade.\n` +
+      `                             the default intent facade.\n` +
       `  tandem-mcp --version, -v   Print version and exit.\n` +
       `  tandem-mcp --help, -h      Show this help.\n` +
       `\n` +

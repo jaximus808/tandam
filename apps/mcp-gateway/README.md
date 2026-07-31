@@ -84,10 +84,10 @@ pnpm --filter @jaximus/tandem-mcp build
 | ------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `API_URL`           | `https://tandemcanvas.com` | Tandem HTTP API base URL. Only set this to override the default.                                                                                    |
 | `TANDEM_TOKEN`      | _(unset)_                  | Personal access token — lets the agent act as **you** on your private and shared canvases. Mint one at `/me`. Without it, only public canvases work. |
-| `TANDEM_FULL_TOOLS` | _(unset)_                  | Set to `1` to also advertise the full CRUD surface (maps, sheets, charts, forms, …) alongside the default 12-tool facade. Same as `--full-tools`.    |
+| `TANDEM_FULL_TOOLS` | _(unset)_                  | Set to `1` to also advertise the full CRUD surface (maps, sheets, charts, forms, …) alongside the default intent facade. Same as `--full-tools`.    |
 | `TANDEM_CANVAS_CODE` | _(unset)_                 | This project's canvas code, written by `init`. Named in the `canvas_connect` tool description so the agent knows which canvas it belongs to, and used as the default when it calls `canvas_connect` without one. |
 | `MCP_TRACE`         | _(unset)_                  | Per-tool-call timing on stderr, plus a session summary on exit. `1` for human-readable lines, `json` for one JSON object per line. See [Tracing](#tracing). |
-| `REQUEST_TIMEOUT_MS` | `15000`                   | Per-request timeout for calls to the Tandem API.                                                                                                    |
+| `REQUEST_TIMEOUT_MS` | `15000`                   | Per-request timeout for calls to the Tandem API. `queue_wait` is exempt — its deadline is derived from the wait it asked for, so a long wait is never cut short by this budget. |
 
 To connect as yourself, mint a token under **Access tokens** at [tandemcanvas.com/me](https://tandemcanvas.com/me) and add it to your MCP client config:
 
@@ -163,7 +163,7 @@ Same fields, one JSON object per line, so the numbers can be scraped straight ou
 
 ## Tools
 
-The default surface is a **14-tool intent facade** shaped like the work loop, not like the API:
+The default surface is a **16-tool intent facade** shaped like the work loop, not like the API:
 
 | Tool             | Purpose                                                                                                     |
 | ---------------- | ----------------------------------------------------------------------------------------------------------- |
@@ -171,6 +171,7 @@ The default surface is a **14-tool intent facade** shaped like the work loop, no
 | `agent_register` | Register or re-register this session's identity after connect — fix a rejected `parentAgentId`, record the model, switch role. |
 | `context_get`    | The canvas briefing in one cheap call — identity, mode, document tabs, per-kind counts, queue state.        |
 | `queue_next`     | The approved tasks ready to work, compact. The entry point for work.                                        |
+| `queue_wait`     | Wait for work instead of ending your turn: one call that returns the moment something is approved, with the same dispatch-ready `handoff` blocks. `status: "timeout"` means "nothing yet, call again" — not an error. Optional `timeoutSeconds` (default 25, max 60) and `epicId`. |
 | `task_find`      | Find a task by NAME when you have no id — substring/word match over titles (then bodies), optional `state` filter. Returns just the matches, so a description never costs a board read. A ticket ref is resolved directly. |
 | `task_get`       | One task with its linked context hydrated — all a session needs to start.                                   |
 | `task_claim`     | Atomic claim (`approved` → `executing`). Losers get `{ claimed: false, claimedBy }` and move on.             |
@@ -178,6 +179,7 @@ The default surface is a **14-tool intent facade** shaped like the work loop, no
 | `task_complete`  | Finish with a `result` (include commit hashes) plus `links` (commit / PR / branch URLs), or `status: "failed"` + `error`. |
 | `task_propose`   | Propose one task or a whole plan (`tasks: [...]`). Lands as `proposed` for human approval.                   |
 | `task_amend`     | Correct or withdraw a task YOU proposed — only while it is still `proposed`, unclaimed, and yours.            |
+| `task_approve`   | Approve a task a DIFFERENT agent proposed — only on a canvas whose owner turned on the `peer` approval policy. Never your own, never an epic. |
 | `epic_propose`   | Propose an epic, optionally with its whole plan (`tasks: [...]`) in one call. A human approves the epic once and it cascades to every task under it. |
 | `doc_write`      | Leave context behind as a markdown note; names a tab and creates it if new.                                  |
 | `board_status`   | Board-shaped overview — counts by state, epics, and every in-flight task as a report line (holder, claim age, last progress note, `staleClaim` past the lease) — without dumping the canvas. |

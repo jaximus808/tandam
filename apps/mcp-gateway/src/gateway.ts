@@ -356,9 +356,16 @@ export class Gateway {
    * call that failed still shows where the time went. `recordApiCall` is a
    * single boolean check when tracing is off.
    */
-  private async safeFetch(path: string, init?: RequestInit): Promise<Response> {
+  private async safeFetch(
+    path: string,
+    init?: RequestInit,
+    timeoutOverrideMs?: number
+  ): Promise<Response> {
     const method = init?.method ?? "GET";
-    const timeoutMs = this.config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    // The override exists for ONE case: a request the server deliberately holds
+    // open (the queue long poll). Everything else uses the shared budget.
+    const timeoutMs =
+      timeoutOverrideMs ?? this.config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     const start = Date.now();
@@ -469,6 +476,52 @@ export class Gateway {
       return (await res.json()) as T;
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * GET a LONG POLL — a request the server holds open on purpose until it has an
+   * answer (GET /api/canvas/queue/wait, TDM-148/149). Three things make it
+   * different from `get`, and all three are failure modes if you skip them:
+   *
+   *  1. THE CLIENT DEADLINE MUST OUTLAST THE SERVER'S. The default request budget
+   *     is 15s; the server may hold a wait for up to 60s. Left alone, the client
+   *     would abort every wait longer than 15 seconds — the tool would fail
+   *     precisely when it was WORKING (parked, waiting, exactly as asked). So the
+   *     caller passes a deadline derived from the wait it requested, and it is
+   *     always the larger of the two numbers. `timeoutMs` here is the CLIENT
+   *     deadline, not the wait.
+   *  2. AN OLDER API IS "NOT SUPPORTED", NOT AN ERROR. A gateway deployed ahead of
+   *     the API meets a 404 — or, because the API serves the SPA on `/*`, a 200 of
+   *     HTML. Both mean the same thing (`unsupported: true`), and the caller
+   *     degrades to a plain queue read instead of throwing at an agent that only
+   *     wanted to wait.
+   *  3. 429 IS AN ANSWER. Over the canvas's waiter cap the server refuses to park
+   *     another waiter; that is a routing outcome (back off to the plain read),
+   *     not a crash — the same reasoning as postWithConflict / postWithRefusal.
+   *
+   * Everything else still goes through assertOk, so a 401 keeps its reconnect
+   * message and a 5xx still fails loudly.
+   */
+  async getLongPoll<T, R>(
+    path: string,
+    timeoutMs: number
+  ): Promise<{ data?: T; unsupported?: true; throttled?: R }> {
+    const res = await this.safeFetch(path, { headers: this.authHeaders() }, timeoutMs);
+    if (res.status === 404) return { unsupported: true };
+    if (res.status === 429) {
+      if ((res.headers.get("content-type") ?? "").includes("json")) {
+        return { throttled: (await res.json()) as R };
+      }
+      return { throttled: { error: "too_many_waiters", message: await res.text() } as R };
+    }
+    await this.assertOk("GET", path, res);
+    // A 200 that isn't JSON is the SPA catch-all: the route does not exist here.
+    if (!(res.headers.get("content-type") ?? "").includes("json")) return { unsupported: true };
+    try {
+      return { data: (await res.json()) as T };
+    } catch {
+      return { unsupported: true };
     }
   }
 

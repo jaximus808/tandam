@@ -25,6 +25,7 @@ const EXPECTED_FACADE = [
   "agent_register",
   "context_get",
   "queue_next",
+  "queue_wait",
   "task_find",
   "task_get",
   "task_claim",
@@ -38,10 +39,10 @@ const EXPECTED_FACADE = [
   "board_status",
 ];
 
-test("default manifest is exactly the 15-tool intent facade", () => {
+test("default manifest is exactly the 16-tool intent facade", () => {
   const names = manifestFor(false).map((t) => t.name);
   assert.deepEqual(names, EXPECTED_FACADE);
-  assert.equal(names.length, 15);
+  assert.equal(names.length, 16);
 });
 
 test("TANDEM_FULL_TOOLS adds the CRUD surface without dropping or duplicating", () => {
@@ -137,7 +138,16 @@ test("every facade tool but the connector advertises the session handle", () => 
 
 test("read-only facade tools are annotated read-only", () => {
   const byName = new Map(FACADE_TOOLS.map((t) => [t.name, t]));
-  for (const n of ["context_get", "queue_next", "task_find", "task_get", "board_status"]) {
+  for (const n of [
+    "context_get",
+    "queue_next",
+    // A long poll is still a READ — annotated so a connector can auto-approve
+    // the one call an agent makes instead of stopping (TDM-149).
+    "queue_wait",
+    "task_find",
+    "task_get",
+    "board_status",
+  ]) {
     assert.equal(byName.get(n)!.annotations.readOnlyHint, true, `${n} is a read`);
   }
   for (const n of [

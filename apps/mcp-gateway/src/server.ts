@@ -51,9 +51,11 @@ export const SERVER_INSTRUCTIONS =
   "on a 'peer' canvas a REVIEWER agent may approve a task a DIFFERENT agent proposed " +
   "(task_approve) — read the work first, epics stay human-only, and approving everything just " +
   "makes you a slower 'auto'. " +
+  "WAITING for an approval: never end your turn — call queue_wait, which returns when work is " +
+  "approved ('timeout' means nothing yet, not an error: call it again). " +
   "ORCHESTRATOR (dispatching to subagents): propose the epic, then WAIT for the human's approval " +
-  "before dispatching — the approved board queue is the go signal, not your own plan; work must " +
-  "exist, approved, on the board before you dispatch it. Dispatch ONLY tasks queue_next returns " +
+  "before dispatching (queue_wait) — the approved board queue is the go signal, not your own " +
+  "plan. Dispatch ONLY tasks queue_next returns " +
   "with a `handoff` block, one subagent per task, and pass the canvas CODE, never your `session` " +
   "handle. You claim nothing; the workers claim their own.";
 

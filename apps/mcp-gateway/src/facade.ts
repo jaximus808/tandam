@@ -5,8 +5,8 @@
  * a time. That's a fine machine interface and a bad agent interface: it costs a
  * large slice of the context window before the session does anything, and it
  * leaves the model to invent the workflow. This file replaces it as the DEFAULT
- * manifest with 12 tools shaped like the things an agent session actually wants
- * to do, in the order it wants to do them:
+ * manifest with a small set of tools shaped like the things an agent session
+ * actually wants to do, in the order it wants to do them:
  *
  *     canvas_connect (+ role: register) → context_get → queue_next → task_get
  *              → task_claim → (work, task_progress) → doc_write → task_complete
@@ -14,6 +14,12 @@
  * …or, with subagents, the same queue forks at queue_next: every ready task
  * comes back with a `handoff` block (TDM-62) the orchestrator pastes into one
  * subagent per task. It dispatches; the workers claim. See buildHandoff.
+ *
+ * And where that flow used to STOP — nothing approved yet, so the session ends
+ * its turn and waits for a human to prompt it again — there is now queue_wait
+ * (TDM-149): one call that returns when work is approved. It is the same queue,
+ * with the same handoffs; the only difference is that the waiting happens on the
+ * server, where an agent with no sleep can actually do it.
  *
  * agent_register is here too, but only as the SECOND chance: identity is meant
  * to be minted by canvas_connect's `role` argument (TDM-61), because a separate
@@ -37,7 +43,14 @@
  */
 
 import type { Gateway } from "./gateway.js";
-import { RAW_TOOL_BY_NAME, adoptCarriedSession, handleTool, type RawTool } from "./tools.js";
+import {
+  RAW_TOOL_BY_NAME,
+  adoptCarriedSession,
+  handleTool,
+  projectTaskRows,
+  type RawTaskAction,
+  type RawTool,
+} from "./tools.js";
 import {
   alreadyFinishedMessage,
   fenceRejectionMessage,
@@ -723,6 +736,137 @@ function buildHandoff(
   };
 }
 
+/**
+ * Turn raw ready-queue rows into DISPATCH-READY rows: a `handoff` on everything
+ * claimable, a tap-out annotation on anything this session already raced for and
+ * lost. Shared by queue_next and queue_wait (TDM-149) — a task handed over by the
+ * long poll must be the same object, with the same handoff, as one read from the
+ * queue, or "wait then dispatch" and "read then dispatch" quietly diverge.
+ *
+ * ANTI-LOOP, the queue half (TDM-99). A task THIS session was told to let go of
+ * must not be offered back to it as fresh work — that round trip (queue → claim →
+ * lose → queue) is the loop the tap-out contract exists to break.
+ *
+ * Annotated rather than hidden: a vanishing task is worse than a marked one — the
+ * session (and the human reading its transcript) can still see the work exists and
+ * who holds it. What it does NOT get is a `handoff`, because a handoff is a
+ * dispatch instruction and dispatching a task you just lost is the loop with extra
+ * steps.
+ *
+ * And this is the SELF-HEALING path: if the server now lists the task as ready
+ * with NO holder, the winner's claim is over (release clears claimed_by), so the
+ * loss is stale and gets forgotten right here — the task comes back with a
+ * handoff, claimable again.
+ */
+function decorateReadyQueue(
+  gateway: Gateway,
+  tasks: unknown[],
+  limit: number
+): { shown: Array<Record<string, unknown>>; lostByYou: Array<Record<string, unknown>> } {
+  const session = gateway.getSession();
+  const lostByYou: Array<Record<string, unknown>> = [];
+  const shown = tasks.slice(0, Math.max(1, limit)).map((t) => {
+    const row = (t ?? {}) as Record<string, unknown>;
+    const id = typeof row.id === "string" ? row.id : undefined;
+    const ticketId = typeof row.ticketId === "string" ? row.ticketId : undefined;
+    const loss = findAnyLoss(gateway, [id, ticketId]);
+    if (loss) {
+      const holder = typeof row.claimedBy === "string" ? row.claimedBy : undefined;
+      if (!holder) {
+        // Ready and unheld: proof the claim that beat us is gone.
+        forgetLoss(gateway, id, ticketId);
+      } else {
+        const marked = {
+          ...row,
+          lostByYou: true,
+          ...(loss.holder ? { lostTo: loss.holder } : {}),
+          _tapOut:
+            `You already lost this task to "${loss.holder ?? holder}" — it is NOT yours to ` +
+            `claim or dispatch. No handoff is attached on purpose. Take a different task.`,
+        };
+        lostByYou.push({ id, ...(ticketId ? { ticketId } : {}) });
+        return marked;
+      }
+    }
+    return { ...row, handoff: buildHandoff(row, session.canvasCode, session.agentId) };
+  });
+  return { shown, lostByYou };
+}
+
+/** The `_lostByYou` explanation, when any row came back marked. */
+function lostByYouNote(count: number): string {
+  return (
+    `${count} task(s) in this list are marked lostByYou — you already raced for them and lost, ` +
+    `so they carry no handoff and you must not claim them again. If every task is marked, there ` +
+    `is nothing here for you: report that instead of re-claiming.`
+  );
+}
+
+// ── The queue long poll (TDM-149, over the API's TDM-148) ────────────────────
+
+/** The API's one response shape for GET /api/canvas/queue/wait. */
+type QueueWaitBody = {
+  type?: string;
+  /** "ready" | "timeout" — the single field to branch on; both arrive as 200. */
+  status?: string;
+  /** Byte-identical to GET /api/canvas/actions, so the queue projection applies. */
+  actions?: RawTaskAction[];
+  count?: number;
+  waitedMs?: number;
+  timeoutSeconds?: number;
+  _hint?: string;
+};
+
+/**
+ * Wait bounds, mirrored from the API (queue_wait.go) so a bad number is fixed
+ * HERE rather than spent on a round trip that comes back 400. The server clamps
+ * identically, and its `timeoutSeconds` is what the response reports back.
+ */
+const WAIT_MIN_SECONDS = 1;
+const WAIT_MAX_SECONDS = 60;
+const WAIT_DEFAULT_SECONDS = 25;
+
+/**
+ * How much longer the CLIENT waits than the server. The server answers at
+ * `timeoutSeconds`; this covers the response's own trip back plus any proxy
+ * hop, so the server's answer always beats the client's deadline. Getting this
+ * backwards is the bug that makes the tool fail exactly when it is working.
+ */
+const WAIT_CLIENT_SLACK_MS = 20_000;
+
+function clampWaitTimeout(raw: unknown): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return WAIT_DEFAULT_SECONDS;
+  return Math.min(WAIT_MAX_SECONDS, Math.max(WAIT_MIN_SECONDS, Math.round(n)));
+}
+
+/** `Retry-After`-ish hint out of the API's 429 body, when it carried one. */
+function readRetryAfter(body: Record<string, unknown>): number | undefined {
+  const n = Number(body.retryAfterSeconds);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+/** What to do the moment approved work comes back — the same on every path. */
+const READY_NEXT =
+  "Approved work is ready NOW. Working alone: task_get one for the brief, task_claim it, then " +
+  "work it. Dispatching: spawn one subagent per task and paste that task's `handoff` in verbatim " +
+  "— it is already composed. Do not wait again while work is sitting here unclaimed.";
+
+/** The dispatch-or-claim instruction that rides on any non-empty ready queue. */
+function dispatchNote(agentId?: string): string {
+  return (
+    "If you have subagents, dispatch — do not claim these yourself. Spawn one subagent per task " +
+    "and paste that task's `handoff` into it verbatim; each worker registers under you and claims " +
+    "its own task. Working alone? Pick ONE, task_get it, task_claim it, then work. Either way " +
+    "your `session` handle stays with you — the canvas CODE in the handoff is what travels." +
+    (agentId
+      ? ""
+      : " You are not registered, so the handoffs carry a placeholder parent: reconnect with " +
+        'canvas_connect role "planner" and call queue_next again so your workers show up under ' +
+        "you on the board.")
+  );
+}
+
 /** `## title` + blank line + body, when a title was given. */
 function composeMarkdown(title: unknown, body: unknown): string {
   const t = typeof title === "string" ? title.trim() : "";
@@ -737,6 +881,7 @@ const FACADE_NAMES = new Set([
   "agent_register",
   "context_get",
   "queue_next",
+  "queue_wait",
   "task_find",
   "task_get",
   "task_claim",
@@ -813,47 +958,10 @@ export async function handleFacadeTool(
       const tasks = listed.tasks ?? [];
       const session = gateway.getSession();
 
-      // ANTI-LOOP, the queue half (TDM-99). A task THIS session was told to let
-      // go of must not be offered back to it as fresh work — that round trip
-      // (queue_next → claim → lose → queue_next) is the loop the tap-out contract
-      // exists to break, and the ready queue is where it closes.
-      //
-      // Annotated rather than hidden: a vanishing task is worse than a marked
-      // one — the session (and the human reading its transcript) can still see
-      // the work exists and who holds it. What it does NOT get is a `handoff`,
-      // because a handoff is a dispatch instruction and dispatching a task you
-      // just lost is the loop with extra steps.
-      //
-      // And this is the SELF-HEALING path: if the server now lists the task as
-      // ready with NO holder, the winner's claim is over (release clears
-      // claimed_by), so the loss is stale and gets forgotten right here — the
-      // task comes back with a handoff, claimable again.
-      const lostByYou: Array<Record<string, unknown>> = [];
-      const shown = tasks.slice(0, Math.max(1, limit)).map((t) => {
-        const row = (t ?? {}) as Record<string, unknown>;
-        const id = typeof row.id === "string" ? row.id : undefined;
-        const ticketId = typeof row.ticketId === "string" ? row.ticketId : undefined;
-        const loss = findAnyLoss(gateway, [id, ticketId]);
-        if (loss) {
-          const holder = typeof row.claimedBy === "string" ? row.claimedBy : undefined;
-          if (!holder) {
-            // Ready and unheld: proof the claim that beat us is gone.
-            forgetLoss(gateway, id, ticketId);
-          } else {
-            const marked = {
-              ...row,
-              lostByYou: true,
-              ...(loss.holder ? { lostTo: loss.holder } : {}),
-              _tapOut:
-                `You already lost this task to "${loss.holder ?? holder}" — it is NOT yours to ` +
-                `claim or dispatch. No handoff is attached on purpose. Take a different task.`,
-            };
-            lostByYou.push({ id, ...(ticketId ? { ticketId } : {}) });
-            return marked;
-          }
-        }
-        return { ...row, handoff: buildHandoff(row, session.canvasCode, session.agentId) };
-      });
+      // Handoffs on the claimable rows, tap-outs on anything already lost.
+      // Shared with queue_wait so a waited-for task is the same object as a
+      // read-for one — see decorateReadyQueue.
+      const { shown, lostByYou } = decorateReadyQueue(gateway, tasks, limit);
       // An EMPTY queue is where the surface says who may open the approval gate,
       // and that answer is per-canvas (TDM-146): on strict|epic|auto it is the
       // human's, full stop; on 'peer' a reviewer agent is also a way through, and
@@ -879,31 +987,135 @@ export async function handleFacadeTool(
       return {
         tasks: shown,
         ...(tasks.length > limit ? { truncated: tasks.length - limit } : {}),
-        ...(lostByYou.length > 0
-          ? {
-              lostByYou,
-              _lostByYou:
-                `${lostByYou.length} task(s) in this list are marked lostByYou — you already ` +
-                `raced for them and lost, so they carry no handoff and you must not claim them ` +
-                `again. If every task is marked, there is nothing here for you: report that ` +
-                `instead of re-claiming.`,
-            }
-          : {}),
+        ...(lostByYou.length > 0 ? { lostByYou, _lostByYou: lostByYouNote(lostByYou.length) } : {}),
         ...(shown.length > 0
-          ? {
-              _dispatch:
-                "If you have subagents, dispatch — do not claim these yourself. Spawn one " +
-                "subagent per task and paste that task's `handoff` into it verbatim; each " +
-                "worker registers under you and claims its own task. Working alone? Pick ONE, " +
-                "task_get it, task_claim it, then work. Either way your `session` handle stays " +
-                "with you — the canvas CODE in the handoff is what travels." +
-                (session.agentId
-                  ? ""
-                  : " You are not registered, so the handoffs carry a placeholder parent: " +
-                    'reconnect with canvas_connect role "planner" and call queue_next again ' +
-                    "so your workers show up under you on the board."),
-            }
+          ? { _dispatch: dispatchNote(session.agentId) }
           : { _next: emptyQueueNext }),
+      };
+    }
+
+    // ── queue_wait: the call you make INSTEAD of ending your turn (TDM-149) ────
+    //
+    // THE FAILURE THIS FIXES, precisely. An MCP agent has no sleep and no
+    // blocking call. Told to "poll queue_next on a backing-off interval" it does
+    // the only thing it can — it ends its turn — and the human has to prompt it a
+    // second time to notice an approval that already landed. That happened on
+    // this project on 2026-07-31. The waiting therefore lives on the SERVER
+    // (TDM-148), and this is the one call that reaches it.
+    //
+    // So the response TEXT is as load-bearing as the plumbing, and it is written
+    // against exactly one decision the model makes: end the turn, or call again?
+    //   - "ready"   → the work, dispatch-ready, with handoffs already attached.
+    //   - "timeout" → NOT a failure. It says so, in those words, and says call
+    //                 again. A timeout that reads like an error trains the model
+    //                 out of the only tool that keeps it alive.
+    //   - "busy"    → the canvas is at its waiter cap; fall back to the plain read
+    //                 (already done here) rather than hammering the wait.
+    //   - "unsupported" → the API predates the long poll; degrade to a plain read
+    //                 rather than throwing at an agent that only wanted to wait.
+    case "queue_wait": {
+      const limit = Number.isFinite(Number(args.limit)) ? Number(args.limit) : 10;
+      const timeoutSeconds = clampWaitTimeout(args.timeoutSeconds);
+      const epicId = typeof args.epicId === "string" ? args.epicId.trim() : "";
+
+      const params = new URLSearchParams({
+        timeout: String(timeoutSeconds),
+        // Same default as queue_next: an agent waits on the AGENT queue, so a
+        // human's todo list never wakes a worker.
+        assignee: "agent",
+      });
+      if (epicId) params.set("epicId", epicId);
+
+      const res = await gateway.getLongPoll<QueueWaitBody, Record<string, unknown>>(
+        `/api/canvas/queue/wait?${params.toString()}`,
+        // The CLIENT deadline, deliberately above the server's own: the server
+        // answers at `timeoutSeconds` (clamped to 60 on its side too), and this
+        // has to outlast that answer plus the round trip, or the wait would fail
+        // exactly when it was working. See Gateway.getLongPoll.
+        timeoutSeconds * 1000 + WAIT_CLIENT_SLACK_MS
+      );
+
+      // An API older than this gateway (deployed gateway, un-updated API), or a
+      // canvas at its waiter cap. Both degrade the same way — read the queue the
+      // way queue_next does — and only the wording differs.
+      if (res.unsupported || res.throttled) {
+        const fallback = (await handleFacadeTool(gateway, "queue_next", {
+          ...(epicId ? { epicId } : {}),
+          limit,
+        })) as { tasks?: unknown[]; _next?: string; _dispatch?: string };
+        const found = fallback.tasks ?? [];
+        const retryAfter = res.throttled ? readRetryAfter(res.throttled) : undefined;
+        return {
+          ...fallback,
+          status: found.length > 0 ? "ready" : res.throttled ? "busy" : "unsupported",
+          count: found.length,
+          waited: false,
+          _next:
+            found.length > 0
+              ? READY_NEXT
+              : res.throttled
+                ? `This canvas is at its cap for agents waiting on the queue, so this call did ` +
+                  `NOT wait — it read the queue instead, and nothing is approved yet. Not an ` +
+                  `error. Call queue_wait once more (a waiter slot frees as other agents are ` +
+                  `handed work${retryAfter ? `; the server suggests ~${retryAfter}s` : ""}); if ` +
+                  `it comes back "busy" again, say so to the human rather than looping.`
+                : `This Tandem API predates the queue long poll, so this call could not wait — ` +
+                  `it read the queue instead, and nothing is approved yet. Not an error, and ` +
+                  `nothing you can fix from here. Tell the human the API needs updating for ` +
+                  `waiting to work, and meanwhile treat queue_wait as queue_next. ` +
+                  (fallback._next ?? ""),
+        };
+      }
+
+      const body = res.data ?? ({} as QueueWaitBody);
+      const waitedMs = typeof body.waitedMs === "number" ? body.waitedMs : undefined;
+      const effectiveTimeout =
+        typeof body.timeoutSeconds === "number" ? body.timeoutSeconds : timeoutSeconds;
+
+      // TIMEOUT — the normal, expected, cheap answer. Everything about this
+      // branch exists to stop it reading as a failure.
+      if (body.status !== "ready") {
+        return {
+          status: "timeout",
+          tasks: [],
+          count: 0,
+          waited: true,
+          waitedMs,
+          timeoutSeconds: effectiveTimeout,
+          _next:
+            `Nothing has been approved yet — this is NOT an error and NOT a failure. It is the ` +
+            `normal answer to "I waited ${effectiveTimeout}s and the human hasn't approved ` +
+            `anything yet". You were parked on the server the whole time, not polling, and it ` +
+            `cost one call. DO NOT end your turn and DO NOT report a failure: call queue_wait ` +
+            `AGAIN, right now, and keep doing that until it answers status "ready" (or you have ` +
+            `waited long enough that telling the human is the honest thing to do).`,
+        };
+      }
+
+      // READY — project the actions with the SAME projection queue_next uses, then
+      // attach the SAME handoffs, so the next step is dispatch with nothing to
+      // compose.
+      const rows = await projectTaskRows(gateway, body.actions, epicId || undefined);
+      const { shown, lostByYou } = decorateReadyQueue(gateway, rows, limit);
+      const session = gateway.getSession();
+      // Every row lost by this session is the one way "ready" can still leave the
+      // caller with nothing to do — say so instead of handing back an empty-ish list.
+      const claimable = shown.filter((t) => t.lostByYou !== true);
+      return {
+        status: "ready",
+        tasks: shown,
+        count: shown.length,
+        waited: true,
+        waitedMs,
+        timeoutSeconds: effectiveTimeout,
+        ...(rows.length > limit ? { truncated: rows.length - limit } : {}),
+        ...(lostByYou.length > 0 ? { lostByYou, _lostByYou: lostByYouNote(lostByYou.length) } : {}),
+        ...(claimable.length > 0 ? { _dispatch: dispatchNote(session.agentId) } : {}),
+        _next:
+          claimable.length > 0
+            ? READY_NEXT
+            : `The wait returned work, but every task in it is one you already raced for and ` +
+              `lost — none of it is yours. Call queue_wait again rather than re-claiming.`,
       };
     }
 
@@ -1458,13 +1670,14 @@ export async function handleFacadeTool(
         url: canvasBlock(gateway).url,
         _next:
           epicApproval +
-          "NOW LISTEN FOR " +
-          "THAT APPROVAL instead of ending your turn: unless the user told you otherwise, poll " +
-          "queue_next with this `epicId` on a backing-off interval (start ~15s, double to a ~2min " +
-          "cap) and the moment tasks come back approved, work them — with subagents, dispatch one " +
-          "per task using the `handoff` blocks queue_next returns. The human approving on the " +
-          "board IS the go signal; they should not have to prompt you again. Add more tasks to " +
-          "the batch later with task_propose and this `epicId`.",
+          "NOW LISTEN FOR THAT APPROVAL instead of ending your turn — and you do that with ONE " +
+          "call, not a loop: queue_wait with this `epicId`. It parks on the server and returns " +
+          "the moment the tasks are approved. If it answers status 'timeout', nothing was " +
+          "approved yet — that is not an error, so call queue_wait again, and keep doing that " +
+          "until it answers 'ready'. Then work them — with subagents, dispatch one per task " +
+          "using the `handoff` blocks it hands back. The human approving on the board IS the go " +
+          "signal; they should not have to prompt you again. Add more tasks to the batch later " +
+          "with task_propose and this `epicId`.",
       };
     }
 
@@ -1664,6 +1877,50 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
       properties: {
         limit: { type: "number", description: "Max tasks to return. Default 10." },
         epicId: { type: "string", description: "Only ready tasks under this epic." },
+      },
+    },
+  },
+  {
+    name: "queue_wait",
+    description:
+      SESSION_CONVENTION +
+      " " +
+      "WAIT HERE INSTEAD OF ENDING YOUR TURN. One call that RETURNS THE MOMENT approved work " +
+      "exists — you are parked on the server, not polling, and you are woken the instant a human " +
+      "(or a peer reviewer) approves something. This is the tool for every 'now we wait for " +
+      "approval' moment: you proposed an epic, you finished a task and there may be more coming, " +
+      "the queue is empty but work is expected. Do NOT stop and ask the human to prompt you " +
+      "again — the approval on the board IS the go signal, and this call is how you hear it. " +
+      "ANSWERS, always one of these, always on `status`: " +
+      "'ready' — approved tasks, each already carrying the same paste-ready `handoff` queue_next " +
+      "gives you, so the next step is claim (working alone) or dispatch (with subagents), with " +
+      "nothing to compose. " +
+      "'timeout' — nothing was approved inside the window. THIS IS NOT AN ERROR AND NOT A " +
+      "FAILURE: it means 'nothing yet', it cost one call, and the correct response is to call " +
+      "queue_wait AGAIN immediately. Keep going until you get 'ready', or until enough time has " +
+      "passed that telling the human is honest. " +
+      "'busy' / 'unsupported' — this canvas is at its waiter cap, or the API is too old to wait; " +
+      "the call read the queue for you instead, so treat it like queue_next and try again. " +
+      "Default wait is 25s, up to 60 (`timeoutSeconds`). Narrow to one batch with `epicId` — " +
+      "e.g. the id epic_propose just returned. To read the queue right now WITHOUT waiting, use " +
+      "queue_next.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        timeoutSeconds: {
+          type: "number",
+          description:
+            "How long to wait for work, in seconds. Default 25, clamped to 1–60. Longer is " +
+            "fine — a long wait costs nothing while it is parked, and a 'timeout' answer just " +
+            "means call again.",
+        },
+        epicId: {
+          type: "string",
+          description:
+            "Only wake for ready tasks under this epic — e.g. the `epicId` epic_propose returned, " +
+            "when you are waiting on approval of a batch you just proposed.",
+        },
+        limit: { type: "number", description: "Max tasks to return. Default 10." },
       },
     },
   },
@@ -1939,9 +2196,9 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
       "it yourself — that gate is the human's on every canvas, epics included, and the server " +
       "refuses agent approval of an epic even where it allows peer review of a task (there the " +
       "cascade is off and each task is approved on its own; see task_approve). " +
-      "After proposing, do not end your turn: LISTEN for the approval by polling queue_next with " +
-      "the returned `epicId` on a backing-off interval, so the human's approval on the board — " +
-      "not another prompt — is what starts the work. " +
+      "After proposing, do not end your turn: LISTEN for the approval with queue_wait and the " +
+      "returned `epicId` — one call that returns when the work is approved — so the human's " +
+      "approval on the board, not another prompt, is what starts the work. " +
       "Returns `epicId`: pass it as `epicId` on later task_propose calls to add work to the same " +
       "batch (once the epic is approved, those tasks are born approved).",
     inputSchema: {
