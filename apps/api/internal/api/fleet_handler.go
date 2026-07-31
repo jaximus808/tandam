@@ -470,6 +470,18 @@ const (
 	// there — the loser changed nothing. The durable record is the task's
 	// payload.contention[] trail, which every state push already carries.
 	activityContended = "contended"
+	// activityReworked: a REVIEWER sent finished work back (done → approved with
+	// a reason, TDM-154). Distinct from `requeued`, which is a human rescuing a
+	// FAILED task: this one is a judgement on work that reported success, and it
+	// is the fact a watcher most wants to see land live. The ACTOR is the
+	// reviewer (server-derived), not the worker whose task moved.
+	//
+	// Live-only, like claim_expired and contended: deriveActivity reads history
+	// off the row's own columns and a bounce leaves no column behind (the rewind
+	// clears the claim and the result). The durable record is the task's
+	// payload.audit[] entry, which carries the reviewer, the states and the
+	// verbatim reason — and every state push already carries the payload.
+	activityReworked = "reworked"
 )
 
 // activityEvent is ONE fleet fact, and it is deliberately the SAME struct on
@@ -673,7 +685,7 @@ func lifecycleRank(verb string) int {
 		return 0
 	case activityApproved:
 		return 1
-	case activityRejected, activityRequeued, activityReleased:
+	case activityRejected, activityRequeued, activityReleased, activityReworked:
 		return 2
 	case activityClaimed, activityClaimExpired:
 		return 3

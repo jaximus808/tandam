@@ -138,6 +138,134 @@ func peerApprovalRefusal(approver string, target *store.Action) *peerRefusal {
 	return nil
 }
 
+// ── Rework: the reviewer's "no" (TDM-154) ────────────────────────────────────
+//
+// Peer approval let a reviewer say YES. This is the other half: a reviewer agent
+// may send FINISHED work back — done → approved, with a required reason — so the
+// author can revise it. It is deliberately a BOUNCE and not a kill.
+//
+// WHY THIS AND NOT REJECT. RejectAction (action_handler.go) stays human-only,
+// and the reasoning there is right: rejection destroys a proposal. Rework
+// destroys nothing — the task goes back to the ready queue it already passed the
+// gate to enter, and every state it lands in is one a human can undo with a
+// single move. That reversibility is exactly the class 'peer' already permits,
+// which is why this door opens on 'peer' and nowhere else.
+//
+// THE NON-SELF RULE, again from server-derived identities only. For approval the
+// pair is (approver, stored proposer). Here it is (reviewer, stored COMPLETER) —
+// the claimant that finished the work, off claimed_by, which the claim path
+// stamps. A reviewer that IS the completer is reviewing itself, and an agent
+// bouncing its own finished task is just a slower reopen. The reason field is
+// never an identity: as everywhere in this file, no request body buys a decision.
+//
+// FAIL CLOSED ON AN UNKNOWN COMPLETER, the same discipline as
+// peer_proposer_unknown: claimed_by may be absent (a row that predates the claim
+// record) or the generic "agent" fallback the claim path writes when no name was
+// asserted. Neither can prove non-self, so neither is allowed to.
+const (
+	// reworkGenericClaimant is what claimAction stamps when a caller claims with
+	// no asserted name. It names no one, so it cannot be compared for non-self.
+	reworkGenericClaimant = "agent"
+	// reworkMinReason is a floor, not a quality bar: the point is that "no" costs
+	// the reviewer a sentence. The real quality gate is a human reading the board.
+	reworkMinReason = 1
+)
+
+// sameAgentIdentity compares a server-derived author ("agent:<name>") with a
+// claimed_by value. They are stored in two different spellings — provenance
+// prefixes, claimed_by holds the bare registered name — so the comparison is on
+// the name, with the prefix tolerated on either side.
+func sameAgentIdentity(author, claimant string) bool {
+	a := strings.TrimPrefix(author, authorAgentPrefix)
+	c := strings.TrimPrefix(claimant, authorAgentPrefix)
+	return a != "" && a == c
+}
+
+// peerReworkRefusal is the rework rule as a PURE function, the counterpart of
+// peerApprovalRefusal and testable the same way. It assumes the canvas is
+// already known to be on 'peer' and the task already known to be 'done' (the
+// handler checks both — one needs the store, the other is the move matrix).
+//
+// `reviewer` is AuthorFromCtx for this request; `target` is the stored row.
+// Returns nil when the bounce may proceed.
+func peerReworkRefusal(reviewer string, target *store.Action) *peerRefusal {
+	if !authorIsAgent(reviewer) {
+		return &peerRefusal{
+			code: "rework_identity_required",
+			message: "sending work back for rework requires an agent identity the server can see — connect through the MCP gateway (canvas_connect registers you and sends the identity header) " +
+				"so the bounce can be attributed; an anonymous canvas token cannot review",
+		}
+	}
+	if target.Type != "task" {
+		return &peerRefusal{
+			code:    "rework_task_only",
+			message: "only a task can be sent back for rework: an epic is the batch, not the work",
+			extra:   map[string]string{"actionType": target.Type},
+		}
+	}
+	completer := ""
+	if target.ClaimedBy != nil {
+		completer = strings.TrimSpace(*target.ClaimedBy)
+	}
+	if completer == "" || completer == reworkGenericClaimant {
+		// Fail CLOSED: with no attributable worker on the row there is no way to
+		// prove the reviewer is a different agent, and "we couldn't tell" must
+		// never resolve to "allowed" — same rule as peer_proposer_unknown.
+		return &peerRefusal{
+			code: "rework_completer_unknown",
+			message: "this task records no attributable worker (claimed_by is empty or the generic \"agent\"), so the server cannot prove the reviewer is a different agent than the one that finished it — " +
+				"a human sends this one back (POST /api/canvas/actions/{id}/move with {\"to\":\"approved\"})",
+		}
+	}
+	if sameAgentIdentity(reviewer, completer) {
+		return &peerRefusal{
+			code: "rework_self_review",
+			message: "self-review is refused: work is sent back by a DIFFERENT agent than the one that finished it, and this reviewer resolves to the worker (" +
+				completer + "). Hand it to your reviewer agent, or ask a human.",
+			extra: map[string]string{"reviewer": reviewer, "completedBy": completer},
+		}
+	}
+	return nil
+}
+
+// authorizePeerRework is the store-backed half of the rework rule, mirroring
+// authorizePeerApproval: policy check, then the pure rule, then the registered-
+// agent floor. It takes the ALREADY-LOADED target because the handler needs the
+// row anyway (to check it is 'done'), so the gate costs no second read here.
+//
+// Every failure path fails CLOSED, and a canvas that is not on 'peer' is told
+// plainly that the human still owns this move — there is no legacy behaviour to
+// preserve byte-for-byte, because before TDM-154 the endpoint did not exist.
+func (h *Handler) authorizePeerRework(w http.ResponseWriter, r *http.Request, target *store.Action) bool {
+	ctx := r.Context()
+	canvasID := CanvasIDFromCtx(ctx)
+	canvas, err := h.store.GetCanvasByID(ctx, canvasID)
+	if err != nil || canvas.ApprovalPolicy != policyPeer {
+		writeCodedError(w, http.StatusForbidden, "rework_policy_required",
+			"an agent can only send work back for rework on a canvas whose owner set approval_policy to 'peer' — "+
+				"on this canvas a human reopens finished work (POST /api/canvas/actions/{id}/move with {\"to\":\"approved\"})", nil)
+		return false
+	}
+	reviewer := ""
+	if a := AuthorFromCtx(ctx); a != nil {
+		reviewer = *a
+	}
+	if refusal := peerReworkRefusal(reviewer, target); refusal != nil {
+		writeCodedError(w, http.StatusForbidden, refusal.code, refusal.message, refusal.extra)
+		return false
+	}
+	// Same floor as peer approval: the asserted identity must name an agent that
+	// registered on THIS canvas, so a bounce is always attributable to a row on
+	// the fleet view rather than to a string nobody has ever seen.
+	if !h.approverIsRegisteredAgent(ctx, canvasID, reviewer) {
+		writeCodedError(w, http.StatusForbidden, "rework_agent_unregistered",
+			"sending work back for rework requires a registered agent on this canvas: register first (canvas_connect / agent_register with a name) and review under that identity",
+			map[string]string{"reviewer": reviewer})
+		return false
+	}
+	return true
+}
+
 // authorizePeerApproval is the store-backed half of the rule: it decides whether
 // this NON-HUMAN caller may approve the action named by {id}. Writes the refusal
 // itself and returns false when it must not.

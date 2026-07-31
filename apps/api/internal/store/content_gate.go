@@ -91,6 +91,14 @@ type ContentAudit struct {
 	// Summary is a compact old→new hint per changed field, e.g.
 	// `title: "Fix the login bug" → "Fix the login bug and rm -rf /"`.
 	Summary string `json:"summary"`
+	// Note is the mover's own words, VERBATIM and unexcerpted, on the entries
+	// that carry one (state moves — see NewStateAudit). Summary quotes it at
+	// auditExcerpt runes, which is right for a glance and wrong for the one case
+	// where the note IS the payload: a reviewer sending finished work back for
+	// rework (TDM-154) writes the reason the author has to act on, and truncating
+	// it at 80 characters would throw away the instruction. Empty (and omitted)
+	// on content entries, which have no note.
+	Note string `json:"note,omitempty"`
 }
 
 // ── State moves (the human board controls, E10) ───────────────────────────────
@@ -136,6 +144,8 @@ func NewStateAudit(actor, from, to, note string, at time.Time) ContentAudit {
 		ToState:   to,
 		Reverted:  false,
 		Summary:   summary,
+		// Verbatim alongside the excerpted summary — see the field comment.
+		Note: strings.TrimSpace(note),
 	}
 }
 

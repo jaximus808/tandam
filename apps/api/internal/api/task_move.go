@@ -124,6 +124,15 @@ var (
 	moveRequeue    = humanMove{"failed", "approved", moveKindRewind, activityRequeued, "re-queue"}
 	moveReopen     = humanMove{"done", "approved", moveKindRewind, activityRequeued, "reopen"}
 	moveReconsider = humanMove{"rejected", "proposed", moveKindRewind, activityProposed, "reconsider"}
+	// moveRework is the REVIEWER's bounce (TDM-154): the same done → approved
+	// rewind as moveReopen, under a different verb and a different door. It is
+	// deliberately NOT in humanMoveTargets — the human board's matrix is
+	// unchanged, and a person reopening a task still gets moveReopen. This one
+	// exists so the agent-facing endpoint reuses rewindTask (and therefore
+	// store.ReopenAction's state-predicated UPDATE, the audit entry, the
+	// queue-ready signal and the broadcasts) without widening the human surface
+	// or the state machine by a single transition.
+	moveRework = humanMove{"done", "approved", moveKindRewind, activityReworked, "send back for rework"}
 )
 
 // humanMoveTargets is the matrix, keyed by the state the card is in. The
@@ -281,6 +290,94 @@ func (h *Handler) MoveAction(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// POST /api/canvas/actions/{id}/rework — the REVIEWER'S "NO" (TDM-154).
+//
+//	{ "reason": "the migration is missing; TDM-40 needs the index too" }
+//
+// A registered agent on a 'peer' canvas sends FINISHED work back: done →
+// approved, the claim and the stale result cleared, the task in the ready queue
+// again for its author to revise. `reason` is REQUIRED — a bounce with no
+// reason is a task that comes back with no instruction, which costs the author
+// a whole run to rediscover what the reviewer already knew. Empty is a 400, not
+// a silent success.
+//
+// WHY IT IS A SEPARATE DOOR AND NOT /move OR /reject:
+//
+//   - not /reject — rejection destroys a proposal and stays human-only
+//     (action_handler.go). This destroys nothing; see peer_approval.go.
+//   - not /move — that endpoint is human-only by surface and its matrix is the
+//     human board's. Reusing it would have meant either widening the human
+//     matrix for an agent's benefit or gating one row of it differently, and
+//     both make the matrix stop meaning what its header says it means.
+//
+// So the state machine gains nothing: this is a second CALLER for the done →
+// approved rewind that store.ReopenAction has always made, behind a gate of its
+// own. Everything downstream — audit entry, queue-ready signal for a parked
+// queue_wait, state broadcast, fleet activity — is rewindTask's, unchanged.
+//
+// 403s are coded (see peer_approval.go): rework_policy_required,
+// rework_identity_required, rework_task_only, rework_completer_unknown,
+// rework_self_review, rework_agent_unregistered.
+func (h *Handler) ReworkAction(w http.ResponseWriter, r *http.Request) {
+	canvasID := CanvasIDFromCtx(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id: expected a task uuid or an existing ticket ref like TDM-21")
+		return
+	}
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	reason := strings.TrimSpace(body.Reason)
+	if len(reason) < reworkMinReason {
+		// The one field this endpoint exists to carry. A 400 rather than a bounce
+		// with an empty reason: the author would get the task back knowing only
+		// that somebody disliked it.
+		writeCodedError(w, http.StatusBadRequest, "rework_reason_required",
+			"reason: say what has to change — sending work back without a reason gives the author no way to revise it", nil)
+		return
+	}
+	if !checkMoveNote(w, reason) {
+		return
+	}
+	current, err := h.store.GetAction(r.Context(), canvasID, id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "action not found")
+		return
+	}
+	// The gate. A signed-in human short-circuits it exactly as on approve: a
+	// person can already make this move from the board (moveReopen), so refusing
+	// them at this door would be theatre — but the reason stays required, because
+	// the author's need for one does not depend on who pressed the button. Every
+	// non-human caller is judged by the 'peer' rework rule.
+	if !callerIsHuman(r.Context()) && !h.authorizePeerRework(w, r, current) {
+		return
+	}
+	// FINISHED work only, and strictly: 'done' is the one state a bounce means
+	// anything from. Deliberately NOT idempotent on 'approved' — a task already
+	// back in the queue answers with its state rather than a 200 and a second
+	// audit entry, so a reviewer re-sending a lost request can see what happened
+	// instead of silently double-bouncing.
+	if current.State != moveRework.from {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "rework_not_finished",
+			"message": fmt.Sprintf("only finished work can be sent back for rework: this task is %q, not %q",
+				current.State, moveRework.from),
+			"state": current.State,
+		})
+		return
+	}
+	// Zero claimant: the reviewer is not the holder, and it must not have to be —
+	// bouncing somebody else's finished work is the entire point, so the claim
+	// fence would refuse exactly the caller this endpoint is for. The non-self
+	// rule above is what stands in its place.
+	h.rewindTask(w, r, moveRework, reason, claimant{})
+}
+
 // startTaskAsHuman is approved → executing for a PERSON: the identical atomic
 // claim an agent makes (so a human and an agent cannot both win one task),
 // minus the presence side effect — see claimTaskAs's `presence` parameter for
@@ -404,9 +501,11 @@ func (h *Handler) rewindTask(w http.ResponseWriter, r *http.Request, move humanM
 	case moveRequeue:
 		action, _, err = h.store.RequeueAction(r.Context(), canvasID, id)
 	default:
-		// reopen (done → approved) and reconsider (rejected → proposed): one
-		// method, predicated on the pair the matrix already validated. It is never
-		// reachable with an arbitrary pair — see humanMoveFor.
+		// reopen (done → approved), rework (the reviewer's bounce, same pair) and
+		// reconsider (rejected → proposed): one method, predicated on a pair the
+		// caller has already validated — the human matrix for the first and last
+		// (humanMoveFor), the explicit 'done' check in ReworkAction for the middle.
+		// It is never reachable with an arbitrary pair from a request body.
 		action, _, err = h.store.ReopenAction(r.Context(), canvasID, id, move.from, move.to)
 	}
 	if err != nil {

@@ -405,6 +405,14 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 			// approve/reject stay the only door into the ready queue. See
 			// task_move.go for the matrix and the whole argument.
 			r.With(ResolveTicketRef(s)).Post("/api/canvas/actions/{id}/move", h.MoveAction)
+			// The REVIEWER's "no" (TDM-154): done → approved with a required
+			// reason, so finished work goes back to its author instead of being
+			// killed. The one board move an AGENT may make that it did not claim
+			// — gated on the 'peer' approval policy and on the reviewer not being
+			// the agent that finished it (peer_approval.go). Rejection stays
+			// human-only; this is the reversible move, which is the class 'peer'
+			// already permits. See task_move.go's ReworkAction.
+			r.With(ResolveTicketRef(s)).Post("/api/canvas/actions/{id}/rework", h.ReworkAction)
 			r.With(ResolveTicketRef(s)).Patch("/api/canvas/actions/{id}", h.UpdateActionState)
 			r.With(ResolveTicketRef(s)).Delete("/api/canvas/actions/{id}", h.DeleteAction)
 
