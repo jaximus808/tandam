@@ -190,6 +190,13 @@ func ExtractRow(snap Snapshot) SnapshotRow {
 // client count. Named here so the extraction and the router agree on the string.
 const GaugeWSClients = "ws_clients"
 
+// GaugeQueueWaiters is how many agents are parked on the queue long poll right
+// now (TDM-148). Published because a wait that is never cleaned up is invisible
+// otherwise: this number rising and never falling is the signature of leaked
+// waiters, and is the difference between noticing that in a graph and noticing it
+// when the process runs out of memory.
+const GaugeQueueWaiters = "queue_waiters"
+
 // Collector scrapes a Registry into a SnapshotSink on an interval, and enforces
 // the retention window.
 type Collector struct {

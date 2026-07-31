@@ -162,10 +162,11 @@ func newTaskEventTask(a *store.Action) taskEventTask {
 // emitTaskEvent enqueues one outbound event for one task.
 //
 // NIL-SAFE BY DESIGN: h.events is nil whenever webhooks aren't wired (every
-// handler test, and any deployment that doesn't construct an Emitter), and this
-// becomes a no-op. Non-task actions are skipped here rather than at each call
-// site — approving an EPIC is not a task entering the queue; its tasks each get
-// their own event from the cascade.
+// handler test, and any deployment that doesn't construct an Emitter), and the
+// EMIT becomes a no-op — the long-poll wake below it does not, since that is a
+// canvas behaviour rather than a webhook one. Non-task actions are skipped here
+// rather than at each call site — approving an EPIC is not a task entering the
+// queue; its tasks each get their own event from the cascade.
 //
 // It is EmitAsync-shaped on purpose: the caller has already persisted the state
 // change and (usually) already written the response. A webhook config read must
@@ -174,7 +175,22 @@ func newTaskEventTask(a *store.Action) taskEventTask {
 // store write returns nil — a rolled-back write that still notified the world
 // is the one failure mode this feature can't recover from.
 func (h *Handler) emitTaskEvent(canvasID uuid.UUID, eventType string, a *store.Action, opts ...func(*taskEvent)) {
-	if h.events == nil || a == nil || a.Type != "task" {
+	if a == nil || a.Type != "task" {
+		return
+	}
+	// THE LONG-POLL WAKE (TDM-148), and it sits ABOVE the h.events nil check on
+	// purpose: waking an agent that is waiting for work is a property of the
+	// canvas, not of whether anyone configured outbound webhooks. Hanging this off
+	// the emitter would mean waiters only ever wake on canvases with webhooks
+	// wired — which is neither of the deployments this runs in.
+	//
+	// This is THE reason the wait endpoint needs no timer against the database:
+	// every approval door in action_handler.go already funnels through here, so
+	// they all signal by construction, and a door added later inherits it.
+	if eventType == webhooks.EventTaskApproved {
+		h.signalQueueReady(canvasID)
+	}
+	if h.events == nil {
 		return
 	}
 	// The event id is minted HERE, not inside the emitter, so the same id can be

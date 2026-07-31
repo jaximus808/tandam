@@ -422,6 +422,15 @@ func (h *Handler) rewindTask(w http.ResponseWriter, r *http.Request, move humanM
 	}
 	h.recordMove(r.Context(), canvasID, action, move, note, moveActor(r))
 	broadcastStateAsync(r.Context(), h.store, h.hub, canvasID)
+	// A rewind that lands in 'approved' put a task back in the READY QUEUE, so
+	// anyone long-polling for work must be told (TDM-148). It deliberately fires
+	// no task.approved webhook — re-queueing is not a second approval, and a fleet
+	// subscribed to that event would re-run work it already picked up — but a
+	// parked waiter is not a subscriber: it is an agent asking "is there work?",
+	// and after a release there is. Cheap when nobody is waiting.
+	if action != nil && action.Type == "task" && action.State == "approved" {
+		h.signalQueueReady(canvasID)
+	}
 	// The fleet verb, with the actor the SERVER derived rather than the "human"
 	// actorFor assumes for these verbs: a rewind on a public canvas may well be
 	// an anonymous viewer, and the feed should say so.

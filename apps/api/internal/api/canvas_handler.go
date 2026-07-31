@@ -57,6 +57,11 @@ type Handler struct {
 	// session can be read, so those endpoints see every caller as anonymous (public
 	// canvases only), which is the safe default for a Handler built without it.
 	authSvc *auth.Service
+	// waiters holds the long-poll waiters parked on GET /api/canvas/queue/wait
+	// (TDM-148). A VALUE, not a pointer, and usable at its zero value, so a
+	// Handler built as a struct literal still has a working registry — and so the
+	// approve paths can signal it without a nil check. See queue_wait.go.
+	waiters queueWaiters
 }
 
 // HandlerOption customizes NewHandler. Optional dependencies go here rather than

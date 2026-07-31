@@ -63,6 +63,11 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 		}
 	}
 	h := NewHandler(s, hub, mapsReg, hOpts...)
+	if metricsReg != nil {
+		// Registered after the Handler exists (unlike ws_clients above, whose
+		// source is the hub): parked long-poll waiters live on the Handler.
+		metricsReg.RegisterGauge(metrics.GaugeQueueWaiters, h.QueueWaiterCount)
+	}
 	wsH := NewWSHandler(s, hub, authSvc, mapsReg)
 	mapsH := NewMapsHandler(mapsReg)
 	authH := NewAuthHandler(s, authSvc, googleVerifier, cookieSecure)
@@ -251,6 +256,17 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 		// One-call connect bundle: briefing + approved queue (+ ?taskId= for one
 		// hydrated task) as AGENTS.md-shaped markdown. See context_handler.go.
 		r.Get("/api/canvas/context", h.GetContext)
+		// THE LONG POLL (TDM-148): blocks server-side until this canvas has
+		// approved work, then returns the same ready queue the plain actions read
+		// does. A read, so it sits with the reads: waiting for work is not a
+		// mutation, and a read-only token may wait exactly as it may look.
+		//
+		// It holds a connection open for up to a minute BY DESIGN, which the Go
+		// server tolerates (no WriteTimeout — see cmd/server/main.go) exactly as it
+		// tolerates the WebSocket hub. Its long latencies land in this route
+		// pattern's own histogram and nowhere else, so they can't smear the rest of
+		// the API's numbers. See queue_wait.go.
+		r.Get("/api/canvas/queue/wait", h.WaitForQueue)
 		r.Get("/api/canvas/pending-edits", h.ListPendingEdits)
 		r.Post("/api/canvas/forms/scaffold", h.ScaffoldForm) // computes a spec; no mutation
 		r.Get("/api/canvas/actions", h.ListActions)
