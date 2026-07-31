@@ -1402,7 +1402,28 @@ export default function App() {
           </span>
         </button>
         <span className="hidden text-ink/20 shrink-0 sm:inline">/</span>
-        <div className="flex items-center gap-2 min-w-0">
+        {/* Canvas identity. This group is the header row's ONLY shrinkable item,
+            so every bit of width pressure in the row lands here — which is why
+            what the header gives up first is decided HERE, explicitly, instead
+            of being whatever falls out of the flexbox:
+              1. "View only" goes first (below xl) — the full-width banner
+                 directly under the header says the same thing at every width,
+                 so the chip is pure redundancy.
+              2. The canvas code goes next (below lg) — it's recoverable from the
+                 URL and from Share, and at ~70px of shrink-0 it was what crushed
+                 the name into a single letter on a narrowed window.
+              3. The name NEVER goes. It only truncates: it's the one thing
+                 telling you which canvas you're looking at.
+            `overflow-hidden` is the guarantee under all of it (TDM-152). Flex
+            shrinks this BOX, not its contents, so without containment the
+            shrink-0 code chip kept its full width, spilled out of the collapsed
+            group and got painted over by the next shrink-0 sibling — the
+            notification bell. Clipped to its own box, nothing in here can reach a
+            sibling at any width, whatever the right-hand cluster grows to.
+            `pl-1 -ml-1` re-opens the 4px that the name button's own `-mx-1`
+            bleeds to the left, so containment doesn't shave its hover highlight;
+            it nets to the exact geometry as before at every breakpoint. */}
+        <div className="flex items-center gap-2 min-w-0 overflow-hidden pl-1 -ml-1">
           <CanvasNameEditor
             name={canvas.name}
             canEdit={!!me && canvas.ownerUserId === me.id}
@@ -1420,15 +1441,18 @@ export default function App() {
               }
             }}
           />
-          <span className="hidden rounded-[3px] border border-ink/10 bg-surface px-1.5 py-px font-code text-[10px] tracking-[0.14em] text-ink/40 shrink-0 sm:inline">
+          {/* Wide windows only (was sm:). Below lg this chip's ~70px is worth
+              more to the canvas name than to a lookup value you can read off the
+              URL or copy from Share — see the collapse order above. */}
+          <span className="hidden rounded-[3px] border border-ink/10 bg-surface px-1.5 py-px font-code text-[10px] tracking-[0.14em] text-ink/40 shrink-0 lg:inline">
             {canvas.code}
           </span>
-          {/* Desktop-only: the full-width view-only banner under the header
-              carries this on phones — the chip's ~70px would tip a 375px
-              header (logo + name + CTA + sign-in) into clipping. */}
+          {/* First thing the header drops (was sm:). The full-width view-only
+              banner under the header renders at EVERY width, so below xl this
+              chip costs the canvas name ~75px and tells you nothing new. */}
           {canvas.yourRole === "read" && (
             <span
-              className="hidden items-center gap-1 rounded-[4px] bg-ink/5 px-1.5 py-px text-[11px] font-medium text-ink/60 shrink-0 sm:inline-flex"
+              className="hidden items-center gap-1 rounded-[4px] bg-ink/5 px-1.5 py-px text-[11px] font-medium text-ink/60 shrink-0 xl:inline-flex"
               title="You have view-only access to this canvas"
             >
               <span className="h-1 w-1 rounded-full bg-ink/35" />
