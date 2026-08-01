@@ -112,10 +112,21 @@ test("epic + tasks is ONE round trip per side, with the new epic's id injected",
   await withRecordedFetch(async (calls) => {
     const res = (await handleFacadeTool(connectedGateway(), "epic_propose", {
       title: "Dark mode rollout",
+      // Real bodies, because the ticket-quality contract (TDM-159) hard-fails a
+      // bodyless ticket before anything is written — a fixture without them
+      // never reaches the round-trip assertion this test exists for.
       tasks: [
-        { title: "Token the palette", body: "CSS vars" },
+        {
+          title: "Token the palette",
+          body: "Replace the hard-coded hexes in apps/web/src/index.css with paper/surface/ink CSS variables. Done when pnpm build passes and no component reads a raw hex.",
+        },
         // An item's own epicId is overridden — this call's point is the new epic.
-        { title: "Convert the chrome", epicId: "some-older-epic", requiresApproval: true },
+        {
+          title: "Convert the chrome",
+          body: "Point the header and sidebar in apps/web/src/components at the new tokens instead of Tailwind literals. Done when both render unchanged in light mode.",
+          epicId: "some-older-epic",
+          requiresApproval: true,
+        },
       ],
     })) as Record<string, unknown>;
 
