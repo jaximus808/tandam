@@ -89,6 +89,13 @@ func (h *Handler) SetCanvasApprovalPolicy(w http.ResponseWriter, r *http.Request
 	}
 	var body struct {
 		ApprovalPolicy string `json:"approvalPolicy"`
+		// RequireCrossModelReview (TDM-155, migration 0042) rides along on the same
+		// owner-only PATCH rather than claiming a route of its own: it is a modifier
+		// on 'peer', meaningless without it, and an owner setting the review posture
+		// is setting one thing. A POINTER so omitting it means "leave as-is" — every
+		// existing caller (the web ShareDialog sends only approvalPolicy) keeps its
+		// exact behaviour, which is what default-OFF has to mean in practice.
+		RequireCrossModelReview *bool `json:"requireCrossModelReview"`
 	}
 	if err := decode(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
@@ -104,9 +111,18 @@ func (h *Handler) SetCanvasApprovalPolicy(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	crossModel := canvas.RequireCrossModelReview
+	if body.RequireCrossModelReview != nil && *body.RequireCrossModelReview != crossModel {
+		if _, err := h.store.SetCanvasCrossModelReview(r.Context(), canvas.ID, *body.RequireCrossModelReview); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		crossModel = *body.RequireCrossModelReview
+	}
 	// Push fresh state so connected boards pick up the new policy live.
 	broadcastState(r.Context(), h.store, h.hub, canvas.ID)
-	writeJSON(w, http.StatusOK, map[string]string{"approvalPolicy": body.ApprovalPolicy})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"approvalPolicy": body.ApprovalPolicy, "requireCrossModelReview": crossModel})
 }
 
 // maxCanvasNameLen caps a canvas name. Names are short human labels rendered in

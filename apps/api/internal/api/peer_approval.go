@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"strings"
 
@@ -263,6 +264,18 @@ func (h *Handler) authorizePeerRework(w http.ResponseWriter, r *http.Request, ta
 			map[string]string{"reviewer": reviewer})
 		return false
 	}
+	// And the cross-model bar, when the owner opted in (TDM-155). The pair here is
+	// (reviewer, COMPLETER) — the same pair peerReworkRefusal just cleared, so the
+	// claimant is non-empty and not the generic fallback by here.
+	completer := ""
+	if target.ClaimedBy != nil {
+		completer = strings.TrimSpace(*target.ClaimedBy)
+	}
+	if refusal := h.enforceCrossModel(ctx, canvas, canvasID, reviewer, completer, "rework",
+		peerReworkSameModelRefusal); refusal != nil {
+		writeCodedError(w, http.StatusForbidden, refusal.code, refusal.message, refusal.extra)
+		return false
+	}
 	return true
 }
 
@@ -315,7 +328,230 @@ func (h *Handler) authorizePeerApproval(w http.ResponseWriter, r *http.Request) 
 			map[string]string{"approver": approver})
 		return false
 	}
+	// LAST, and only when the owner opted in: a different agent is not enough, it
+	// must be a different model (TDM-155). Deliberately after the registered-agent
+	// floor, so a roster error is already refused CLOSED there and never reaches a
+	// check that fails open. AuthoredBy is non-nil by here — peerApprovalRefusal
+	// refuses peer_proposer_unknown above.
+	if refusal := h.enforceCrossModel(ctx, canvas, canvasID, approver, *target.AuthoredBy, "approve",
+		peerSameModelRefusal); refusal != nil {
+		writeCodedError(w, http.StatusForbidden, refusal.code, refusal.message, refusal.extra)
+		return false
+	}
 	return true
+}
+
+// ── Cross-model review: a different agent is not enough (TDM-155) ────────────
+//
+// THE ARGUMENT. 0041's non-self rule asks for a different AGENT. Two agents on
+// the same model are one reviewer wearing two name tags: Opus approving Opus is
+// self-review with extra steps, and the whole case for agent review is that a
+// different model forms a different opinion. Under this flag the peer rule reads
+// "a different agent AND a different model".
+//
+// OPT-IN, DEFAULT OFF. canvases.require_cross_model_review (migration 0042) is
+// false everywhere until an owner sets it, and it is inert on any policy other
+// than 'peer' — it is only ever consulted from the two authorize* functions
+// below, both of which have already established the canvas is on 'peer'. So no
+// existing canvas changes behaviour, which is the same promise 0041 made.
+//
+// IT COVERS BOTH HALVES OF THE REVIEWER'S JOB — approval AND rework — and that
+// was a decision, not a copy-paste. The tempting scope is "approval only": a
+// bounce is reversible, so a same-model bounce lets nothing bad THROUGH. But the
+// flag's meaning is "review on this canvas comes from a different architecture",
+// and a same-model "no" is exactly as much theatre as a same-model "yes" — worse,
+// an ungated bounce is a way for an agent to send a same-model peer's work back
+// indefinitely. A flag that meant one thing for yes and another for no would be
+// the harder thing to explain. The two paths get DISTINCT codes
+// (peer_same_model / rework_same_model) so a client can tell which door closed.
+//
+// FAIL OPEN ON AN UNKNOWN MODEL — and note this is the OPPOSITE posture from
+// peer_proposer_unknown and rework_completer_unknown, which fail CLOSED. The
+// asymmetry is deliberate and worth stating plainly:
+//
+//   - An unknown PROPOSER is a defect in the thing the gate is about. Without it
+//     the non-self rule is unenforceable, so "we couldn't tell" must resolve to
+//     "a human decides".
+//   - An unknown MODEL is the ORDINARY case. `model` is an optional argument to
+//     canvas_connect; most agents registered before this feature existed never
+//     sent one. Failing closed there would take a live 'peer' canvas and brick
+//     every peer approval on it the moment the owner ticked a box — turning an
+//     opt-in quality bar into an outage. So an unrecorded model means this
+//     particular check abstains; the non-self rule and the registered-agent floor
+//     both still had to pass to get here.
+//
+// It is logged, so "why did that get through" has an answer in the logs.
+//
+// THE HONEST RAIL, which appears in the refusal message itself and must appear in
+// any docs: agents.model is SELF-ASSERTED. canvas_connect takes a `model`
+// argument and stores it verbatim; nothing verifies it, exactly as nothing
+// verifies the agent name (see the file comment). This raises the cost of
+// ACCIDENTAL same-model review — a fleet that is quietly all one model, which is
+// the realistic failure — and it does not stop a client that lies. It is not a
+// guarantee and must never be described as one.
+
+// modelVariantSuffix strips a bracketed variant tag such as the "[1m]" in
+// "claude-opus-5[1m]". A context-window variant is the same model, and letting
+// two spellings of one model read as two models would defeat the check with a
+// typo rather than with a second architecture.
+func modelVariantSuffix(id string) string {
+	if i := strings.IndexByte(id, '['); i > 0 {
+		return strings.TrimSpace(id[:i])
+	}
+	return id
+}
+
+// normalizeModelID reduces a self-asserted model id to what is worth comparing:
+// case, surrounding space, a routing prefix ("anthropic/", "us.anthropic.",
+// "openai/") and a bracketed variant tag are all noise around the same model.
+//
+// What it deliberately does NOT do is guess model FAMILIES. "claude-opus-4-8"
+// reviewing "claude-opus-5" passes this check — different weights, plausibly a
+// genuinely different opinion — and inferring architecture lineage from a free
+// text string would be a guess wearing a uniform. The check catches the same
+// model spelled two ways, which is the accident it exists to catch.
+func normalizeModelID(raw string) string {
+	id := strings.ToLower(strings.TrimSpace(raw))
+	if id == "" {
+		return ""
+	}
+	if i := strings.LastIndexAny(id, "/"); i >= 0 && i+1 < len(id) {
+		id = id[i+1:]
+	}
+	for _, prefix := range []string{"us.anthropic.", "eu.anthropic.", "anthropic.", "anthropic:"} {
+		id = strings.TrimPrefix(id, prefix)
+	}
+	return strings.TrimSpace(modelVariantSuffix(id))
+}
+
+// modelsCollide compares two self-asserted model ids. `known` is false when
+// either side is unrecorded, which is the fail-open case — the caller must treat
+// !known as "this check abstains", never as "same" and never as "different".
+func modelsCollide(a, b string) (collide, known bool) {
+	na, nb := normalizeModelID(a), normalizeModelID(b)
+	if na == "" || nb == "" {
+		return false, false
+	}
+	return na == nb, true
+}
+
+// crossModelHonestyRail is appended to every same-model refusal. The refusal is
+// the one place a reader is guaranteed to look, so it is the one place the limit
+// of the check has to be stated.
+const crossModelHonestyRail = " (Model is self-asserted by the connecting agent — this raises the cost of accidental same-model review, it does not prevent a client that misreports its model. It is not a guarantee.)"
+
+// peerSameModelRefusal is the approval-side branch, pure and testable on its own
+// like peerApprovalRefusal, whose result it is meant to follow. Returns nil when
+// the models differ OR either is unrecorded (fail open).
+func peerSameModelRefusal(approver, approverModel, proposer, proposerModel string) *peerRefusal {
+	collide, known := modelsCollide(approverModel, proposerModel)
+	if !known || !collide {
+		return nil
+	}
+	return &peerRefusal{
+		code: "peer_same_model",
+		message: "same-model approval is refused: this canvas requires review from a DIFFERENT model, and both the approver (" + approver + ") and the proposer (" +
+			proposer + ") report " + strings.TrimSpace(approverModel) + ". Hand it to a reviewer agent running on a different model, or ask a human." + crossModelHonestyRail,
+		extra: map[string]string{
+			"approver": approver, "approverModel": strings.TrimSpace(approverModel),
+			"proposedBy": proposer, "proposerModel": strings.TrimSpace(proposerModel),
+		},
+	}
+}
+
+// peerReworkSameModelRefusal is the rework-side branch — same rule, different
+// pair: (reviewer, COMPLETER off claimed_by), matching peerReworkRefusal.
+func peerReworkSameModelRefusal(reviewer, reviewerModel, completer, completerModel string) *peerRefusal {
+	collide, known := modelsCollide(reviewerModel, completerModel)
+	if !known || !collide {
+		return nil
+	}
+	return &peerRefusal{
+		code: "rework_same_model",
+		message: "same-model review is refused: this canvas requires review from a DIFFERENT model, and both the reviewer (" + reviewer + ") and the agent that finished the work (" +
+			completer + ") report " + strings.TrimSpace(reviewerModel) + ". Hand it to a reviewer agent running on a different model, or ask a human." + crossModelHonestyRail,
+		extra: map[string]string{
+			"reviewer": reviewer, "reviewerModel": strings.TrimSpace(reviewerModel),
+			"completedBy": completer, "completerModel": strings.TrimSpace(completerModel),
+		},
+	}
+}
+
+// agentModelIndex reads the canvas roster ONCE and returns a lookup from agent
+// identity to self-asserted model, keyed by both name and id string so it accepts
+// whichever spelling an identity arrived in (the gateway prefers the name and
+// falls back to the id — same tolerance as approverIsRegisteredAgent).
+//
+// WHY THE ROSTER AND NOT A COLUMN ON THE ROW. The obvious alternative is to stamp
+// the model onto the action at INSERT, next to authored_by. Two reasons not to:
+// provenance.go derives authored_by from headers alone and performs no DB work by
+// design (a roster read there would be a query on every request on the canvas);
+// and a model stamped at insert is no more trustworthy than one read now, since
+// both are the same self-asserted string. The cost is real and worth naming: this
+// compares the model an identity reports TODAY, not the one it reported when it
+// wrote the row. An agent that re-registers the same name under a new model moves
+// its whole history with it. For a check whose job is "are these two reviewers
+// actually the same brain right now", that is the more useful reading anyway.
+//
+// A roster error returns the error; callers treat it as unknown and fail open —
+// which is safe here only because both authorize* paths run the registered-agent
+// floor (which fails CLOSED on a roster error) BEFORE reaching this.
+func (h *Handler) agentModelIndex(ctx context.Context, canvasID uuid.UUID) (map[string]string, error) {
+	agents, err := h.store.ListAgents(ctx, canvasID)
+	if err != nil {
+		return nil, err
+	}
+	index := make(map[string]string, len(agents)*2)
+	for _, a := range agents {
+		if a == nil || a.Model == nil || strings.TrimSpace(*a.Model) == "" {
+			continue
+		}
+		if a.Name != "" {
+			index[a.Name] = *a.Model
+		}
+		index[a.ID.String()] = *a.Model
+	}
+	return index, nil
+}
+
+// modelFor resolves one server-derived identity ("agent:<name>", or the bare
+// registered name claimed_by holds) to its reported model. "" = unrecorded, which
+// is the fail-open signal, never a value to compare.
+func modelFor(index map[string]string, identity string) string {
+	return index[strings.TrimPrefix(strings.TrimSpace(identity), authorAgentPrefix)]
+}
+
+// enforceCrossModel is the store-backed half shared by approval and rework: read
+// the roster, resolve both models, and hand the pure branch the answer. Returns
+// nil (allow) whenever the flag is off, the roster is unreadable, or either model
+// is unrecorded — every abstention is logged so a permitted same-model review is
+// never silent.
+//
+// `refuse` is the pure branch to apply, so the two call sites keep their own
+// refusal codes and wording without this function knowing about either.
+func (h *Handler) enforceCrossModel(
+	ctx context.Context, canvas *store.Canvas, canvasID uuid.UUID,
+	reviewer, author, path string,
+	refuse func(reviewer, reviewerModel, author, authorModel string) *peerRefusal,
+) *peerRefusal {
+	if canvas == nil || !canvas.RequireCrossModelReview {
+		return nil
+	}
+	index, err := h.agentModelIndex(ctx, canvasID)
+	if err != nil {
+		// Abstain, loudly. The registered-agent floor already refused on a roster
+		// error before this ran, so in practice this is unreachable; if the read
+		// ever becomes conditional, this must not silently become the allow path.
+		log.Printf("cross-model review (%s) on canvas %s: roster unreadable, check skipped: %v", path, canvasID, err)
+		return nil
+	}
+	reviewerModel, authorModel := modelFor(index, reviewer), modelFor(index, author)
+	if reviewerModel == "" || authorModel == "" {
+		log.Printf("cross-model review (%s) on canvas %s: model unrecorded (reviewer %q=%q, author %q=%q), failing OPEN",
+			path, canvasID, reviewer, reviewerModel, author, authorModel)
+		return nil
+	}
+	return refuse(reviewer, reviewerModel, author, authorModel)
 }
 
 // approverIsRegisteredAgent resolves an "agent:<identity>" author against the

@@ -97,6 +97,10 @@ type dbCanvas struct {
 	PublicRole  string  `json:"public_role"`
 	// approval_policy (migration 0033); empty until the migration is applied.
 	ApprovalPolicy string `json:"approval_policy"`
+	// require_cross_model_review (migration 0042); absent until the migration is
+	// applied, and an absent bool decodes as false — which is exactly "off", so an
+	// unapplied migration is indistinguishable from an opted-out canvas.
+	RequireCrossModelReview bool `json:"require_cross_model_review"`
 	// briefing_doc_id (migration 0037); null until a briefing is designated.
 	BriefingDocID *string         `json:"briefing_doc_id"`
 	EnabledModes  json.RawMessage `json:"enabled_modes"`
@@ -424,8 +428,9 @@ func toCanvas(d dbCanvas) *Canvas {
 	return &Canvas{ID: id, Code: d.Code, Name: d.Name, Mode: d.Mode,
 		EnabledModes: parseEnabledModes(d.EnabledModes), MapID: d.MapID, OwnerUserID: owner,
 		Visibility: d.Visibility, PublicRole: d.PublicRole,
-		ApprovalPolicy: d.ApprovalPolicy, BriefingDocID: parseUUIDPtr(d.BriefingDocID),
-		Version:   d.Version,
+		ApprovalPolicy: d.ApprovalPolicy, RequireCrossModelReview: d.RequireCrossModelReview,
+		BriefingDocID: parseUUIDPtr(d.BriefingDocID),
+		Version:       d.Version,
 		CreatedAt: parseTime(d.CreatedAt), UpdatedAt: parseTime(d.UpdatedAt)}
 }
 
@@ -1123,6 +1128,21 @@ func (s *supabaseStore) SetCanvasApprovalPolicy(ctx context.Context, canvasID uu
 		return 0, err
 	}
 	// Bump version so connected boards re-fetch state and pick up the new policy.
+	return s.bumpVersion(ctx, canvasID)
+}
+
+// SetCanvasCrossModelReview flips the cross-model review flag (migration 0042).
+// A plain boolean column, so this is one write; it deliberately does NOT touch
+// approval_policy, because the flag and the policy are independent settings that
+// a caller may change one at a time.
+func (s *supabaseStore) SetCanvasCrossModelReview(ctx context.Context, canvasID uuid.UUID, required bool) (int, error) {
+	err := s.exec(s.client.From("canvases").
+		Update(map[string]any{"require_cross_model_review": required}, "minimal", "").
+		Eq("id", canvasID.String()))
+	if err != nil {
+		return 0, err
+	}
+	// Bump version so connected boards re-fetch state and pick up the new posture.
 	return s.bumpVersion(ctx, canvasID)
 }
 

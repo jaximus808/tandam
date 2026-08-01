@@ -139,6 +139,14 @@ type Canvas struct {
 	// may approve a task a DIFFERENT agent proposed (TDM-145, see
 	// api/peer_approval.go); nothing defaults to it.
 	ApprovalPolicy string `json:"approvalPolicy,omitempty"`
+	// RequireCrossModelReview (migration 0042, TDM-155) extends the 'peer' non-self
+	// rule from "a different agent" to "a different MODEL": a peer approval or
+	// rework bounce is refused when reviewer and author report the same
+	// self-asserted agents.model. Opt-in, default false, and inert on any policy
+	// other than 'peer'. Fails OPEN when either model is unrecorded — see
+	// api/peer_approval.go for why that asymmetry with the proposer check is
+	// deliberate. A missing column (migration unapplied) decodes as false = off.
+	RequireCrossModelReview bool `json:"requireCrossModelReview,omitempty"`
 	// BriefingDocID is the document designated as this canvas's briefing — the
 	// read-me-first context an agent pulls on connect (migration 0037). At most
 	// one per canvas by construction. nil = no briefing designated.
@@ -945,6 +953,11 @@ type Store interface {
 	// SetCanvasApprovalPolicy sets the canvas approval policy
 	// ('strict'|'epic'|'auto', migration 0033). Validation is the caller's job.
 	SetCanvasApprovalPolicy(ctx context.Context, canvasID uuid.UUID, policy string) (int, error)
+	// SetCanvasCrossModelReview flips the opt-in cross-model review flag
+	// (migration 0042). Owner-only at the handler; inert unless the canvas is on
+	// 'peer'. Separate from SetCanvasApprovalPolicy because it is a separate
+	// column and a caller may change either without disturbing the other.
+	SetCanvasCrossModelReview(ctx context.Context, canvasID uuid.UUID, required bool) (int, error)
 	// SetCanvasBriefingDoc designates (or, with a nil docID, un-designates) the
 	// canvas's briefing document (migration 0037). The FK enforces that the id
 	// is a real document; the caller checks it belongs to THIS canvas.
