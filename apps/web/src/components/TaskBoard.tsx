@@ -5,12 +5,14 @@ import {
   Ban,
   Bot,
   Check,
+  CheckSquare,
   ChevronDown,
   ChevronRight,
   CircleDashed,
   GitCommitHorizontal,
   Layers,
   Link2,
+  ListChecks,
   Maximize2,
   Milestone,
   Pencil,
@@ -21,6 +23,7 @@ import {
   Search,
   Shield,
   SlidersHorizontal,
+  Square,
   SquareKanban,
   Timer,
   Trash2,
@@ -143,6 +146,15 @@ import { spaLink } from "../lib/spaNav";
 
    What no control here can do is APPROVE. A proposed task has no moves at all
    — Approve / Reject are its only exits, on the server as much as in this file.
+
+   TRIAGE IS A BATCH VERB (TDM-164). The Proposed lane takes a selection —
+   click, shift-click for a range, cmd/ctrl-click to toggle, arrows and
+   shift-arrows from the keyboard, and a tap-to-select mode for touch — and
+   approve / reject act on the whole of it, with one shared reason asked once.
+   The selection is a set of task IDS held apart from the canvas state, because
+   this board re-renders under live websocket pushes and a selection keyed by
+   position would drift onto tickets nobody looked at; see the note on
+   `selected` for the two rules that keep it honest against a moving lane.
    ──────────────────────────────────────────────────────────────────────────── */
 
 // Kanban columns. `dot` is the header hue (from the shared six-hue state set);
@@ -174,6 +186,53 @@ function colKeyForState(s: string): string {
 // load (TDM-45). The rest render their chips without a dot until you open them.
 // See liveLinkTaskIds for why this is a small number.
 const LIVE_LINK_CARDS = 6;
+
+// Whether a keystroke landed in something the person is TYPING into — the guard
+// every bare-letter shortcut on this surface needs, or "a" in the search box
+// approves the selection. Factored out because "/" and the TDM-164 triage keys
+// must agree on what counts as typing.
+function isTypingTarget(el: EventTarget | null): boolean {
+  const node = el as HTMLElement | null;
+  if (!node) return false;
+  return (
+    node.tagName === "INPUT" ||
+    node.tagName === "TEXTAREA" ||
+    node.tagName === "SELECT" ||
+    node.isContentEditable
+  );
+}
+
+/* Fan a per-id write across a bounded number of lanes, and report which ids
+   landed (TDM-164). Bulk REJECT has no batch endpoint — reject is one request
+   per ticket by design (each carries its own reason into the action's error
+   column) — so rejecting eleven tickets serially would spend eleven
+   round-trips end to end and make the bulk path feel slower than clicking. Four
+   at a time is the same shape the API's own batch paths settled on: enough
+   overlap to hide the latency, few enough not to open a connection per ticket.
+
+   Failures are SWALLOWED here and inferred from the returned list: one ticket
+   that has already moved on must not abort the other ten, and the caller has to
+   know exactly which ids to offer an undo for anyway. */
+const BULK_LANES = 4;
+async function runBatch(ids: string[], fn: (id: string) => Promise<void>): Promise<string[]> {
+  const queue = [...ids];
+  const landed: string[] = [];
+  await Promise.all(
+    Array.from({ length: Math.min(BULK_LANES, queue.length) }, async () => {
+      for (;;) {
+        const id = queue.shift();
+        if (id === undefined) return;
+        try {
+          await fn(id);
+          landed.push(id);
+        } catch {
+          /* counted by the caller as "not in the landed list" */
+        }
+      }
+    }),
+  );
+  return landed;
+}
 
 /* ── Mobile type scale (TDM-85) ───────────────────────────────────────────────
    The board's desktop scale is deliberately DENSE: five lanes side by side, so
@@ -1153,10 +1212,56 @@ export default function TaskBoard({
   // time, so a half-finished edit can never be left behind on a card scrolled
   // off screen.
   const [amendingId, setAmendingId] = useState<string | null>(null);
-  // The last one-tap task rejection, offering Undo (TDM-160). Rejecting a task
-  // is a single tap precisely BECAUSE this exists; if you remove the strip,
-  // put the confirm back or the gate stops being reversible.
-  const [undoReject, setUndoReject] = useState<{ id: string; label: string } | null>(null);
+  // The last rejection, offering Undo (TDM-160, widened to a LIST by TDM-164).
+  // Rejecting is a single tap precisely BECAUSE this exists; if you remove the
+  // strip, put the confirm back or the gate stops being reversible. A bulk
+  // reject arms the same strip with every id it rejected, so "reject three,
+  // change your mind" is one Undo rather than three.
+  const [undoReject, setUndoReject] = useState<{ ids: string[]; label: string } | null>(null);
+
+  /* ── Multi-select triage (TDM-164) ─────────────────────────────────────────
+     Approving eleven tickets except three used to cost eleven decisions' worth
+     of clicking, which is how a gate becomes a rubber stamp: the value is
+     decided per PLAN but the cost is paid per TICKET. So the Proposed lane
+     takes a selection, and approve / reject act on all of it at once.
+
+     THE SELECTION IS A SET OF IDS, AND NOTHING ELSE. This board takes live
+     websocket pushes — cards arrive, get claimed, and leave the lane while you
+     are still deciding — so any selection keyed by index, by position, or
+     rebuilt from the incoming payload would silently shift onto the wrong
+     tickets on the next broadcast. That failure is worse than having no
+     multi-select at all (you would approve something you never looked at), so
+     this state is deliberately NOT derived from `state.actions`: a push
+     re-renders the lanes and leaves the set untouched.
+
+     Two rules keep the set honest against that live board, both below:
+       · `selectedIds` is the set INTERSECTED with the proposed lane as
+         currently rendered — the writes only ever touch tickets that are on
+         screen and still awaiting a decision.
+       · a prune effect drops ids that stopped being proposed tasks at all
+         (someone else approved them, an agent's epic got rejected, the ticket
+         was deleted), so a selection cannot accumulate ghosts.
+
+     A scope change clears the selection: navigating to another epic is a
+     deliberate change of subject, and carrying a selection you can no longer
+     see into it is how you approve the wrong batch. A websocket push is not. */
+  const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
+  // Tap-to-select mode. Shift-click has no touch equivalent, so a phone gets an
+  // explicit mode (the Proposed lane header's "Select"): while it is on, a tap
+  // on a proposed card selects instead of opening the detail slide-over. It is
+  // also what keeps the bulk bar up after you deselect the last ticket, so
+  // "clear and start again" doesn't drop you out of triage.
+  const [selectMode, setSelectMode] = useState(false);
+  // Where a range gesture measures FROM, plus the selection as it stood when
+  // that anchor was set. Range gestures recompute `base ∪ range(anchor→here)`
+  // rather than accumulating, which is what lets shift-arrow SHRINK a range
+  // back down instead of only ever growing it.
+  const [anchor, setAnchor] = useState<{ id: string; base: string[] } | null>(null);
+  // The shared reason for a bulk reject: null = the panel is closed, "" = open
+  // and empty. Asked ONCE for the whole selection — a reason per ticket is the
+  // per-ticket cost this whole feature exists to remove, and the tickets in one
+  // selection are almost always being turned down for one reason.
+  const [bulkReason, setBulkReason] = useState<string | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
   // Whether the scoped epic's finished-ticket rollup is expanded (TDM-93).
   // Collapsed by default: the summary above it is the answer, and the receipts
@@ -1519,6 +1624,53 @@ export default function TaskBoard({
     [scopedTasks, visibleTasks, filtering],
   );
 
+  // ── The selection, reconciled against the live lane (TDM-164) ─────────────
+  // The proposed lane in DISPLAY ORDER: the axis every range gesture runs along
+  // (shift-click, shift-arrow) and the universe "select all" selects. It is the
+  // filtered list, so a selection can never reach a card the person cannot see
+  // — narrowing the filters visibly narrows what Approve/Reject will touch,
+  // rather than acting on hidden tickets.
+  const proposedOrder = useMemo(
+    () => (columnBuckets.find((b) => b.col.key === "proposed")?.shown ?? []).map((t) => t.id),
+    [columnBuckets],
+  );
+  // What the bulk buttons actually write to, in lane order. Intersecting here
+  // (rather than mutating the set on every push) is what makes the selection
+  // survive live updates: a ticket that leaves the lane under you stops being
+  // acted on immediately, while the rest of your selection is undisturbed.
+  const selectedIds = useMemo(
+    () => proposedOrder.filter((id) => selected.has(id)),
+    [proposedOrder, selected],
+  );
+  // Whether the board is IN triage: the bulk bar is up and a plain click on a
+  // proposed card selects rather than opening it.
+  const selecting = !readOnly && (selectMode || selected.size > 0);
+
+  // Drop ids that stopped being proposed tasks — approved by someone else,
+  // rejected, claimed, deleted. Keyed off the canvas state so it runs on every
+  // push, and returns the SAME set when nothing changed so it can't loop.
+  useEffect(() => {
+    setSelected((prev) => {
+      if (prev.size === 0) return prev;
+      const next = new Set<string>();
+      for (const id of prev) {
+        const a = (state.actions ?? {})[id];
+        if (a && a.type === "task" && a.state === "proposed") next.add(id);
+      }
+      return next.size === prev.size ? prev : next;
+    });
+  }, [state.actions]);
+
+  // Changing the lens is a change of subject — see the note on the state above.
+  // Guarded so the mount pass (and any re-run with nothing selected) is a true
+  // no-op rather than a fresh empty Set that re-renders the whole board.
+  useEffect(() => {
+    setSelected((prev) => (prev.size === 0 ? prev : new Set()));
+    setSelectMode(false);
+    setAnchor(null);
+    setBulkReason(null);
+  }, [effectiveScope]);
+
   // How many visible cards are held by a LAPSED lease (TDM-101). The Working
   // lane header wears this, so "something is stuck" is answerable from the lane
   // label without reading a single card — the per-card chips are the detail
@@ -1617,13 +1769,15 @@ export default function TaskBoard({
   /* ── Per-ticket triage (TDM-160) ───────────────────────────────────────────
      The three decisions a person makes at the plan gate, one ticket at a time:
      approve, reject (+ undo), amend. Everything the board renders on a proposed
-     card routes through exactly these four functions, so a surface that wants
-     to triage MANY tickets at once (TDM-164's multi-select) extends these
-     rather than reimplementing the writes: approve maps onto the existing
-     approveBatch (see approveAllProposed above, one request for N ids), and
-     reject has no batch endpoint yet, so a selection rejects by calling
-     rejectOne per id — the undo strip's shape is what would have to grow, from
-     one id to a list.
+     card routes through exactly these four functions.
+
+     TDM-164 built the multi-select layer on top of them rather than beside
+     them: a selection approves through the existing approveBatch (one request
+     for N ids, the same call "Approve all" makes) and rejects through the same
+     per-id reject route, fanned out by runBatch — no second write path, and no
+     second definition of what rejecting means. The undo strip grew with it,
+     from one id to a list, so a bulk reject is undone by the one control that
+     made a single reject safe in the first place.
 
      Note on the epic cascade: approving the epic AFTER partial triage cannot
      resurrect anything decided here. Both server paths (ApproveEpicTasks and
@@ -1664,21 +1818,35 @@ export default function TaskBoard({
     const label = a.ticketId || taskPayload(a).title || "that ticket";
     if (amendingId === a.id) setAmendingId(null);
     void rejectOne(a.id).then((ok) => {
-      if (ok) setUndoReject({ id: a.id, label });
+      if (ok) setUndoReject({ ids: [a.id], label });
     });
   }
 
-  // rejected → proposed (lib/taskMoves' RECONSIDER). Puts the ticket back in
-  // triage exactly as it was, NOT back in the queue — undoing a rejection
-  // returns a decision to you, it does not make it for you.
+  // rejected → proposed (lib/taskMoves' RECONSIDER), for the one ticket or for
+  // the whole batch. Puts the tickets back in triage exactly as they were, NOT
+  // back in the queue — undoing a rejection returns a decision to you, it does
+  // not make it for you. (The rewind also clears the reason the bulk reject
+  // wrote, which is right: a ticket back in triage must not still advertise the
+  // verdict that was just taken back.)
   function undoLastReject() {
     const target = undoReject;
-    if (!target) return;
-    void run(target.id, async () => {
-      await moveTask(code, target.id, "proposed");
-      setUndoReject(null);
-      posthog.capture("agent_task_reject_undone", { canvas_code: code, surface: "board" });
-    });
+    if (!target || batchBusy) return;
+    setBatchBusy(true);
+    setError(null);
+    void runBatch(target.ids, (id) => moveTask(code, id, "proposed").then(() => undefined)).then(
+      (back) => {
+        setBatchBusy(false);
+        setUndoReject(null);
+        if (back.length < target.ids.length) {
+          setError(`Put ${back.length} of ${target.ids.length} back — the rest could not be undone.`);
+        }
+        posthog.capture("agent_task_reject_undone", {
+          canvas_code: code,
+          count: back.length,
+          surface: "board",
+        });
+      },
+    );
   }
 
   // Amend in place. The payload PATCH replaces what's stored, so the whole
@@ -1697,12 +1865,174 @@ export default function TaskBoard({
   }
 
   // The Undo offer is a moment, not a state: it expires on its own so it can't
-  // sit on the board offering to undo something you decided a while ago.
+  // sit on the board offering to undo something you decided a while ago. A
+  // BATCH gets longer — eleven tickets took longer to decide on than one, and
+  // re-reading what you just turned down is the point of the offer.
   useEffect(() => {
     if (!undoReject) return;
-    const t = setTimeout(() => setUndoReject(null), 12_000);
+    const t = setTimeout(() => setUndoReject(null), undoReject.ids.length > 1 ? 20_000 : 12_000);
     return () => clearTimeout(t);
   }, [undoReject]);
+
+  /* ── Selection gestures (TDM-164) ──────────────────────────────────────────
+     The muscle memory people already have from every file manager and mail
+     client: click one, shift-click to extend a range, cmd/ctrl-click to toggle
+     one, shift-arrow to grow or shrink it from the keyboard. Nothing here
+     writes anything — they only move ids in and out of `selected`. */
+
+  function clearSelection() {
+    setSelected(new Set());
+    setSelectMode(false);
+    setAnchor(null);
+    setBulkReason(null);
+  }
+
+  // Toggle one, and re-anchor: the ticket you last touched by hand is where the
+  // next range measures from, whether you were adding or removing.
+  function toggleSelect(id: string) {
+    const next = new Set(selected);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setSelected(next);
+    setAnchor({ id, base: [...next] });
+  }
+
+  // Add one and anchor there. What a range gesture DEGRADES to when it has
+  // nowhere to measure from — including the live-board case where the anchor
+  // card was approved or claimed out from under the selection between the two
+  // clicks. Additive rather than a toggle: "extend to here" must never come out
+  // as "deselect here".
+  function selectOne(id: string) {
+    const next = new Set(selected);
+    next.add(id);
+    setSelected(next);
+    setAnchor({ id, base: [...next] });
+  }
+
+  // base ∪ range(anchor → id), recomputed from scratch every time so pulling
+  // the range back deselects what it passed over instead of leaving it behind.
+  function rangeTo(from: { id: string; base: string[] }, id: string) {
+    const i = proposedOrder.indexOf(from.id);
+    const j = proposedOrder.indexOf(id);
+    if (i < 0 || j < 0) {
+      selectOne(id);
+      return;
+    }
+    const [lo, hi] = i <= j ? [i, j] : [j, i];
+    const next = new Set(from.base);
+    for (let k = lo; k <= hi; k++) next.add(proposedOrder[k]);
+    setSelected(next);
+  }
+
+  // Shift-click. With no anchor yet it is just a click — extending from nowhere
+  // has no meaning, and guessing (the top of the lane?) would select tickets
+  // the person never pointed at.
+  function extendTo(id: string) {
+    if (!anchor) {
+      selectOne(id);
+      return;
+    }
+    rangeTo(anchor, id);
+  }
+
+  // The inverse of "approve everything except these three": take the lot, then
+  // deselect the three. Scoped to an epic, the lane IS that epic's proposed
+  // tickets, so this is also the epic-wide select-all.
+  function selectAllProposed() {
+    setSelected(new Set(proposedOrder));
+    setSelectMode(true);
+    setAnchor(proposedOrder.length > 0 ? { id: proposedOrder[0], base: proposedOrder } : null);
+  }
+
+  // Arrow / shift-arrow from the focused card. Focus IS the cursor — the card
+  // the event came from — so repeated shift-arrows measure from the anchor and
+  // the range grows and shrinks the way it does in a spreadsheet. Shift-arrow
+  // with nothing anchored takes the card you are on with you, which is what
+  // "start selecting from here" means.
+  function stepSelection(fromId: string, dir: 1 | -1, extend: boolean) {
+    const i = proposedOrder.indexOf(fromId);
+    if (i < 0) return;
+    const j = Math.min(proposedOrder.length - 1, Math.max(0, i + dir));
+    const target = proposedOrder[j];
+    if (extend) {
+      const from = anchor ?? { id: fromId, base: [...new Set([...selected, fromId])] };
+      if (!anchor) setAnchor(from);
+      rangeTo(from, target);
+    } else {
+      setAnchor({ id: target, base: [...selected] });
+    }
+    const el = document.querySelector(`[data-task-id="${CSS.escape(target)}"]`);
+    if (el instanceof HTMLElement) {
+      el.focus();
+      el.scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  /* ── Bulk triage writes (TDM-164) ──────────────────────────────────────────
+     Both verbs act on `selectedIds` — the selection intersected with the lane
+     as rendered — so neither can touch a ticket that moved on while the bar was
+     up. Approve is the EXISTING approve-batch endpoint (one request for N ids,
+     the same one "Approve all" uses); reject is per-id by necessity, fanned out
+     through runBatch, because rejection carries a reason and has no batch
+     route. Neither is optimistic: the websocket broadcast moves the cards,
+     which is also the confirmation that the writes landed. */
+
+  async function approveSelection() {
+    const ids = selectedIds;
+    if (ids.length === 0 || batchBusy || readOnly) return;
+    setBatchBusy(true);
+    setError(null);
+    try {
+      const { approved } = await approveBatch(code, ids);
+      posthog.capture("agent_tasks_batch_approved", {
+        canvas_code: code,
+        requested: ids.length,
+        approved: approved.length,
+        surface: "board",
+        via: "selection",
+      });
+      clearSelection();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not approve tasks");
+    } finally {
+      setBatchBusy(false);
+    }
+  }
+
+  async function rejectSelection(reason: string) {
+    const ids = selectedIds;
+    if (ids.length === 0 || batchBusy || readOnly) return;
+    // Read the label BEFORE the writes: the cards leave the Proposed lane as
+    // the broadcasts land, and the Undo strip still has to name what it undoes.
+    const first = (state.actions ?? {})[ids[0]];
+    const oneLabel = first
+      ? first.ticketId || taskPayload(first).title || "that ticket"
+      : "that ticket";
+    const shared = reason.trim();
+    setBatchBusy(true);
+    setError(null);
+    const rejected = await runBatch(ids, (id) => rejectAction(code, id, shared || undefined));
+    setBatchBusy(false);
+    clearSelection();
+    if (rejected.length > 0) {
+      setUndoReject({
+        ids: rejected,
+        label: rejected.length === 1 ? oneLabel : `${rejected.length} tickets`,
+      });
+      posthog.capture("agent_tasks_batch_rejected", {
+        canvas_code: code,
+        requested: ids.length,
+        rejected: rejected.length,
+        with_reason: shared.length > 0,
+        surface: "board",
+      });
+    }
+    if (rejected.length < ids.length) {
+      setError(
+        `Rejected ${rejected.length} of ${ids.length} — the rest had already moved on.`,
+      );
+    }
+  }
 
   // A human state move from a CARD: no note, no confirm — the whole point is
   // that marking your own todo started or done is one click. The card doesn't
@@ -1858,6 +2188,12 @@ export default function TaskBoard({
           // dismisses it before it reaches for the filters. On md+ the rail
           // renders whatever this flag says, so clearing it is a no-op there.
           setSidebarOpen(false);
+        } else if (bulkReason !== null) {
+          // Back out of the reason, keeping the selection: Escape on an open
+          // form means "put this away", not "throw away my triage" (TDM-164).
+          setBulkReason(null);
+        } else if (selecting) {
+          clearSelection();
         } else if (filtering || searchInput) {
           clearFilters();
           searchRef.current?.blur();
@@ -1865,10 +2201,34 @@ export default function TaskBoard({
         return;
       }
       if (e.key === "/") {
-        const el = e.target as HTMLElement | null;
-        if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable)) return;
+        if (isTypingTarget(e.target)) return;
         e.preventDefault();
         searchRef.current?.focus();
+      }
+      /* The keyboard end of bulk triage (TDM-164): with a selection up, A
+         approves it and R opens the shared reason. Bare letters, so they are
+         guarded three ways — not while typing, not while a modifier is held
+         (cmd+R is reload), and not while the detail slide-over is reading a
+         ticket, where "a" belongs to whatever is open rather than to a
+         selection behind it. The whole triage is then doable without a mouse:
+         arrow to a card, shift-arrow to extend, A or R. */
+      if (
+        selectedIds.length > 0 &&
+        bulkReason === null &&
+        !detailId &&
+        !readOnly &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        !isTypingTarget(e.target)
+      ) {
+        if (e.key === "a" || e.key === "A") {
+          e.preventDefault();
+          void approveSelection();
+        } else if (e.key === "r" || e.key === "R") {
+          e.preventDefault();
+          setBulkReason("");
+        }
       }
     }
     window.addEventListener("keydown", onKey);
@@ -1899,6 +2259,12 @@ export default function TaskBoard({
   function renderApproveReject(a: Action, approveLabel?: string) {
     if (readOnly || a.state !== "proposed") return null;
     const isEpic = a.type === "epic";
+    // In multi-select triage the per-card row stands down (TDM-164). Two sets
+    // of Approve/Reject on screen at once — one meaning "this ticket", one
+    // meaning "the eight I picked" — is a misfire waiting to happen, and
+    // dropping the row also fits more cards on screen for the decision you are
+    // actually making. It returns the moment the selection is cleared.
+    if (!isEpic && selecting) return null;
     if (!isEpic && amendingId === a.id) {
       return (
         <InlineAmend
@@ -1944,6 +2310,12 @@ export default function TaskBoard({
     // card worth borrowing the card's own border for: it is a fact about the
     // CARD (nobody is driving this), not about a field inside it.
     const lease = deriveLease(t, now);
+    // Multi-select triage (TDM-164) lives on the proposed lane and nowhere else:
+    // a selection is a thing you do at the GATE, and there is no bulk verb for
+    // a card that has already been decided on.
+    const selectable = !readOnly && t.state === "proposed";
+    const isSelected = selectable && selected.has(t.id);
+    const cardLabel = t.ticketId || p.title || "this ticket";
     return (
       <div
         key={t.id}
@@ -1955,27 +2327,116 @@ export default function TaskBoard({
         data-agent-target={t.id}
         role="button"
         tabIndex={0}
-        onClick={() => setDetailId(t.id)}
+        // Shift-click selects a RANGE, and the browser's own shift-click is
+        // "extend the text selection" — which would paint the lane blue under
+        // the cards. Suppressed at mousedown, where that behaviour starts.
+        onMouseDown={(ev) => {
+          if (selectable && ev.shiftKey) ev.preventDefault();
+        }}
+        onClick={(ev) => {
+          if (selectable) {
+            // cmd/ctrl-click toggles one, shift-click extends the range, and
+            // once a selection is up (or tap-to-select is on) a plain click
+            // selects too — the same escalation a file manager makes. With no
+            // selection and no modifier, a click still opens the ticket, which
+            // is what a click on this card has always meant.
+            if (ev.metaKey || ev.ctrlKey) {
+              toggleSelect(t.id);
+              return;
+            }
+            if (ev.shiftKey) {
+              extendTo(t.id);
+              return;
+            }
+            if (selecting) {
+              toggleSelect(t.id);
+              return;
+            }
+          }
+          setDetailId(t.id);
+        }}
         onKeyDown={(ev: ReactKeyboardEvent) => {
-          // Keyboard parity with the sidebar rows: Enter/Space opens the detail
-          // slide-over. Only when the card itself is focused — keys on inner
-          // controls (approve/reject, epic chip) keep their own behaviour.
-          if ((ev.key === "Enter" || ev.key === " ") && ev.target === ev.currentTarget) {
+          // Only when the card itself is focused — keys on inner controls
+          // (approve/reject, epic chip) keep their own behaviour.
+          if (ev.target !== ev.currentTarget) return;
+          // Keyboard parity with the sidebar rows: Enter opens the detail
+          // slide-over, and so does Space on a card with no selection to make.
+          if (ev.key === "Enter") {
             ev.preventDefault();
             setDetailId(t.id);
+            return;
+          }
+          if (!selectable) {
+            if (ev.key === " ") {
+              ev.preventDefault();
+              setDetailId(t.id);
+            }
+            return;
+          }
+          // On a SELECTABLE card Space is the checkbox key (the platform
+          // convention), x its Gmail-shaped alias, and the arrows walk the lane
+          // — with shift, they drag the selection along (TDM-164).
+          if (ev.key === " " || ev.key === "x" || ev.key === "X") {
+            ev.preventDefault();
+            toggleSelect(t.id);
+            return;
+          }
+          if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+            ev.preventDefault();
+            stepSelection(t.id, ev.key === "ArrowDown" ? 1 : -1, ev.shiftKey);
+            return;
+          }
+          if ((ev.key === "a" || ev.key === "A") && (ev.metaKey || ev.ctrlKey)) {
+            // Select-all, scoped to the lane the focus is in rather than to the
+            // document — which is the only reading of cmd+A that makes sense
+            // with a card focused, and why it is bound here and not on window.
+            ev.preventDefault();
+            selectAllProposed();
           }
         }}
-        className={`cursor-pointer rounded-lg border bg-surface p-2.5 transition-[border-color,box-shadow] hover:border-ink/25 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${
+        /* Selection is carried by a ring and the border, NOT by a fill: the
+           card's `bg-surface` is one deliberate step above the board's paper in
+           dark mode, and swapping it for a translucent accent would make the
+           selected cards read as sunk BELOW the ones you didn't pick. */
+        className={`group cursor-pointer rounded-lg border bg-surface p-2.5 transition-[border-color,box-shadow] hover:border-ink/25 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${
+          isSelected ? "ring-2 ring-inset ring-accent/50" : ""
+        } ${
           justLanded
             ? "tandem-card-land border-agent/40"
             : lease.health === "stale"
               ? "border-amber-500/40"
-              : "border-ink/10"
+              : isSelected
+                ? "border-accent/45"
+                : "border-ink/10"
         }`}
       >
         <div className="flex items-start justify-between gap-2">
+          {/* The selection box. Hidden until it is wanted — on a pointer device
+              it appears on hover or keyboard focus, and on touch (no hover at
+              all) the lane header's "Select" is the way in, which is why that
+              control exists. Never a tab stop: the card is the one tab stop and
+              Space toggles it, so tabbing a triage lane doesn't cost two stops
+              per ticket. */}
+          {selectable && (
+            <button
+              role="checkbox"
+              aria-checked={isSelected}
+              aria-label={isSelected ? `Deselect ${cardLabel}` : `Select ${cardLabel}`}
+              tabIndex={-1}
+              onClick={(ev) => {
+                ev.stopPropagation();
+                if (ev.shiftKey) extendTo(t.id);
+                else toggleSelect(t.id);
+              }}
+              className={`mt-px shrink-0 rounded-[4px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+                isSelected ? "text-accent" : "text-ink/35 hover:text-ink/70"
+              } ${selecting ? "flex" : "hidden group-hover:flex group-focus-within:flex"}`}
+            >
+              {isSelected ? <CheckSquare size={14} /> : <Square size={14} />}
+            </button>
+          )}
           <span
-            className={`min-w-0 font-semibold leading-snug ${T_TITLE} ${terminal ? "text-ink/55" : "text-ink"}`}
+            className={`min-w-0 flex-1 font-semibold leading-snug ${T_TITLE} ${terminal ? "text-ink/55" : "text-ink"}`}
           >
             {t.ticketId &&
               (onOpenTicket ? (
@@ -2789,6 +3250,108 @@ export default function TaskBoard({
         </div>
       )}
 
+      {/* ── The bulk triage bar (TDM-164) ──────────────────────────────────
+          What a selection is FOR. Same column flow as the undo strip below and
+          for the same reason: on a phone the Proposed lane is the whole screen,
+          and a floating bar would cover the cards you are deciding about.
+
+          Approve and Reject sit side by side at equal weight — the entire point
+          of this ticket is that turning eleven tickets down costs what letting
+          them through costs. Reject opens the shared-reason panel rather than
+          firing, because a batch is the one case where a reason is worth typing
+          once, and because a mis-aimed bulk reject is the expensive mistake on
+          this surface (the Undo strip catches it either way).
+
+          It stays up while the selection is EMPTY but tap-to-select is on: that
+          is the state you are in right after pressing "Select", and it is where
+          "All 11" lives. */}
+      {selecting && (
+        <div className="mx-4 mt-2 shrink-0 rounded-md border border-accent/30 bg-accent/[0.06] px-2.5 py-1.5">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+            <span className={`shrink-0 font-medium text-ink/80 ${T_BTN}`}>
+              {selectedIds.length} selected
+            </span>
+            {selectedIds.length < proposedOrder.length && proposedOrder.length > 0 && (
+              <button
+                onClick={selectAllProposed}
+                className={`shrink-0 rounded-[4px] px-1.5 py-1 font-semibold text-accent transition-colors hover:bg-accent/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:py-px ${T_META}`}
+              >
+                All {proposedOrder.length}
+              </button>
+            )}
+            {selectedIds.length > 0 && (
+              <button
+                onClick={clearSelection}
+                className={`shrink-0 rounded-[4px] px-1.5 py-1 font-medium text-ink/55 transition-colors hover:bg-ink/5 hover:text-ink/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:py-px ${T_META}`}
+              >
+                Clear
+              </button>
+            )}
+            {/* The keyboard path, stated where it is used — the whole triage is
+                doable without the mouse and nobody would guess that. */}
+            <span className={`hidden shrink-0 font-code text-ink/40 lg:inline ${T_META}`}>
+              ↑↓ move · ⇧↑↓ extend · space pick · A approve · R reject
+            </span>
+            <div className="ml-auto flex shrink-0 items-center gap-1.5">
+              <button
+                onClick={() => void approveSelection()}
+                disabled={batchBusy || selectedIds.length === 0}
+                className={`flex items-center justify-center gap-1 rounded-md bg-accent px-2.5 py-1 font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40 ${T_BTN} ${TAP}`}
+              >
+                <Check size={12} /> {batchBusy ? "Working…" : `Approve ${selectedIds.length}`}
+              </button>
+              <button
+                onClick={() => setBulkReason(bulkReason === null ? "" : null)}
+                disabled={batchBusy || selectedIds.length === 0}
+                aria-expanded={bulkReason !== null}
+                className={`flex items-center justify-center gap-1 rounded-md border border-rose-500/30 px-2.5 py-1 font-medium text-rose-600 transition-colors hover:border-rose-500/60 hover:bg-rose-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500/40 disabled:opacity-40 dark:text-rose-400 ${T_BTN} ${TAP}`}
+              >
+                <X size={12} /> Reject {selectedIds.length}
+              </button>
+            </div>
+          </div>
+          {/* ONE reason for the batch. Optional — a reason you are made to type
+              is a reason nobody reads — but it is offered first, because the
+              rejection rate only means something if the record says why. It
+              lands in each ticket's error column, and an Undo clears it. */}
+          {bulkReason !== null && selectedIds.length > 0 && (
+            <div className="mt-1.5 flex flex-col gap-1.5">
+              <textarea
+                autoFocus
+                value={bulkReason}
+                onChange={(e) => setBulkReason(e.target.value)}
+                onKeyDown={(e: ReactKeyboardEvent) => {
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                    e.preventDefault();
+                    void rejectSelection(bulkReason);
+                  }
+                }}
+                rows={2}
+                placeholder={`Why these ${selectedIds.length} are being turned down (optional) — recorded on every one of them`}
+                aria-label="Shared reason for rejecting the selected tickets"
+                className={`w-full resize-y rounded-md border border-ink/15 bg-paper px-2 py-1.5 leading-relaxed text-ink placeholder:text-ink/35 focus:border-rose-500/50 focus:outline-none focus:ring-2 focus:ring-rose-500/20 ${T_BTN}`}
+              />
+              <div className="flex gap-1.5">
+                <button
+                  onClick={() => void rejectSelection(bulkReason)}
+                  disabled={batchBusy}
+                  className={`flex flex-1 items-center justify-center gap-1 rounded-md bg-rose-600 px-2 py-1 font-medium text-white transition-colors hover:bg-rose-600/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500/40 disabled:opacity-40 ${T_BTN} ${TAP}`}
+                >
+                  <Ban size={12} />
+                  {batchBusy ? "Rejecting…" : `Reject ${selectedIds.length}`}
+                </button>
+                <button
+                  onClick={() => setBulkReason(null)}
+                  className={`flex-1 rounded-md border border-ink/15 px-2 py-1 font-medium text-ink/60 transition-colors hover:border-ink/30 ${T_BTN} ${TAP}`}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* What makes one-tap reject safe (TDM-160). It sits in the board's own
           column flow rather than floating over the lanes: on a phone the
           Proposed lane IS the screen, and a toast pinned over it would cover
@@ -2800,11 +3363,16 @@ export default function TaskBoard({
         >
           <Ban size={12} className="shrink-0 text-rose-500" aria-hidden="true" />
           <span className="min-w-0 truncate">
-            Rejected <span className="font-code font-medium text-ink/85">{undoReject.label}</span>
+            Rejected{" "}
+            <span
+              className={`font-medium text-ink/85 ${undoReject.ids.length === 1 ? "font-code" : ""}`}
+            >
+              {undoReject.label}
+            </span>
           </span>
           <button
             onClick={undoLastReject}
-            disabled={busyId === undoReject.id}
+            disabled={batchBusy}
             className={`ml-auto shrink-0 rounded-md border border-ink/15 px-2 py-1 font-medium text-ink/75 transition-colors hover:border-ink/30 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40 sm:py-0.5 ${T_BTN} ${TAP}`}
           >
             Undo
@@ -3087,17 +3655,45 @@ export default function TaskBoard({
                             {stalledCount} stalled
                           </span>
                         )}
-                        {/* Bulk triage: one approve-batch call for the whole
-                            proposed column (within the current scope). */}
+                        {/* Bulk triage on the lane header. "Approve all" is the
+                            whole column in one approve-batch call; "Select" is
+                            the way INTO a partial one — and on touch it is the
+                            only way in, since shift-click has no finger
+                            equivalent (TDM-164). While a selection is up the
+                            pair collapses to "Done": the bulk bar below carries
+                            the verbs, and offering "Approve all" beside
+                            "Approve 8" is two buttons a keystroke apart that do
+                            different things to different tickets. */}
                         {col.key === "proposed" && !readOnly && colAll.length > 1 && (
-                          <button
-                            onClick={() => approveAllProposed(colAll.map((t) => t.id))}
-                            disabled={batchBusy}
-                            title="Approve every proposed task in this scope in one batch"
-                            className={`ml-auto shrink-0 rounded-md px-1.5 py-1 font-semibold text-ink/50 transition-colors hover:bg-ink/5 hover:text-ink/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 sm:py-0.5 ${T_META}`}
-                          >
-                            {batchBusy ? "Approving…" : `Approve all ${colAll.length}`}
-                          </button>
+                          <div className="ml-auto flex shrink-0 items-center gap-0.5">
+                            {selecting ? (
+                              <button
+                                onClick={clearSelection}
+                                className={`rounded-md px-1.5 py-1 font-semibold text-ink/50 transition-colors hover:bg-ink/5 hover:text-ink/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:py-0.5 ${T_META}`}
+                              >
+                                Done
+                              </button>
+                            ) : (
+                              <>
+                                <button
+                                  onClick={() => setSelectMode(true)}
+                                  title="Pick tickets to approve or reject together"
+                                  className={`flex items-center gap-1 rounded-md px-1.5 py-1 font-semibold text-ink/50 transition-colors hover:bg-ink/5 hover:text-ink/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:py-0.5 ${T_META}`}
+                                >
+                                  <ListChecks size={11} className="shrink-0" />
+                                  Select
+                                </button>
+                                <button
+                                  onClick={() => approveAllProposed(colAll.map((t) => t.id))}
+                                  disabled={batchBusy}
+                                  title="Approve every proposed task in this scope in one batch"
+                                  className={`rounded-md px-1.5 py-1 font-semibold text-ink/50 transition-colors hover:bg-ink/5 hover:text-ink/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 sm:py-0.5 ${T_META}`}
+                                >
+                                  {batchBusy ? "Approving…" : `Approve all ${colAll.length}`}
+                                </button>
+                              </>
+                            )}
+                          </div>
                         )}
                       </div>
                       {slim ? (
