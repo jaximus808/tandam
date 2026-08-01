@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### `doc_read` — read a document tab back without leaving the facade (TDM-179/180)
+
+- **New `doc_read`** on the default surface: `doc_write`'s twin. `document` is the
+  tab's NAME (case-insensitive, the one you gave `doc_write`) or its id, and you
+  get that tab's notes in board order, each with its markdown and its `noteId`.
+  `context_get` lists the tabs; an unknown name comes back naming the ones that
+  exist rather than erroring blind.
+- **It retires the workaround.** Reading canvas-hosted docs used to mean decoding
+  the `session` handle for its token and hand-building a whole-canvas read against
+  the raw API, then filtering by `documentId` client-side. That recipe is gone from
+  the docs: the read is now scoped server-side (`GET
+  /api/canvas/documents/{ref}/notes`, TDM-179), so one tab never drags the rest of
+  the canvas along.
+- Keep the `noteId` of anything you'll revise — `doc_write` without it appends a
+  second note instead of updating the one you just read.
+- The default manifest is now **17 tools**.
+
 ### `queue_wait` — wait for approval instead of ending your turn (TDM-149)
 
 - **New `queue_wait`** on the default surface: ONE call that returns the moment

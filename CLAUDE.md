@@ -18,11 +18,12 @@ Live at https://tandemcanvas.com. Deploy = push to `main` (GitHub Actions → GC
 The living roadmap for THIS project is itself a Tandem canvas: **code `TEGLQFXR`**
 ("tandem planning"). Dogfooding — we plan Tandem in Tandem.
 
-The tool names below are the **default MCP surface** — the 16-tool intent facade
+The tool names below are the **default MCP surface** — the 17-tool intent facade
 (`FACADE_NAMES` in `apps/mcp-gateway/src/facade.ts`): `canvas_connect`,
 `agent_register`, `context_get`, `queue_next`, `queue_wait`, `task_find`,
 `task_get`, `task_claim`, `task_progress`, `task_complete`, `task_propose`,
-`task_amend`, `task_review`, `epic_propose`, `doc_write`, `board_status`. The old ~80-tool
+`task_amend`, `task_review`, `epic_propose`, `doc_write`, `doc_read`,
+`board_status`. The old ~80-tool
 `canvas_*` CRUD surface is still callable but is only *advertised* behind
 `TANDEM_FULL_TOOLS=1`, so write against these names.
 
@@ -214,11 +215,15 @@ as document tabs on `TEGLQFXR`. Asked to read "the thesis" (or any strategy
 doc), fetch it from the canvas; asked to write or update one, `doc_write` it to
 the right tab (a new `document` name creates the tab) instead of adding markdown
 under `docs/`. Repo `docs/` stays for code-adjacent material (ORCHESTRATION.md,
-DESIGN.md, specs). Reading a tab's content isn't on the 16-tool facade yet
-(`context_get` lists tabs but not note bodies): the `session` handle from
-`canvas_connect` is base64 JSON whose `token` field is a bearer token — `GET
-/api/canvas/state?fields=notes` with `Authorization: Bearer <token>` returns
-every note with its `documentId`; match against `fields=documents` for the tab.
+DESIGN.md, specs). Reading one back is **`doc_read`**, the read side of
+`doc_write`: pass `document` — the tab's NAME (case-insensitive, the same one you
+gave `doc_write`) or its id — and you get that tab's notes in board order, each
+with its markdown and its `noteId`. `context_get` lists the tabs if you don't
+know the name; an unknown name comes back naming the ones that do exist. Keep the
+`noteId` of anything you intend to revise, because `doc_write` without it appends
+a second copy instead of updating. The read is scoped server-side, so reading one
+tab never drags the rest of the canvas along — there is no reason to reach past
+the facade at the raw API with a hand-built token.
 
 ## Build / verify
 

@@ -12,7 +12,7 @@
 > Everything named here is shipped UI: the header fleet chip (`FleetView.tsx`, TDM-47),
 > the roster tree (orchestrator → executors via `parentAgentId`), the Feed tab (TDM-48),
 > the waiting-orchestrator state (`queue_wait`, TDM-149/150/151), ticket badges, live
-> column moves, epic progress. Every prompt is on the 16-tool intent facade.
+> column moves, epic progress. Every prompt is on the 17-tool intent facade.
 
 ~60s, three acts. House rules (hard, non-negotiable):
 

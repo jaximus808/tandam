@@ -963,12 +963,19 @@ they are not actually in the ready queue. `board_status` answers the last one.
 
 ## Notes on the tool surface
 
-Everything the prompt above uses is on the **default** manifest — the 16-tool
+Everything the prompt above uses is on the **default** manifest — the 17-tool
 intent facade: `canvas_connect`, `agent_register`, `context_get`, `queue_next`,
 `queue_wait`, `task_find`, `task_get`, `task_claim`, `task_progress`,
 `task_complete`, `task_propose`, `task_amend`, `task_review`, `epic_propose`,
-`doc_write`, `board_status`. No `TANDEM_FULL_TOOLS=1` needed; that env var opens
-the full CRUD surface, which orchestration does not require.
+`doc_write`, `doc_read`, `board_status`. No `TANDEM_FULL_TOOLS=1` needed; that
+env var opens the full CRUD surface, which orchestration does not require.
+
+`doc_read` is `doc_write`'s twin and closes the last gap that used to send
+sessions around the facade: reading a document tab back — a plan, a thesis, the
+decisions a past session left behind — is one call taking the tab's name (or id),
+scoped server-side to that tab. `context_get` lists the tabs; `doc_read` reads
+one. Hand-rolling an HTTP call against the raw API to get at note bodies is no
+longer a thing anyone has to do.
 
 `queue_wait` (§0) is `queue_next`'s waiting twin and needs no setup at all: it is
 what a live orchestrator calls instead of ending its turn. The webhook-launched
@@ -979,8 +986,8 @@ exits, because the listener is what wakes it next.
 and `outcome: "changes_requested"` — and it does nothing on a canvas that is not
 on the `peer` approval policy (§5): it answers `reviewed:false` and says so.
 
-It **replaced** `task_approve` on the manifest rather than joining it, so the
-surface is still 16 tools. `task_approve` is still *routed* — a session running on
+It **replaced** `task_approve` on the manifest rather than joining it, so it cost
+the surface no slot. `task_approve` is still *routed* — a session running on
 older instructions gets its approval instead of "unknown tool" — but it is no
 longer advertised and only ever did the `pass` half, which is precisely the gap
 §5 exists to close. Write `task_review`.

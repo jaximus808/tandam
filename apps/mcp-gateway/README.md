@@ -163,7 +163,7 @@ Same fields, one JSON object per line, so the numbers can be scraped straight ou
 
 ## Tools
 
-The default surface is a **16-tool intent facade** shaped like the work loop, not like the API:
+The default surface is a **17-tool intent facade** shaped like the work loop, not like the API:
 
 | Tool             | Purpose                                                                                                     |
 | ---------------- | ----------------------------------------------------------------------------------------------------------- |
@@ -182,13 +182,16 @@ The default surface is a **16-tool intent facade** shaped like the work loop, no
 | `task_review`    | The reviewer's one verb, two outcomes: `pass` approves a task a DIFFERENT agent proposed; `changes_requested` (with a required `reason`) sends a DIFFERENT agent's finished work back to the ready queue. Only on a canvas whose owner turned on the `peer` approval policy. Never your own work, never an epic, and never a rejection — killing work stays human. |
 | `epic_propose`   | Propose an epic, optionally with its whole plan (`tasks: [...]`) in one call. A human approves the epic once and it cascades to every task under it. |
 | `doc_write`      | Leave context behind as a markdown note; names a tab and creates it if new.                                  |
+| `doc_read`       | Read one document tab back — `document` is the tab's name (case-insensitive) or id; returns its notes with their markdown and `noteId`s, scoped server-side so it never pulls the rest of the canvas. Never creates a tab; an unknown name comes back naming the ones that exist. |
 | `board_status`   | Board-shaped overview — counts by state, epics, and every in-flight task as a report line (holder, claim age, last progress note, `staleClaim` past the lease) — without dumping the canvas. |
 
 The loop: `canvas_connect` → `queue_next` → `task_get` → `task_claim` → work (`task_progress`, `doc_write`) → `task_complete`.
 
 Every tool but `canvas_connect` takes the `session` handle — pass it on every call, since the hosted connection can reset between calls.
 
-`task_review` **replaced** `task_approve` on this manifest (the surface is still 16 tools). `task_approve` stays **callable** with its old behaviour and response shape, so sessions and prompts that learned it keep working — it is just no longer advertised, and it only ever did the approve half. New work uses `task_review`. The review loop itself, including what it deliberately refuses to do, is documented in [`docs/ORCHESTRATION.md` §5](https://github.com/jaximus808/tandam/blob/main/docs/ORCHESTRATION.md).
+Reading a tab is `doc_read`, not a hand-built HTTP call: `context_get` lists the tabs, `doc_read` returns one tab's notes. Keep the `noteId` of anything you plan to revise — `doc_write` without it appends a second note instead of updating the one you read.
+
+`task_review` **replaced** `task_approve` on this manifest (it cost the surface no slot). `task_approve` stays **callable** with its old behaviour and response shape, so sessions and prompts that learned it keep working — it is just no longer advertised, and it only ever did the approve half. New work uses `task_review`. The review loop itself, including what it deliberately refuses to do, is documented in [`docs/ORCHESTRATION.md` §5](https://github.com/jaximus808/tandam/blob/main/docs/ORCHESTRATION.md).
 
 ### The full CRUD surface
 
