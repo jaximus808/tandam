@@ -331,7 +331,23 @@ export async function projectTaskRows(
   return tasks;
 }
 
+/**
+ * Dispatch one CRUD tool call, with the session binding isolated to THIS call
+ * (TDM-178). The stdio entrypoint shares one Gateway across every concurrent
+ * subagent, so without the scope a call that yields on its API request could
+ * come back to a sibling's session and export a handle carrying the sibling's
+ * identity. Re-entrant: a facade tool that already opened a scope and delegates
+ * here keeps its own session rather than forking a copy of it.
+ */
 export async function handleTool(
+  gateway: Gateway,
+  toolName: string,
+  args: Args
+): Promise<unknown> {
+  return gateway.runInCallScope(() => runTool(gateway, toolName, args));
+}
+
+async function runTool(
   gateway: Gateway,
   toolName: string,
   args: Args

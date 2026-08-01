@@ -7,6 +7,8 @@
  * fail with a "not connected" error.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import { recordApiCall } from "./trace.js";
 
 export interface GatewayConfig {
@@ -112,9 +114,45 @@ function isConflictStatus(status: number): boolean {
   return status === 409 || status === 412;
 }
 
+/** Mutable holder for the binding ONE tool call reads and writes. */
+interface SessionSlot {
+  session: CanvasSession | null;
+}
+
+/**
+ * Per-call session isolation (TDM-178).
+ *
+ * THE BUG THIS EXISTS TO KILL: the stdio entrypoint builds ONE Gateway for the
+ * whole process, and every concurrent subagent in a harness (Claude Code's
+ * parallel Agent calls) funnels its tool calls through it. The binding used to
+ * live in a single mutable field, so a claim did this:
+ *
+ *   A: adoptSession(A)  →  await PATCH …          (yields the event loop)
+ *   B:                     adoptSession(B)        (overwrites the field)
+ *   A:                     exportSession() → B    (a SIBLING's identity)
+ *
+ * The observed symptom was task_claim handing agent A a "refreshed" handle
+ * carrying agent B's agentId/agentName — and the `_session_note` telling A to
+ * adopt it, which would have made all of A's later progress/complete calls post
+ * as B. The same interleave could also swap the JWT and the X-Tandem-Agent
+ * header on an in-flight request.
+ *
+ * THE FIX: a tool call runs inside an AsyncLocalStorage scope holding its OWN
+ * slot, so every read and write of the binding during that call — adopt, the
+ * auth headers built inside safeFetch, setAgentId, setClaimGeneration, the final
+ * exportSession — sees only that call's session, whatever siblings do meanwhile.
+ * The store carries its `owner` so one Gateway can never read a scope another
+ * Gateway opened (the HTTP sidecar has one per MCP session).
+ */
+const callScope = new AsyncLocalStorage<{ owner: Gateway; slot: SessionSlot }>();
+
 export class Gateway {
   private config: GatewayConfig;
-  private session: CanvasSession | null = null;
+  // The binding for calls made OUTSIDE a tool-call scope (the `init` CLI path),
+  // and the seed/write-back for calls made inside one — so a session a
+  // `canvas_connect` established still serves a later call that carries no
+  // handle, exactly as the single mutable field used to.
+  private processSlot: SessionSlot = { session: null };
   // Per-request user credential for the multi-tenant HTTP sidecar: the OAuth
   // access token from the incoming Authorization header, set by http.ts before
   // each dispatch. Takes precedence over config.userToken (the stdio env token),
@@ -123,6 +161,56 @@ export class Gateway {
 
   constructor(config: GatewayConfig) {
     this.config = config;
+  }
+
+  /**
+   * The slot this code path must use: the active call's own slot when we are
+   * inside a scope THIS gateway opened, the process-level one otherwise.
+   */
+  private slot(): SessionSlot {
+    const store = callScope.getStore();
+    return store && store.owner === this ? store.slot : this.processSlot;
+  }
+
+  /**
+   * The active binding. A private accessor rather than a field so every existing
+   * `this.session` read/write in this class is automatically call-scoped — there
+   * is no way to reach the raw slot and reintroduce the cross-session leak.
+   */
+  private get session(): CanvasSession | null {
+    return this.slot().session;
+  }
+
+  private set session(value: CanvasSession | null) {
+    this.slot().session = value;
+  }
+
+  /**
+   * Run ONE tool call with its own private copy of the binding (TDM-178 — see
+   * `callScope`). Concurrent calls on a shared Gateway cannot see or clobber
+   * each other's session, so the handle a call exports is always its OWN.
+   *
+   * Re-entrant by design: the tool entrypoints and the server's dispatch both
+   * wrap, and a facade tool delegating to a CRUD tool wraps again. Only the
+   * outermost scope is real; the inner ones pass through, so a delegate still
+   * shares the caller's session instead of forking a stale copy of it.
+   *
+   * On exit the slot is written back to the process-level binding, preserving
+   * the old behaviour for a client that connects once and then omits the handle.
+   * The seed is a COPY, so an in-flight call mutating its session (a lazily
+   * minted claimantId, agent_register, a claim's fencing token) cannot be seen
+   * mid-flight by a concurrent handle-less call.
+   */
+  async runInCallScope<T>(fn: () => Promise<T>): Promise<T> {
+    const store = callScope.getStore();
+    if (store && store.owner === this) return fn();
+    const current = this.processSlot.session;
+    const slot: SessionSlot = { session: current ? { ...current } : null };
+    try {
+      return await callScope.run({ owner: this, slot }, fn);
+    } finally {
+      this.processSlot.session = slot.session;
+    }
   }
 
   /**

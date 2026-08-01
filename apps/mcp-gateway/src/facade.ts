@@ -1207,7 +1207,21 @@ function requireTaskId(args: Args): string {
   return id;
 }
 
+/**
+ * Dispatch one facade tool call. Session-isolated for the same reason the CRUD
+ * entrypoint is (TDM-178): one shared Gateway serves every concurrent subagent
+ * on stdio, and a call that yields mid-flight must come back to ITS OWN
+ * binding — task_claim exports a handle at the end of exactly such a yield.
+ */
 export async function handleFacadeTool(
+  gateway: Gateway,
+  toolName: string,
+  args: Args
+): Promise<unknown> {
+  return gateway.runInCallScope(() => runFacadeTool(gateway, toolName, args));
+}
+
+async function runFacadeTool(
   gateway: Gateway,
   toolName: string,
   args: Args

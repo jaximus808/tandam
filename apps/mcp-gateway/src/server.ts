@@ -168,9 +168,14 @@ export function createTandemServer(
     // it, and ok/error. A pass-through when tracing is off. `isError` on the
     // dispatch result is the tool-level failure signal — dispatch catches
     // throws and turns them into an error payload.
+    // The whole dispatch — the tool AND the canvas_state_read decoration that
+    // reads the session after it — runs in one call-scoped binding (TDM-178),
+    // so concurrent callers on a shared Gateway can't be answered with each
+    // other's canvas or identity. handleTool/handleFacadeTool wrap too; the
+    // inner scope is a pass-through.
     return tracer.call(
       name,
-      () => dispatch(gateway, name, a),
+      () => gateway.runInCallScope(() => dispatch(gateway, name, a)),
       (result) => !(result as { isError?: boolean }).isError
     );
   });
