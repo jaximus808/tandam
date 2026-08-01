@@ -141,7 +141,11 @@ test("board_status returns each epic's summary and account without reading its t
       );
       assert.equal(res.epics.length, 1);
       assert.equal(res.epics[0].summary, "Published the pivot; reconciled the surfaces.");
-      assert.equal(res.epics[0].done[0].result, "Shipped.");
+      // The per-ticket account is EXPANDED now, not free (TDM-184): the default
+      // read says how many lines it is holding back, and `epic:` fetches them.
+      assert.equal("done" in res.epics[0], false, "no per-ticket lines on the default read");
+      assert.equal(res.epics[0].doneOmitted, 1);
+      assert.match(String(res._epics), /epic: "<id or title>"/);
     },
     { epics: [rollup({ summary: "Published the pivot; reconciled the surfaces." })] }
   );

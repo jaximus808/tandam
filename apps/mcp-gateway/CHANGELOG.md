@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### `board_status` reads compact, expands one epic on demand (TDM-184)
+
+- **The board read no longer ships the archive.** It used to quote one line per
+  finished ticket for every batch on the canvas, so "where does this project
+  stand?" grew with the project's whole history — on the Tandem board itself, 34
+  batches and 256 tickets in, ~76KB of mostly-finished work with the live rows
+  buried in it. The same read is now **~11KB**, and its size tracks the number of
+  batches, not the number of tickets under them.
+- **Each epic row is bounded:** counts, state, the first line of the batch's
+  `summary` (`summaryTruncated` when there was more), and `doneOmitted` — how many
+  finished-ticket lines the row is holding back. Nothing is dropped silently, and
+  `returned` (a ticket that came BACK, with the decider's reason) is never
+  trimmed, because it is the most actionable thing on the read.
+- **New `epic` argument expands exactly ONE batch** — its id, or enough of its
+  title to name it ("E15", "token diet"). That batch comes back whole, with its
+  per-ticket account; every other batch stays compact. Still one rollup call. A
+  ref that matches nothing, or several, expands nothing and says so in
+  `_epicNotExpanded` — as data, with the board read unaffected.
+- Reads the API's compact rollup (`GET /api/canvas/epics`, TDM-183) by default and
+  `?full=1` only when expanding. `task_get` / `task_complete`'s epic block is
+  unchanged — it still reads the full shape, which is where its `summaryBy`
+  attribution comes from.
+
 ### `doc_read` — read a document tab back without leaving the facade (TDM-179/180)
 
 - **New `doc_read`** on the default surface: `doc_write`'s twin. `document` is the

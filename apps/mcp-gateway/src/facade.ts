@@ -306,9 +306,19 @@ function reviewNote(fb: ReviewFeedback | undefined): { _review?: string } {
  * Read the rollups, or null on an API deployed before the endpoint existed
  * (same getIfAvailable contract context_get uses for /api/canvas/context).
  */
-async function fetchEpicRollups(gateway: Gateway): Promise<EpicRollup[] | null> {
+async function fetchEpicRollups(
+  gateway: Gateway,
+  opts: { full?: boolean } = {}
+): Promise<EpicRollup[] | null> {
   try {
-    const res = await gateway.getIfAvailable<{ epics?: EpicRollup[] }>("/api/canvas/epics");
+    // COMPACT is the default read (TDM-183, api side): per-ticket lines only
+    // where there is still open work, and no `summaryBy` stamp. `?full=1` asks
+    // for the archive — one line per finished ticket in every batch — and is
+    // what the single-epic reads below want, because they quote exactly one
+    // batch back and the trimming they need is their own.
+    const res = await gateway.getIfAvailable<{ epics?: EpicRollup[] }>(
+      `/api/canvas/epics${opts.full ? "?full=1" : ""}`
+    );
     return res?.epics ?? null;
   } catch {
     // SUPPLEMENTARY, so it fails soft. Every caller of this asks its real
@@ -322,9 +332,14 @@ async function fetchEpicRollups(gateway: Gateway): Promise<EpicRollup[] | null> 
   }
 }
 
-/** One rollup by id, or null when the endpoint or the epic is absent. */
+/**
+ * One rollup by id, or null when the endpoint or the epic is absent. Reads the
+ * FULL shape: this feeds epicSnapshot, whose `summaryBy` attribution the compact
+ * read drops, and it quotes a single batch rather than the whole board — so the
+ * size argument that put the board read on a diet does not apply here.
+ */
 async function fetchEpicRollup(gateway: Gateway, epicId: string): Promise<EpicRollup | null> {
-  const all = await fetchEpicRollups(gateway);
+  const all = await fetchEpicRollups(gateway, { full: true });
   return all?.find((e) => e.id === epicId) ?? null;
 }
 
@@ -365,6 +380,111 @@ function epicSnapshot(e: EpicRollup) {
     // nothing here.
     ...(e.returned && e.returned.length > 0 ? { returned: e.returned } : {}),
     ...(e.review ? { review: e.review } : {}),
+  };
+}
+
+// ── The board read's epic rows (TDM-184) ─────────────────────────────────────
+
+/**
+ * How much of a batch's summary the BOARD read quotes. The board answers "where
+ * does this project stand", which a first line answers; "what exactly did E15
+ * deliver" is the expanded read, one argument away. Capped rather than dropped
+ * because a bare list of epic titles is not a status report — and capped at all
+ * because every finished batch keeps its summary forever, so an uncapped one
+ * would make the board read grow with the project's whole history.
+ */
+const BOARD_SUMMARY_CHARS = 200;
+
+/** First line, cut to `max`, with a flag saying whether anything was left out. */
+function excerptLine(text: string, max: number): { text: string; truncated: boolean } {
+  const firstLine = text.trim().split("\n")[0]!.trim();
+  const cut = firstLine.length > max;
+  return {
+    text: cut ? `${firstLine.slice(0, max)}…` : firstLine,
+    truncated: cut || firstLine.length < text.trim().length,
+  };
+}
+
+/**
+ * One epic as the DEFAULT board read shows it: bounded in size no matter how
+ * many tickets the batch has or how long the project has run.
+ *
+ * The board read used to quote one line per finished ticket for every batch on
+ * the canvas, so it grew with the archive — 34 batches and 250 tickets in, the
+ * answer to "where does this stand?" was ~79KB of mostly-finished history, and
+ * the live rows an orchestrator actually needed were buried in it. The per-ticket
+ * account did not stop being useful; it stopped being something every read should
+ * pay for. So it moves behind `epic:` — expand exactly one batch — and what stays
+ * here is what a status answer is made of: the counts, the state, the first line
+ * of what the batch achieved, and whether anything came back.
+ *
+ * `doneOmitted` is what keeps that honest: a row never quietly drops lines, it
+ * says how many and where to get them. Activity timestamps are dropped too —
+ * they are per-batch trivia the expanded read still carries.
+ */
+function boardEpicRow(e: EpicRollup) {
+  const summary = e.summary ? excerptLine(e.summary, BOARD_SUMMARY_CHARS) : undefined;
+  // Either the server already compacted this batch (it says how many lines it
+  // left out) or it sent them and we are dropping them here. Both are the same
+  // fact to the reader.
+  const omitted = e.doneOmitted ?? e.done?.length ?? 0;
+  return {
+    id: e.id,
+    title: e.title,
+    state: e.state,
+    tasks: e.tasks,
+    ...(summary
+      ? { summary: summary.text, ...(summary.truncated ? { summaryTruncated: true } : {}) }
+      : {}),
+    // Flags only when true: on a board of mostly-finished batches, `false` on
+    // every row is pure weight.
+    ...(e.drained ? { drained: true } : {}),
+    ...(e.summaryNeeded ? { summaryNeeded: true } : {}),
+    ...(omitted > 0 ? { doneOmitted: omitted } : {}),
+    // Never trimmed here (TDM-161): a ticket that came BACK carries the
+    // decider's reason, which is the most actionable thing on the whole read.
+    // The server already excerpts these, and they are rare.
+    ...(e.returned && e.returned.length > 0 ? { returned: e.returned } : {}),
+    ...(e.review ? { review: e.review } : {}),
+  };
+}
+
+/**
+ * Resolve the `epic` argument — an id, or a title the caller half-remembers
+ * ("E15", "the token diet one") — against the batches on this board.
+ *
+ * Refusals come back as DATA, never as a throw: the board read still answers,
+ * and the caller is told which names exist rather than having to go looking.
+ */
+function matchBoardEpic(
+  epics: EpicRollup[],
+  ref: string
+): { epic?: EpicRollup; problem?: string } {
+  const needle = ref.trim().toLowerCase();
+  if (!needle) return {};
+  const byId = epics.find((e) => e.id.toLowerCase() === needle);
+  if (byId) return { epic: byId };
+  const exact = epics.filter((e) => (e.title ?? "").trim().toLowerCase() === needle);
+  if (exact.length === 1) return { epic: exact[0] };
+  const partial = epics.filter((e) => (e.title ?? "").toLowerCase().includes(needle));
+  if (partial.length === 1) return { epic: partial[0] };
+  const names = (partial.length > 1 ? partial : epics)
+    .slice(0, 12)
+    .map((e) => `"${e.title}"`)
+    .join(", ");
+  if (partial.length > 1) {
+    return {
+      problem:
+        `\`epic: "${ref}"\` matches ${partial.length} batches (${names}) — nothing was expanded. ` +
+        `Pass the epic's id, or enough of one title to name it alone.`,
+    };
+  }
+  return {
+    problem:
+      `No epic here matches \`epic: "${ref}"\` — nothing was expanded, and the rest of this ` +
+      `board read is unaffected. The batches on this canvas are: ${names}` +
+      (epics.length > 12 ? `, …(+${epics.length - 12} more)` : "") +
+      `. Pass an id or a title from that list.`,
   };
 }
 
@@ -419,6 +539,14 @@ const DEFAULT_CLAIM_LEASE_MINUTES = 15;
 
 /** How long a progress note may be in a board read before it gets trimmed. */
 const BOARD_PROGRESS_CHARS = 200;
+
+/**
+ * How many un-summarized batches the board read NAMES. The count is always
+ * exact and every such epic is flagged on its own row; this only caps the
+ * convenience list, which on a long-running board is otherwise two dozen ids and
+ * titles quoted a second time.
+ */
+const UNSUMMARIZED_LISTED = 6;
 
 type ProgressEntry = { at?: string; agent?: string; note?: string };
 
@@ -2699,13 +2827,22 @@ async function runFacadeTool(
       //
       // The epic half comes from the server's ROLLUP endpoint (TDM-93) when the
       // API has it: each batch's persisted `summary` — what it ACHIEVED — plus
-      // counts, the activity window, and one line per finished ticket. That is
-      // the answer this tool could not give before: counting task states says
-      // how MUCH happened in an epic and nothing about what, so "what did E5
-      // deliver?" meant opening all six of its tickets.
+      // counts and, on request, one line per finished ticket. That is the answer
+      // this tool could not give before: counting task states says how MUCH
+      // happened in an epic and nothing about what, so "what did E5 deliver?"
+      // meant opening all six of its tickets.
+      //
+      // Those per-ticket lines are now EXPANDED, not free (TDM-184). Every read
+      // used to carry the whole archive, so the report grew with the project's
+      // history and the live rows were buried in finished ones. The default is
+      // one bounded row per batch; `epic:` quotes exactly one batch in full,
+      // which is the question that actually wanted the lines.
+      const expandRef = typeof args.epic === "string" ? args.epic.trim() : "";
       const [tasks, rollups, epicsRes] = await Promise.all([
         listAgentTasks(gateway),
-        fetchEpicRollups(gateway),
+        // ONE rollup call either way. Expanding asks for the full shape and
+        // compacts the other batches here, rather than paying for a second read.
+        fetchEpicRollups(gateway, expandRef ? { full: true } : {}),
         // The fallback list, for an API deployed before /api/canvas/epics
         // existed. Read in the same wave so the fallback costs no extra round
         // trip when the rollup turns out to be absent.
@@ -2714,8 +2851,29 @@ async function runFacadeTool(
         }>,
       ]);
 
+      // Which batch (if any) the caller asked to see whole. A ref that names
+      // nothing, or names several, expands nothing and says so — the board read
+      // itself still answers.
+      const expansion: { epic?: EpicRollup; problem?: string } = !expandRef
+        ? {}
+        : rollups
+          ? matchBoardEpic(rollups, expandRef)
+          : {
+              problem:
+                `This API has no epic rollup endpoint, so \`epic: "${expandRef}"\` could not be ` +
+                `expanded — the epics below are composed from task counts alone. Read the ` +
+                `batch's tickets with task_find / task_get instead.`,
+            };
+      const expandedId = expansion.epic?.id;
+
       const epics =
-        rollups ??
+        rollups?.map((e) =>
+          e.id === expandedId
+            ? // The whole batch, exactly as the rollup gives it: per-ticket
+              // lines, the summary in full, the activity window.
+              { ...e, expanded: true }
+            : boardEpicRow(e)
+        ) ??
         (epicsRes.actions ?? []).map((e) => {
           const mine = tasks.filter((t) => t.payload?.epicId === e.id);
           return {
@@ -2726,12 +2884,25 @@ async function runFacadeTool(
           };
         });
 
+      // How much finished history this read is NOT carrying. Reported rather
+      // than silent: an agent that cannot see the lines should at least know
+      // they exist and cost one argument.
+      const omittedLines = (rollups ?? []).reduce(
+        (n, e) => n + (e.id === expandedId ? 0 : (e.doneOmitted ?? e.done?.length ?? 0)),
+        0
+      );
+
       // Batches that drained with nobody recording what they delivered. Named
       // rather than left for the reader to notice: an unwritten summary only
       // ever gets written while somebody still remembers the work.
-      const unsummarized = (rollups ?? [])
+      // Listed at briefing length, not exhaustively: on a long-running board this
+      // is a backlog of two dozen finished batches, and re-quoting every id and
+      // title here doubles them — each row above already carries
+      // `summaryNeeded: true`, and the note says how many there are in total.
+      const unsummarizedAll = (rollups ?? [])
         .filter((e) => e.summaryNeeded)
         .map((e) => ({ id: e.id, title: e.title, doneTasks: e.tasks.byState.done ?? 0 }));
+      const unsummarized = unsummarizedAll.slice(0, UNSUMMARIZED_LISTED);
 
       // Each in-flight row is a REPORT line, not just a name (TDM-95): ticket,
       // holder, how long they have held it, whether the claim outlived its lease,
@@ -2753,7 +2924,9 @@ async function runFacadeTool(
         inFlight,
         epics,
         unassignedTasks: tasks.filter((t) => !t.payload?.epicId).length,
+        ...(expansion.epic ? { expandedEpic: expansion.epic.id } : {}),
         ...(unsummarized.length > 0 ? { unsummarizedEpics: unsummarized } : {}),
+        ...(expansion.problem ? { _epicNotExpanded: expansion.problem } : {}),
         ...(stale.length > 0
           ? {
               _staleClaims:
@@ -2763,11 +2936,16 @@ async function runFacadeTool(
                 `risk — do NOT complete them on the holder's behalf.`,
             }
           : {}),
-        ...(unsummarized.length > 0
+        ...(unsummarizedAll.length > 0
           ? {
               _unsummarizedEpics:
-                `${unsummarized.length} epic(s) have DRAINED with nothing recording what the batch ` +
-                `achieved. Report them: the account only gets written while someone still remembers ` +
+                `${unsummarizedAll.length} epic(s) have DRAINED with nothing recording what the ` +
+                `batch achieved` +
+                (unsummarizedAll.length > unsummarized.length
+                  ? ` (\`unsummarizedEpics\` lists ${unsummarized.length}; the rest are the epic ` +
+                    `rows marked \`summaryNeeded\`)`
+                  : "") +
+                `. Report them: the account only gets written while someone still remembers ` +
                 `the work. An agent finishing remaining work in one passes \`epicSummary\` to ` +
                 `task_complete; otherwise the human writes it on the board.`,
             }
@@ -2783,10 +2961,22 @@ async function runFacadeTool(
                 `Reasons are excerpted here — task_get on the ticket has the whole thing.`,
             }
           : {}),
+        ...(omittedLines > 0
+          ? {
+              _epics:
+                `Epics are listed COMPACT: counts, state, and the first line of each batch's ` +
+                `summary. ${omittedLines} finished-ticket line(s) are not shown — call ` +
+                `board_status again with \`epic: "<id or title>"\` to expand exactly ONE batch ` +
+                `into its per-ticket account (that batch full, every other one still compact), ` +
+                `which is the read for "what did that epic actually deliver?". Each row's ` +
+                `\`doneOmitted\` says how many lines it is holding back.`,
+            }
+          : {}),
         _next:
           "Ready work is the 'approved' count — call queue_next to see it. Tasks stuck at " +
           "'proposed' are waiting on a human (and tasks under a 'proposed' epic wait on that " +
-          "epic). Looking for one specific task by name? task_find.",
+          "epic). Looking for one specific task by name? task_find. Want one batch's " +
+          "per-ticket history? board_status with `epic:` — it is one argument, not a second tool.",
       };
     }
 
@@ -3385,17 +3575,32 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
     name: "board_status",
     description:
       "A compact read of the BOARD, not the canvas: task counts by state, epics with their approval " +
-      "state, per-epic task counts and — the batch-level answer — each epic's `summary` of what it " +
-      "ACHIEVED plus one line per finished ticket, so 'what did E5 deliver?' costs this one call " +
-      "instead of opening all six of its tasks. An epic marked `summaryNeeded` has drained with " +
-      "nobody recording that. And every in-flight task as a report line — ticketId, " +
-      "holder, how many minutes they have held the claim, their last progress note, and " +
-      "`staleClaim: true` once nothing has been reported for longer than the claim lease (~15 min), " +
-      "meaning the holder has probably gone dark. THIS IS THE ORCHESTRATOR'S REPORT: it is enough " +
-      "to say where every worker stands without reading a single task. Also how you check whether " +
-      "your proposals got approved. Cheap — it never dumps canvas contents. For the work you can " +
+      "state, per-epic task counts and the first line of each epic's `summary` of what it ACHIEVED. " +
+      "An epic marked `summaryNeeded` has drained with nobody recording that. And every in-flight " +
+      "task as a report line — ticketId, holder, how many minutes they have held the claim, their " +
+      "last progress note, and `staleClaim: true` once nothing has been reported for longer than " +
+      "the claim lease (~15 min), meaning the holder has probably gone dark. THIS IS THE " +
+      "ORCHESTRATOR'S REPORT: it is enough to say where every worker stands without reading a " +
+      "single task. Also how you check whether your proposals got approved. ONE BATCH IN FULL: the " +
+      "per-ticket account — one line per finished ticket, with what it delivered — is one argument " +
+      "away, not something every read pays for. Pass `epic` (its id, or enough of its title to name " +
+      "it) and THAT batch comes back whole while every other one stays compact, which is the read " +
+      "for 'what did E5 actually deliver?'. Each compact row's `doneOmitted` says how many lines it " +
+      "is holding back. Cheap by default and it never dumps canvas contents. For the work you can " +
       "actually start, use queue_next; to find one task by name, task_find. " +
       SESSION_CONVENTION,
-    inputSchema: { type: "object" as const, properties: {} },
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        epic: {
+          type: "string",
+          description:
+            "Optional: expand exactly ONE batch into its per-ticket account — its id, or enough " +
+            "of its title to name it alone ('E15', 'token diet'). Everything else on the board " +
+            "stays compact. A ref that matches nothing, or several batches, expands nothing and " +
+            "says so in `_epicNotExpanded` — the rest of the board read still answers.",
+        },
+      },
+    },
   },
 ];

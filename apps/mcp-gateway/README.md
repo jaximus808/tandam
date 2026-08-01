@@ -183,7 +183,7 @@ The default surface is a **17-tool intent facade** shaped like the work loop, no
 | `epic_propose`   | Propose an epic, optionally with its whole plan (`tasks: [...]`) in one call. A human approves the epic once and it cascades to every task under it. |
 | `doc_write`      | Leave context behind as a markdown note; names a tab and creates it if new.                                  |
 | `doc_read`       | Read one document tab back — `document` is the tab's name (case-insensitive) or id; returns its notes with their markdown and `noteId`s, scoped server-side so it never pulls the rest of the canvas. Never creates a tab; an unknown name comes back naming the ones that exist. |
-| `board_status`   | Board-shaped overview — counts by state, epics, and every in-flight task as a report line (holder, claim age, last progress note, `staleClaim` past the lease) — without dumping the canvas. |
+| `board_status`   | Board-shaped overview — counts by state, epics, and every in-flight task as a report line (holder, claim age, last progress note, `staleClaim` past the lease) — without dumping the canvas. Compact by default: each epic is counts plus the first line of what it achieved, and `doneOmitted` says how many finished-ticket lines it is holding back. Pass `epic` (id, or enough of the title to name it) to expand exactly ONE batch into its per-ticket account. |
 
 The loop: `canvas_connect` → `queue_next` → `task_get` → `task_claim` → work (`task_progress`, `doc_write`) → `task_complete`.
 
