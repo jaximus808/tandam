@@ -2887,7 +2887,23 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
       "under it via `tasks` (same item shape as task_propose). Use this whenever you're asked to " +
       "'write an epic' or plan a feature: tasks proposed without one are unparented and each need " +
       "their own approval. " +
-      "TICKET QUALITY IS THE POINT HERE, not a nicety: the PLAN is what the human reviews, so " +
+      "WHEN TO REACH FOR IT WITHOUT BEING ASKED — and when NOT to, which matters just as much. " +
+      "The test: could you write the ticket — name the surface it touches, state a done condition " +
+      "someone else could check, one sitting of work — out of what the user ACTUALLY SAID? " +
+      "If NO for any part of the ask, call this FIRST, before you write a line of code: " +
+      "'fix auth, the email service, and messaging' names three AREAS and zero surfaces, so " +
+      "starting means inventing the surfaces, the scope and the done conditions yourself — and " +
+      "those invented calls are exactly what the human is meant to see before the code exists. " +
+      "Same for one vague area ('make onboarding not suck') or one ask plainly bigger than a " +
+      "sitting. If YES for every part, do NOT wrap it in an epic — just do the work. " +
+      "'Fix the bell overlapping the code chip' already names its surface and its done condition; " +
+      "an epic there charges the human an approval for a decision they made when they asked, and " +
+      "a gate that fires on everything gets switched off. It turns on how SPECIFIED the ask is, " +
+      "not how many parts it has: three specified one-sitting changes are three tasks, not an " +
+      "epic. Propose the WHOLE batch here rather than starting on the easy one while the rest " +
+      "waits. " +
+      "THAT SAME TEST IS THE BAR FOR THE TICKETS YOU WRITE, and ticket quality is the point " +
+      "here, not a nicety: the PLAN is what the human reviews, so " +
       "eleven mushy tickets waste the whole gate. Every ticket you write must (1) NAME THE " +
       "SURFACE it touches — a file, a package, an endpoint, a component, never 'improve auth'; " +
       "(2) carry a DONE CONDITION someone else could check without asking you — a test, a build, " +

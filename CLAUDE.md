@@ -93,6 +93,41 @@ picks it up). Add more tasks to an existing batch later with `task_propose` and
 that `epicId`. Everything lands as `proposed` for human approval in the web UI —
 never try to approve your own work; epic approval is the human's on every canvas.
 
+**Which asks become a plan, and which you just do.** "Plan work rather than
+execute it" is not usually stated; it arrives as a lazy prompt. The test is the
+ticket contract itself: **could you write the ticket — name the surface it
+touches, state a done condition someone else could check, one sitting of work —
+out of what the human actually said?**
+
+- **No → `epic_propose` FIRST, before you write a line of code.** *"Fix auth, the
+  email service, and messaging"* names three **areas** and zero surfaces: to
+  start, you would have to invent the surfaces, the scope and the done
+  conditions. Those invented calls are precisely what the plan gate exists to
+  show the human. Same for one area that is vague (*"make onboarding not suck"*)
+  or one ask plainly larger than a sitting. Reading eleven ticket titles costs
+  twenty seconds; reading eleven wrong diffs costs an afternoon.
+- **Yes, for every part of the ask → just do the work.** *"Fix the bell
+  overlapping the code chip"* already names its surface and its done condition;
+  an epic there buys the human an approval click for work they approved by
+  asking, and a gate that fires on everything is a gate people switch off. It is
+  about how **specified** the ask is, not how many parts it has: three specified
+  one-sitting changes are three tasks, not an epic — and `epic_propose` refuses a
+  one-ticket epic outright, because that is a task.
+
+Propose the **whole** batch in one `epic_propose` — don't start on "the easy one"
+while the rest waits — then `queue_wait` on the returned `epicId`. If a ticket
+comes back, `task_get` answers with a `review` block carrying the decider's
+reason verbatim: a **rejection** is a correction to the *plan* (`task_amend` the
+neighbours it also condemns; re-proposing it lands the same way), a **bounce** is
+the brief for the next attempt at that same ticket.
+
+None of this is a fifth mode: it is the default `epic` policy's shape, where one
+human approval per batch releases every ticket under it. The owner picks the
+policy (next paragraph) — you only pick whether there is a plan worth reviewing.
+The one that changes the answer is `auto`: no gate at all, so proposing there is
+record-keeping and the direct path is the norm. Worked examples and the policy
+table: `docs/ORCHESTRATION.md` §6.
+
 **The one exception — `approval_policy: 'peer'`, off by default.** A canvas is on
 exactly one of **four** approval policies (`strict | epic | auto | peer`,
 migrations 0033 + 0041), and only the OWNER sets it: `strict` lands every

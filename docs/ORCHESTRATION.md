@@ -37,6 +37,10 @@ Before you write the orchestrator prompt, read **[CONTENTION.md](CONTENTION.md)*
 the claim lifecycle, the tap-out contract every loser follows, and why dispatching
 work that was never ticketed causes double implementation.
 
+Upstream of all of it: **§6** is how work gets onto the board in the first place —
+which asks an agent should turn into a proposed epic, and which it should just go
+and do.
+
 ---
 
 ## 0. If an agent is already running, it waits: `queue_wait`
@@ -722,7 +726,112 @@ Both outcomes:
 
 ---
 
-## 6. Troubleshooting
+## 6. The plan gate: which asks become an epic, and which you just do
+
+Everything above starts from tickets already being on the board. This is the step
+before it, and it is the one an agent gets wrong in both directions: executing a
+sprawling ask it should have planned, or ceremonially wrapping a one-line fix in
+an epic nobody wanted to approve.
+
+The pitch is that **the gate moves to before the code**. Every review tool on the
+market intervenes at the diff — the agent builds the wrong thing, and you read
+400 lines to find out it was the wrong thing. A plan intervenes earlier: eleven
+ticket titles cost twenty seconds to read, eleven wrong diffs cost an afternoon.
+That only pays if the routing is reliable, which is what this section is.
+
+### The test
+
+**Could you write the ticket — name the surface it touches, state a done
+condition someone else could check, one sitting of work — out of what the human
+actually said?**
+
+That is deliberately the same contract `epic_propose` holds the tickets to (it
+states it in the tool description and enforces the objective half). One rule,
+used twice: it decides whether there is a plan to write, and then it decides
+whether what you wrote is worth reviewing.
+
+- **No, for any part of the ask → `epic_propose` FIRST**, before a line of code.
+  You would be inventing the surfaces, the scope and the done conditions
+  yourself, and those invented calls are exactly what the human is being shown.
+- **Yes, for every part → do the work.** There is nothing to review: the human
+  already made the calls when they asked. Wrapping it in an epic charges them an
+  approval click for a decision they have already taken.
+
+It turns on how **specified** the ask is, not how many parts it has.
+
+| The ask | Route | Why |
+|---|---|---|
+| *"fix auth, the email service, and messaging"* | `epic_propose` | Three **areas**, zero surfaces. Each one is several tickets you would be writing on their behalf. |
+| *"make onboarding not suck"* | `epic_propose` | One area, no surface, no done condition. A goal, not a change. |
+| *"add rate limiting"* | `epic_propose` | Sounds like one thing; it is a limiter, a store, config, and a 429 path. Larger than a sitting. |
+| *"fix the bell overlapping the code chip"* | just do it | Surface named, done condition obvious, one sitting. |
+| *"add a `--quiet` flag to `tandem-mcp listen`, bump the version, update the README"* | just do all three | Three parts, all specified, all one sitting each. Three tasks, not an epic. |
+| *"plan the dark-mode rollout"* / *"write an epic for X"* | `epic_propose` | Asked for a plan explicitly. |
+
+### The boundary is as load-bearing as the trigger
+
+State it out loud, because overreach is what makes a gate annoying enough to turn
+off: **a single specific ask must not become an epic.** Three reasons it is a
+rule and not a preference:
+
+1. It costs the human an approval for work they authorised by asking for it.
+2. It is slower than the thing it replaced, on the one case where direct
+   instruction genuinely wins.
+3. `epic_propose` **refuses a one-ticket epic** outright — an epic with a single
+   task is a task, so the honest move is `task_propose` (with an `epicId` to file
+   it under an existing batch), or nothing at all if you are about to do it now.
+
+The general version, worth saying to anyone who asks why they would bother:
+Tandem is not for the three things you would just type into a session. It starts
+paying when the batch is bigger than you can hold, when agents run where you are
+not, when two of them want the same ticket, or when you want to triage from a
+phone. Claiming it wins at N=3 loses the argument for the case where it wins.
+
+### What the policy has to do with it
+
+Nothing you choose. The route is *whether there is a plan worth reviewing*; the
+canvas's `approval_policy` is *who lets it through*, and only the owner sets it
+(§5 has the full table). There is no fifth mode for this:
+
+| Policy | What the route looks like there |
+|---|---|
+| `epic` (default) | **The pairing.** One human approval on the epic releases every ticket under it — which is what makes proposing a whole batch cheap enough to be the default answer to a vague ask. |
+| `strict` | Same route, ticket-by-ticket gate. Propose the batch anyway; the human approves each. |
+| `peer` | Same route, but nothing is born approved and the epic cascade is off — a reviewer agent passes each ticket on its own (§5). |
+| `auto` | **The direct path.** Nothing waits, so proposing is record-keeping rather than review. Worth doing for a batch you want claimable and trackable; not worth it to gate a one-line fix that no longer gets gated anyway. |
+
+### After you propose
+
+Do not end the turn and do not poll. `queue_wait` with the returned `epicId`
+returns the moment the batch is approved; `status: "timeout"` means nothing yet,
+so call it again (§0).
+
+Tickets come back, and that is the gate working. `task_get` answers with a
+`review` block — `{ outcome, reason, by, at }`, the decider's words verbatim —
+whichever produced it (TDM-161):
+
+- **`rejected`** — a human killed it. Read it as a correction to the *plan*, not
+  to the one ticket: it usually condemns neighbours too, so `task_amend` those
+  while they are still `proposed`. Re-proposing the same ticket lands the same
+  way.
+- **`rework`** — finished work sent back (§5). The reason is the brief for the
+  next attempt at that same ticket; it is back in the ready queue for a fresh
+  claim, not a new ticket to file.
+
+### The honest limit
+
+Decomposition does not create thought. *"Fix auth"* can absolutely produce eleven
+vague tickets, and this route does not stop that — what changes is that you can
+**see** it is slop in twenty seconds instead of forty minutes. It is a slop
+detector, not a slop preventer. `epic_propose`'s ticket-quality contract raises
+the floor (a ticket with no real body, or one that just restates the epic's
+title, is refused before anything is written, and softer smells come back as
+non-blocking `warnings` to fix with `task_amend`) — but the floor is not
+judgement, and the human reading eleven titles is still the point.
+
+---
+
+## 7. Troubleshooting
 
 **401 from the listener** — the signature is missing, malformed, or does not
 match, which in practice means the secret is wrong. The listener reads
