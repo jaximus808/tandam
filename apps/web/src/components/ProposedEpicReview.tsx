@@ -4,7 +4,7 @@ import {
   WARNING_ORDER,
   type PlanReview,
   type TicketReview,
-} from "../lib/ticketQuality";
+} from "@agentcanvas/shared/ticket-quality";
 import { T_HEAD, T_META, TAP } from "../lib/boardScale";
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -30,11 +30,13 @@ import { T_HEAD, T_META, TAP } from "../lib/boardScale";
        it touches, how you would know it is done, and any warnings. These are
        what make the LIST judgeable, which is the whole ticket.
 
-   The signals themselves come from lib/ticketQuality, which mirrors TDM-159's
-   contract client-side (see the long note there on why, and on the duplication
-   that buys). Nothing here decides anything: the digest's one control sorts,
-   and every verb on this surface still belongs to TDM-160's per-ticket triage
-   and TDM-164's selection.
+   The signals themselves come from `@agentcanvas/shared/ticket-quality` — the
+   ONE implementation of TDM-159's contract, which the MCP gateway runs at
+   propose time and the board runs here (it was a hand-copied mirror in
+   lib/ticketQuality until TDM-169 hoisted it). See the long note there for why
+   the rules stay client-evaluable at all. Nothing here decides anything: the
+   digest's one control sorts, and every verb on this surface still belongs to
+   TDM-160's per-ticket triage and TDM-164's selection.
    ──────────────────────────────────────────────────────────────────────────── */
 
 /** An amber warning chip: the same weight the board already gives a stalled

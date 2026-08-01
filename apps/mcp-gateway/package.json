@@ -58,6 +58,7 @@
     "@modelcontextprotocol/sdk": "^1.0.0"
   },
   "devDependencies": {
+    "@agentcanvas/shared": "workspace:*",
     "@types/node": "^20.12.7",
     "tsup": "^8.0.2",
     "tsx": "^4.7.3",

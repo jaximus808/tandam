@@ -90,7 +90,7 @@ import {
 import TaskLinks from "./TaskLinks";
 import { useCardFlight } from "../lib/useCardFlight";
 import { spaLink } from "../lib/spaNav";
-import { reviewPlan, type PlanReview } from "../lib/ticketQuality";
+import { reviewPlan, type PlanReview } from "@agentcanvas/shared/ticket-quality";
 import { PlanDigest, TicketReviewLines } from "./ProposedEpicReview";
 import { T_BTN, T_HEAD, T_META, T_ROW, T_TITLE, TAP } from "../lib/boardScale";
 
@@ -169,7 +169,8 @@ import { T_BTN, T_HEAD, T_META, T_ROW, T_TITLE, TAP } from "../lib/boardScale";
    quality contract flags and for what), the Proposed lane runs in the plan's
    own ticket order instead of newest-first, and every proposed card states the
    surface it claims to touch and the condition it says it is done by. All of it
-   is derived — see lib/ticketQuality and components/ProposedEpicReview — and it
+   is derived — see @agentcanvas/shared/ticket-quality and
+   components/ProposedEpicReview — and it
    applies ONLY under a proposed epic scope, so an approved epic, the "All
    tasks" board and every other lane render exactly as they did.
    ──────────────────────────────────────────────────────────────────────────── */
@@ -1752,10 +1753,12 @@ export default function TaskBoard({
 
      Why derived at all: the quality contract that produces these warnings
      (TDM-159) runs inside `epic_propose` and returns them on the RESPONSE.
-     Nothing persists them, so the board cannot read back what the tool saw —
-     lib/ticketQuality recomputes them from the same rules. That file carries
-     the argument for the duplication and what it buys; the short version is
-     that it also covers the batches the contract never ran on at all. */
+     Nothing persists them, so the board cannot read back what the tool saw — it
+     re-derives them by running the SAME rules, which since TDM-169 is literally
+     the same module the gateway runs (`@agentcanvas/shared/ticket-quality`,
+     hoisted out of the hand-copied mirror this file used to import). Deriving
+     also covers the batches the contract never ran on at all: tickets filed one
+     at a time, proposed before the contract existed, or amended in place. */
   const reviewEpic = scopedEpic && scopedEpic.state === "proposed" ? scopedEpic : null;
   const planReview: PlanReview | null = useMemo(() => {
     if (!reviewEpic) return null;

@@ -18,6 +18,9 @@ importers:
         specifier: ^1.0.0
         version: 1.29.0(zod@4.4.3)
     devDependencies:
+      '@agentcanvas/shared':
+        specifier: workspace:*
+        version: link:../../internal/shared
       '@types/node':
         specifier: ^20.12.7
         version: 20.19.41
