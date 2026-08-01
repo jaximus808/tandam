@@ -12,6 +12,7 @@ import VillainSection from "../components/landing/VillainSection";
 import HowItWorksSection from "../components/landing/HowItWorksSection";
 import AudienceSection from "../components/landing/AudienceSection";
 import SolvesSection from "../components/landing/SolvesSection";
+import PlanReviewSection from "../components/landing/PlanReviewSection";
 import DogfoodProofSection from "../components/landing/DogfoodProofSection";
 import ReceiptsSection from "../components/landing/ReceiptsSection";
 import QuickstartSection from "../components/landing/QuickstartSection";
@@ -34,6 +35,7 @@ interface Props {
      → HOW (HowItWorksSection: the loop, step by step, in real tool names)
      → WHO (AudienceSection: the fleet shapes this is built for)
      → WHAT IT SOLVES (SolvesSection: four failure modes → four mechanisms)
+     → THE GATE (PlanReviewSection: triage the plan before the code exists)
      → live proof (DogfoodProofSection: Tandem is built on its own queue)
      → receipts (ReceiptsSection: every task traced to a commit)
      → try it (QuickstartSection: copy-paste setup)
@@ -476,6 +478,10 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
 
       {/* WHAT IT SOLVES: four failure modes → four mechanisms (plain paper) */}
       <SolvesSection />
+
+      {/* THE GATE: review the plan, not the diffs — triage a proposed epic
+          before any code exists, and the reason travels back (plain paper) */}
+      <PlanReviewSection />
 
       {/* Live proof: Tandem is planned and built on its own public queue (band) */}
       <DogfoodProofSection />
