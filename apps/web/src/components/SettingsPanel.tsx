@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { ChevronsLeft, Trash2, Webhook } from "lucide-react";
 import type { CanvasMeta } from "../types";
-import { deleteCanvas } from "../lib/api";
+import type { GateMetrics } from "../lib/api";
+import { deleteCanvas, fetchGateMetrics } from "../lib/api";
 import {
   approvalPolicyLabel,
   approvalPolicySentence,
@@ -71,6 +72,28 @@ export default function SettingsPanel({
       live = false;
     };
   }, [canvas.code, isOwner, summaryNonce]);
+
+  // The gate's report card (TDM-165). Loaded when the dock opens, for everyone
+  // who can open this canvas — same audience as the policy disclosure above, and
+  // for the same reason: a gate's honesty is the reader's business, not just the
+  // owner's. Null while loading, and null forever on failure — a metric that
+  // can't load must not break the settings panel it lives in.
+  const [gate, setGate] = useState<GateMetrics | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const m = await fetchGateMetrics(canvas.code);
+        if (live) setGate(m);
+      } catch {
+        if (live) setGate(null);
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [canvas.code]);
 
   // Delete the canvas we're currently sitting in, then hand back to the caller
   // to navigate away — the board we're rendering no longer exists, and the API
@@ -143,6 +166,95 @@ export default function SettingsPanel({
             </p>
           )}
         </div>
+
+        {/* Is the gate real? (TDM-165)
+
+            Sits directly under the policy because it is the policy's report
+            card: the section above says what this canvas PROMISES to do with
+            agent-proposed work, and this one says what it has actually done.
+
+            DELIBERATELY UNGAMIFIED, and every visual choice here is that
+            decision:
+              - no progress bar, no goal line, no target number rendered as a
+                thing to reach;
+              - no green/red, no "good"/"bad" — every figure is plain ink, so the
+                UI never congratulates you for rejecting or scolds you for
+                approving;
+              - the caveat is not a tooltip. It renders in full, always, from the
+                server's own copy, because a rate like this is misread the
+                instant it appears without one.
+            A surface that pushes toward rejecting produces rejection theater,
+            which is worse than rubber-stamping: it destroys good work AND fakes
+            the measurement. */}
+        {gate && (
+          <div className="mt-6 border-t border-ink/10 pt-4">
+            <div className="flex items-center gap-2">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-ink/40">
+                Pre-work intervention
+              </p>
+              <span className="rounded-full bg-ink/[0.06] px-1.5 py-0.5 text-[10px] font-medium text-ink/50">
+                {gate.windowDays}d
+              </span>
+            </div>
+
+            {gate.window.hasRate ? (
+              <>
+                <div className="mt-2 flex items-baseline gap-1.5">
+                  <span className="text-3xl font-semibold tracking-tight tabular-nums text-ink">
+                    {gate.window.ratePct}
+                  </span>
+                  <span className="text-lg font-medium tabular-nums text-ink/35">%</span>
+                </div>
+                <p className="mt-1 text-[12px] leading-relaxed text-ink/45">
+                  {gate.window.intervened} of {gate.window.decided} decided ticket
+                  {gate.window.decided === 1 ? " was" : "s were"} rejected or rewritten before an
+                  agent built {gate.window.intervened === 1 ? "it" : "them"}.
+                </p>
+              </>
+            ) : (
+              <p className="mt-2 text-[12px] leading-relaxed text-ink/45">
+                Nothing decided in the last {gate.windowDays} days — no rate to report yet.
+                {gate.window.pending > 0 &&
+                  ` ${gate.window.pending} ticket${gate.window.pending === 1 ? " is" : "s are"} still in the gate.`}
+              </p>
+            )}
+
+            {/* All-time alongside the window: a board that used to have a gate
+                and one that still does are different situations, and only the
+                pair distinguishes them. */}
+            {gate.allTime.hasRate && (
+              <p className="mt-1.5 font-code text-[11px] leading-relaxed text-ink/35">
+                all time {gate.allTime.ratePct}% · {gate.allTime.rejected} rejected ·{" "}
+                {gate.allTime.amended} amended · {gate.allTime.decided} decided
+                {gate.allTime.rejectionsUndone > 0 &&
+                  ` · ${gate.allTime.rejectionsUndone} rejection${gate.allTime.rejectionsUndone === 1 ? "" : "s"} undone`}
+                {gate.allTime.postWorkBounces > 0 &&
+                  ` · ${gate.allTime.postWorkBounces} sent back after the work`}
+                {gate.allTime.ungatedAuto > 0 &&
+                  ` · ${gate.allTime.ungatedAuto} ungated`}
+              </p>
+            )}
+
+            <p className="mt-2.5 text-[12px] leading-relaxed text-ink/45">{gate.caveat}</p>
+
+            {/* The definition, verbatim from the server. A metric whose
+                definition is implicit gets misread, and this one has two edges
+                people guess wrong: what counts as "materially amended", and what
+                an undone rejection does to the number. */}
+            <details className="mt-2 [&_summary::-webkit-details-marker]:hidden">
+              <summary className="cursor-pointer list-none text-[11px] font-medium text-ink/40 transition-colors hover:text-ink/65">
+                How this is counted
+              </summary>
+              <ul className="mt-2 space-y-1.5 border-l border-ink/10 pl-3">
+                {gate.definition.map((line) => (
+                  <li key={line} className="text-[11px] leading-relaxed text-ink/40">
+                    {line}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          </div>
+        )}
 
         <div className="mt-6 border-t border-ink/10 pt-4">
           <p className="text-[11px] font-semibold uppercase tracking-wider text-ink/40">

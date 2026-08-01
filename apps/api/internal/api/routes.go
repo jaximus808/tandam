@@ -279,6 +279,12 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 		// — so "what did this epic achieve" costs one round trip instead of one
 		// read per ticket. See epic_rollup.go.
 		r.Get("/api/canvas/epics", h.ListEpics)
+		// The gate's own report card (TDM-165): the share of proposed work that
+		// was rejected or rewritten BEFORE an agent built it, per canvas and per
+		// epic, all-time and rolling. Derived at read time from action state and
+		// the payload.audit[] log — no table, no migration. See gate_metrics.go,
+		// especially the note on why this is a diagnostic and never a target.
+		r.Get("/api/canvas/gate", h.GateMetrics)
 		r.Get("/api/canvas/roadmap-items", h.ListRoadmapItems)
 		r.Get("/api/canvas/documents", h.ListDocuments)
 		// Fleet presence + activity (TDM-46). The roster pairs every registered

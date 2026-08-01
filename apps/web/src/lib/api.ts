@@ -287,6 +287,70 @@ export async function fetchActivityFeed(code: string, limit = 50): Promise<Activ
   return (await res.json()) as ActivityFeed;
 }
 
+// ── The gate's report card (TDM-165) ─────────────────────────────────────────
+// GET /api/canvas/gate — the share of proposed work that was rejected or
+// rewritten BEFORE an agent built it.
+//
+// The number that separates "the plans are good" from "nobody is reading the
+// plans": those two look identical on a board with a low rejection rate, and the
+// whole quality claim rests on telling them apart. Derived server-side at read
+// time from task state plus the payload.audit[] log — there is no metrics table.
+//
+// `definition` and `caveat` come down WITH the numbers on purpose. This is a
+// diagnostic, never a target, and a UI must not be able to render the figure
+// without the words that qualify it — so it renders the server's, rather than
+// keeping its own copy that can drift.
+
+export type GateTally = {
+  /** Denominator: tasks the gate has actually ruled on. */
+  decided: number;
+  /** Still proposed — undecided, and in neither half of the rate. */
+  pending: number;
+  rejected: number;
+  amended: number;
+  /** The union of rejected and amended — the numerator. */
+  intervened: number;
+  ratePct: number;
+  /** False when nothing has been decided: unknown, not 0%. */
+  hasRate: boolean;
+  /** Born approved under the 'auto' policy — never gated, so excluded. */
+  ungatedAuto: number;
+  rejectionsUndone: number;
+  /** done → approved bounces. Reported, deliberately outside the rate. */
+  postWorkBounces: number;
+};
+
+export type GateEpicTally = {
+  id: string;
+  title: string;
+  state: string;
+  tally: GateTally;
+  createdAt: string;
+};
+
+export type GateMetrics = {
+  type: "gate.metrics";
+  generatedAt: string;
+  windowDays: number;
+  allTime: GateTally;
+  window: GateTally;
+  epics: GateEpicTally[];
+  unepiced: GateTally;
+  truncated?: number;
+  definition: string[];
+  caveat: string;
+};
+
+export async function fetchGateMetrics(code: string, days = 30): Promise<GateMetrics> {
+  const res = await authedFetch(
+    code,
+    `/api/canvas/gate?days=${encodeURIComponent(String(days))}`,
+    { method: "GET" },
+    "Could not load the gate metrics",
+  );
+  return (await res.json()) as GateMetrics;
+}
+
 // ── GitHub ground truth (TDM-45) ─────────────────────────────────────────────
 // GET /api/canvas/github/status?url= — resolve ONE evidence link into what
 // GitHub currently says about it. Read-only, server-side, cached there; the
