@@ -43,6 +43,7 @@ import { deriveLease, leaseAge } from "../lib/lease";
 import { eventLabel, eventSentence, repeatsOf, tallyContention } from "../lib/contention";
 import { humanMovesFor, type HumanMove } from "../lib/taskMoves";
 import { moveTask } from "../lib/api";
+import { TaskOwnerMoves } from "./OwnerMoveControls";
 import posthog from "../lib/posthog";
 import TaskLinks from "./TaskLinks";
 import TandemLogo from "./TandemLogo";
@@ -927,6 +928,22 @@ export default function TicketView({
                     task={task}
                     assignee={p.assignee ?? "agent"}
                     className="mt-4"
+                  />
+                )}
+
+                {/* Back BEHIND the gate (TDM-191). Every rewind above lands in
+                    the ready queue; these land in 'proposed' — the difference
+                    between "redo this" and "nobody start this until I've looked
+                    again". Below the board moves rather than mixed into them,
+                    because un-approving is the rarer and heavier decision, and
+                    on a phone the buttons you reach for daily should come
+                    first. */}
+                {!readOnly && (
+                  <TaskOwnerMoves
+                    code={code}
+                    task={task}
+                    surface="ticket_page"
+                    className="mt-3 max-w-md"
                   />
                 )}
 

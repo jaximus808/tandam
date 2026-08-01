@@ -88,11 +88,19 @@ const REOPEN: HumanMove = {
   notePrompt: "What's still missing (optional)",
 };
 
+// The one move in this table that lands BEHIND the gate — rejected is already
+// outside the queue, so putting it back in triage takes nothing out. TDM-191
+// gave it the note the other rewinds have: its twin on the owner matrix
+// (lib/ownerMoves' TASK_REPROPOSE, the same transition through the newer
+// endpoint) records a reason, and the same move should not lose the ability to
+// say why depending on which button you happened to reach. Labelled to match
+// that twin and the epic's, so one transition reads as one word everywhere.
 const RECONSIDER: HumanMove = {
   to: "proposed",
-  label: "Reconsider",
+  label: "Re-propose",
   hint: "Send this back to triage so it can be approved or rejected again",
   kind: "rewind",
+  notePrompt: "What changed your mind (optional)",
 };
 
 /**

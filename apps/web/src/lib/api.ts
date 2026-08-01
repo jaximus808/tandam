@@ -77,12 +77,25 @@ async function canvasToken(code: string): Promise<string> {
   return token;
 }
 
-// Canvas-JWT fetch with a single retry on 401 (cached token gone stale).
-async function authedFetch(
+// Canvas-JWT fetch with a single retry on 401 (cached token gone stale), and NO
+// error handling — the response comes back whatever its status.
+//
+// Split out of authedFetch (TDM-191) for the callers that need the failure BODY,
+// not just a message. Most of the API answers an error as a bare string and
+// authedFetch's flattening is right for them; the owner-move endpoints answer a
+// refusal as structured data (a stable code, the card's real state, the moves
+// that ARE legal from it) that the UI acts on rather than prints. Reading that
+// means getting to the body before something throws it away.
+//
+// Note the missing `credentials`: for a same-origin request that defaults to
+// "same-origin", so the Google session cookie rides along next to the canvas
+// JWT. Both are load-bearing — the JWT says which canvas, the cookie is what
+// makes callerIsHuman true, which is the whole gate on /approve, /reject and the
+// two move endpoints.
+async function authedFetchRaw(
   code: string,
   path: string,
   init: { method: string; body?: unknown },
-  fallbackError: string,
 ): Promise<Response> {
   const doFetch = async (token: string) =>
     fetch(path, {
@@ -96,6 +109,16 @@ async function authedFetch(
     tokenCache.delete(code);
     res = await doFetch(await canvasToken(code));
   }
+  return res;
+}
+
+async function authedFetch(
+  code: string,
+  path: string,
+  init: { method: string; body?: unknown },
+  fallbackError: string,
+): Promise<Response> {
+  const res = await authedFetchRaw(code, path, init);
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
     let msg = detail;
@@ -458,6 +481,139 @@ export async function requeueTask(code: string, id: string): Promise<void> {
     `/api/canvas/actions/${id}/requeue`,
     { method: "POST" },
     "Could not re-queue task",
+  );
+}
+
+/* ── Owner moves back to the gate (TDM-189 / TDM-190) ────────────────────────
+   The undo the approval gate was missing. Both endpoints are separate from the
+   board's /move for the reason lib/ownerMoves.ts spells out: these put work back
+   BEHIND the gate, and they are checked server-side against callerIsHuman rather
+   than merely being absent from the MCP surface.
+
+   A refusal here is DATA, not a sentence. epic_move_illegal / task_move_illegal
+   carry the card's real state and the moves that are legal from it, which is
+   what lets a board looking at a stale card re-render its buttons instead of
+   showing one that keeps failing. MoveRefused is that answer, typed. */
+
+/** One legal target, as the server offers it in a refusal's `moves` list. */
+export type OwnerMoveTarget = { to: string; label: string };
+
+export class MoveRefused extends Error {
+  /** Stable code: epic_move_illegal, task_move_human_only, epic_not_found, … */
+  readonly code: string;
+  /** The state the server says the card is REALLY in (illegal-move refusals). */
+  readonly state?: string;
+  /** The moves that are legal from that state — empty when the state has none. */
+  readonly moves: OwnerMoveTarget[];
+
+  constructor(code: string, message: string, state?: string, moves: OwnerMoveTarget[] = []) {
+    super(message);
+    this.name = "MoveRefused";
+    this.code = code;
+    this.state = state;
+    this.moves = moves;
+  }
+}
+
+/** Shared answer shape: what moved, and from where. */
+export type OwnerMoveResult = {
+  action: Action;
+  /** false = it was already in that state; nothing was written. */
+  moved: boolean;
+  from: string;
+  to: string;
+};
+
+/** One ticket the un-approve cascade took back out of the ready queue. */
+export type UnapprovedLine = {
+  id: string;
+  ticketId?: string;
+  title?: string;
+  state: string;
+};
+
+export type EpicMoveResult = OwnerMoveResult & {
+  unapproved: UnapprovedLine[];
+  unapprovedCount: number;
+};
+
+async function ownerMove<T>(
+  code: string,
+  path: string,
+  to: ActionState,
+  reason: string | undefined,
+  fallbackError: string,
+): Promise<T> {
+  const res = await authedFetchRaw(code, path, {
+    method: "POST",
+    body: { to, reason: reason?.trim() || undefined },
+  });
+  const text = await res.text().catch(() => "");
+  let body: Record<string, unknown> | null = null;
+  try {
+    body = text ? (JSON.parse(text) as Record<string, unknown>) : null;
+  } catch {
+    /* not json — a proxy error page, say. Handled by the fallbacks below. */
+  }
+  if (!res.ok) {
+    const codeStr = typeof body?.error === "string" ? body.error : "move_failed";
+    // `message` is the sentence written for a person; `error` is the machine
+    // code. Printing the code at somebody ("epic_move_illegal") is what this
+    // ordering exists to avoid.
+    const msg =
+      (typeof body?.message === "string" && body.message) ||
+      (typeof body?.error === "string" && body.error) ||
+      text ||
+      fallbackError;
+    throw new MoveRefused(
+      codeStr,
+      msg,
+      typeof body?.state === "string" ? body.state : undefined,
+      Array.isArray(body?.moves) ? (body.moves as OwnerMoveTarget[]) : [],
+    );
+  }
+  return (body ?? {}) as T;
+}
+
+// POST /api/canvas/epics/{id}/move — un-approve / re-open / retire / re-propose a
+// BATCH. Uuid only: ticket refs name tasks, not epics.
+//
+// Un-approving cascades: the epic's policy-approved, UNCLAIMED tickets go back to
+// 'proposed' with it, and the answer reports exactly which ones. That count is
+// the point of the call for the person making it — "how much work just stopped
+// being workable" — so it is surfaced rather than swallowed.
+export async function moveEpicState(
+  code: string,
+  id: string,
+  to: ActionState,
+  reason?: string,
+): Promise<EpicMoveResult> {
+  return ownerMove<EpicMoveResult>(
+    code,
+    `/api/canvas/epics/${id}/move`,
+    to,
+    reason,
+    "Could not move this epic",
+  );
+}
+
+// POST /api/canvas/tasks/{id}/move — un-approve / re-open / re-propose ONE
+// ticket, always to 'proposed'. Takes a uuid or a ticket ref.
+//
+// A re-open clears the claim and the now-stale result server-side, and the reason
+// reaches whoever picks the ticket up next as task_get's `review` block.
+export async function moveTaskToGate(
+  code: string,
+  id: string,
+  to: ActionState,
+  reason?: string,
+): Promise<OwnerMoveResult> {
+  return ownerMove<OwnerMoveResult>(
+    code,
+    `/api/canvas/tasks/${id}/move`,
+    to,
+    reason,
+    "Could not move this ticket",
   );
 }
 

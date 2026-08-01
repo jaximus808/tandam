@@ -51,6 +51,7 @@ import {
   updateTask,
 } from "../lib/api";
 import { humanMovesFor, primaryMoveFor, type HumanMove } from "../lib/taskMoves";
+import { EpicOwnerMoves, TaskOwnerMoves } from "./OwnerMoveControls";
 import {
   deriveLease,
   leaseAge,
@@ -2500,6 +2501,31 @@ export default function TaskBoard({
     );
   }
 
+  /* ── Owner state moves on a BATCH (TDM-191) ────────────────────────────────
+     The other half of the gate. Approve / Reject above are how a batch LEAVES
+     'proposed'; these are how it comes back — un-approve one approved by
+     mistake, re-open one that drained too early, retire one that should not
+     have run, re-propose one triaged away. Rendered on both epic surfaces (the
+     sidebar row and the scoped header) for the same reason Approve is on both:
+     wherever you can say yes to a batch you should be able to take it back.
+
+     'proposed' renders nothing here — epicOwnerMovesFor has no key for it, and
+     that is the rule the server states too: the gate is the only door in and
+     out of triage. */
+
+  function renderEpicOwnerMoves(e: Action) {
+    if (readOnly) return null;
+    return (
+      <EpicOwnerMoves
+        code={code}
+        epic={e}
+        epicTasks={tasksByEpic.get(e.id) ?? []}
+        surface="board"
+        className="mt-2"
+      />
+    );
+  }
+
   // ── Kanban card ─────────────────────────────────────────────────────────────
   // withEpicChip: only the All-tasks scope shows the epic chip (clicking it
   // jumps the sidebar to that epic); inside an epic scope it's redundant.
@@ -2887,6 +2913,17 @@ export default function TaskBoard({
         </div>
         {/* The sidebar doubles as the approval inbox. */}
         {renderApproveReject(e, "Approve epic")}
+        {/* …and, in the DONE bucket, the undo. Only there, and the asymmetry
+            with Approve above is deliberate: the sidebar is a timeline of
+            batches, and hanging "Send back to proposed" under every live epic
+            would put a rare, heavy control on the row you scroll past forty
+            times a day. A batch that has drained or been archived is the one
+            case where the undo is the reason you opened this bucket at all —
+            and where making you select the epic first to discover the move
+            exists is a step you'd have to guess at. For a live epic the same
+            control is one click away in its scoped header, which is also where
+            you can see what you'd be taking back. */}
+        {aged && renderEpicOwnerMoves(e)}
       </div>
     );
   }
@@ -3088,6 +3125,10 @@ export default function TaskBoard({
             <div className="max-w-xs">{renderApproveReject(e, "Approve epic")}</div>
           </>
         )}
+        {/* OUTSIDE the finished/unfinished branch on purpose: a drained batch
+            renders no progress bar and no gate row, and re-opening one is
+            precisely the move you come to a finished epic's header to make. */}
+        <div className="max-w-md">{renderEpicOwnerMoves(e)}</div>
       </div>
     );
   }
@@ -4073,6 +4114,16 @@ function linkLabel(state: CanvasState, id: string): { kind: string; label: strin
   return null;
 }
 
+// The tickets filed under an epic, straight off canvas state. The board keeps a
+// memoised tasksByEpic for this, but the slide-over doesn't receive it — and an
+// epic's ticket list is only read here when its owner-move confirm needs the
+// cascade preview, which is one click, not every render.
+function epicTasksOf(state: CanvasState, epicId: string): Action[] {
+  return Object.values(state.actions ?? {}).filter(
+    (a) => a.type === "task" && taskPayload(a).epicId === epicId,
+  );
+}
+
 function TaskDetail({
   code,
   action,
@@ -4871,6 +4922,22 @@ function TaskDetail({
                 rejected one. 'proposed' renders nothing here: the approval
                 controls above are its only exit. */}
             {renderMoves()}
+            {/* Back BEHIND the gate (TDM-191) — the moves the matrix above
+                deliberately stops short of. Every rewind up there lands in the
+                ready queue; these land in 'proposed', which is the difference
+                between "redo this" and "nobody start this until I've looked
+                again". Under the board moves rather than mixed into them,
+                because they are the rarer and heavier decision. */}
+            {isTask && <TaskOwnerMoves code={code} task={action} surface="board_detail" className="mt-2" />}
+            {!isTask && (
+              <EpicOwnerMoves
+                code={code}
+                epic={action}
+                epicTasks={epicTasksOf(state, action.id)}
+                surface="board_detail"
+                className="mt-2"
+              />
+            )}
             {/* Delete — available in every state. Quiet by default, two-step
                 like the other destructive moves. */}
             {isTask &&
