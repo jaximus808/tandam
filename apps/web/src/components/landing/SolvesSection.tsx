@@ -1,5 +1,5 @@
 /* ─────────────────────────────────────────────────────────────────────────────
-   SolvesSection — the WHAT-IT-SOLVES beat: four failure modes of a multi-machine
+   SolvesSection — the WHAT-IT-SOLVES beat: five failure modes of a multi-machine
    fleet, each paired with the mechanism that handles it (and the MCP tool that
    mechanism lives in). Deliberately mechanism-first — no adjectives, just what
    the server actually does.
@@ -78,6 +78,20 @@ const SOLVES: { problem: string; mechanism: string; body: ReactNode; tools?: str
     body: "Agents propose; only what a human approved is pullable. Approve an epic once and the batch clears — the gate is on what runs, not on every step. Each task keeps who proposed it, who approved it, and which session claimed it.",
   },
   {
+    problem: "One vague prompt becomes eleven vague tickets",
+    mechanism: "The plan is the thing you review",
+    body: (
+      <>
+        The batch arrives as text before any of it is worked — every ticket with its title, the
+        surface it touches and the condition that says it's done. Amend one there, or send a
+        finished one back, and the reason is stored on the task: the next session reads{" "}
+        <span className="font-code text-[13px] text-ink/70">why</span> off the ticket instead of
+        asking. You find out a ticket was wrong while it's still a sentence.
+      </>
+    ),
+    tools: ["epic_propose", "task_review"],
+  },
+  {
     problem: "The tooling picks your vendor",
     mechanism: "Plain MCP, no SDK",
     body: "Claude Code, claude.ai, Codex, Cursor, a CI script with an MCP client — same queue, same tools, same canvas code. Nothing on the server knows or cares which model is calling.",
@@ -93,7 +107,7 @@ export default function SolvesSection() {
           What it solves
         </span>
         <h2 className="mt-3 text-2xl font-semibold tracking-tight text-ink sm:text-[2rem]">
-          Four failure modes, four mechanisms.
+          Five failure modes, five mechanisms.
         </h2>
         <p className="mt-3 leading-relaxed text-ink/65">
           Every one of these is a thing the server does, not a promise about behaviour.
