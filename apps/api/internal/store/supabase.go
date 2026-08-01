@@ -3750,6 +3750,93 @@ func (s *supabaseStore) ApproveEpicTasks(ctx context.Context, canvasID, epicID u
 	return out, nil
 }
 
+// MoveEpic is the owner's rewind of a whole BATCH (TDM-189) — rejected →
+// proposed, approved → proposed, done → proposed | rejected — with the same
+// conditional-UPDATE + re-read-to-disambiguate pattern as ReopenAction, and a
+// type='epic' predicate where that one carries type='task'. See the interface
+// doc in store.go for the rule and why the clear-set is what it is; (from, to)
+// is the caller's validated pair, never a request body's.
+func (s *supabaseStore) MoveEpic(ctx context.Context, canvasID, id uuid.UUID, from, to, reason string) (*Action, int, error) {
+	// `error` is cleared on every move and re-set only when this move IS the
+	// rejection: an epic revived out of 'rejected' that kept its old reason would
+	// keep answering the rollup's review block with a verdict that no longer stands.
+	m := map[string]any{"state": to, "error": nil}
+	if to == "proposed" {
+		m["approved_by"] = nil
+	}
+	if to == "rejected" && strings.TrimSpace(reason) != "" {
+		m["error"] = reason
+	}
+	var rows []dbAction
+	_, err := s.client.From("actions").
+		Update(m, "representation", "").
+		Eq("id", id.String()).
+		Eq("canvas_id", canvasID.String()).
+		Eq("state", from).
+		Eq("type", "epic").
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(rows) == 1 {
+		v, verr := s.bumpVersion(ctx, canvasID)
+		if verr != nil {
+			return nil, 0, verr
+		}
+		return toAction(rows[0]), v, nil
+	}
+	existing, gerr := s.GetAction(ctx, canvasID, id)
+	if gerr != nil {
+		return nil, 0, ErrActionNotFound
+	}
+	if existing.Type != "epic" {
+		return nil, 0, fmt.Errorf("%w: only epics can be moved this way (this is a %q)", ErrIllegalActionState, existing.Type)
+	}
+	if existing.State == to {
+		return existing, 0, nil // already where the caller wants it — idempotent retry
+	}
+	return nil, 0, fmt.Errorf("%w: cannot move epic from %q to %q (it is %q now)",
+		ErrIllegalActionState, from, to, existing.State)
+}
+
+// UnapproveEpicTasks is the inverse of ApproveEpicTasks: the tickets that are in
+// the ready queue only because their epic was approved go back to 'proposed' in
+// ONE bulk UPDATE when that approval is withdrawn. Every predicate below is a
+// rule — see the interface doc in store.go.
+func (s *supabaseStore) UnapproveEpicTasks(ctx context.Context, canvasID, epicID uuid.UUID, onlyApprovedBy string) ([]*Action, error) {
+	// An empty stamp would match nothing (approved_by is never ''), and asking
+	// the database to prove that is a round trip for a caller bug.
+	if onlyApprovedBy == "" {
+		return []*Action{}, nil
+	}
+	var rows []dbAction
+	_, err := s.client.From("actions").
+		Update(map[string]any{"state": "proposed", "approved_by": nil}, "representation", "").
+		Eq("canvas_id", canvasID.String()).
+		Eq("type", "task").
+		Eq("state", "approved").
+		Eq("approved_by", onlyApprovedBy).
+		// The claim guard, in SQL: never take a ticket back off a worker.
+		Is("claimed_by", "null").
+		Eq("payload->>epicId", epicID.String()).
+		ExecuteTo(&rows)
+	if err != nil {
+		return nil, err
+	}
+	// Nothing matched → no state change, no version bump, no broadcast needed.
+	if len(rows) == 0 {
+		return []*Action{}, nil
+	}
+	out := make([]*Action, 0, len(rows))
+	for _, d := range rows {
+		out = append(out, toAction(d))
+	}
+	if _, err := s.bumpVersion(ctx, canvasID); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
 // ApproveActionsBatch flips every listed action still in 'proposed' to
 // approved in ONE bulk conditional UPDATE, stamping approved_by. The
 // state='proposed' filter makes it retry-safe and race-safe: an id that

@@ -424,6 +424,18 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 			// human-only; this is the reversible move, which is the class 'peer'
 			// already permits. See task_move.go's ReworkAction.
 			r.With(ResolveTicketRef(s)).Post("/api/canvas/actions/{id}/rework", h.ReworkAction)
+			// The OWNER's state moves on a BATCH (TDM-189): un-approve
+			// (approved → proposed), re-open / retire a drained epic
+			// (done → proposed | rejected) and revive a rejected one
+			// (rejected → proposed), all through ONE endpoint validated
+			// against the epic move matrix. Un-approving cascades: the
+			// tickets that were in the ready queue only because this epic
+			// was approved go back to the gate, and executing or finished
+			// work is never touched. Human-only, from the same
+			// server-derived provenance /approve and /reject use — no MCP
+			// tool maps to it. Addressed by uuid, not by ticket ref: refs
+			// name tasks. See epic_move.go for the matrix and the argument.
+			r.Post("/api/canvas/epics/{id}/move", h.MoveEpic)
 			r.With(ResolveTicketRef(s)).Patch("/api/canvas/actions/{id}", h.UpdateActionState)
 			r.With(ResolveTicketRef(s)).Delete("/api/canvas/actions/{id}", h.DeleteAction)
 

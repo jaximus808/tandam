@@ -1218,6 +1218,52 @@ type Store interface {
 	// caller can fan one task.approved webhook out per task — TDM-37); the
 	// canvas version is bumped only when that slice is non-empty.
 	ApproveEpicTasks(ctx context.Context, canvasID, epicID uuid.UUID, approvedBy string) ([]*Action, error)
+	// MoveEpic is ReopenAction's EPIC counterpart (TDM-189): the owner's rewind
+	// of a whole BATCH — rejected → proposed (revive), approved → proposed
+	// (un-approve), done → proposed | rejected (re-open / retire). It exists as
+	// its own method rather than as a widened ReopenAction because all three
+	// rewinds carry a type='task' predicate on purpose: an epic is not a task,
+	// it has no claim and no result, and a batch-level move must never be
+	// reachable by pointing a task endpoint at an epic id.
+	//
+	// Same conditional-UPDATE + re-read-to-disambiguate pattern as
+	// ReopenAction, predicated on `from`, so an epic that moved under the
+	// request yields ErrIllegalActionState instead of a lost update. A move to
+	// 'proposed' clears approved_by (the batch is going back INTO the gate, and
+	// an epic rendering as "approved by …" while it waits is a lie) and clears
+	// `error` (a revived epic must not keep the rejection reason it was revived
+	// out of). A move to 'rejected' stores `reason` in `error` — the same column
+	// RejectAction writes, which is what deriveReviewFeedback reads back.
+	//
+	// (from, to) is validated by the CALLER against the epic move matrix (see
+	// api.epicMoveTargets); this method must never be reachable with an
+	// arbitrary pair from a request body. Human-only by surface, like the task
+	// rewinds: no MCP tool maps to it.
+	MoveEpic(ctx context.Context, canvasID, id uuid.UUID, from, to, reason string) (*Action, int, error)
+	// UnapproveEpicTasks is the UN-approve cascade — the exact inverse of
+	// ApproveEpicTasks, and deliberately narrower than it. In ONE bulk UPDATE it
+	// sends back to 'proposed' (clearing approved_by) every task under an epic
+	// that is: type='task', state='approved', UNCLAIMED (claimed_by IS NULL) and
+	// stamped with `onlyApprovedBy` — which callers pass as the 'policy:epic'
+	// provenance the epic cascade itself wrote.
+	//
+	// Each predicate is a rule, not an optimisation:
+	//
+	//   - state='approved' is what keeps EXECUTING and DONE work untouched. A
+	//     batch losing its approval must never yank a task out from under a
+	//     worker or un-finish work that is already reported.
+	//   - claimed_by IS NULL is the same rule in SQL for the window where a stale
+	//     claim record outlives its state.
+	//   - approved_by=<stamp> narrows it to tasks that are only in the queue
+	//     BECAUSE the epic was approved. A ticket a human approved individually
+	//     keeps that approval: un-approving the batch undoes the batch's act, not
+	//     the person's.
+	//
+	// Returns the tasks that actually moved (so the caller can report exactly
+	// what left the queue); the canvas version is bumped only when that slice is
+	// non-empty. Nothing is ever REJECTED here — killing tickets stays a separate
+	// human decision.
+	UnapproveEpicTasks(ctx context.Context, canvasID, epicID uuid.UUID, onlyApprovedBy string) ([]*Action, error)
 	// ApproveActionsBatch flips every listed action still in 'proposed' to
 	// approved in ONE bulk conditional UPDATE (id IN ids AND canvas_id AND
 	// state='proposed'), stamping approved_by. Ids that don't match (missing,
