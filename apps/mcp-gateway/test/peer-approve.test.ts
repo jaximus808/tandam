@@ -221,12 +221,12 @@ test("an empty queue says 'a human approves' on a normal canvas", async () => {
   }
 });
 
-test("an empty queue points a reviewer at task_approve on a 'peer' canvas", async () => {
+test("an empty queue points a reviewer at task_review on a 'peer' canvas", async () => {
   const { restore } = install({ policy: "peer", actions: [] });
   try {
     const gw = await connect();
     const out = (await handleFacadeTool(gw, "queue_next", {})) as any;
-    assert.match(out._next, /task_approve/);
+    assert.match(out._next, /task_review/);
     assert.match(out._next, /DIFFERENT agent/);
   } finally {
     restore();
@@ -297,8 +297,11 @@ test("task_amend's refusal names a reviewer only where one can exist", async () 
 // ── What the surface teaches ────────────────────────────────────────────────
 
 test("the reviewer is documented as a second pair of eyes, not a rubber stamp", () => {
-  const tool = FACADE_TOOLS.find((t) => t.name === "task_approve")!;
-  assert.ok(tool, "task_approve is advertised on the default manifest");
+  // TDM-156: the advertised verb is task_review now (task_approve is still
+  // routed for older sessions, just not on the manifest). What the surface has
+  // to TEACH is unchanged, so these assertions moved rather than went away.
+  const tool = FACADE_TOOLS.find((t) => t.name === "task_review")!;
+  assert.ok(tool, "task_review is advertised on the default manifest");
   // The distinction that justifies the role existing at all.
   assert.match(tool.description, /auto/, "must contrast itself with the 'auto' policy");
   assert.match(tool.description, /read/i, "must tell the reviewer to read the work");
@@ -311,6 +314,6 @@ test("the reviewer is documented as a second pair of eyes, not a rubber stamp", 
 test("SERVER_INSTRUCTIONS keeps the human gate as the rule and peer as the exception", () => {
   assert.match(SERVER_INSTRUCTIONS, /HUMAN approves it on the board/);
   assert.match(SERVER_INSTRUCTIONS, /exception/);
-  assert.match(SERVER_INSTRUCTIONS, /task_approve/);
+  assert.match(SERVER_INSTRUCTIONS, /task_review/);
   assert.ok(SERVER_INSTRUCTIONS.length < 1600, "instructions must stay compact");
 });

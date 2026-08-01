@@ -447,8 +447,8 @@ async function canvasAllowsPeerApproval(gateway: Gateway): Promise<boolean> {
  */
 const PEER_APPROVAL_CLAUSE =
   "(One exception, off by default: on a canvas whose owner turned on the 'peer' approval policy, " +
-  "a reviewer agent may approve a task a DIFFERENT agent proposed — task_approve. Never your own " +
-  "work, and never on any other canvas.)";
+  "a reviewer agent may approve a task a DIFFERENT agent proposed, and send that agent's finished " +
+  "work back for changes — task_review. Never your own work, and never on any other canvas.)";
 
 /**
  * The refusal a coded 403 carries, normalized.
@@ -484,11 +484,65 @@ function readApprovalRefusal(body: unknown): ApprovalRefusal {
 }
 
 /**
+ * A refusal this gateway has no bespoke copy for — a code the API grew after this
+ * build shipped. The ONLY safe thing to do is hand the server's own sentence back
+ * as the instruction and say clearly that it is a refusal, not a fault: a
+ * reviewer that reads "unknown error" retries, and a reviewer that reads the
+ * server's reason stops. This is why a new API refusal code never needs a gateway
+ * release to be usable — only to be phrased better.
+ */
+function unknownRefusalNext(refusal: ApprovalRefusal): string {
+  return (
+    `The server refused, with a reason this gateway has no specific advice for (\`${refusal.code}\`), ` +
+    `so its own words ARE the instruction: "${refusal.message}". This is a decision, not a ` +
+    `transport error — do not retry the same call. Fix what it names if that is in your power, ` +
+    `otherwise leave the task where it is and report the reason to the human.`
+  );
+}
+
+/**
+ * The same-model refusal (TDM-155): a canvas whose owner turned on cross-model
+ * review requires the reviewer to be a different MODEL from the author, not
+ * merely a different agent. The API ships it on BOTH review paths with distinct
+ * codes — `peer_same_model` on approve, `rework_same_model` on the bounce
+ * (peer_approval.go) — because a client should be able to tell which door closed.
+ *
+ * Matched on the shared SHAPE of those codes rather than listed one by one: the
+ * advice is identical on both paths (get a different model, or the human), so a
+ * substring test is the honest expression of "these are the same answer", and it
+ * keeps working if the rule ever grows a third door. Anything it misses still
+ * lands in unknownRefusalNext and reads as the server's own words.
+ */
+function isSameModelRefusal(code?: string): boolean {
+  return !!code && code.includes("same_model");
+}
+
+function sameModelNext(refusal: ApprovalRefusal): string {
+  // The API names the colliding model in `approverModel` (approve) or
+  // `reviewerModel` (rework); it is absent only if the shape changes.
+  const model = refusal.extra.reviewerModel || refusal.extra.approverModel;
+  return (
+    `You and the agent whose work this is are the same MODEL${model ? ` (${model})` : ""}, and this ` +
+    `canvas requires review from a different one — same-model review is the theatre peer review ` +
+    `exists to avoid, not a technicality. Nothing you can do from here changes that: hand it to a ` +
+    `reviewer agent running on a different model, or to the human, and report it as still ` +
+    `awaiting review.`
+  );
+}
+
+/** The refusal every canvas that is NOT on 'peer' answers — uncoded, and the default. */
+const HUMAN_APPROVAL_ONLY_NEXT =
+  "Approval on this canvas is the human's — it is not on the 'peer' approval policy, which " +
+  "is the only mode where an agent may approve another agent's task, and only the canvas " +
+  "owner can turn that on. Report the task as waiting for approval on the board and move on.";
+
+/**
  * What the reviewer should DO about a refusal. Keyed off the server's code so the
  * gateway adds routing, not rules — every one of these is the server's decision
  * restated as a next call.
  */
 function approvalRefusalNext(refusal: ApprovalRefusal): string {
+  if (isSameModelRefusal(refusal.code)) return sameModelNext(refusal);
   switch (refusal.code) {
     case "peer_self_approval":
       return (
@@ -517,15 +571,103 @@ function approvalRefusalNext(refusal: ApprovalRefusal): string {
         "The server cannot tell who proposed this task, so it cannot prove you are not the " +
         "proposer, and it refuses rather than guess. A human approves this one on the board."
       );
-    default:
-      // Includes the LEGACY refusal: this canvas is on strict | epic | auto, where
-      // approval is human-only and nothing an agent does changes that.
+  }
+  // NO `default:` — an unrecognized CODE and the uncoded LEGACY refusal are two
+  // different answers and used to share one sentence. The legacy body (prose in
+  // `error`, no `message`) is what every strict|epic|auto canvas still returns,
+  // and the human-only wording is exactly right for it. A code this build has
+  // never heard of is NOT that: telling a reviewer "this canvas isn't on peer"
+  // when the server actually said something else sends it away from work it may
+  // be allowed to do. (TDM-155's same-model refusal is the immediate case.)
+  return refusal.code ? unknownRefusalNext(refusal) : HUMAN_APPROVAL_ONLY_NEXT;
+}
+
+/**
+ * POST the approve endpoint — the reviewer's YES, one call site.
+ *
+ * Shared by task_review (outcome 'pass') and the legacy task_approve alias so
+ * the two can never drift into approving differently. The body is empty because
+ * the approver identity rides the X-Tandem-Agent header the gateway already
+ * sends; an `approvedBy` in the body is the forgery vector TDM-40 / TDM-129
+ * closed, and the server ignores it either way.
+ */
+async function postApproval(gateway: Gateway, id: string, alsoRefusalStatuses?: number[]) {
+  return gateway.postWithRefusal<
+    { action?: TaskRow & { type?: string; approvedBy?: string } },
+    unknown
+  >(`/api/canvas/actions/${encodeURIComponent(id)}/approve`, {}, alsoRefusalStatuses);
+}
+
+// ── Sending finished work back (TDM-154 / TDM-156) ───────────────────────────
+//
+// The reviewer's OTHER answer. `POST /api/canvas/actions/{id}/rework` rewinds a
+// done task to 'approved' with a required reason, and is gated the same way the
+// peer approve is: 'peer' canvas only, reviewer ≠ the agent that finished the
+// work, both identities server-derived. Rejection — which destroys a proposal —
+// stays human-only; the bounce is the reversible move, which is why it is the one
+// an agent gets.
+//
+// Same division of labour as approvalRefusalNext: the API decides, this only
+// turns its decision into the reviewer's next move.
+
+/** What to do about a refused bounce, by the server's stable code (TDM-154). */
+function reworkRefusalNext(refusal: ApprovalRefusal): string {
+  if (isSameModelRefusal(refusal.code)) return sameModelNext(refusal);
+  switch (refusal.code) {
+    case "rework_not_finished":
       return (
-        "Approval on this canvas is the human's — it is not on the 'peer' approval policy, which " +
-        "is the only mode where an agent may approve another agent's task, and only the canvas " +
-        "owner can turn that on. Report the task as waiting for approval on the board and move on."
+        `Only FINISHED work can be sent back, and this task is '${refusal.extra.state ?? "not done"}'. ` +
+        `If it is still 'proposed' you are looking at a PLAN, not work: review it with ` +
+        `outcome 'pass' to release it, or leave it unapproved and say why — an agent cannot ` +
+        `reject a proposal, that stays the human's. If it is 'approved' or 'executing', nobody ` +
+        `has submitted anything to review yet: leave it alone and come back once it is done.`
+      );
+    case "rework_self_review":
+      return (
+        `You finished this task${refusal.extra.completedBy ? ` (the server has it completed by ${refusal.extra.completedBy})` : ""}, ` +
+        `so you cannot be the one who sends it back — reviewing your own work is the thing peer ` +
+        `review exists to prevent. Another registered agent, or the human on the board, has to ` +
+        `make that call. Say what you would have changed and leave the task done.`
+      );
+    case "rework_policy_required":
+      return (
+        "This canvas is not on the 'peer' approval policy, and that is the only mode where an " +
+        "agent can bounce another agent's finished work. Only the canvas owner can turn it on. " +
+        "Write what you would have sent back — in a task_progress note, a doc_write, or your " +
+        "report — and leave the task done for the human to judge."
+      );
+    case "rework_identity_required":
+      return (
+        "This session has no agent identity the server can see, and an anonymous bounce is " +
+        "refused on purpose. Reconnect with canvas_connect passing a `name` and `role` (that one " +
+        "call registers you), then review again under that identity."
+      );
+    case "rework_agent_unregistered":
+      return (
+        "Your identity is not on this canvas's roster. Register it — canvas_connect with a `name` " +
+        "and `role`, or agent_register — and review again under that name."
+      );
+    case "rework_task_only":
+      return (
+        `Only a TASK can be sent back for rework; this is a ${refusal.extra.actionType ?? "different kind of action"}. ` +
+        `Epics are not reviewed as a unit — review the tasks under it one at a time.`
+      );
+    case "rework_completer_unknown":
+      return (
+        "The server cannot tell WHO finished this task, so it cannot prove you are not that " +
+        "agent, and it fails closed rather than guess. This one is the human's on the board — " +
+        "report what you found and why you would send it back."
+      );
+    case "rework_reason_required":
+      return (
+        "The bounce carries the reason the author works from, so an empty one is refused. Call " +
+        "again with a `reason` naming what is wrong and what 'fixed' looks like."
       );
   }
+  return refusal.code
+    ? unknownRefusalNext(refusal)
+    : `The server refused to send this back: "${refusal.message}". Leave the task as it is and ` +
+      `report that, rather than retrying.`;
 }
 
 /**
@@ -895,7 +1037,7 @@ function composeMarkdown(title: unknown, body: unknown): string {
  * There is deliberately NO model judging ticket quality here: an LLM in the
  * write path of the gate is slow, unpredictable, and puts an opinion where a
  * rule belongs. If quality needs a model's opinion, that is the reviewer role's
- * job (task_approve), not this call's.
+ * job (task_review), not this call's.
  */
 
 /** Below either of these a `body` is a title with extra whitespace, not a ticket. */
@@ -1118,7 +1260,7 @@ const FACADE_NAMES = new Set([
   "task_complete",
   "task_propose",
   "task_amend",
-  "task_approve",
+  "task_review",
   "epic_propose",
   "doc_write",
   "board_status",
@@ -1133,9 +1275,25 @@ const FACADE_NAMES = new Set([
  */
 const IMPLEMENTED_BY_CRUD = new Set(["canvas_connect", "agent_register"]);
 
+/**
+ * Still ROUTED, no longer ADVERTISED (TDM-156). `task_review` replaced
+ * `task_approve` rather than joining it — see the tool's own comment for why one
+ * verb with two outcomes beats two verbs — but the old name shipped in 2.3.x and
+ * is written into docs, skills and running sessions' memory. Keeping the handler
+ * reachable costs one Set entry and no context window (an unadvertised tool is
+ * not in the manifest the model reads), and it means an agent that learned
+ * `task_approve` last week gets its approval instead of "unknown tool".
+ *
+ * This is the ONLY thing in here that is not on the manifest, and it is a
+ * deprecation shim, not a second surface: nothing new should be added to it.
+ */
+const FACADE_LEGACY_NAMES = new Set(["task_approve"]);
+
 /** Does this tool name route to handleFacadeTool? (Some facade names don't.) */
 export function isFacadeTool(name: string): boolean {
-  return FACADE_NAMES.has(name) && !IMPLEMENTED_BY_CRUD.has(name);
+  return (
+    (FACADE_NAMES.has(name) || FACADE_LEGACY_NAMES.has(name)) && !IMPLEMENTED_BY_CRUD.has(name)
+  );
 }
 
 /**
@@ -1204,8 +1362,8 @@ export async function handleFacadeTool(
             ? "Nothing approved. Tasks you propose land as 'proposed' and need approving on the " +
               "board before anyone can claim them. This canvas is on the 'peer' approval policy, " +
               "so a human is not the only way through: a REVIEWER agent may approve a task a " +
-              "DIFFERENT agent proposed, with task_approve (never its own, and epics stay " +
-              "human-only). Read board_status for what is waiting, or ask the human."
+              "DIFFERENT agent proposed, with task_review (outcome 'pass' — never its own, and " +
+              "epics stay human-only). Read board_status for what is waiting, or ask the human."
             : "Nothing approved. Tasks you propose land as 'proposed' and need a human to " +
               "approve them on the board — check board_status, or ask the human.";
 
@@ -1772,29 +1930,152 @@ export async function handleFacadeTool(
       return { amended: true, id, url: canvasBlock(gateway).url };
     }
 
-    case "task_approve": {
-      // THE REVIEWER'S TOOL (TDM-146), and deliberately the thinnest thing on this
-      // surface: it POSTs the approve endpoint that already existed and renders the
-      // answer. The rule — a REGISTERED agent may approve a task a DIFFERENT agent
-      // proposed, and only on a canvas whose owner set the 'peer' approval policy —
-      // lives entirely in the API (apps/api/internal/api/peer_approval.go), decided
-      // from server-derived provenance on both sides.
-      //
-      // So there is deliberately NO local non-self check, no policy pre-flight, and
-      // no client-supplied approver. Re-implementing the rule here would buy nothing
-      // (the server refuses either way, and a raw curl walks past anything the
-      // gateway believes) while costing the property that makes the gate
-      // trustworthy: one place to get right. The approver identity is the
-      // X-Tandem-Agent header this gateway already sends on every call — which is
-      // also why an unregistered session is refused rather than approving as nobody.
-      //
-      // The body is empty on purpose: `approvedBy` in a request body is the forgery
-      // vector TDM-40 / TDM-129 closed, and the server ignores it.
+    // ── task_review: the reviewer's ONE verb, two outcomes (TDM-156) ──────────
+    //
+    // WHY ONE TOOL RATHER THAN TWO, and why it REPLACED task_approve on the
+    // manifest instead of joining it. A reviewer makes a single decision — does
+    // this go on, or does it come back — and the two answers happen to land on
+    // two different endpoints (approve, and TDM-154's rework) that no reviewer
+    // should have to know exist. Advertising them as two tools teaches the wrong
+    // thing twice over: a manifest carrying only `task_approve` told reviewers
+    // their sole move was YES (the exact gap this epic exists to close), and a
+    // manifest carrying both would make "which one applies here?" a question the
+    // model answers from a task's state — server knowledge it does not have.
+    // One verb, an `outcome` it must state, and the surface stays 16 tools.
+    //
+    // What this does NOT do is decide anything. `outcome` chooses the endpoint;
+    // every rule — the 'peer' policy, reviewer ≠ author, reviewer ≠ same model
+    // (TDM-155), the state the task must be in — is the server's, derived from
+    // provenance the caller cannot forge (apps/api/internal/api/peer_approval.go).
+    // No local pre-flight, no client-supplied identity: the same reasoning as
+    // task_approve's, which is one place to get the gate right instead of two
+    // that can disagree. The gateway's whole job is to turn the server's answer
+    // into the reviewer's next move.
+    case "task_review": {
       const id = requireTaskId(args);
-      const { data, refusal } = await gateway.postWithRefusal<
-        { action?: TaskRow & { type?: string; approvedBy?: string } },
-        unknown
-      >(`/api/canvas/actions/${encodeURIComponent(id)}/approve`, {});
+      const outcome = typeof args.outcome === "string" ? args.outcome.trim() : "";
+      if (outcome !== "pass" && outcome !== "changes_requested") {
+        throw new Error(
+          "`outcome` must be \"pass\" (approve a PROPOSED task into the ready queue) or " +
+            '"changes_requested" (send a DONE task back to the queue with a reason). ' +
+            "There is no third answer: an agent cannot reject a proposal or fail a task — " +
+            "leaving it alone and saying why is the way to say no to those."
+        );
+      }
+      const reason = typeof args.reason === "string" ? args.reason.trim() : "";
+      if (outcome === "changes_requested" && !reason) {
+        // Argument shape, not policy: the server refuses an empty reason too
+        // (rework_reason_required), but a bounce with nothing to act on is worth
+        // stopping before it costs a round trip — and the message can say what
+        // makes a usable one, which a 400 cannot.
+        throw new Error(
+          "`reason` (string) is required when outcome is \"changes_requested\" — it is the whole " +
+            "content of the bounce and the only thing the author gets. Name what is wrong and " +
+            "what 'fixed' looks like (\"the rework handler never checks the claim fence — cover " +
+            "that case in the API tests\"), not merely that it is wrong."
+        );
+      }
+
+      if (outcome === "changes_requested") {
+        const { data, refusal } = await gateway.postWithRefusal<
+          { action?: TaskRow & { type?: string } },
+          unknown
+        >(
+          `/api/canvas/actions/${encodeURIComponent(id)}/rework`,
+          { reason },
+          // 400 is an ANSWER here, not a fault: rework_not_finished (asking for
+          // changes on work that is not done) is the likeliest reviewer mistake
+          // there is, and it deserves prose telling it what to do instead.
+          [400]
+        );
+        if (refusal) {
+          const parsed = readApprovalRefusal(refusal);
+          return {
+            reviewed: false,
+            outcome,
+            id,
+            refusal: parsed.code ?? "rework_refused",
+            message: parsed.message,
+            ...parsed.extra,
+            _next: reworkRefusalNext(parsed),
+          };
+        }
+        const action = data?.action;
+        return {
+          reviewed: true,
+          outcome,
+          id,
+          ...(action?.ticketId ? { ticketId: action.ticketId } : {}),
+          ...(action?.payload?.title ? { title: action.payload.title } : {}),
+          state: action?.state ?? "approved",
+          reason,
+          url: canvasBlock(gateway).url,
+          _next:
+            "Sent back. The task left 'done', is unclaimed, and is in the ready queue again as " +
+            "'approved' — your reason rides on its audit trail, so whoever picks it up from " +
+            "queue_next reads it there and does not have to ask you. Do NOT claim it and fix it " +
+            "yourself: you are the reviewer, and an agent that reviews and then does the work is " +
+            "one pair of eyes wearing two hats. Expect it back, and review the second attempt on " +
+            "its own merits.",
+        };
+      }
+
+      // outcome: "pass" — the peer approve path. The body is empty on purpose:
+      // `approvedBy` in a request body is the forgery vector TDM-40 / TDM-129
+      // closed, and the server ignores it. `reason` (if one was passed) is not
+      // sent: approve records WHO, not why, and inventing a field to carry it
+      // would be a write the board never shows.
+      const { data, refusal, status } = await postApproval(gateway, id, [400]);
+      if (refusal) {
+        const parsed = readApprovalRefusal(refusal);
+        // An uncoded 400 is the state machine, not the gate ("illegal
+        // transition: done → approved" — 'pass' on work that is already finished
+        // or in flight). Routing it through approvalRefusalNext would answer a
+        // state problem with the policy sentence and send the reviewer away.
+        const stateRefusal = status === 400 && !parsed.code;
+        return {
+          reviewed: false,
+          outcome,
+          id,
+          refusal: parsed.code ?? (stateRefusal ? "not_reviewable" : "human_approval_only"),
+          message: parsed.message,
+          ...parsed.extra,
+          _next: stateRefusal
+            ? `The server would not make that move: "${parsed.message}". 'pass' approves a task ` +
+              `that is still 'proposed' — nothing else is waiting on your yes. If it is already ` +
+              `approved or executing, there is nothing to do; if it is 'done' and you want ` +
+              `changes, call task_review again with outcome "changes_requested" and a reason.`
+            : approvalRefusalNext(parsed),
+        };
+      }
+      const passed = data?.action;
+      const passedBy = typeof passed?.approvedBy === "string" ? passed.approvedBy : undefined;
+      return {
+        reviewed: true,
+        outcome,
+        id,
+        ...(passed?.ticketId ? { ticketId: passed.ticketId } : {}),
+        ...(passed?.payload?.title ? { title: passed.payload.title } : {}),
+        state: passed?.state ?? "approved",
+        ...(passedBy ? { approvedBy: passedBy } : {}),
+        url: canvasBlock(gateway).url,
+        _next:
+          "Passed: the task is in the ready queue and queue_next now returns it to any executor. " +
+          "`approvedBy` records WHO let it through — an 'agent:' prefix is a peer review, " +
+          "'human' is a human's — so the board can tell the two apart later. You reviewed it, so " +
+          "hand it on rather than claiming it yourself: an agent that reviews and then works the " +
+          "same task is one pair of eyes wearing two hats.",
+      };
+    }
+
+    // The name this shipped under in 2.3.x (TDM-146). Unadvertised since TDM-156
+    // — task_review is the verb now — but still routed, and deliberately
+    // UNCHANGED in behaviour and response shape so a session running on older
+    // instructions gets its approval rather than "unknown tool". New work uses
+    // task_review; see FACADE_LEGACY_NAMES.
+    case "task_approve": {
+      const id = requireTaskId(args);
+      const { data, refusal } = await postApproval(gateway, id);
 
       if (refusal) {
         // A refusal is an ANSWER, not a crash — same reasoning as the tap-out
@@ -1913,7 +2194,7 @@ export async function handleFacadeTool(
           "here, and you must not try to approve it yourself. This canvas is on the 'peer' " +
           "approval policy, so that approval does NOT cascade: each task still needs its own, " +
           "which a REVIEWER agent (any registered agent other than the one that proposed it) can " +
-          "give with task_approve. "
+          "give with task_review, outcome 'pass'. "
         : "The epic is 'proposed'. A HUMAN approves it once on the board and that approval " +
           "cascades to every task under it — do not try to approve it yourself. ";
 
@@ -2408,37 +2689,66 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
     },
   },
   {
-    name: "task_approve",
+    name: "task_review",
     description:
       SESSION_CONVENTION +
       " " +
-      "THE REVIEWER'S TOOL, and only usable on a canvas whose owner turned on the 'peer' approval " +
-      "policy (off by default — everywhere else approval is the human's and this answers " +
-      "approved:false). There, a REGISTERED agent may approve a proposed task that a DIFFERENT " +
-      "agent proposed, releasing it into the ready queue. The server enforces every part of that " +
-      "from provenance it derived itself: you cannot approve your own proposal, you cannot " +
-      "approve an epic (that cascade stays human-only), and you cannot approve as anyone but the " +
-      "identity you registered under. Rejecting is human-only too — you either approve or you " +
-      "leave it. " +
-      "BEING A REVIEWER MEANS READING THE WORK: task_get the task, judge whether it is right, " +
-      "correctly scoped and actually ready, and approve only then. Leaving a task unapproved and " +
-      "saying why is a legitimate outcome and often the correct one; a reviewer that approves " +
-      "everything is indistinguishable from the 'auto' policy, which already exists and is " +
-      "simpler. Refusals come back as data, not errors: `approved:false` with a stable `reason` " +
-      "(peer_self_approval, peer_epic_human_only, peer_agent_unregistered, " +
-      "peer_identity_required, peer_proposer_unknown, or human_approval_only when the canvas is " +
-      "not on 'peer') and a `_next` saying what to do about it.",
+      "THE REVIEWER'S ONE TOOL — the whole review loop, in two outcomes. Only usable on a canvas " +
+      "whose owner turned on the 'peer' approval policy (off by default — everywhere else review " +
+      "is the human's and this answers reviewed:false). There, a REGISTERED agent reviews work " +
+      "another agent did: " +
+      "`outcome: \"pass\"` approves a task that is still 'proposed', releasing it into the ready " +
+      "queue; `outcome: \"changes_requested\"` sends a task that is 'done' back — it leaves 'done', " +
+      "loses its claim, and returns to the ready queue as 'approved' with your `reason` on its " +
+      "audit trail, so the next executor reads why. Those are the only two moves, and each one " +
+      "applies to exactly one state: 'pass' is for a PLAN you are letting through, " +
+      "'changes_requested' is for FINISHED work you are sending back. " +
+      "There is no third answer, deliberately: an agent cannot reject a proposal or kill a task. " +
+      "The bounce is reversible, so an agent gets it; destroying work is not, so it stays the " +
+      "human's. Leaving a task alone and saying why IS how you say no to a proposal. " +
+      "The server enforces the rest from provenance it derived itself — you cannot review your " +
+      "own proposal or your own completion, you cannot review an epic (that cascade stays " +
+      "human-only), and you cannot review as anyone but the identity you registered under. On a " +
+      "canvas whose owner also turned on cross-model review you cannot review an agent running " +
+      "the same MODEL as you either (peer_same_model / rework_same_model), which is why " +
+      "canvas_connect's `model` is worth passing. " +
+      "BEING A REVIEWER MEANS READING THE WORK: task_get the task (and its result, and the " +
+      "commit it links), judge whether it is right, correctly scoped and actually finished, and " +
+      "only then answer. A reviewer that passes everything is indistinguishable from the 'auto' " +
+      "policy, which already exists and is simpler. " +
+      "Refusals come back as DATA, not errors: `reviewed:false` with a stable `refusal` code " +
+      "(rework_not_finished, rework_self_review, peer_self_approval, peer_epic_human_only, " +
+      "peer_agent_unregistered, rework_policy_required, human_approval_only when the canvas is " +
+      "not on 'peer', …) plus the server's `message` and a `_next` saying what to do about it. " +
+      "Read `_next` — it is written for the case you actually hit, including codes newer than " +
+      "this tool.",
     inputSchema: {
       type: "object" as const,
       properties: {
         id: {
           type: "string",
           description:
-            "The proposed task to approve — its ticket ref (e.g. 'TDM-21') or uuid. One task per " +
-            "call: there is no bulk approve for agents, on purpose.",
+            "The task you reviewed — its ticket ref (e.g. 'TDM-21', '#21', '21') or uuid. One " +
+            "task per call: there is no bulk review for agents, on purpose.",
+        },
+        outcome: {
+          type: "string",
+          enum: ["pass", "changes_requested"],
+          description:
+            "'pass' — approve a PROPOSED task into the ready queue. 'changes_requested' — send a " +
+            "DONE task back for another go, with a reason. Nothing else is a review outcome.",
+        },
+        reason: {
+          type: "string",
+          description:
+            "REQUIRED on 'changes_requested', and the only thing the author gets: name what is " +
+            "wrong and what 'fixed' would look like ('the rework handler never checks the claim " +
+            "fence — cover that case in the API tests'), not merely that it is wrong. Kept " +
+            "verbatim on the task's audit trail. Ignored on 'pass', which records who approved, " +
+            "not why.",
         },
       },
-      required: ["id"],
+      required: ["id", "outcome"],
     },
   },
   {
@@ -2466,7 +2776,7 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
       "and that single approval cascades to every task under it. You must NOT try to approve " +
       "it yourself — that gate is the human's on every canvas, epics included, and the server " +
       "refuses agent approval of an epic even where it allows peer review of a task (there the " +
-      "cascade is off and each task is approved on its own; see task_approve). " +
+      "cascade is off and each task is approved on its own; see task_review). " +
       "After proposing, do not end your turn: LISTEN for the approval with queue_wait and the " +
       "returned `epicId` — one call that returns when the work is approved — so the human's " +
       "approval on the board, not another prompt, is what starts the work. " +

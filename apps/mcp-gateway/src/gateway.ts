@@ -571,23 +571,36 @@ export class Gateway {
    * as `POST … failed: 403 {json}` that would reach the model as an opaque error
    * string with the code buried inside it.
    *
-   * 403 ONLY. Everything else still goes through assertOk, so a 401 keeps its
-   * reconnect message and a 5xx still fails loudly. A non-JSON 403 (a proxy's HTML
-   * error page) is handed back as `{ error: "forbidden", message: <text> }` so the
-   * caller never has to care whether the body parsed.
+   * 403 BY DEFAULT. Everything else still goes through assertOk, so a 401 keeps
+   * its reconnect message and a 5xx still fails loudly. A non-JSON refusal (a
+   * proxy's HTML error page) is handed back as `{ error: "forbidden", message:
+   * <text> }` so the caller never has to care whether the body parsed.
+   *
+   * `alsoRefusalStatuses` widens that set for a route where another status is
+   * ALSO an answer rather than a fault. task_review (TDM-156) passes [400]: the
+   * rework endpoint (TDM-154) answers 400 `rework_not_finished` when a reviewer
+   * asks for changes on work that isn't finished yet — the single most likely
+   * mistake a reviewer makes, and one it should be told how to fix rather than
+   * meet as `POST … failed: 400 {json}`. `status` comes back alongside the
+   * refusal so a caller can tell a policy "no" (403) from a state "no" (400)
+   * without re-deriving it from the body.
    */
-  async postWithRefusal<T, R>(path: string, body?: unknown): Promise<{ data?: T; refusal?: R }> {
+  async postWithRefusal<T, R>(
+    path: string,
+    body?: unknown,
+    alsoRefusalStatuses?: number[]
+  ): Promise<{ data?: T; refusal?: R; status?: number }> {
     const res = await this.safeFetch(path, {
       method: "POST",
       headers: this.authHeaders(),
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
-    if (res.status === 403) {
+    if (res.status === 403 || alsoRefusalStatuses?.includes(res.status)) {
       if ((res.headers.get("content-type") ?? "").includes("json")) {
-        return { refusal: (await res.json()) as R };
+        return { refusal: (await res.json()) as R, status: res.status };
       }
       const text = await res.text();
-      return { refusal: { error: "forbidden", message: text } as R };
+      return { refusal: { error: "forbidden", message: text } as R, status: res.status };
     }
     await this.assertOk("POST", path, res);
     return { data: await this.parseJson<T>("POST", path, res) };

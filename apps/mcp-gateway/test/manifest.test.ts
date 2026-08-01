@@ -33,7 +33,7 @@ const EXPECTED_FACADE = [
   "task_complete",
   "task_propose",
   "task_amend",
-  "task_approve",
+  "task_review",
   "epic_propose",
   "doc_write",
   "board_status",
@@ -156,7 +156,9 @@ test("read-only facade tools are annotated read-only", () => {
     "doc_write",
     "task_propose",
     "epic_propose",
-    "task_approve",
+    // Both review outcomes write: 'pass' approves, 'changes_requested' moves a
+    // done task back to the queue (TDM-156).
+    "task_review",
   ]) {
     assert.equal(byName.get(n)!.annotations.readOnlyHint, false, `${n} writes`);
     assert.equal(byName.get(n)!.annotations.destructiveHint, false);
