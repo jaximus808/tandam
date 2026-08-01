@@ -1131,6 +1131,96 @@ function dispatchNote(agentId?: string): string {
   );
 }
 
+// ── The approval ask (TDM-186) ───────────────────────────────────────────────
+//
+// Proposing answered with ids, a url and "now wait for the approval" — and that
+// is a deadlock written into the contract. The gate is a HUMAN one, so the plan
+// sits on a board nobody was asked to open: the agent parks on queue_wait, the
+// human never hears that anything is waiting for them, and both sides are
+// patiently blocked on each other. queue_wait is not the first move after
+// proposing; ASKING is. You cannot wait for an approval you never requested.
+//
+// So the answer carries the sentence itself — `tellHuman`, paste-ready, with
+// the title, the ticket range and the board URL already in it, so relaying it
+// costs the model nothing and cannot come out vague ("I made some tasks") — and
+// `_next` leads with "say this NOW", with the queue_wait guidance demoted to
+// second, where it belongs.
+//
+// It stays HONEST about what actually landed: a task born approved (the 'auto'
+// policy, or an already-approved epic under the default 'epic' one) is waiting
+// on nobody, so it gets no ask. A line that tells the human to go approve what
+// the board already approved is how they learn the line is noise.
+
+/** "TDM-4..TDM-9" for a range, "TDM-4" for one, "" when the API assigned none. */
+function ticketRange(ticketIds: Array<string | undefined>): string {
+  const ids = ticketIds.filter((t): t is string => typeof t === "string" && t.trim() !== "");
+  if (ids.length === 0) return "";
+  if (ids.length === 1) return ids[0];
+  return `${ids[0]}..${ids[ids.length - 1]}`;
+}
+
+/** One relayable sentence: what is waiting, which tickets, and where to click. */
+function approvalAsk(opts: {
+  subject: string;
+  detail?: string;
+  url: string;
+  plural?: boolean;
+}): string {
+  const detail = opts.detail ? ` (${opts.detail})` : "";
+  return (
+    `${opts.subject}${detail} ${opts.plural ? "are" : "is"} waiting for YOUR approval ` +
+    `on the board: ${opts.url}`
+  );
+}
+
+/** The first instruction on any answer that carries an ask — relay it, then wait. */
+const RELAY_FIRST =
+  "RELAY `tellHuman` TO THE HUMAN NOW — say it in your very next message, before you call " +
+  "anything else. Nothing here can be worked until they approve it, and they cannot approve " +
+  "what nobody told them about. ";
+
+/** Rows as the task POST / batch POST hands them back. */
+type ProposedRow = { ticketId?: string; state?: string; payload?: { title?: string } };
+
+/**
+ * The `tellHuman` / `url` / `_next` block for a bare task proposal (task_propose).
+ * epic_propose composes its own — the thing waiting there is the epic, and one
+ * approval on it releases the batch.
+ */
+function taskProposalAsk(
+  gateway: Gateway,
+  rows: ProposedRow[]
+): { tellHuman?: string; url: string; _next: string } {
+  const url = canvasBlock(gateway).url;
+  const waiting = rows.filter((r) => (r.state ?? "proposed") === "proposed");
+  if (waiting.length === 0) {
+    return {
+      url,
+      _next:
+        "These were born APPROVED under this canvas's approval policy — there is no gate here and " +
+        "nothing to relay. They are already in the ready queue: call queue_next to pick one up, or " +
+        "dispatch one subagent per task with the `handoff` blocks it hands back.",
+    };
+  }
+  const many = waiting.length > 1;
+  const title = (waiting[0].payload?.title ?? "").trim();
+  return {
+    url,
+    tellHuman: approvalAsk({
+      subject: many ? `${waiting.length} proposed tasks` : `Task ${title ? `"${title}"` : "(untitled)"}`,
+      detail: ticketRange(waiting.map((r) => r.ticketId)),
+      url,
+      plural: many,
+    }),
+    _next:
+      RELAY_FIRST +
+      `${many ? "They land" : "It lands"} as 'proposed' and a HUMAN approves ${many ? "them" : "it"} ` +
+      "on the board — never approve your own proposal. THEN listen for that approval instead of " +
+      "ending your turn: ONE call, not a loop — queue_wait. If it answers status 'timeout', " +
+      "nothing was approved yet; that is not an error, so call it again until it answers 'ready'.",
+  };
+}
+
 /** `## title` + blank line + body, when a title was given. */
 function composeMarkdown(title: unknown, body: unknown): string {
   const t = typeof title === "string" ? title.trim() : "";
@@ -1766,7 +1856,7 @@ async function runFacadeTool(
             throw new Error(`tasks[${i}] needs a \`title\` — one line saying what to do`);
           }
         }
-        return handleTool(gateway, "canvas_task_add_batch", {
+        const batch = (await handleTool(gateway, "canvas_task_add_batch", {
           tasks: (many as Args[]).map((t) => ({
             ...(args.epicId ? { epicId: args.epicId } : {}),
             ...(args.assignee ? { assignee: args.assignee } : {}),
@@ -1775,12 +1865,15 @@ async function runFacadeTool(
               : {}),
             ...t,
           })),
-        });
+        })) as { actions?: ProposedRow[] };
+        // The ids stay exactly as they were; what's added is the ask (TDM-186).
+        return { ...batch, ...taskProposalAsk(gateway, batch.actions ?? []) };
       }
       if (typeof args.title !== "string" || !args.title.trim()) {
         throw new Error("Pass `title` (one task) or `tasks` (an array of them)");
       }
-      return handleTool(gateway, "canvas_task_add", args);
+      const task = (await handleTool(gateway, "canvas_task_add", args)) as ProposedRow;
+      return { ...task, ...taskProposalAsk(gateway, [task]) };
     }
 
     case "task_amend": {
@@ -2146,18 +2239,43 @@ async function runFacadeTool(
         : "The epic is 'proposed'. A HUMAN approves it once on the board and that approval " +
           "cascades to every task under it — do not try to approve it yourself. ";
 
+      // The paste-ready approval ask (TDM-186). An agent-proposed epic always
+      // lands 'proposed' — only tasks can be born approved — but read the state
+      // back rather than asserting it, so an epic that somehow arrives approved
+      // does not send the human off to approve it twice.
+      const url = canvasBlock(gateway).url;
+      const epicState = epic.state ?? "proposed";
+      const tellHuman =
+        epicState === "proposed"
+          ? approvalAsk({
+              subject: `Epic "${title}"`,
+              detail: [
+                many.length > 0 ? `${many.length} task${many.length === 1 ? "" : "s"}` : "",
+                ticketRange(tasks.map((t) => t.ticketId as string | undefined)),
+              ]
+                .filter(Boolean)
+                .join(", "),
+              url,
+            })
+          : undefined;
+
       return {
         created: true,
         epicId: epic.id,
-        state: epic.state ?? "proposed",
+        state: epicState,
         ...(many.length > 0 ? { tasks } : {}),
         ...(warnings.length > 0
           ? { warnings, _warnings: ticketWarningsNote(warnings, many.length) }
           : {}),
-        url: canvasBlock(gateway).url,
+        url,
+        ...(tellHuman ? { tellHuman } : {}),
         _next:
+          // ASK FIRST, then wait: parking on queue_wait without ever telling the
+          // human the gate is open is how a plan sits unread while both sides
+          // think it is the other's move.
+          (tellHuman ? RELAY_FIRST : "") +
           epicApproval +
-          "NOW LISTEN FOR THAT APPROVAL instead of ending your turn — and you do that with ONE " +
+          "THEN LISTEN FOR THAT APPROVAL instead of ending your turn — and you do that with ONE " +
           "call, not a loop: queue_wait with this `epicId`. It parks on the server and returns " +
           "the moment the tasks are approved. If it answers status 'timeout', nothing was " +
           "approved yet — that is not an error, so call queue_wait again, and keep doing that " +
@@ -2563,6 +2681,9 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
       "the heavy context in notes/roadmap items referenced by `linkedIds` — task_get hydrates " +
       "those for whoever picks it up. For a whole plan, prefer epic_propose: it creates the epic " +
       "AND its tasks in one call, so the human approves once instead of task by task. " +
+      "The answer hands back `tellHuman` — a paste-ready line naming what is waiting, its ticket " +
+      "range and the board URL. RELAY IT in your very next message before you wait on anything: " +
+      "a gate nobody was told about is just a stall. " +
       PEER_APPROVAL_CLAUSE,
     inputSchema: {
       type: "object" as const,
@@ -2768,7 +2889,10 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
       "it yourself — that gate is the human's on every canvas, epics included, and the server " +
       "refuses agent approval of an epic even where it allows peer review of a task (there the " +
       "cascade is off and each task is approved on its own; see task_review). " +
-      "After proposing, do not end your turn: LISTEN for the approval with queue_wait and the " +
+      "After proposing, TELL THE HUMAN FIRST, then listen: the answer hands you `tellHuman`, a " +
+      "paste-ready line naming the epic, its ticket range and the board URL — relay it in your " +
+      "very next message, because a gate nobody was told about is just a stall. THEN, without " +
+      "ending your turn, LISTEN for the approval with queue_wait and the " +
       "returned `epicId` — one call that returns when the work is approved — so the human's " +
       "approval on the board, not another prompt, is what starts the work. " +
       "Returns `epicId`: pass it as `epicId` on later task_propose calls to add work to the same " +

@@ -21,7 +21,7 @@ type Recorded = { method: string; path: string; body: any };
 /** Swap fetch for a recorder answering the epic POST and the task batch POST. */
 function withRecordedFetch(
   run: (calls: Recorded[]) => Promise<void>,
-  opts?: { failBatch?: boolean }
+  opts?: { failBatch?: boolean; taskState?: string }
 ): Promise<void> {
   const calls: Recorded[] = [];
   const real = globalThis.fetch;
@@ -42,7 +42,7 @@ function withRecordedFetch(
         id: `task-${i + 1}`,
         ticketId: `TDM-${i + 1}`,
         type: "task",
-        state: "proposed",
+        state: opts?.taskState ?? "proposed",
         payload: a.payload,
       }));
       return new Response(JSON.stringify({ actions }), {
@@ -50,9 +50,16 @@ function withRecordedFetch(
         headers: { "content-type": "application/json" },
       });
     }
-    // POST /api/canvas/actions — the epic itself.
+    // POST /api/canvas/actions — the epic itself, or a single task_propose.
+    const isTask = body?.type === "task";
     return new Response(
-      JSON.stringify({ id: "epic-1", type: body?.type, state: "proposed", payload: body?.payload }),
+      JSON.stringify({
+        id: isTask ? "task-1" : "epic-1",
+        ...(isTask ? { ticketId: "TDM-7" } : {}),
+        type: body?.type,
+        state: isTask ? opts?.taskState ?? "proposed" : "proposed",
+        payload: body?.payload,
+      }),
       { status: 201, headers: { "content-type": "application/json" } }
     );
   }) as typeof globalThis.fetch;
@@ -185,6 +192,85 @@ test("the manifest teaches the human-only approval rule", async () => {
   assert.equal(props.title?.type, "string");
   assert.equal(props.tasks?.type, "array");
   assert.ok(props.session, "epic_propose must take the session handle");
+});
+
+// ── The approval ask (TDM-186) ───────────────────────────────────────────────
+//
+// Proposing then parking on queue_wait without ever telling the human deadlocks
+// both sides. What's pinned here is that the answer carries the sentence to
+// relay, that `_next` puts relaying BEFORE waiting, and that it stays quiet when
+// nothing is actually waiting on a human.
+
+test("epic_propose hands back a paste-ready tellHuman: title, ticket range, board URL", async () => {
+  await withRecordedFetch(async () => {
+    const res = (await handleFacadeTool(connectedGateway(), "epic_propose", {
+      title: "Dark mode rollout",
+      tasks: [
+        {
+          title: "Token the palette",
+          body: "Replace the hard-coded hexes in apps/web/src/index.css with paper/surface/ink CSS variables. Done when pnpm build passes and no component reads a raw hex.",
+        },
+        {
+          title: "Convert the chrome",
+          body: "Point the header and sidebar in apps/web/src/components at the new tokens instead of Tailwind literals. Done when both render unchanged in light mode.",
+        },
+      ],
+    })) as Record<string, unknown>;
+
+    const tell = String(res.tellHuman);
+    assert.match(tell, /Dark mode rollout/, "names the epic");
+    assert.match(tell, /2 tasks/, "says how much work it is");
+    assert.match(tell, /TDM-1\.\.TDM-2/, "carries the ticket range");
+    assert.match(tell, /TESTCODE/, "carries the board URL to click");
+    assert.match(tell, /waiting for YOUR approval/);
+
+    // Ask FIRST, wait second — the whole point of the ticket.
+    const next = String(res._next);
+    assert.match(next.slice(0, 120), /tellHuman/, "_next must LEAD with the relay instruction");
+    assert.ok(
+      next.indexOf("tellHuman") < next.indexOf("queue_wait"),
+      "relaying comes before waiting, not after"
+    );
+  });
+});
+
+test("task_propose answers with the same ask — one task and a batch", async () => {
+  await withRecordedFetch(async () => {
+    const one = (await handleFacadeTool(connectedGateway(), "task_propose", {
+      title: "Fix the bell overlap",
+      body: "The notification bell overlaps the code chip in apps/web/src/components/Header.tsx.",
+    })) as Record<string, unknown>;
+    // The ids it already returned are untouched; the ask rides alongside them.
+    assert.equal(one.id, "task-1");
+    assert.match(String(one.tellHuman), /Fix the bell overlap/);
+    assert.match(String(one.tellHuman), /TDM-7/);
+    assert.match(String(one.tellHuman), /TESTCODE/);
+    assert.ok(String(one._next).indexOf("tellHuman") < String(one._next).indexOf("queue_wait"));
+
+    const batch = (await handleFacadeTool(connectedGateway(), "task_propose", {
+      tasks: [{ title: "One" }, { title: "Two" }],
+    })) as Record<string, unknown>;
+    assert.equal((batch.actions as unknown[]).length, 2);
+    assert.match(String(batch.tellHuman), /2 proposed tasks/);
+    assert.match(String(batch.tellHuman), /TDM-1\.\.TDM-2/);
+    assert.match(String(batch.tellHuman), /are waiting/, "plural subject takes a plural verb");
+  });
+});
+
+test("no ask when nothing is waiting: born-approved tasks are not the human's problem", async () => {
+  await withRecordedFetch(
+    async () => {
+      const res = (await handleFacadeTool(connectedGateway(), "task_propose", {
+        tasks: [{ title: "One" }, { title: "Two" }],
+      })) as Record<string, unknown>;
+      // 'auto' policy / approved epic: the board already approved these, so
+      // asking the human to go approve them teaches them the line is noise.
+      assert.equal("tellHuman" in res, false);
+      assert.match(String(res._next), /queue_next/);
+      assert.doesNotMatch(String(res._next), /tellHuman/);
+    },
+    { taskState: "approved" }
+  );
 });
 
 test("task_propose advertises epicId on both the single and the batch shape", async () => {
