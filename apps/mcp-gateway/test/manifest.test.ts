@@ -36,13 +36,14 @@ const EXPECTED_FACADE = [
   "task_review",
   "epic_propose",
   "doc_write",
+  "doc_read",
   "board_status",
 ];
 
-test("default manifest is exactly the 16-tool intent facade", () => {
+test("default manifest is exactly the 17-tool intent facade", () => {
   const names = manifestFor(false).map((t) => t.name);
   assert.deepEqual(names, EXPECTED_FACADE);
-  assert.equal(names.length, 16);
+  assert.equal(names.length, 17);
 });
 
 test("TANDEM_FULL_TOOLS adds the CRUD surface without dropping or duplicating", () => {
@@ -147,6 +148,8 @@ test("read-only facade tools are annotated read-only", () => {
     "task_find",
     "task_get",
     "board_status",
+    // The read side of doc_write (TDM-180): reading a tab changes nothing.
+    "doc_read",
   ]) {
     assert.equal(byName.get(n)!.annotations.readOnlyHint, true, `${n} is a read`);
   }

@@ -938,6 +938,98 @@ async function resolveNotesDocument(gateway: Gateway, ref: string): Promise<stri
   return created.document.id;
 }
 
+// ── Composed reads: doc_read (TDM-180) ───────────────────────────────────────
+//
+// The read side of doc_write. An agent that wrote a tab could not read it back
+// on this surface: the only path was GET /api/canvas/state?fields=notes — EVERY
+// note on the canvas — matched by hand against a second read of fields=documents.
+// On a board whose docs are the strategy writing, that is the whole corpus pulled
+// into a context window to answer a question about one tab. TDM-179 put the
+// scoped read on the API; this is the tool over it.
+
+/** One note as the document endpoint (TDM-179) returns it. */
+type DocumentNoteLine = { id?: string; body?: string; createdBy?: string; updatedAt?: string };
+
+/** GET /api/canvas/documents/{ref}/notes */
+type DocumentNotesResponse = {
+  document?: { id: string; name: string; type: string };
+  notes?: DocumentNoteLine[];
+};
+
+/**
+ * Project a tab into the answer the model reads: one entry per note, each
+ * carrying its markdown AND the `noteId` doc_write needs to rewrite it in place
+ * (without the id, revising a doc means appending a second copy of it).
+ *
+ * PURE, and the single shaping point for BOTH read paths below — so the two
+ * cannot drift, and anything that has to reason about the size of this answer
+ * has one place to do it.
+ */
+function shapeDocRead(
+  doc: { id: string; name: string; type?: string },
+  notes: DocumentNoteLine[],
+  url: string
+) {
+  const lines = notes.map((n) => ({
+    noteId: n.id,
+    body: n.body ?? "",
+    ...(n.createdBy ? { createdBy: n.createdBy } : {}),
+    ...(n.updatedAt ? { updatedAt: n.updatedAt } : {}),
+  }));
+  return {
+    document: { id: doc.id, name: doc.name, ...(doc.type ? { type: doc.type } : {}) },
+    noteCount: lines.length,
+    notes: lines,
+    url,
+    _next: lines.length
+      ? "Every note carries its `noteId`: to revise one, doc_write with that noteId — writing " +
+        "without it appends a second copy of the same document."
+      : "The tab exists but is empty — doc_write with this `document` name starts it.",
+  };
+}
+
+/**
+ * The tab did not answer. Say WHICH of the two reasons it was, because they need
+ * opposite responses from the caller.
+ *
+ * The scoped endpoint answers "absent" (see Gateway.getIfAvailable) both when the
+ * ref names nothing — a 404 — and when the API predates TDM-179, since this API
+ * serves the SPA on `/*` and an unrouted /api path comes back as HTML. One list
+ * of documents tells them apart: no match means the agent asked for a tab that
+ * does not exist (name the ones that do, so it can retry without a second call);
+ * a match means the tab is real and the ENDPOINT is what's missing, which is an
+ * API version problem the agent cannot fix and should not be punished for — so
+ * fall back to the state read there, and only there.
+ */
+async function docReadFallback(gateway: Gateway, ref: string) {
+  const { documents = [] } = (await gateway.get("/api/canvas/documents")) as {
+    documents?: Array<{ id: string; type: string; name: string }>;
+  };
+  const wanted = ref.trim().toLowerCase();
+  const hit = documents.find(
+    (d) => d.id.toLowerCase() === wanted || d.name.trim().toLowerCase() === wanted
+  );
+
+  if (!hit) {
+    const names = documents.map((d) => `"${d.name}"`).join(", ");
+    throw new Error(
+      `No document "${ref}" on this canvas. Tabs that DO exist: ${names || "(none yet)"}. ` +
+        `Read one of those, or doc_write with a new \`document\` name to create it.`
+    );
+  }
+
+  // Legacy path only: an API without the scoped endpoint. Every note on the
+  // canvas, filtered to this tab here — the exact read doc_read exists to avoid,
+  // kept because answering an old deployment beats failing on one.
+  const state = (await gateway.get("/api/canvas/state?fields=notes")) as {
+    state?: { notes?: Record<string, DocumentNoteLine & { documentId?: string; sortOrder?: number }> };
+  };
+  const mine = Object.values(state.state?.notes ?? {})
+    .filter((n) => n.documentId === hit.id)
+    .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || String(a.id).localeCompare(String(b.id)));
+  return shapeDocRead(hit, mine, canvasBlock(gateway).url);
+}
+
 // ── Dispatch handoff (TDM-62 / E9.2) ─────────────────────────────────────────
 
 /**
@@ -1322,6 +1414,7 @@ const FACADE_NAMES = new Set([
   "task_review",
   "epic_propose",
   "doc_write",
+  "doc_read",
   "board_status",
 ]);
 
@@ -2422,6 +2515,25 @@ async function runFacadeTool(
       };
     }
 
+    case "doc_read": {
+      const ref = typeof args.document === "string" ? args.document.trim() : "";
+      if (!ref) {
+        throw new Error(
+          "`document` (string) is required — the tab's NAME (the one you gave doc_write) or its " +
+            "id. context_get lists the tabs on this canvas."
+        );
+      }
+      // ONE scoped call on the happy path (TDM-179): this tab's notes, in the
+      // order the tab shows them, and nothing from any other document.
+      const served = await gateway.getIfAvailable<DocumentNotesResponse>(
+        `/api/canvas/documents/${encodeURIComponent(ref)}/notes`
+      );
+      if (served?.document) {
+        return shapeDocRead(served.document, served.notes ?? [], canvasBlock(gateway).url);
+      }
+      return docReadFallback(gateway, ref);
+    }
+
     case "board_status": {
       // Deliberately NOT canvas_state_read: the whole point is a board-shaped
       // answer (states, epics, who holds what) without pulling the canvas.
@@ -3066,6 +3178,31 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
         },
       },
       required: ["body"],
+    },
+  },
+  {
+    name: "doc_read",
+    description:
+      "READ ONE DOCUMENT TAB BACK — the read side of doc_write. Use it for the strategy and " +
+      "context writing that lives on the canvas rather than in the repo: the thesis, a plan, the " +
+      "decisions a past session left behind. `document` is the tab's NAME (the one you passed to " +
+      "doc_write) or its id; context_get lists the tabs if you don't know it. Returns that tab's " +
+      "notes in the order it shows them, each with its markdown and its `noteId` — keep the id if " +
+      "you'll revise that note, because doc_write WITHOUT it appends a second copy instead of " +
+      "updating. Scoped server-side: reading one tab never pulls the rest of the canvas. An " +
+      "unknown name comes back naming the tabs that do exist. " +
+      SESSION_CONVENTION,
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        document: {
+          type: "string",
+          description:
+            "The tab to read — an existing document's name (case-insensitive) or its id. " +
+            "Unlike doc_write, this never creates one.",
+        },
+      },
+      required: ["document"],
     },
   },
   {
