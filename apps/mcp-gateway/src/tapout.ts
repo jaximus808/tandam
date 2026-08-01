@@ -240,6 +240,43 @@ export function writeReason(c: ReadConflict): TapOutReason | undefined {
  *     unheld — the winner's claim ended, so refusing would be wrong. That makes
  *     the ready queue the self-healing path, which is also the tool every
  *     tap-out points at.
+ *
+ * THE CLOCK STARTS ONCE AND NEVER MOVES FORWARD (TDM-167). Both valves used to
+ * be unreachable for the one case that needs them most — a holder that DIED
+ * mid-task:
+ *
+ *   - queue_next cannot clear it, because a task stuck `executing` under a dead
+ *     holder is not in the ready queue at all. It is exactly the task that never
+ *     comes back through the self-healing path.
+ *   - the TTL could not expire it either, because every retry re-stamped `at`.
+ *     A session that asked again at minute 14 pushed its own deadline to minute
+ *     29, forever. The ledger key is canvas + claimant() (the agent NAME), so
+ *     reconnecting under the same name inherited the same trap; the only escape
+ *     was registering under a NEW name, which leaves a duplicate on the fleet
+ *     view. During E20 this stranded TDM-154 twice: a worker finished and
+ *     committed a whole ticket and could then neither claim it nor heartbeat on
+ *     it, so the board showed no trail and a human had to release it by hand.
+ *
+ * So `at` is the start of the current losing STREAK, not the last time we said
+ * no, and nothing pushes it forward. The guard lifts on its own one lease after
+ * the first loss, one claim reaches the server, and the SERVER decides — which
+ * is the only place the decision can honestly be made:
+ *
+ *   - The claim path consults the lease (store.DefaultClaimTTL, lazy expiry at
+ *     claim time), so a live holder still wins the race and the loser is
+ *     recorded again for another lease. Re-racing a genuine claim still taps out
+ *     — at most once per lease instead of once per turn, which is the loop this
+ *     ledger exists to break.
+ *   - A dead holder's lease has expired by then, the re-claim SUCCEEDS, and the
+ *     session that did the work can report on it again.
+ *
+ * And only a rejected CLAIM is evidence a lease is live. The write fence
+ * (progress / complete) is identity-only — see claim_fence.go: it refuses on the
+ * holder's NAME whatever the lease age — so a refused heartbeat says "someone
+ * else's name is on this", never "and their claim is still good". Letting those
+ * rejections extend the clock is what welded the trap shut. They still record
+ * the loss (the session must stop writing); they just cannot buy the holder
+ * another 15 minutes.
  */
 export interface Loss {
   taskId: string;
@@ -247,14 +284,48 @@ export interface Loss {
   reason: TapOutReason;
   /** The live claim generation, when the API's fence reported one. */
   claimGeneration?: number;
-  /** Date.now() of the most recent rejection. */
+  /**
+   * When this losing streak STARTED — the one clock freshness is measured
+   * against, and the only field the TTL reads. Set when a loss is first recorded
+   * (or first recorded again after one expired) and never pushed forward by a
+   * later rejection or retry: an entry that re-stamped itself could never age
+   * out under the retries it exists to refuse (TDM-167). Use `lastAt` for "when
+   * did this session last ask".
+   */
   at: number;
+  /**
+   * The most recent time this session was told to let go of this task — the
+   * newest rejection or local refusal. Reporting only: it deliberately does NOT
+   * affect expiry.
+   */
+  lastAt?: number;
   /** How many times this session has been told to let go of this task. */
   attempts: number;
 }
 
-/** As long as the API's claim lease: past it, a loss proves nothing. */
+/**
+ * As long as the API's claim lease: past it, a loss proves nothing.
+ *
+ * Kept in step with the server's claim TTL (store.DefaultClaimTTL /
+ * CLAIM_TTL_MINUTES, 15 min), because that is the moment a dead holder's task
+ * becomes claimable again. Shorter and the gateway re-races claims the server
+ * will still refuse; longer and it keeps refusing work the server would now
+ * hand over.
+ */
 export const LOSS_TTL_MS = 15 * 60 * 1000;
+
+/**
+ * The clock the ledger ages losses against. Indirected ONLY so tests can wind
+ * time past the lease without sleeping for it; production always reads
+ * Date.now(). Kept module-private with a seam rather than passed through every
+ * call site, so no production path can pass a clock of its own.
+ */
+let lossClock: () => number = Date.now;
+
+/** Test seam: run the ledger on a fake clock (no argument restores Date.now). */
+export function setLossClock(clock?: (() => number) | null): void {
+  lossClock = clock ?? Date.now;
+}
 
 /**
  * Ledger keys are normalized task REFS, because a task has several spellings: a
@@ -294,14 +365,25 @@ function ledgerFor(gateway: Gateway): Map<string, Loss> {
   return m;
 }
 
-function fresh(loss: Loss, now = Date.now()): boolean {
+/**
+ * Is this loss still inside the lease window that started it? Measured from
+ * `at`, the START of the streak — see the Loss doc: a clock that moved on every
+ * rejection never expired.
+ */
+function fresh(loss: Loss, now = lossClock()): boolean {
   return now - loss.at < LOSS_TTL_MS;
 }
 
 /**
  * Remember that this session was told to let go of `taskId`, and return the
  * ledger entry (whose `attempts` is what makes the second refusal firmer than
- * the first). Re-recording the same task bumps the count and refreshes the clock.
+ * the first).
+ *
+ * Re-recording the same task bumps the count and records WHEN it last happened,
+ * but it does NOT restart the expiry clock: `at` is carried over from the live
+ * entry, so the streak still ends one lease after it began (TDM-167). A new
+ * clock is started only when there is nothing live to carry — the first loss, or
+ * the first one after an earlier streak expired or was forgotten.
  */
 export function recordLoss(
   gateway: Gateway,
@@ -310,7 +392,11 @@ export function recordLoss(
 ): Loss {
   const ledger = ledgerFor(gateway);
   const key = lossKey(taskId);
-  const prior = ledger.get(key);
+  const stored = ledger.get(key);
+  // Only a LIVE entry is carried forward; an expired one is a finished streak,
+  // and starting from its clock would resurrect a refusal that already lapsed.
+  const prior = stored && fresh(stored) ? stored : undefined;
+  const now = lossClock();
   const loss: Loss = {
     taskId,
     ...(info.holder ? { holder: info.holder } : prior?.holder ? { holder: prior.holder } : {}),
@@ -320,8 +406,9 @@ export function recordLoss(
       : prior?.claimGeneration !== undefined
         ? { claimGeneration: prior.claimGeneration }
         : {}),
-    at: Date.now(),
-    attempts: (prior && fresh(prior) ? prior.attempts : 0) + 1,
+    at: prior ? prior.at : now,
+    lastAt: now,
+    attempts: (prior ? prior.attempts : 0) + 1,
   };
   ledger.set(key, loss);
   // Evict the oldest losses first — the recent ones are the ones a loop is
@@ -375,9 +462,24 @@ export function forgetLoss(gateway: Gateway, ...refs: Array<string | undefined>)
   }
 }
 
-/** Bump an existing loss's attempt count without changing why it was lost. */
+/**
+ * Bump an existing loss's attempt count without changing why it was lost — what
+ * a LOCAL refusal records. Nothing new was learned (the gateway did not touch
+ * the API), so this is the last thing that should be allowed to extend the
+ * refusal: it counts the ask and moves `lastAt`, and leaves the expiry clock
+ * exactly where the first loss put it (TDM-167).
+ */
 export function bumpLoss(gateway: Gateway, loss: Loss): Loss {
-  return recordLoss(gateway, loss.taskId, { holder: loss.holder, reason: loss.reason });
+  const ledger = ledgerFor(gateway);
+  const key = lossKey(loss.taskId);
+  const current = ledger.get(key) ?? loss;
+  const bumped: Loss = {
+    ...current,
+    lastAt: lossClock(),
+    attempts: current.attempts + 1,
+  };
+  ledger.set(key, bumped);
+  return bumped;
 }
 
 /** Test seam: drop every session's ledger. Never called in production paths. */
@@ -413,8 +515,21 @@ export function repeatClaimRejectionMessage(loss: Loss): string {
     `You already lost this task to ${who} and were told to stop — this is attempt ` +
     `${loss.attempts}. The gateway did NOT retry the claim: re-racing a task you lost is a loop, ` +
     `not a strategy. Do NOT work on it. Call queue_next and take a DIFFERENT ready task. ` +
-    `If a human releases this one it will appear there as ready again.`
+    `If a human releases this one it will appear there as ready again. ` +
+    // The way out that needs nobody: the refusal is time-boxed to one claim
+    // lease from the FIRST loss, and asking again does not extend it (TDM-167).
+    // Say so, or a session that hit a holder which then died reads this as
+    // permanent and either gives up or re-registers under a new name.
+    `This refusal also lifts by itself in ${minutesLeft(loss)} — if ${who} has gone dark, its ` +
+    `claim expires and the next task_claim is allowed through to the server, which decides.`
   );
+}
+
+/** How long until a loss stops being proof, phrased for the refusal message. */
+function minutesLeft(loss: Loss): string {
+  const remaining = Math.max(0, loss.at + LOSS_TTL_MS - lossClock());
+  const minutes = Math.ceil(remaining / 60_000);
+  return minutes <= 1 ? "under a minute" : `about ${minutes} minutes`;
 }
 
 /** What a fenced write is told: your claim went stale, the task moved on. */
