@@ -380,7 +380,13 @@ export interface Action {
   claimedBy?: string;        // agent holding the executing claim (task_start)
   claimedAt?: string;        // when the claim was taken
   result?: string;           // execution outcome summary
-  error?: string;            // failure detail
+  // Failure detail — AND the reason a human gave when rejecting it (TDM-161).
+  // The same column carries both because they are the same kind of fact: the
+  // last thing anyone said about why this action did not go on. Which one it is
+  // follows from `state` ("rejected" vs "failed"). Read it through
+  // ReviewFeedback rather than case by case — the API derives that shape and it
+  // covers the rework bounce, whose reason lives in the audit log instead.
+  error?: string;
   linkedPinIds: EntityId[];  // pins this action references
   ticket?: number;           // per-canvas sequential task number (type "task" only)
   ticketId?: string;         // display form, "TDM-<n>" — built server-side from `ticket`
@@ -391,6 +397,51 @@ export interface Action {
   authoredBy?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+// Why a piece of work came BACK (TDM-161) — DERIVED by the API at read time
+// (apps/api/internal/api/review_feedback.go), never stored and never written by
+// a client.
+//
+// ONE SHAPE, TWO ORIGINS, because to the agent that wrote the ticket they are
+// the same event:
+//
+//   rejected  a human said no at the gate. The reason is `error` on the action.
+//             Terminal — nobody will work it.
+//   rework    finished work was sent back to the queue: a reviewer agent's
+//             bounce (TDM-154) or a human's reopen. The reason is the `note` on
+//             the done → approved entry in `audit`. NOT terminal — the ticket is
+//             live again and the reason is the brief for the second attempt.
+//
+// Read it off task_get / GET /api/canvas/actions/{id} (`review`) and off the
+// epic rollup (each epic's `returned[]`). It is deliberately absent from the
+// ready queue, which answers "what should I start?" and must not become a
+// notifications feed.
+//
+// It reflects CURRENT state, so an undone rejection (TDM-160) simply stops being
+// reported, and a bounce that has since been redone stops too.
+export interface ReviewFeedback {
+  outcome: "rejected" | "rework";
+  /** The decider's own words. VERBATIM on a single-task read — the reason IS the
+   *  correction, so nothing excerpts it there. Absent when no reason was given,
+   *  which is worth showing as silence rather than hiding. */
+  reason?: string;
+  /** Server-derived provenance, same vocabulary as `authoredBy`. */
+  by?: string;
+  at?: string;
+  /** Where the action sits NOW — 'rejected' is over, anything else is live. */
+  state: ActionState;
+  /** Set only on a LIST read (an epic's `returned[]`), where reasons are cut to
+   *  keep the batch read cheap. The whole text is one task_get away. */
+  reasonTruncated?: boolean;
+}
+
+// One came-back ticket as the epic rollup lists it: the feedback plus enough to
+// address the ticket it is about.
+export interface ReturnedTicket extends ReviewFeedback {
+  id: EntityId;
+  ticketId?: string;
+  title: string;
 }
 
 // Minimal identity so the canvas knows who is writing (provenance) and who is

@@ -493,6 +493,17 @@ func (h *Handler) ReadAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := map[string]any{"action": action}
+	// Why this ticket came back, if it did (TDM-161): a human's rejection reason
+	// or a reviewer's rework instruction, derived into ONE shape so the agent that
+	// proposed the work has one place to learn it was corrected. Attached for
+	// EVERY action type, not just tasks — an orchestrator reading back the epic it
+	// proposed deserves the same answer about the batch as about a ticket.
+	//
+	// This read path and not the queue: see review_feedback.go on why queue_next
+	// stays a ready-work call rather than becoming a notifications feed.
+	if fb := deriveReviewFeedback(action); fb != nil {
+		resp["review"] = fb
+	}
 	// Tasks get their linked roadmap items / notes hydrated so one read hands
 	// an agent session the task plus its context — no full state pull needed.
 	if action.Type == "task" {

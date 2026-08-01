@@ -36,6 +36,17 @@ const epicResultExcerpt = 240
 // cheap; the count in `tasks` still tells the whole truth.
 const maxEpicDoneLines = 40
 
+// maxEpicReturnedLines caps the returned[] lines one epic contributes, for the
+// same reason as maxEpicDoneLines. Lower, because these carry prose: a batch
+// where twenty tickets came back is a batch whose problem is the plan, and the
+// twenty-first reason adds nothing the first twenty did not already say.
+const maxEpicReturnedLines = 20
+
+// reviewReasonExcerpt caps a reason in RUNES on this LIST read. The single-task
+// read (task_get) hands the reason back whole and this one points at it; see
+// excerptReason in review_feedback.go for why the two differ.
+const reviewReasonExcerpt = 400
+
 // epicTerminalStates mirrors the web's TERMINAL_STATES (lib/epicLifecycle.ts) —
 // a task in one of these never moves again on its own, and an approved epic whose
 // every task is terminal has DRAINED. The two definitions must agree or the board
@@ -59,6 +70,33 @@ type epicDoneLine struct {
 	Result   string    `json:"result,omitempty"`
 }
 
+// epicReturnedLine is one ticket in this batch that came BACK — rejected at the
+// gate, or bounced for rework after it was finished — with the reason attached
+// (TDM-161).
+//
+// WHY IT BELONGS IN THE BATCH READ. An orchestrator that proposed eleven tickets
+// and polls to learn what was approved otherwise sees only that the count
+// dropped: seven approved, and no account of the four that went away. The reason
+// is the correction, and it is worth more to the plan than to the ticket — "no,
+// messaging is a separate service" applies to the neighbours as much as to the
+// ticket it was typed on. Reading it per batch is what lets an orchestrator
+// amend the rest of the plan before it gets worked.
+type epicReturnedLine struct {
+	ID       uuid.UUID `json:"id"`
+	TicketID string    `json:"ticketId,omitempty"`
+	Title    string    `json:"title"`
+	State    string    `json:"state"`
+	// Outcome / Reason / By / At, flattened out of reviewFeedback so a line here
+	// reads like the done[] lines beside it rather than nesting one object deep.
+	Outcome string `json:"outcome"`
+	Reason  string `json:"reason,omitempty"`
+	By      string `json:"by,omitempty"`
+	At      string `json:"at,omitempty"`
+	// ReasonTruncated says the reason was cut for this list; task_get on the
+	// ticket has the whole thing.
+	ReasonTruncated bool `json:"reasonTruncated,omitempty"`
+}
+
 // epicRollup is one epic, answerable without opening a single ticket.
 type epicRollup struct {
 	ID    uuid.UUID `json:"id"`
@@ -76,6 +114,14 @@ type epicRollup struct {
 	LastActivity  *time.Time `json:"lastActivity,omitempty"`
 	// Done is the ticket-level account, oldest ticket first.
 	Done []epicDoneLine `json:"done"`
+	// Returned is the other half of that account (TDM-161): the tickets that came
+	// back, with WHY. Oldest first, like Done. Empty on a batch nobody has
+	// corrected — which is most of them.
+	Returned []epicReturnedLine `json:"returned"`
+	// Review is feedback on the EPIC ITSELF — a human rejecting the whole batch.
+	// Same shape a task carries, because "the batch was cut, here is why" is the
+	// same news as "the ticket was cut, here is why".
+	Review *reviewFeedback `json:"review,omitempty"`
 	// Drained: approved, has tasks, and every one of them is terminal — the epic
 	// is over whether or not anyone has said what it achieved.
 	Drained bool `json:"drained"`
@@ -84,6 +130,8 @@ type epicRollup struct {
 	SummaryNeeded bool `json:"summaryNeeded"`
 	// Truncated counts done lines omitted by maxEpicDoneLines.
 	Truncated int `json:"truncated,omitempty"`
+	// ReturnedTruncated counts returned lines omitted by maxEpicReturnedLines.
+	ReturnedTruncated int `json:"returnedTruncated,omitempty"`
 }
 
 // epicRollupBody is the endpoint's response.
@@ -92,7 +140,13 @@ type epicRollupBody struct {
 	// Unepiced is every task with no epicId (or one that dangles) — the work
 	// that belongs to no batch, which no epic row would otherwise account for.
 	Unepiced epicTaskRollup `json:"unepiced"`
-	Hint     string         `json:"_hint"`
+	// UnepicedReturned is the returned[] list for those same batchless tickets
+	// (TDM-161). Without it a ticket proposed on its own with task_propose could
+	// be rejected and its reason would be reachable only by knowing to task_get a
+	// ticket you were never told about — the dead end this whole feedback channel
+	// exists to close.
+	UnepicedReturned []epicReturnedLine `json:"unepicedReturned"`
+	Hint             string             `json:"_hint"`
 }
 
 // epicRollupTaskPayload is the slice of a task payload the rollup reads.
@@ -117,6 +171,7 @@ func buildEpicRollups(epics, tasks []*store.Action) epicRollupBody {
 		}
 	}
 	unepiced := epicTaskRollup{ByState: map[string]int{}}
+	unepicedReturned := []epicReturnedLine{}
 	for _, t := range tasks {
 		if t == nil {
 			continue
@@ -129,6 +184,9 @@ func buildEpicRollups(epics, tasks []*store.Action) epicRollupBody {
 		if err != nil || !known[id] {
 			unepiced.Total++
 			unepiced.ByState[t.State]++
+			if fb := deriveReviewFeedback(t); fb != nil && len(unepicedReturned) < maxEpicReturnedLines {
+				unepicedReturned = append(unepicedReturned, returnedLine(t, fb))
+			}
 			continue
 		}
 		byEpic[id] = append(byEpic[id], t)
@@ -152,11 +210,16 @@ func buildEpicRollups(epics, tasks []*store.Action) epicRollupBody {
 		out = append(out, rollupOne(e, byEpic[e.ID]))
 	}
 	return epicRollupBody{
-		Epics:    out,
-		Unepiced: unepiced,
+		Epics:            out,
+		Unepiced:         unepiced,
+		UnepicedReturned: unepicedReturned,
 		Hint: "One read for every batch on this board: its summary (what it achieved), task counts " +
 			"by state, and one line per finished ticket. An epic with summaryNeeded:true has drained " +
-			"with nobody saying what it delivered — write it in one call.",
+			"with nobody saying what it delivered — write it in one call. `returned` is the other " +
+			"half of the account: the tickets that came BACK — rejected at the gate, or bounced for " +
+			"rework — each with the reason. Read those against the tickets still standing: a " +
+			"rejection is a correction to the PLAN, not just to the ticket it was typed on. Reasons " +
+			"are excerpted here; task_get on the ticket has the whole thing.",
 	}
 }
 
@@ -176,6 +239,9 @@ func rollupOne(e *store.Action, tasks []*store.Action) epicRollup {
 		SummaryAt: sum.SummaryAt,
 		Tasks:     epicTaskRollup{ByState: map[string]int{}},
 		Done:      []epicDoneLine{},
+		Returned:  []epicReturnedLine{},
+		// The epic's own feedback, when a human rejected the whole batch.
+		Review: deriveReviewFeedback(e),
 	}
 
 	ordered := sortedTasks(tasks)
@@ -193,6 +259,19 @@ func rollupOne(e *store.Action, tasks []*store.Action) epicRollup {
 		if r.LastActivity == nil || t.UpdatedAt.After(*r.LastActivity) {
 			at := t.UpdatedAt
 			r.LastActivity = &at
+		}
+		// The other account (TDM-161): the tickets that came back, and why. A
+		// rejected ticket appears HERE rather than in done[] — nobody worked it —
+		// and a ticket bounced for rework appears here while the bounce is
+		// outstanding, even though it is 'approved' and counted as such above.
+		// The two lists answer different questions and a ticket may legitimately
+		// be in the counts and here at once.
+		if fb := deriveReviewFeedback(t); fb != nil {
+			if len(r.Returned) >= maxEpicReturnedLines {
+				r.ReturnedTruncated++
+			} else {
+				r.Returned = append(r.Returned, returnedLine(t, fb))
+			}
 		}
 		// The account of the work: what finished, and what it produced. `failed`
 		// belongs here too — "we tried and it broke" is part of what a batch
@@ -219,6 +298,26 @@ func rollupOne(e *store.Action, tasks []*store.Action) epicRollup {
 	r.Drained = e.State == "approved" && r.Tasks.Total > 0 && allTerminal
 	r.SummaryNeeded = r.Drained && r.Summary == ""
 	return r
+}
+
+// returnedLine renders one came-back ticket for a list read, with its reason
+// excerpted. Shared by the per-epic list and the unepiced one so a ticket's line
+// does not depend on whether it happens to sit in a batch.
+func returnedLine(t *store.Action, fb *reviewFeedback) epicReturnedLine {
+	var p epicRollupTaskPayload
+	_ = json.Unmarshal(t.Payload, &p)
+	reason, cut := excerptReason(fb.Reason, reviewReasonExcerpt)
+	return epicReturnedLine{
+		ID:              t.ID,
+		TicketID:        t.TicketID(),
+		Title:           strings.TrimSpace(p.Title),
+		State:           t.State,
+		Outcome:         fb.Outcome,
+		Reason:          reason,
+		By:              fb.By,
+		At:              fb.At,
+		ReasonTruncated: cut,
+	}
 }
 
 // firstLineExcerpt renders a task result as ONE line, capped by rune. Results

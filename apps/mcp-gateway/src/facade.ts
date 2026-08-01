@@ -186,7 +186,87 @@ type EpicRollup = {
   /** Drained with nobody saying what it delivered — the story is about to be lost. */
   summaryNeeded: boolean;
   truncated?: number;
+  /** The tickets that came BACK, each with the reason (TDM-161). */
+  returned?: ReturnedTicket[];
+  returnedTruncated?: number;
+  /** Feedback on the EPIC itself — a human rejecting the whole batch. */
+  review?: ReviewFeedback;
 };
+
+// ── Review feedback (TDM-161) ────────────────────────────────────────────────
+
+/**
+ * Why a piece of work came back, derived server-side (api/review_feedback.go)
+ * into ONE shape whatever produced it: a human's rejection at the gate, or a
+ * reviewer agent's rework bounce after it was finished. To the agent that wrote
+ * the ticket those are the same event — "this came back, and here is why" — so
+ * they arrive as one block with `outcome` naming which and `by` naming who.
+ *
+ * The gateway derives NOTHING here. It reads the server's answer and turns it
+ * into the author's next move, which is the same division task_review keeps.
+ */
+type ReviewFeedback = {
+  outcome: "rejected" | "rework";
+  /** The decider's own words — VERBATIM on a task read. The reason IS the
+   *  correction, so it is never excerpted here. */
+  reason?: string;
+  /** "human" | "agent:<identity>" | "anonymous" — server-derived. */
+  by?: string;
+  at?: string;
+  /** Where the ticket sits NOW: 'rejected' is over, anything else is live. */
+  state: string;
+  /** Set only on the LIST read (an epic's returned[]), never on a task read. */
+  reasonTruncated?: boolean;
+};
+
+/** One came-back ticket as the epic rollup lists it. */
+type ReturnedTicket = ReviewFeedback & {
+  id: string;
+  ticketId?: string;
+  title: string;
+};
+
+/**
+ * The sentence a proposing agent needs about its own returned ticket — what
+ * happened, and what to do about it. Empty when nothing came back.
+ *
+ * Written in the redirecting voice the refusal copy uses, and pointed at the
+ * NEXT action rather than at the feeling: a rejection's value is in the
+ * neighbouring tickets it also condemns, and a bounce's value is that the reason
+ * is this attempt's brief. Both say what NOT to do too — re-proposing a rejected
+ * ticket and re-completing over a bounce are the two ways this loop turns into a
+ * treadmill.
+ */
+function reviewNote(fb: ReviewFeedback | undefined): { _review?: string } {
+  if (!fb) return {};
+  const by = fb.by ? ` by ${fb.by}` : "";
+  const quoted = fb.reason ? ` The reason: "${fb.reason}"` : "";
+  if (fb.outcome === "rejected") {
+    return {
+      _review:
+        `This ticket was REJECTED${by}, so nobody will work it — do not claim it, and do not ` +
+        `re-propose the same ticket, which lands the same way.${quoted}` +
+        (fb.reason
+          ? " Treat that as a correction to the PLAN, not just to this ticket: it usually " +
+            "condemns neighbours too. Read the batch (the epic read lists every ticket that " +
+            "came back with its reason) and task_amend the ones it also applies to before a " +
+            "worker picks them up."
+          : " No reason was recorded, so ask rather than guess at what was wrong.") +
+        " If it contradicts the brief you were working from, say so — do not quietly re-file it.",
+    };
+  }
+  return {
+    _review:
+      `This task was SENT BACK${by} and is '${fb.state}' again — it is the SAME ticket, still ` +
+      `open, so do not re-propose it as a new one.${quoted}` +
+      (fb.reason
+        ? " That is the brief for this attempt, not a comment on the last one: do the work it " +
+          "names, then task_complete again. If it is wrong or impossible, say so with " +
+          "task_progress and ask — completing over it only spends the reviewer's next pass."
+        : " No reason was recorded, which is worth asking about before redoing anything — " +
+          "otherwise you are guessing at what changed."),
+  };
+}
 
 /**
  * Read the rollups, or null on an API deployed before the endpoint existed
@@ -242,6 +322,15 @@ function epicSnapshot(e: EpicRollup) {
     tasks: e.tasks,
     drained: e.drained,
     summaryNeeded: e.summaryNeeded,
+    // The tickets in this batch that came back, with their reasons (TDM-161).
+    // Kept where done[] is dropped, because the two are not the same weight: a
+    // worker does not need forty siblings quoted at it, but it very much needs
+    // to know that the human already cut three tickets next to the one it is
+    // about to start — that is the correction most likely to apply to its own.
+    // Absent (not empty) on the overwhelming majority of batches, which cost
+    // nothing here.
+    ...(e.returned && e.returned.length > 0 ? { returned: e.returned } : {}),
+    ...(e.review ? { review: e.review } : {}),
   };
 }
 
@@ -1475,7 +1564,12 @@ export async function handleFacadeTool(
             `anything yet". You were parked on the server the whole time, not polling, and it ` +
             `cost one call. DO NOT end your turn and DO NOT report a failure: call queue_wait ` +
             `AGAIN, right now, and keep doing that until it answers status "ready" (or you have ` +
-            `waited long enough that telling the human is the honest thing to do).`,
+            `waited long enough that telling the human is the honest thing to do). One thing ` +
+            `worth checking after several timeouts, ONCE and not every round: a REJECTED ticket ` +
+            `never becomes ready, so waiting on one is waiting forever. board_status names the ` +
+            `tickets that came back on each epic's \`returned\`, with the reason — and a ` +
+            `rejection is usually a correction to the rest of the plan, which is work you can ` +
+            `do right now instead of waiting.`,
         };
       }
 
@@ -1582,7 +1676,16 @@ export async function handleFacadeTool(
       requireTaskId(args);
       const got = (await handleTool(gateway, "canvas_task_get", args)) as {
         epic?: { id?: string };
+        review?: ReviewFeedback;
       };
+      // WHY IT CAME BACK, if it did (TDM-161). The API attaches `review` — a
+      // human's rejection reason or a reviewer's rework instruction, in one
+      // shape — and this turns it into the author's next move. THIS is the read
+      // path that carries it: the handoff already sends every worker through
+      // task_get before it starts, so the reason reaches the ticket's author and
+      // its next worker without queue_next having to become a notifications
+      // feed. `_review` rides on every branch below, epic or not.
+      const review = reviewNote(got?.review);
       // The API hydrates {id, title, state} for the task's epic. Deepen it into
       // the batch's rollup (TDM-93) so the worker learns, BEFORE it starts, how
       // much of the batch is left and whether finishing this task finishes the
@@ -1590,12 +1693,13 @@ export async function handleFacadeTool(
       // only afterwards, the answer arrives when there is no call left to put it
       // on. One extra read, and only for a task that HAS an epic.
       const epicId = typeof got?.epic?.id === "string" ? got.epic.id : "";
-      if (!epicId) return got;
+      if (!epicId) return { ...got, ...review };
       const rollup = await fetchEpicRollup(gateway, epicId);
-      if (!rollup) return got;
+      if (!rollup) return { ...got, ...review };
       const open = rollup.tasks.total - terminalCount(rollup);
       return {
         ...got,
+        ...review,
         epic: { ...got.epic, ...epicSnapshot(rollup), openTasks: open },
         ...(open <= 1
           ? {
@@ -2012,8 +2116,9 @@ export async function handleFacadeTool(
           url: canvasBlock(gateway).url,
           _next:
             "Sent back. The task left 'done', is unclaimed, and is in the ready queue again as " +
-            "'approved' — your reason rides on its audit trail, so whoever picks it up from " +
-            "queue_next reads it there and does not have to ask you. Do NOT claim it and fix it " +
+            "'approved' — and your reason is DELIVERED, not just filed (TDM-161): task_get on " +
+            "this ticket now answers with a `review` block carrying it verbatim, so the author " +
+            "and whoever picks it up next read it without asking you. Do NOT claim it and fix it " +
             "yourself: you are the reviewer, and an agent that reviews and then does the work is " +
             "one pair of eyes wearing two hats. Expect it back, and review the second attempt on " +
             "its own merits.",
@@ -2322,6 +2427,12 @@ export async function handleFacadeTool(
       const inFlight = tasks.filter((t) => t.state === "executing").map(inFlightRow);
       const stale = inFlight.filter((t) => "staleClaim" in t);
 
+      // Tickets that came BACK (TDM-161) — already inline on each epic's
+      // `returned`. Counted here only to say so, because a board read that
+      // quietly carries four rejection reasons is a board read whose most
+      // actionable content goes unread.
+      const returnedCount = (rollups ?? []).reduce((n, e) => n + (e.returned?.length ?? 0), 0);
+
       return {
         canvas: canvasBlock(gateway),
         tasks: { total: tasks.length, byState: countByState(tasks) },
@@ -2345,6 +2456,17 @@ export async function handleFacadeTool(
                 `achieved. Report them: the account only gets written while someone still remembers ` +
                 `the work. An agent finishing remaining work in one passes \`epicSummary\` to ` +
                 `task_complete; otherwise the human writes it on the board.`,
+            }
+          : {}),
+        ...(returnedCount > 0
+          ? {
+              _returned:
+                `${returnedCount} ticket(s) came BACK — see \`returned\` on the epics above: each ` +
+                `carries the reason it was rejected at the gate or bounced for rework, and who ` +
+                `said so. Read them before dispatching anything else in those batches. A ` +
+                `rejection is a correction to the PLAN, so it usually applies to tickets still ` +
+                `standing; amend those rather than watching them come back one at a time. ` +
+                `Reasons are excerpted here — task_get on the ticket has the whole thing.`,
             }
           : {}),
         _next:
@@ -2507,7 +2629,12 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
       "referenced roadmap items and notes (title, body, status), which is where the real brief " +
       "lives, and `epic` says which batch it belongs to. Call this on the task you chose from " +
       "queue_next; it is all the context you need to start, so you never have to read the whole " +
-      "canvas. Progress reported via task_progress comes back here too. " +
+      "canvas. Progress reported via task_progress comes back here too. THIS IS ALSO WHERE WORK " +
+      "THAT CAME BACK EXPLAINS ITSELF: a ticket a human rejected, or finished work a reviewer " +
+      "sent back for rework, answers with a `review` block — { outcome, reason, by, at } — " +
+      "carrying the decider's reason VERBATIM, plus a `_review` line saying what to do about it. " +
+      "One channel for both, so if you proposed something and the count dropped, task_get the " +
+      "ticket rather than guessing why. " +
       SESSION_CONVENTION,
     inputSchema: schemaOf("canvas_task_get"),
   },

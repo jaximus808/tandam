@@ -225,6 +225,13 @@ func renderTaskSection(sb *strings.Builder, b contextBundle, now time.Time) {
 		fmt.Fprintf(sb, "\n%s\n", body)
 	}
 
+	// Why it came back, if it did (TDM-161) — the same derived channel task_get
+	// answers with, rendered as prose here because this bundle's reader is a
+	// model. Placed directly under the body and above everything else: a reason
+	// is a correction to the brief, so it has to be read WITH the brief, not
+	// found further down next to the evidence links.
+	renderReviewFeedback(sb, b.Task)
+
 	// Evidence from earlier work on this task, if any. One line each — the URL
 	// is the fact; anything more would be this renderer guessing.
 	if links := trimmedLinks(p.Links); len(links) > 0 {
@@ -255,6 +262,54 @@ func renderTaskSection(sb *strings.Builder, b contextBundle, now time.Time) {
 			fmt.Fprintf(sb, "\n%s\n", body)
 		}
 	}
+}
+
+// renderReviewFeedback writes the "this came back" section, or nothing at all
+// when it did not. The reason goes in VERBATIM — this is a single-task read, and
+// the reason is the instruction.
+//
+// The two outcomes get different closing lines because they ask for different
+// things: a rejection is a correction to the plan (nobody will work this ticket,
+// so the value is in what it says about its neighbours), while a bounce is a
+// live instruction for the second attempt.
+func renderReviewFeedback(sb *strings.Builder, t *store.Action) {
+	fb := deriveReviewFeedback(t)
+	if fb == nil {
+		return
+	}
+	by := orFallback(strings.TrimSpace(fb.By), "unknown")
+	if fb.Outcome == reviewRejected {
+		fmt.Fprintf(sb, "\n### Rejected\n\nRejected by %s%s.\n", by, atSuffix(fb.At))
+		if fb.Reason != "" {
+			fmt.Fprintf(sb, "\n> %s\n", strings.ReplaceAll(fb.Reason, "\n", "\n> "))
+		} else {
+			sb.WriteString("\nNo reason was recorded.\n")
+		}
+		sb.WriteString("\nNobody will work this ticket, and re-proposing the same one lands the " +
+			"same way. Read the reason against the rest of the plan — it usually applies to more " +
+			"than the ticket it was typed on.\n")
+		return
+	}
+	fmt.Fprintf(sb, "\n### Sent back for rework\n\nReturned by %s%s — the task is '%s' again.\n",
+		by, atSuffix(fb.At), fb.State)
+	if fb.Reason != "" {
+		fmt.Fprintf(sb, "\n> %s\n", strings.ReplaceAll(fb.Reason, "\n", "\n> "))
+		sb.WriteString("\nThat reason is the instruction for this attempt: address it, then finish " +
+			"the task again. If it is wrong or impossible, say so in a progress report and ask " +
+			"rather than completing over it.\n")
+	} else {
+		sb.WriteString("\nNo reason was recorded, which is worth asking about before redoing the " +
+			"work — you would be guessing at what changed.\n")
+	}
+}
+
+// atSuffix renders " on <when>" for a timestamp we have, and nothing for one we
+// do not. Never invents a time.
+func atSuffix(at string) string {
+	if strings.TrimSpace(at) == "" {
+		return ""
+	}
+	return " on " + at
 }
 
 // ── Freshness rendering ───────────────────────────────────────────────────────
