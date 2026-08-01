@@ -65,6 +65,7 @@ import {
   type ContentionTally,
 } from "../lib/contention";
 import { useFreshnessNow } from "./Freshness";
+import { GateRecordDisclosure } from "./GateRecord";
 import posthog from "../lib/posthog";
 import TaskComposer, { linkTargets } from "./TaskComposer";
 import { epicLifecycle, TERMINAL_STATES } from "../lib/epicLifecycle";
@@ -3250,6 +3251,23 @@ export default function TaskBoard({
             {epics.length > 0 && ` · ${epics.length} epic${epics.length === 1 ? "" : "s"}`}
           </span>
         )}
+        {/* The gate's report card, on the board (TDM-172). TDM-165 derived it
+            server-side and put it in Settings; the number that says whether this
+            board's gate is real belongs where the gating happens.
+
+            IT IS A WORD, NOT A BADGE, AND THAT IS THE WHOLE DESIGN. A rate
+            rendered permanently in board chrome — worse, beside the Proposed
+            lane's Approve and Reject buttons — is a score, and a score you can
+            raise by rejecting produces rejection theater: it destroys good
+            tickets and fakes the measurement at once. So the trigger never
+            carries the figure, and opening it renders the figure together with
+            the server's caveat and definition, always, in full. See the note at
+            the top of GateRecord.tsx.
+
+            It sits beside the census rather than in the Proposed lane header for
+            the same reason: next to the quiet count of what is here, not next to
+            the buttons that decide. */}
+        {!empty && <GateRecordDisclosure code={code} />}
         {!readOnly && !empty && (
           <button
             onClick={() => setComposing((v) => !v)}
