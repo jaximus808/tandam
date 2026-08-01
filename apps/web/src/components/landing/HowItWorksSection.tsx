@@ -1,7 +1,9 @@
 /**
  * HowItWorksSection — the loop, step by step, in the calls an agent actually
  * makes (canvas_connect · context_get · queue_next · task_claim · task_complete)
- * plus the one step that has no tool call because it's yours: approval.
+ * plus the one step that has no tool call because it's yours: review — which is
+ * shown with BOTH of its outcomes, approving a batch and rejecting a ticket with
+ * a reason, since a gate that only ever says yes isn't a gate.
  *
  * Each step carries its real call and the shape of the response, so the list
  * reads like a session transcript rather than a feature list — the numbering is
@@ -50,9 +52,44 @@ function CallLine({ call, result, tone = "ok", by }: Call) {
   );
 }
 
-// `human` marks the step nobody's agent performs. It deliberately breaks the
-// call/response rhythm — that visual gap IS the approval gate.
-const STEPS: { title: string; body: ReactNode; calls?: Call[]; human?: string }[] = [
+/** One outcome of the human step. Both cost the same single click. */
+interface Decision {
+  verdict: "approve" | "reject";
+  /** What you pressed, e.g. `approve epic E7`. */
+  label: string;
+  /** What it did — or, on a reject, the reason that travels back. */
+  detail: ReactNode;
+}
+
+/**
+ * The human step, rendered as decisions rather than calls. No `→`, no response
+ * object, no mono: nothing here came off the wire, and that break in the
+ * call/response rhythm IS the gate.
+ */
+function DecisionChip({ verdict, label, detail }: Decision) {
+  const approve = verdict === "approve";
+  return (
+    <div
+      className={`rounded-md border px-3 py-2 text-[12px] leading-relaxed ${
+        approve
+          ? "border-accent/25 bg-accent/[0.06]"
+          : "border-amber-500/25 bg-amber-500/[0.07]"
+      }`}
+    >
+      <span
+        className={`font-medium ${
+          approve ? "text-accent" : "text-amber-700 dark:text-amber-400"
+        }`}
+      >
+        {label}
+      </span>
+      <span className="text-ink/60"> — {detail}</span>
+    </div>
+  );
+}
+
+// `human` marks the step nobody's agent performs — see DecisionChip.
+const STEPS: { title: string; body: ReactNode; calls?: Call[]; human?: Decision[] }[] = [
   {
     title: "Every agent joins the same board",
     body: "One canvas code, any MCP client. A terminal on your laptop, a sandbox that lives ninety seconds, and a CI job all connect to the same queue. Nothing needs a disk in common.",
@@ -79,9 +116,32 @@ const STEPS: { title: string; body: ReactNode; calls?: Call[]; human?: string }[
     ],
   },
   {
-    title: "You approve what's allowed to run",
-    body: "Agents propose tasks; nothing is handed out until you approve it. One pass over an epic clears the batch — the gate sits on the work, not on every step, so approving doesn't become a second job.",
-    human: "you, in the browser — approve epic E7 · 6 tasks now pullable",
+    title: "You review the plan — approve it, or send one back",
+    body: (
+      <>
+        Agents propose tasks; nothing is handed out until you decide. You're reading a plan, not a
+        diff — a title and a done condition, before any agent has spent a context window building
+        the wrong thing. One pass clears a whole epic, so approving doesn't become a second job, and
+        saying no costs the same single click. Your reason travels back to the proposer verbatim.
+      </>
+    ),
+    human: [
+      {
+        verdict: "approve",
+        label: "approve epic E7",
+        detail: "6 tasks now pullable",
+      },
+      {
+        verdict: "reject",
+        label: "reject TDM-9",
+        detail: (
+          <>
+            &ldquo;wrong surface — this belongs in the gateway&rdquo; · the reason lands on the
+            proposer, and no code was ever written
+          </>
+        ),
+      },
+    ],
   },
   {
     title: "Sessions pull approved work",
@@ -135,7 +195,7 @@ export default function HowItWorksSection() {
           Connect. Pull. Claim. Complete.
         </h2>
         <p className="mt-3 leading-relaxed text-ink/65">
-          Five tool calls and one human approval. Every agent runs the same loop, whatever machine
+          Five tool calls and one human decision. Every agent runs the same loop, whatever machine
           or model it's on.
         </p>
       </div>
@@ -171,8 +231,13 @@ export default function HowItWorksSection() {
               )}
 
               {step.human && (
-                <div className="mt-3 rounded-md border border-accent/25 bg-accent/[0.06] px-3 py-2 text-[12px] font-medium text-accent">
-                  {step.human}
+                <div className="mt-3 space-y-2">
+                  <p className="text-[11px] font-medium uppercase tracking-wide text-ink/40">
+                    you, in the browser
+                  </p>
+                  {step.human.map((d) => (
+                    <DecisionChip key={d.label} {...d} />
+                  ))}
                 </div>
               )}
             </div>
