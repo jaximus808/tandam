@@ -27,7 +27,11 @@ COPY apps/server/package.json apps/server/package.json
 COPY internal/shared/package.json internal/shared/package.json
 RUN pnpm install --frozen-lockfile --filter @jaximus/tandem-mcp...
 
-# Build the sidecar (produces dist/http.js alongside dist/index.js).
+# Build the sidecar (produces dist/http.js alongside dist/index.js). tsup bundles
+# @agentcanvas/shared straight from its TypeScript sources (the workspace link
+# points at internal/shared/src/*.ts), so the sources must be in the image — the
+# package.json copied above is only enough for pnpm install.
+COPY internal/shared internal/shared
 COPY apps/mcp-gateway apps/mcp-gateway
 RUN pnpm --filter @jaximus/tandem-mcp build
 
