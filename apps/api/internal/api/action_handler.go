@@ -524,10 +524,29 @@ func (h *Handler) ReadAction(w http.ResponseWriter, r *http.Request) {
 		if epicID, err := uuid.Parse(p.EpicID); err == nil {
 			if epic, err := h.store.GetAction(r.Context(), canvasID, epicID); err == nil && epic.Type == "epic" {
 				var ep struct {
-					Title string `json:"title"`
+					Title     string      `json:"title"`
+					LinkedIDs []uuid.UUID `json:"linkedIds"`
 				}
 				_ = json.Unmarshal(epic.Payload, &ep)
-				resp["epic"] = map[string]any{"id": epic.ID, "title": ep.Title, "state": epic.State}
+				// hasLinkedContext is a FACT the ticket-quality derivation needs and
+				// cannot get anywhere else (TDM-168). Context linked once on the
+				// BATCH covers every ticket under it, so a heavy body whose epic
+				// links the note is not "context pasted instead of linked" — and a
+				// reader holding only the task cannot tell. Deliberately a boolean
+				// and not the id list: the rule asks whether the batch links
+				// anything, and shipping the ids would invite a client to hydrate
+				// them off a call that is meant to stay one read.
+				//
+				// This is the whole of the API's part in ticket quality. The RULES
+				// stay in TypeScript, in one module, for the reasons recorded in
+				// apps/mcp-gateway/src/facade.ts: both consumers (the gateway,
+				// before any write; the board, on text a human is editing) have to
+				// evaluate them in-process, so a Go copy would be a third
+				// implementation rather than a replacement for either.
+				resp["epic"] = map[string]any{
+					"id": epic.ID, "title": ep.Title, "state": epic.State,
+					"hasLinkedContext": len(ep.LinkedIDs) > 0,
+				}
 			}
 		}
 	}

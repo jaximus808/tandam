@@ -1105,10 +1105,12 @@ function composeMarkdown(title: unknown, body: unknown): string {
   return t ? `## ${t}\n\n${b}` : b;
 }
 
-// ── Ticket quality (epic_propose) ────────────────────────────────────────────
+// ── Ticket quality (the rule module) ─────────────────────────────────────────
 
 /**
- * The ticket-quality contract for a proposed plan (TDM-159).
+ * The ticket-quality contract for a proposed plan (TDM-159), and the read-time
+ * derivation that makes its warnings legible after the propose call is over
+ * (TDM-168).
  *
  * The pitch of the plan gate is "the decomposition is worth reviewing" — and
  * eleven mushy tickets kill it. Until now ticket quality rode entirely on
@@ -1127,6 +1129,55 @@ function composeMarkdown(title: unknown, body: unknown): string {
  * write path of the gate is slow, unpredictable, and puts an opinion where a
  * rule belongs. If quality needs a model's opinion, that is the reviewer role's
  * job (task_review), not this call's.
+ *
+ * ═════ DERIVED AT READ TIME, NOT STORED (TDM-168) ═══════════════════════════
+ *
+ * TDM-159 computed these warnings and then dropped them: they existed only on
+ * the `epic_propose` response, handed to the agent that had just made the
+ * mistake. The obvious fix is to persist them on the row at propose time. It is
+ * the wrong one, and the choice is recorded here because the shape of this
+ * module follows from it.
+ *
+ * A stored warning is a SECOND COPY OF THE TRUTH, snapshotted at the one moment
+ * the ticket happened to pass through `epic_propose`. It cannot describe:
+ *   · a ticket filed one at a time with `task_propose`, which runs no contract;
+ *   · a ticket proposed before the contract existed;
+ *   · a ticket a human amended in place afterwards (TDM-160) — the stored
+ *     warning would then be describing text nobody can still read, which is
+ *     worse than no warning, because a warning you cannot reproduce from what
+ *     is on screen is one you stop trusting;
+ *   · a rule we tighten next month, on any row written before we tightened it.
+ * Deriving from the row's CURRENT text covers all four for free, and needs no
+ * column, no migration and no backfill. It is the same discipline TDM-165
+ * (gate metrics) and TDM-161 (review feedback) already chose on this codebase:
+ * compute at read time off rows that exist rather than grow a parallel store.
+ *
+ * WHY THE RULES STAY IN TYPESCRIPT, and are not moved into the Go API. Serving
+ * warnings from the API would look like the tidier "one implementation", but it
+ * would be a THIRD one rather than a replacement for either existing copy:
+ *   · the gateway must evaluate LOCALLY and BEFORE any write — the hard half's
+ *     whole promise is that a refused plan leaves nothing behind, which cannot
+ *     depend on a validation round-trip;
+ *   · the board must evaluate locally too, because it warns on text the human
+ *     is editing in place; instant feedback is the point, and a server
+ *     round-trip per keystroke is not that.
+ * So both consumers need the rules in-process, in TypeScript. The Go API stays
+ * rule-free and supplies only the FACTS a derivation needs (see
+ * `hasLinkedContext` on the epic block of GET /api/canvas/actions/{id}).
+ *
+ * ═════ THE SHAPE TDM-169 FOLDS INTO ════════════════════════════════════════
+ *
+ * Everything from `TICKET_MIN_BODY_CHARS` down to `ticketWarningsNote` is
+ * self-contained: no gateway, no fetch, no `Args`, no import from this file's
+ * surroundings. That is on purpose — `apps/web/src/lib/ticketQuality.ts`
+ * currently keeps a hand-copied duplicate of it, and TDM-169 lifts this block
+ * verbatim into `internal/shared` so the gateway and the board import ONE
+ * implementation. Two things to keep true when it moves:
+ *   1. the module's inputs are normalized `QualityTicket`s, never MCP `Args` and
+ *      never board rows, so neither consumer's wire format leaks into the rules;
+ *   2. every rule declares its SCOPE (`WARNING_SCOPE`), because the callers do
+ *      not all hold the same amount of the world — a batch read can compare
+ *      tickets against each other, a single-ticket read cannot.
  */
 
 /** Below either of these a `body` is a title with extra whitespace, not a ticket. */
@@ -1148,10 +1199,47 @@ type TicketWarningCode =
   | "context_not_linked"
   | "context_duplicated";
 
-/** One non-blocking quality smell, always about exactly ONE ticket in the batch. */
+/**
+ * What a rule needs to fire, and how much of the world it needs to see.
+ *
+ *  · "ticket" — answerable from ONE ticket's own text (plus, for
+ *    `context_not_linked`, whether it or its batch links anything). Every read
+ *    path can run these, including a single-ticket read.
+ *  · "batch"  — only answerable by comparing tickets against each other.
+ *    `context_duplicated` is the whole of this category: "this line also
+ *    appears in another ticket" is not a property of the ticket.
+ *
+ * Declared rather than implied so a caller holding only one ticket can ask for
+ * exactly what it can honestly answer, instead of silently getting a
+ * batch-scoped rule evaluated against a batch of one (which never fires, and
+ * would read as "checked and clean" when it means "not checked").
+ */
+type WarningScope = "ticket" | "batch";
+
+const WARNING_SCOPE: Record<TicketWarningCode, WarningScope> = {
+  no_surface_named: "ticket",
+  no_done_condition: "ticket",
+  context_not_linked: "ticket",
+  may_exceed_one_sitting: "ticket",
+  context_duplicated: "batch",
+};
+
+/**
+ * One ticket as the RULES read it — normalized, so neither the MCP wire format
+ * nor a stored row's payload shape reaches the rules themselves. Both callers
+ * (a propose call's `tasks[]`, a stored task row) funnel through this.
+ */
+type QualityTicket = {
+  title: string;
+  body: string;
+  /** Whether the ticket itself links context (`linkedIds`). */
+  linked: boolean;
+};
+
+/** One non-blocking quality smell, always about exactly ONE ticket. */
 type TicketWarning = {
   code: TicketWarningCode;
-  /** 0-based position in the `tasks` array as it was passed in. */
+  /** 0-based position in the batch as it was read. Always 0 on a single-ticket read. */
   index: number;
   title: string;
   /** One line: what is missing and what to do about it. */
@@ -1160,6 +1248,25 @@ type TicketWarning = {
   taskId?: string;
   ticketId?: string;
 };
+
+/** Normalize an MCP `tasks[]` entry — untyped by the time it reaches us. */
+function qualityTicketFromArgs(t: Args): QualityTicket {
+  return {
+    title: typeof t.title === "string" ? t.title.trim() : "",
+    body: typeof t.body === "string" ? t.body.trim() : "",
+    linked: Array.isArray(t.linkedIds) && t.linkedIds.length > 0,
+  };
+}
+
+/** Normalize a STORED task row's payload — the read-time input (TDM-168). */
+function qualityTicketFromPayload(payload: unknown): QualityTicket {
+  const p = (payload ?? {}) as Record<string, unknown>;
+  return {
+    title: typeof p.title === "string" ? p.title.trim() : "",
+    body: typeof p.body === "string" ? p.body.trim() : "",
+    linked: Array.isArray(p.linkedIds) && p.linkedIds.length > 0,
+  };
+}
 
 /** Anything that names a concrete surface: a path, a file, an endpoint, an identifier. */
 const NAMES_A_SURFACE: RegExp[] = [
@@ -1219,12 +1326,12 @@ function longLines(body: string): string[] {
  * failure is collected so a lazy plan gets fixed in one pass instead of one
  * round-trip per ticket. Returns the messages; the caller throws.
  */
-function ticketContractFailures(epicTitle: string, tasks: Args[]): string[] {
+function ticketContractFailures(epicTitle: string, tickets: QualityTicket[]): string[] {
   const failures: string[] = [];
 
   // One ticket is a task, not an epic: the container buys an approval step and
   // an epic summary that a single unit of work has no use for.
-  if (tasks.length === 1) {
+  if (tickets.length === 1) {
     failures.push(
       "This epic has exactly ONE ticket, which makes it a task, not an epic — propose it with " +
         "task_propose (passing `epicId` to file it under an existing batch), or split the work " +
@@ -1233,9 +1340,9 @@ function ticketContractFailures(epicTitle: string, tasks: Args[]): string[] {
   }
 
   const epicKey = normalizeTitle(epicTitle);
-  for (const [i, t] of tasks.entries()) {
-    const title = typeof t.title === "string" ? t.title.trim() : "";
-    const body = typeof t.body === "string" ? t.body.trim() : "";
+  for (const [i, t] of tickets.entries()) {
+    const title = t.title.trim();
+    const body = t.body.trim();
     const where = `tasks[${i}] ("${title}")`;
 
     if (body.length < TICKET_MIN_BODY_CHARS || body.split(/\s+/).filter(Boolean).length < TICKET_MIN_BODY_WORDS) {
@@ -1257,26 +1364,43 @@ function ticketContractFailures(epicTitle: string, tasks: Args[]): string[] {
 /**
  * The SOFT half: everything a rule can smell but not prove. Non-blocking on
  * purpose — a heuristic that blocks is a heuristic you learn to route around.
+ *
+ * PURE, and the ONE implementation of the soft rules: `epic_propose` runs it on
+ * a batch it is about to write, and `task_get` runs it on a row somebody
+ * already wrote (TDM-168). Same rules, same wording, whichever end you meet a
+ * ticket from — a read that disagreed with the propose call would be worse than
+ * a read that said nothing.
+ *
+ * `only` narrows to one scope for a caller that cannot honestly run the rest;
+ * see WARNING_SCOPE. `batchHasLinkedContext` is the batch's own `linkedIds`:
+ * linking the shared note on the EPIC suppresses `context_not_linked` for every
+ * ticket under it, because the context is then one hydrated link away.
  */
-function ticketQualityWarnings(tasks: Args[], callHasLinkedContext: boolean): TicketWarning[] {
+function ticketQualityWarnings(
+  tickets: QualityTicket[],
+  opts: { batchHasLinkedContext?: boolean; only?: WarningScope } = {}
+): TicketWarning[] {
   const warnings: TicketWarning[] = [];
+  const inScope = (code: TicketWarningCode) => !opts.only || WARNING_SCOPE[code] === opts.only;
+  const batchLinked = opts.batchHasLinkedContext === true;
 
   // A substantial line repeated verbatim across tickets is context that was
   // pasted rather than linked. Counted across the whole batch, flagged per ticket.
   const lineCounts = new Map<string, number>();
-  for (const t of tasks) {
-    for (const line of new Set(longLines(typeof t.body === "string" ? t.body : ""))) {
+  for (const t of tickets) {
+    for (const line of new Set(longLines(t.body))) {
       lineCounts.set(line, (lineCounts.get(line) ?? 0) + 1);
     }
   }
 
-  for (const [index, t] of tasks.entries()) {
-    const title = typeof t.title === "string" ? t.title.trim() : "";
-    const body = typeof t.body === "string" ? t.body.trim() : "";
+  for (const [index, t] of tickets.entries()) {
+    const title = t.title.trim();
+    const body = t.body.trim();
     const text = `${title}\n${body}`;
-    const linked = Array.isArray(t.linkedIds) && t.linkedIds.length > 0;
-    const add = (code: TicketWarningCode, message: string) =>
-      warnings.push({ code, index, title, message });
+    const linked = t.linked;
+    const add = (code: TicketWarningCode, message: string) => {
+      if (inScope(code)) warnings.push({ code, index, title, message });
+    };
 
     if (!NAMES_A_SURFACE.some((re) => re.test(text))) {
       add(
@@ -1303,7 +1427,7 @@ function ticketQualityWarnings(tasks: Args[], callHasLinkedContext: boolean): Ti
           "three, it is an epic of its own, so split it."
       );
     }
-    if (body.length > TICKET_CONTEXT_CHARS && !linked && !callHasLinkedContext) {
+    if (body.length > TICKET_CONTEXT_CHARS && !linked && !batchLinked) {
       add(
         "context_not_linked",
         `Heavy body (${body.length} chars) with nothing in \`linkedIds\` — link the note or ` +
@@ -1330,7 +1454,73 @@ function ticketWarningsNote(warnings: TicketWarning[], total: number): string {
     `you before a human reads it. Each carries a \`code\`, the ticket it is about (\`ticketId\` / ` +
     `\`taskId\` / \`index\`) and one line on what is missing. Fix the ones you agree with using ` +
     `task_amend — the tickets are still 'proposed', so they are yours to edit — and leave the ` +
-    `rest: a warning is a smell, not a verdict.`
+    `rest: a warning is a smell, not a verdict. These are not ephemeral: the same rules run on ` +
+    `the stored ticket, so task_get and the board re-derive them from whatever the text says ` +
+    `NOW — an amend that fixes one makes it disappear everywhere, and one that does not, does not.`
+  );
+}
+
+/**
+ * States in which a ticket's own quality is still worth saying out loud
+ * (TDM-168) — the same shape, and the same reasoning, as TDM-161's
+ * reviewOutstandingStates.
+ *
+ * 'proposed' is the human gate's moment; 'approved' and 'executing' are the
+ * worker's — "the ticket you are about to start names no surface and states no
+ * done condition" is most actionable BEFORE any code is written, when going
+ * back and asking is still cheap. 'done', 'failed' and 'rejected' are history:
+ * nobody can act on the text any more, and a warning there is noise on a read
+ * every session makes.
+ */
+const QUALITY_OUTSTANDING_STATES = new Set(["proposed", "approved", "executing"]);
+
+/**
+ * The read-time derivation (TDM-168): the same soft rules, run against a STORED
+ * task row instead of a propose call's arguments.
+ *
+ * Ticket-scoped rules only, and that is a correctness point rather than a
+ * shortcut — a single-ticket read holds one ticket, so it cannot honestly
+ * answer `context_duplicated` ("this line also appears in a sibling"). Running
+ * it against a batch of one would never fire and would read as "checked and
+ * clean". The batch-scoped rule stays where the batch is: the propose call, and
+ * the board, which holds the whole plan.
+ *
+ * Returns [] for a row with no text at all — an epic, or a task whose payload
+ * did not parse — rather than warning that an empty ticket names no surface.
+ */
+function storedTicketWarnings(
+  action: { state?: unknown; payload?: unknown } | undefined,
+  epicHasLinkedContext: boolean
+): TicketWarning[] {
+  const state = typeof action?.state === "string" ? action.state : "";
+  if (!QUALITY_OUTSTANDING_STATES.has(state)) return [];
+  const ticket = qualityTicketFromPayload(action?.payload);
+  if (!ticket.title && !ticket.body) return [];
+  return ticketQualityWarnings([ticket], {
+    batchHasLinkedContext: epicHasLinkedContext,
+    only: "ticket",
+  });
+}
+
+/** How to read ONE ticket's warnings on a read path, by who is reading it. */
+function storedWarningsNote(warnings: TicketWarning[], state: string): string {
+  const head =
+    `${warnings.length} quality warning(s) on this ticket, derived from the text it has RIGHT ` +
+    `NOW (not stored at propose time, so an amend changes them and a ticket that never went ` +
+    `through epic_propose still gets them). They do NOT block anything.`;
+  const act =
+    state === "proposed"
+      ? ` It is still 'proposed', so it is editable: fix the ones you agree with with task_amend ` +
+        `before a human reads it.`
+      : ` This ticket is already ${state === "executing" ? "being worked" : "in the ready queue"}, ` +
+        `so treat these as the questions to settle BEFORE you write code — if it names no surface ` +
+        `or no done condition, decide what those are and say so in task_progress / task_complete ` +
+        `rather than guessing quietly.`;
+  return (
+    head +
+    act +
+    ` Ticket-scoped rules only: cross-ticket smells need the whole batch and are reported by ` +
+    `epic_propose and on the board. A warning is a smell, not a verdict.`
   );
 }
 
@@ -1675,7 +1865,8 @@ export async function handleFacadeTool(
     case "task_get": {
       requireTaskId(args);
       const got = (await handleTool(gateway, "canvas_task_get", args)) as {
-        epic?: { id?: string };
+        action?: { state?: string; payload?: unknown };
+        epic?: { id?: string; hasLinkedContext?: boolean };
         review?: ReviewFeedback;
       };
       // WHY IT CAME BACK, if it did (TDM-161). The API attaches `review` — a
@@ -1686,6 +1877,26 @@ export async function handleFacadeTool(
       // its next worker without queue_next having to become a notifications
       // feed. `_review` rides on every branch below, epic or not.
       const review = reviewNote(got?.review);
+      // WHAT THE CONTRACT SEES IN IT (TDM-168). The soft ticket-quality rules,
+      // re-derived here from the row's CURRENT text rather than read back from
+      // whatever epic_propose once computed — so a ticket filed with
+      // task_propose, one proposed before the contract existed, and one a human
+      // amended in place all answer, and an amend that fixes a smell makes it
+      // go away. Same read path as `review` and for the same reason: the handoff
+      // already sends every worker through task_get before it starts, so this
+      // reaches both the ticket's author and its next worker without queue_next
+      // having to grow an opinion about the work it is handing out.
+      const quality = storedTicketWarnings(got?.action, got?.epic?.hasLinkedContext === true);
+      const qualityBlock =
+        quality.length > 0
+          ? {
+              quality,
+              _quality: storedWarningsNote(
+                quality,
+                typeof got?.action?.state === "string" ? got.action.state : ""
+              ),
+            }
+          : {};
       // The API hydrates {id, title, state} for the task's epic. Deepen it into
       // the batch's rollup (TDM-93) so the worker learns, BEFORE it starts, how
       // much of the batch is left and whether finishing this task finishes the
@@ -1693,13 +1904,14 @@ export async function handleFacadeTool(
       // only afterwards, the answer arrives when there is no call left to put it
       // on. One extra read, and only for a task that HAS an epic.
       const epicId = typeof got?.epic?.id === "string" ? got.epic.id : "";
-      if (!epicId) return { ...got, ...review };
+      if (!epicId) return { ...got, ...review, ...qualityBlock };
       const rollup = await fetchEpicRollup(gateway, epicId);
-      if (!rollup) return { ...got, ...review };
+      if (!rollup) return { ...got, ...review, ...qualityBlock };
       const open = rollup.tasks.total - terminalCount(rollup);
       return {
         ...got,
         ...review,
+        ...qualityBlock,
         epic: { ...got.epic, ...epicSnapshot(rollup), openTasks: open },
         ...(open <= 1
           ? {
@@ -2237,7 +2449,8 @@ export async function handleFacadeTool(
       // judge. The hard half runs HERE, before any write, so a refused plan
       // leaves nothing behind; it is collected, not thrown per ticket, so a lazy
       // plan is fixed in one pass.
-      const failures = ticketContractFailures(title, many);
+      const tickets = many.map(qualityTicketFromArgs);
+      const failures = ticketContractFailures(title, tickets);
       if (failures.length > 0) {
         throw new Error(
           `This plan does not meet the ticket-quality contract, so NOTHING was written — no ` +
@@ -2245,11 +2458,13 @@ export async function handleFacadeTool(
         );
       }
       // The soft half is computed off the same inputs but never blocks: it rides
-      // back on the response below so the proposer sees its own slop first.
-      const warnings = ticketQualityWarnings(
-        many,
-        Array.isArray(args.linkedIds) && args.linkedIds.length > 0
-      );
+      // back on the response below so the proposer sees its own slop first. It
+      // is no longer the ONLY place these exist (TDM-168) — the same rules run
+      // on the stored row at read time — but hearing it in the call you just
+      // made is what lets you amend before anyone else looks.
+      const warnings = ticketQualityWarnings(tickets, {
+        batchHasLinkedContext: Array.isArray(args.linkedIds) && args.linkedIds.length > 0,
+      });
 
       // Started HERE, not where it is read: the policy decides what the answer
       // promises about approval (below), and it is independent of the writes, so
@@ -2634,7 +2849,12 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
       "sent back for rework, answers with a `review` block — { outcome, reason, by, at } — " +
       "carrying the decider's reason VERBATIM, plus a `_review` line saying what to do about it. " +
       "One channel for both, so if you proposed something and the count dropped, task_get the " +
-      "ticket rather than guessing why. " +
+      "ticket rather than guessing why. A ticket still open (proposed / approved / executing) may " +
+      "also answer with `quality`: the ticket-quality contract's non-blocking warnings — names no " +
+      "surface, states no done condition, reads like more than one sitting — re-derived from the " +
+      "text the ticket has right now, whether or not it was ever proposed through epic_propose. " +
+      "They block nothing: settle them (amend it, or say what the surface and done condition are) " +
+      "before you write code, rather than guessing quietly. " +
       SESSION_CONVENTION,
     inputSchema: schemaOf("canvas_task_get"),
   },
