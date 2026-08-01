@@ -26,10 +26,31 @@ import (
 // half is the epic's own `summary` (epic_summary.go), because prose about intent
 // is the one thing a machine cannot derive from task states.
 
+// THE COMPACT DEFAULT (TDM-183). This endpoint composes the batch account for a
+// board that now has 31 epics and 221 finished tickets, and it used to render one
+// line per finished ticket every time anybody asked where the project stands.
+// Almost all of that is ARCHIVE: a batch that drained weeks ago answers "what is
+// left?" with a number, and nobody reads its per-ticket lines. So the DEFAULT is
+// now the live half — counts, the activity window, and the summary saying what
+// the batch achieved — and `?full=1` returns today's shape, byte for byte, for
+// the readers that do want the lines (the web board, and whoever is writing an
+// epic summary).
+//
+// WHAT THE DIET NEVER TOUCHES. Counts, drained/summaryNeeded, and the returned[]
+// account. A batch with OPEN work or with tickets that came BACK keeps its line
+// items in both shapes — that is the half a reader acts on — and only its result
+// excerpts get shorter. Compaction trims LINES, never the truth about how much
+// work there was.
+
 // epicResultExcerpt caps a done task's result line in RUNES. This is a rollup:
 // one line per ticket, enough to recognize the work. The full result is on the
 // task, one task_get away.
 const epicResultExcerpt = 240
+
+// epicResultExcerptCompact is the same cap on the compact default. Shorter
+// because the compact read's job is recognition, not reading: the whole result
+// is one task_get away and the whole excerpt is one `?full=1` away.
+const epicResultExcerptCompact = 160
 
 // maxEpicDoneLines caps how many done-ticket lines one epic contributes. A
 // 60-task epic would otherwise dominate the response the rollup exists to keep
@@ -132,6 +153,12 @@ type epicRollup struct {
 	Truncated int `json:"truncated,omitempty"`
 	// ReturnedTruncated counts returned lines omitted by maxEpicReturnedLines.
 	ReturnedTruncated int `json:"returnedTruncated,omitempty"`
+	// DoneOmitted counts the finished-ticket lines the COMPACT default left out
+	// on a batch with nothing open and nothing returned — the archive this read
+	// stopped shipping. It is the difference between "this batch produced
+	// nothing" and "this batch's account is one `?full=1` away", so it is the one
+	// field that must never be silently absent. Never set on ?full=1.
+	DoneOmitted int `json:"doneOmitted,omitempty"`
 }
 
 // epicRollupBody is the endpoint's response.
@@ -146,8 +173,34 @@ type epicRollupBody struct {
 	// ticket you were never told about — the dead end this whole feedback channel
 	// exists to close.
 	UnepicedReturned []epicReturnedLine `json:"unepicedReturned"`
-	Hint             string             `json:"_hint"`
+	// Compact marks the cheap default (TDM-183): drained batches answered with
+	// counts instead of their per-ticket lines. Absent on `?full=1`, which is
+	// what makes that shape byte-identical to what this endpoint always returned.
+	Compact bool   `json:"compact,omitempty"`
+	Hint    string `json:"_hint"`
 }
+
+// The two hints. fullRollupHint is the string this endpoint has always
+// returned — it is part of what `?full=1` keeps byte-identical, so edit it only
+// alongside the callers that read the full shape.
+const fullRollupHint = "One read for every batch on this board: its summary (what it achieved), task counts " +
+	"by state, and one line per finished ticket. An epic with summaryNeeded:true has drained " +
+	"with nobody saying what it delivered — write it in one call. `returned` is the other " +
+	"half of the account: the tickets that came BACK — rejected at the gate, or bounced for " +
+	"rework — each with the reason. Read those against the tickets still standing: a " +
+	"rejection is a correction to the PLAN, not just to the ticket it was typed on. Reasons " +
+	"are excerpted here; task_get on the ticket has the whole thing."
+
+const compactRollupHint = "One read for every batch on this board: its summary (what it achieved) and task counts " +
+	"by state. Batches that have DRAINED answer with counts alone — `doneOmitted` says how " +
+	"many finished-ticket lines were left out, and `?full=1` returns them plus every excerpt " +
+	"in full. Batches with OPEN or RETURNED work keep their line items, because that is the " +
+	"half you act on. An epic with summaryNeeded:true has drained with nobody saying what it " +
+	"delivered — write it in one call. `returned` is the tickets that came BACK — rejected at " +
+	"the gate, or bounced for rework — each with the reason; read those against the tickets " +
+	"still standing, because a rejection is a correction to the PLAN, not just to the ticket " +
+	"it was typed on. Results and reasons are excerpted here; task_get on the ticket has the " +
+	"whole thing."
 
 // epicRollupTaskPayload is the slice of a task payload the rollup reads.
 type epicRollupTaskPayload struct {
@@ -162,7 +215,17 @@ type epicRollupTaskPayload struct {
 //
 // Epics come back in creation order — the order the board's epic timeline reads
 // in, oldest first.
+//
+// This wrapper is the FULL shape — what `?full=1` answers and what this endpoint
+// has always returned. The default response is the compact one; see
+// buildEpicRollupsView.
 func buildEpicRollups(epics, tasks []*store.Action) epicRollupBody {
+	return buildEpicRollupsView(epics, tasks, true)
+}
+
+// buildEpicRollupsView is buildEpicRollups with the shape switch: full=true is
+// today's response, full=false the compact default (TDM-183).
+func buildEpicRollupsView(epics, tasks []*store.Action, full bool) epicRollupBody {
 	byEpic := map[uuid.UUID][]*store.Action{}
 	known := make(map[uuid.UUID]bool, len(epics))
 	for _, e := range epics {
@@ -207,23 +270,22 @@ func buildEpicRollups(epics, tasks []*store.Action) epicRollupBody {
 
 	out := make([]epicRollup, 0, len(ordered))
 	for _, e := range ordered {
-		out = append(out, rollupOne(e, byEpic[e.ID]))
+		out = append(out, rollupOne(e, byEpic[e.ID], full))
 	}
-	return epicRollupBody{
+	body := epicRollupBody{
 		Epics:            out,
 		Unepiced:         unepiced,
 		UnepicedReturned: unepicedReturned,
-		Hint: "One read for every batch on this board: its summary (what it achieved), task counts " +
-			"by state, and one line per finished ticket. An epic with summaryNeeded:true has drained " +
-			"with nobody saying what it delivered — write it in one call. `returned` is the other " +
-			"half of the account: the tickets that came BACK — rejected at the gate, or bounced for " +
-			"rework — each with the reason. Read those against the tickets still standing: a " +
-			"rejection is a correction to the PLAN, not just to the ticket it was typed on. Reasons " +
-			"are excerpted here; task_get on the ticket has the whole thing.",
+		Hint:             fullRollupHint,
 	}
+	if !full {
+		body.Compact = true
+		body.Hint = compactRollupHint
+	}
+	return body
 }
 
-func rollupOne(e *store.Action, tasks []*store.Action) epicRollup {
+func rollupOne(e *store.Action, tasks []*store.Action, full bool) epicRollup {
 	var ep struct {
 		Title string `json:"title"`
 	}
@@ -244,8 +306,17 @@ func rollupOne(e *store.Action, tasks []*store.Action) epicRollup {
 		Review: deriveReviewFeedback(e),
 	}
 
+	excerpt := epicResultExcerpt
+	if !full {
+		excerpt = epicResultExcerptCompact
+	}
+
 	ordered := sortedTasks(tasks)
 	allTerminal := true
+	// doneCount is every finished (done|failed) ticket, counted whether or not it
+	// got a line — so the compact shape can say how many lines it left out even
+	// when maxEpicDoneLines already dropped some.
+	doneCount := 0
 	for _, t := range ordered {
 		r.Tasks.Total++
 		r.Tasks.ByState[t.State]++
@@ -280,6 +351,7 @@ func rollupOne(e *store.Action, tasks []*store.Action) epicRollup {
 		if t.State != "done" && t.State != "failed" {
 			continue
 		}
+		doneCount++
 		if len(r.Done) >= maxEpicDoneLines {
 			r.Truncated++
 			continue
@@ -291,13 +363,39 @@ func rollupOne(e *store.Action, tasks []*store.Action) epicRollup {
 			TicketID: t.TicketID(),
 			Title:    strings.TrimSpace(p.Title),
 			State:    t.State,
-			Result:   firstLineExcerpt(t.Result, epicResultExcerpt),
+			Result:   firstLineExcerpt(t.Result, excerpt),
 		})
 	}
 
 	r.Drained = e.State == "approved" && r.Tasks.Total > 0 && allTerminal
 	r.SummaryNeeded = r.Drained && r.Summary == ""
+	if !full {
+		compactRollup(&r, allTerminal, doneCount)
+	}
 	return r
+}
+
+// compactRollup puts one epic on the diet (TDM-183).
+//
+// The stamps go in every case: summaryBy/summaryAt are provenance on a LIST
+// read, and the summary itself is what the reader came for. The per-ticket lines
+// go only when the batch has nothing OPEN and nothing RETURNED — the two
+// conditions that make its line items actionable rather than archival. Note the
+// test is "nothing open", not the `drained` flag: an epic still `proposed` whose
+// every task is terminal is archive too, and `drained` deliberately says no.
+//
+// doneOmitted is what keeps this honest — a compacted batch says how many lines
+// it is not showing, so an empty done[] never reads as "this batch shipped
+// nothing".
+func compactRollup(r *epicRollup, allTerminal bool, doneCount int) {
+	r.SummaryBy = ""
+	r.SummaryAt = ""
+	if !allTerminal || len(r.Returned) > 0 {
+		return
+	}
+	r.Done = []epicDoneLine{}
+	r.Truncated = 0
+	r.DoneOmitted = doneCount
 }
 
 // returnedLine renders one came-back ticket for a list read, with its reason
@@ -346,7 +444,12 @@ func firstLineExcerpt(s *string, max int) string {
 // Counts every type="task" action, human todos included: an epic's rollup is the
 // truth about the epic, not about one assignee. board_status's own task census
 // stays agent-only, and the two answer different questions on purpose.
+//
+// Two shapes (TDM-183):
+//   - (default)  → compact: drained batches answer with counts, not line items.
+//   - ?full=1    → today's shape, unchanged, for the board and summary writers.
 func (h *Handler) ListEpics(w http.ResponseWriter, r *http.Request) {
+	full := rollupFullRequested(r.URL.Query().Get("full"))
 	ctx := r.Context()
 	canvasID := CanvasIDFromCtx(ctx)
 
@@ -378,5 +481,19 @@ func (h *Handler) ListEpics(w http.ResponseWriter, r *http.Request) {
 	// looking at the board, and viewers should see that.
 	broadcastActivity(h.hub, canvasID, "read")
 
-	writeJSON(w, http.StatusOK, buildEpicRollups(epics, tasks))
+	writeJSON(w, http.StatusOK, buildEpicRollupsView(epics, tasks, full))
+}
+
+// rollupFullRequested reads ?full. The documented spelling is `?full=1`, but
+// `true` and `yes` mean the same thing here: a caller who guessed the other
+// spelling and got the compact shape back would conclude the ticket lines were
+// GONE, not that the flag was misspelled — a silent wrong answer, which is worse
+// than being liberal about three synonyms. Anything else (absent, 0, false) is
+// the default.
+func rollupFullRequested(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes":
+		return true
+	}
+	return false
 }
