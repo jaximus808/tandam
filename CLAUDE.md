@@ -22,7 +22,7 @@ The tool names below are the **default MCP surface** — the 16-tool intent faca
 (`FACADE_NAMES` in `apps/mcp-gateway/src/facade.ts`): `canvas_connect`,
 `agent_register`, `context_get`, `queue_next`, `queue_wait`, `task_find`,
 `task_get`, `task_claim`, `task_progress`, `task_complete`, `task_propose`,
-`task_amend`, `task_approve`, `epic_propose`, `doc_write`, `board_status`. The old ~80-tool
+`task_amend`, `task_review`, `epic_propose`, `doc_write`, `board_status`. The old ~80-tool
 `canvas_*` CRUD surface is still callable but is only *advertised* behind
 `TANDEM_FULL_TOOLS=1`, so write against these names.
 
@@ -93,17 +93,53 @@ picks it up). Add more tasks to an existing batch later with `task_propose` and
 that `epicId`. Everything lands as `proposed` for human approval in the web UI —
 never try to approve your own work; epic approval is the human's on every canvas.
 
-**The one exception — `approval_policy: 'peer'` (TDM-145/146), off by default.**
-A canvas the OWNER puts on `peer` lets a **reviewer agent** approve a *task* that
-a **different** agent proposed, via `task_approve`; the non-self rule is enforced
-server-side from provenance, so you cannot approve your own proposal and the
-gateway does not re-implement the check. Under `peer` nothing is born approved
-and an epic approval no longer cascades — each task is reviewed on its own.
-Rejecting, epics and bulk approval stay human-only. This canvas (`TEGLQFXR`) is
-**not** on `peer` unless Jaxon says so, so assume the human gate. And a reviewer
-that approves everything is just a slower `auto`: read the work, and leaving a
-task unapproved with a reason is a legitimate outcome. Full recipe:
-`docs/ORCHESTRATION.md` §5.
+**The one exception — `approval_policy: 'peer'`, off by default.** A canvas is on
+exactly one of **four** approval policies (`strict | epic | auto | peer`,
+migrations 0033 + 0041), and only the OWNER sets it: `strict` lands every
+agent-proposed task `proposed`; `epic` (the default) births a task approved when
+its epic is already approved; `auto` births everything approved; `peer` is the
+review loop's policy — nothing is born approved, the epic cascade is **off**, and
+each task is gated by a **reviewer agent** instead of by Jaxon.
+
+**`task_review` is the reviewer's one verb, with two outcomes** (TDM-145/154/156):
+
+- `outcome: "pass"` on a still-`proposed` task approves it into the ready queue.
+- `outcome: "changes_requested"` on a `done` task sends it **back**, with a
+  REQUIRED `reason`. The task leaves `done`, loses its claim and its now-stale
+  `result`, and returns to the ready queue as `approved` with your reason stored
+  verbatim on its audit trail — so whoever takes it from `queue_next` reads why
+  without asking you. Don't then claim it yourself: reviewing a task and redoing
+  it is one pair of eyes wearing two hats.
+
+Both doors are enforced server-side from provenance the caller cannot forge — the
+gateway does not re-implement the check — so you cannot pass your own proposal
+(`peer_self_approval`) or bounce your own completion (`rework_self_review`).
+Refusals come back as **data** (`reviewed:false`, a stable `refusal` code, a
+`_next`), not as errors.
+
+**What the loop deliberately does NOT do**, and none of these are TODOs:
+
+1. **Killing work stays human.** A reviewer can pass a proposal or bounce
+   finished work — and has no move that *ends* another agent's task. Both of its
+   moves are reversible with one human click; rejection is not, so `reject` stays
+   with the person whose project it is. Saying no to a *proposal* means leaving
+   it alone and reporting why, not pressing anything.
+2. **No self-review, ever.** Approve compares you to the stored proposer; rework
+   compares you to the recorded completer. Unknown either side fails **closed** —
+   "we couldn't tell" resolves to "a human decides", not to "allowed".
+3. **The model is self-asserted.** A canvas can additionally require the reviewer
+   to be running a *different model* (`requireCrossModelReview`, off by default),
+   but `model` is whatever the agent said on `canvas_connect`. It raises the cost
+   of accidental same-model review; it does not stop a client that misreports.
+   It is an honesty rail, not a guarantee, and must never be described as one.
+
+Epics, bulk approval and born-approved stay human-only on `peer` too. This canvas
+(`TEGLQFXR`) is **not** on `peer` unless Jaxon says so, so assume the human gate.
+And a reviewer that passes everything is just a slower `auto`: read the work.
+Full recipe, including the four-policy table and every refusal code:
+`docs/ORCHESTRATION.md` §5. (The old name `task_approve` is still *routed* for
+sessions that learned it, but it is no longer advertised and only does the `pass`
+half — write `task_review`.)
 
 **After proposing, LISTEN for the approval.** Don't end your turn and don't poll
 on an interval — call `queue_wait` (optionally with the `epicId`); it returns the

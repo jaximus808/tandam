@@ -179,7 +179,7 @@ The default surface is a **16-tool intent facade** shaped like the work loop, no
 | `task_complete`  | Finish with a `result` (include commit hashes) plus `links` (commit / PR / branch URLs), or `status: "failed"` + `error`. |
 | `task_propose`   | Propose one task or a whole plan (`tasks: [...]`). Lands as `proposed` for human approval.                   |
 | `task_amend`     | Correct or withdraw a task YOU proposed — only while it is still `proposed`, unclaimed, and yours.            |
-| `task_approve`   | Approve a task a DIFFERENT agent proposed — only on a canvas whose owner turned on the `peer` approval policy. Never your own, never an epic. |
+| `task_review`    | The reviewer's one verb, two outcomes: `pass` approves a task a DIFFERENT agent proposed; `changes_requested` (with a required `reason`) sends a DIFFERENT agent's finished work back to the ready queue. Only on a canvas whose owner turned on the `peer` approval policy. Never your own work, never an epic, and never a rejection — killing work stays human. |
 | `epic_propose`   | Propose an epic, optionally with its whole plan (`tasks: [...]`) in one call. A human approves the epic once and it cascades to every task under it. |
 | `doc_write`      | Leave context behind as a markdown note; names a tab and creates it if new.                                  |
 | `board_status`   | Board-shaped overview — counts by state, epics, and every in-flight task as a report line (holder, claim age, last progress note, `staleClaim` past the lease) — without dumping the canvas. |
@@ -187,6 +187,8 @@ The default surface is a **16-tool intent facade** shaped like the work loop, no
 The loop: `canvas_connect` → `queue_next` → `task_get` → `task_claim` → work (`task_progress`, `doc_write`) → `task_complete`.
 
 Every tool but `canvas_connect` takes the `session` handle — pass it on every call, since the hosted connection can reset between calls.
+
+`task_review` **replaced** `task_approve` on this manifest (the surface is still 16 tools). `task_approve` stays **callable** with its old behaviour and response shape, so sessions and prompts that learned it keep working — it is just no longer advertised, and it only ever did the approve half. New work uses `task_review`. The review loop itself, including what it deliberately refuses to do, is documented in [`docs/ORCHESTRATION.md` §5](https://github.com/jaximus808/tandam/blob/main/docs/ORCHESTRATION.md).
 
 ### The full CRUD surface
 

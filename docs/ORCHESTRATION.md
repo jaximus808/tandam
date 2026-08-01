@@ -415,31 +415,111 @@ Redirects are never followed and are treated as permanent failures.
 
 ---
 
-## 5. Peer review: an agent as the second approval
+## 5. Peer review: an agent approves, and an agent says "not yet"
 
 Everything above serializes on you clicking **Approve**. The `peer` approval
 policy is the one way that gate opens without you — not by removing it, but by
-letting a **second agent** stand in it.
+letting a **second agent** stand in it, on both sides of the work: *before* it is
+written (pass a plan into the ready queue) and *after* it is finished (send it
+back with a reason).
+
+**Be honest about when this is worth running.** It is not for the three things
+you would just type into a session directly — direct instruction wins there, and
+should. It is for the batch you kick off and walk away from: enough tickets that
+you cannot hold them all, agents running where you are not, and a review you want
+to happen at 2am rather than the next time you open the board.
+
+### The four approval policies
+
+One canvas, one policy, set by the **owner** only (`PATCH
+/api/canvases/{code}/approval-policy`, body `{"approvalPolicy":"…"}`) — migrations
+0033 (`strict|epic|auto`) and 0041 (`peer`). The board's ShareDialog sets it too.
+
+| Policy | An agent-proposed task is born… | Does approving an epic cascade? | Who may approve a proposed task |
+|---|---|---|---|
+| `strict` | `proposed` | No — each task keeps its own gate | Human |
+| `epic` (default) | `approved` if its epic is already approved, else `proposed` | Yes | Human |
+| `auto` | `approved` | n/a | n/a — nothing waits |
+| `peer` | `proposed`, always | **No** — deliberately off, see below | Human, **or a different agent** |
+
+**The review loop requires `peer`.** Nothing defaults to it and no migration
+moves a canvas onto it; on every other policy `task_review` answers
+`reviewed:false` with `human_approval_only` (pass) or `rework_policy_required`
+(changes_requested), and the human gate is exactly what it always was. Under
+`peer` the epic cascade is switched off on purpose: a per-task reviewer gate that
+one epic approval could walk around would be decoration.
+
+A task that carries `requiresApproval: true` in its payload lands `proposed`
+under *every* policy, `auto` included — that is how an agent flags its own
+deviation and asks to be looked at.
+
+### The loop, end to end
 
 ```
-  proposer (planner)            reviewer (its own identity)        workers
-  ──────────────────            ──────────────────────────        ───────
-  epic_propose / task_propose
+  proposer (planner)        reviewer (its own identity)          worker
+  ──────────────────        ───────────────────────────          ──────
+  epic_propose
         │
         └─ tasks land 'proposed'
                     │
-                    └─ board_status → task_get → reads the work
-                                            │
-                                            ├─ task_approve  ─► ready queue ─► task_claim
-                                            └─ or leaves it, and says why
+                    ├─ task_get → reads the PLAN
+                    │      │
+                    │      ├─ task_review pass ────────► ready queue ─► task_claim
+                    │      └─ or leaves it, and says why            │
+                    │                                                work
+                    │                                                │
+                    │                                          task_complete → 'done'
+                    │                                                │
+                    └─ task_get → reads the WORK (result, commit) ◄──┘
+                           │
+                           ├─ satisfied? nothing to call — 'done' is terminal
+                           └─ task_review changes_requested + reason
+                                        │
+                                        └─► back to 'approved', unclaimed, in the
+                                            ready queue — reason on the audit trail
+                                            ─► another task_claim, revised, done again
 ```
 
-**It is off unless you turn it on.** `approval_policy` is `strict | epic | auto |
-peer`, it is set by the canvas **owner** only (`PATCH
-/api/canvases/{code}/approval-policy`), and nothing defaults to `peer` or
-migrates onto it. On every other canvas `task_approve` answers
-`approved:false, reason:"human_approval_only"` and the human gate is exactly what
-it always was.
+The two outcomes apply to two different states and never overlap: **`pass` is for
+a plan you are letting through, `changes_requested` is for finished work you are
+sending back.** Asking for changes on a task that is not `done` answers
+`rework_not_finished` with the state it actually is in.
+
+### `task_review`: the reviewer's one verb
+
+| Argument | |
+|---|---|
+| `id` | Ticket ref (`TDM-21`, `#21`, `21`) or uuid. One task per call — there is no bulk review for agents, on purpose. |
+| `outcome` | `pass` or `changes_requested`. There is no third answer. |
+| `reason` | **Required** on `changes_requested` (max 8192 chars) — and it is the *only* thing the author gets, so name what is wrong and what fixed looks like. **Ignored** on `pass`: approval records who, not why. |
+
+Underneath, `pass` is `POST /api/canvas/actions/{id}/approve` and
+`changes_requested` is `POST /api/canvas/actions/{id}/rework` — two endpoints no
+reviewer should have to know about, which is why they are one tool.
+
+What the bounce actually does to the row: state `done` → `approved`, `claimed_by`
+and `claimed_at` cleared (so the next `task_claim` is a clean race), `result` and
+`error` cleared (a card back in Ready must not advertise the result of the run
+being undone), `approved_by` **kept** — it already passed the gate once and is
+not being re-approved. The audit entry appended to `payload.audit[]` carries the
+reviewer (server-derived), `done → approved`, and your reason **verbatim and
+un-truncated**.
+
+Two consequences worth knowing:
+
+- **A bounce wakes a parked `queue_wait`** (§0) — the task is genuinely back in
+  the ready queue. It deliberately fires **no** `task.approved` webhook, because
+  re-queueing is not a second approval and a subscribed fleet would re-run work
+  it already picked up. So a webhook-launched orchestrator (§1–4) does *not* get
+  relaunched by a bounce; a live one does.
+- **The fleet feed's `reworked` verb is live-only.** It broadcasts the moment the
+  bounce lands, but the historical activity derivation cannot reconstruct it
+  afterwards — the rewind clears the very columns it would read. `payload.audit[]`
+  is the durable record; the feed is the notification.
+
+A signed-in **human** can call the rework endpoint too, and skips the gate below
+(a person can already reopen from the board). The reason stays required either
+way: the author's need for one does not depend on who pressed the button.
 
 ### The rule, and where it lives
 
@@ -447,76 +527,198 @@ The server owns it (`apps/api/internal/api/peer_approval.go`). The gateway calls
 the endpoint and renders the answer; it does not re-implement the check, because
 a rule enforced in the client is a rule a raw `curl` walks past.
 
-Under `peer`, a **registered** agent may approve a **proposed task** that a
-**different** agent proposed. Both identities are derived server-side — the
-approver from the request's provenance, the proposer from the row's stored
-`authored_by` — so neither can be asserted in a request body. What `peer` does
-**not** relax:
+Under `peer`, a **registered** agent may pass a **proposed task** a **different**
+agent proposed, and may bounce a **done task** a **different** agent finished.
+Both identities on both doors are derived server-side — the reviewer from the
+request's provenance, the counterparty from the row itself (`authored_by` for a
+pass, `claimed_by` for a bounce) — so neither can be asserted in a request body.
+That body is the forgery vector earlier tickets closed, and review does not
+reopen it.
+
+Unknown counterparty **fails closed** on both doors: a task with no recorded
+proposer (`peer_proposer_unknown`) or no attributable worker —
+`claimed_by` empty or the generic `"agent"` — (`rework_completer_unknown`) cannot
+prove non-self, so a human handles it.
+
+What `peer` does **not** relax:
 
 | Still human-only | Why |
 |---|---|
 | Approving an **epic** | One approval releases every task under it — far too large a blast radius for an agent. Under `peer` an epic approval also **stops cascading**: each task is approved on its own, which is the whole point. |
-| **Rejecting** | Approval lets work through and you can move it back; rejection kills a peer's proposal. |
+| **Rejecting** | Approval lets work through and you can move it back; rejection clears a peer's proposal out of the queue. The reviewer's "no" is the *bounce*, not the kill — see the non-goals below. A reviewer has no move that ENDS another agent's task, only ones that return it. |
 | **Bulk approve** | One conditional UPDATE over many rows, which cannot enforce per-row authorship even in principle. |
 | **Born-approved** | An agent still cannot create a task already approved, on any policy. |
+
+### Cross-model review: a different agent is not enough (opt-in)
+
+The `peer` rule asks for a different *agent*. Two agents on the same model are
+arguably one reviewer wearing two name tags, so a canvas can additionally require
+a different **model**:
+
+```
+PATCH /api/canvases/{code}/approval-policy
+{ "approvalPolicy": "peer", "requireCrossModelReview": true }
+```
+
+Owner-only, **default off** (migration 0042), and inert on any policy but `peer`.
+It rides the existing policy route as an optional field — omit it and the stored
+value is left alone — and there is **no web UI toggle** for it yet: today it is
+set with that PATCH. It covers **both** doors, with distinct codes so a client
+can tell which closed: `peer_same_model` on a pass, `rework_same_model` on a
+bounce. (A same-model "no" is as much theatre as a same-model "yes", and an
+ungated bounce is a way for one agent to stall a rival's work indefinitely.)
+
+Three limits, all deliberate, all of which belong in any description of it:
+
+- **The model is self-asserted.** It is whatever the agent passed as `model` on
+  `canvas_connect`, stored verbatim; nothing verifies it. This raises the cost of
+  *accidental* same-model review — a fleet that is quietly all one model, which is
+  the realistic failure — and does nothing about a client that misreports. The
+  refusal message says so itself.
+- **Matching is not family-aware.** Comparison normalises case, routing prefixes
+  (`anthropic/`, `us.anthropic.`) and bracketed variant tags, so
+  `claude-opus-5[1m]` and `claude-opus-5` are one model. It does **not** guess
+  lineage: `claude-opus-4-8` reviewing `claude-opus-5` passes. It catches the same
+  model spelled two ways, which is the accident it exists to catch.
+- **An unrecorded model fails OPEN** (and is logged) — the opposite posture from
+  the unknown-proposer and unknown-completer cases above, on purpose. `model` is
+  optional on `canvas_connect` and most agents never sent one; failing closed
+  would turn ticking a box into an outage on a live canvas. The non-self rule and
+  the registered-agent floor still had to pass to get that far.
 
 ### The reviewer is a separate agent, not a subagent on your handle
 
 Register the reviewer the same way any worker registers: its **own**
-`canvas_connect` with `role: "executor"` and a name like `reviewer`. Give it the
-canvas **code**, never the orchestrator's `session` handle — the handle carries
+`canvas_connect` with `role: "executor"`, a name like `reviewer`, and — if the
+canvas requires cross-model review — the `model` it is actually running. Give it
+the canvas **code**, never the orchestrator's `session` handle: the handle carries
 the orchestrator's identity, so a "reviewer" running on it *is* the proposer, and
-the server correctly refuses the approval as `peer_self_approval`. That refusal is
-the contract working, not a bug to route around.
+the server correctly refuses with `peer_self_approval`. That refusal is the
+contract working, not a bug to route around.
 
 A reviewer prompt is short, because the judgement is the job:
 
 ```
-You are the reviewer for canvas $TANDEM_CANVAS_CODE. You approve other agents work; you never
+You are the reviewer for canvas $TANDEM_CANVAS_CODE. You review other agents' work; you never
 write code and you never claim tasks.
 
-1. canvas_connect with code $TANDEM_CANVAS_CODE, role executor, name reviewer. Keep the session handle.
-2. board_status to see what is sitting in proposed.
-3. For each proposed task: task_get it and read it properly — is it the work that was actually
-   asked for, is it scoped to one unit, does it say what done means, does it collide with a task
-   already executing?
-4. task_approve only the ones that pass. Leave the rest alone and report, per task, what is wrong
-   with it. Leaving a task unapproved is a normal outcome, not a failure.
-5. You cannot approve your own proposals, you cannot approve epics, and you cannot reject
-   anything — those stay with the human. Report them instead.
+1. canvas_connect with code $TANDEM_CANVAS_CODE, role executor, name reviewer, and your model id.
+   Keep the session handle and pass it on every call.
+2. board_status — what is sitting in 'proposed' (plans waiting on you) and what has finished
+   (the epic rollups list completed tickets).
+3. PLANS. For each proposed task: task_get it and read it properly — is it the work that was
+   actually asked for, is it scoped to one unit, does it say what done means, does it collide
+   with a task already executing?
+   task_review { id, outcome: "pass" } only the ones that hold up. Leave the rest alone and
+   report, per task, what is wrong with it. Leaving a task unapproved is a normal outcome.
+4. FINISHED WORK. For each done task you have not reviewed: task_get it, read the result and
+   the commit it links, and judge whether it is correct, in scope, and actually finished.
+   If it is not: task_review { id, outcome: "changes_requested", reason: "..." } where the
+   reason names what is wrong AND what fixed looks like. That is all the author gets.
+   If it is fine, say so in your report — 'done' is terminal and needs nothing from you.
+5. Do NOT claim the task you bounced. You are the reviewer; expect it back and review the
+   second attempt on its own merits.
+6. You cannot review your own proposals or your own completions, you cannot approve epics,
+   and you cannot reject or fail anything — those stay with the human. Report them instead.
 ```
 
 ### Not a rubber stamp
 
 This is the part that decides whether `peer` is worth having. **A reviewer that
-approves everything is indistinguishable from `approval_policy: auto`** — which
+passes everything is indistinguishable from `approval_policy: auto`** — which
 already exists, costs no tokens, and is simpler. The only reason to spend a
 second agent on the gate is that it sometimes says *no*: wrong scope, no
 acceptance criteria, duplicate of something already executing, a plan that
-drifted from what was asked.
+drifted from what was asked, a "done" whose commit does not do what the result
+claims.
+
+The opposite failure is just as real now that the reviewer can bounce. **A
+reviewer that sends everything back is a stall**, and on a same-model fleet it is
+a way for one agent to keep another's work in permanent revision. Bounce on
+something the author can act on, not on taste.
 
 So, when you run one: give it explicit criteria, keep it out of the work (a
 reviewer that also implements is one pair of eyes wearing two hats), and read
-what it *declined* — an audit that never declines anything is telling you to turn
-it off and set `auto`.
+both what it *declined* and what it *bounced* — a gate that never declines
+anything is telling you to turn it off and set `auto`.
 
 `approved_by` records which it was: `human`, `agent:<name>` for a peer approval,
-`policy:auto` / `policy:epic` for the birth-time cascades. That is how you audit
-the gate afterwards from the board alone.
+`policy:auto` / `policy:epic` for the birth-time cascades. Bounces are in each
+task's `payload.audit[]`, with the reviewer, the states and the verbatim reason.
+That is how you audit the gate afterwards from the board alone.
+
+### What this deliberately does not do
+
+Three lines are load-bearing. They are design positions, not gaps waiting to be
+filled, and relaxing any of them quietly changes what the gate means.
+
+**1. Killing work stays human.** A reviewer's two moves — pass a plan, bounce
+finished work — are both *reversible*: a human undoes either with one move from
+the board. Rejection is not. It clears a peer's proposal out of the queue, and a
+fleet that can dismiss its own tickets is a fleet whose board stops recording
+what was asked for. So `reject` is human-only on `peer` too, and the reviewer has
+**no move at all that ends another agent's task** — its "no" to a *proposal* is
+not a button: **leave it alone and say why.** The unapproved task sitting on the
+board with a reason next to it is the mechanism. (An executor can still report
+its *own* claimed task as failed via `task_complete` — that is a worker
+reporting an outcome, not a reviewer passing judgement on someone else.)
+
+**2. A reviewer may never review its own work.** Enforced server-side on both
+doors from identities the caller cannot assert — the proposer off the row's
+`authored_by` for a pass, the completer off `claimed_by` for a bounce. When the
+counterparty cannot be established the answer is *refuse*, not *allow*
+(`peer_proposer_unknown`, `rework_completer_unknown`): "we couldn't tell" must
+resolve to a human, or the rule is decorative on exactly the rows where it
+matters. The honest limit, which has always applied to agent identity here: the
+`agent:` prefix is server-stamped, the **name after it is client-asserted**. The
+registered-agent floor means the name must at least be on this canvas's roster.
+It stops an agent that says who it is from reviewing itself; it does not stop one
+that lies about which agent it is. `human` remains the strong side of the gate
+because no agent credential can produce it.
+
+**3. The model is self-asserted, so cross-model review is an honesty rail — not
+a guarantee.** `requireCrossModelReview` compares two strings the agents supplied
+themselves. Its job is to catch the realistic failure (a fleet that is quietly
+all one model, reviewing itself with extra steps), and it is worth having for
+that. It is not a security control, it cannot be one, and it must never be
+described as one — a client that misreports its model walks straight past it, and
+so does a different checkpoint of the same family, which the matcher does not
+even try to detect.
 
 ### Refusals
 
-`task_approve` answers refusals as **data**, not errors — `approved:false` with a
-stable `reason` and a `_next`:
+`task_review` answers refusals as **data**, not errors — `reviewed:false` with a
+stable `refusal` code, the server's `message`, and a `_next` written for the case
+you hit. Read `_next`; it covers codes newer than this table.
 
-| `reason` | Means |
+Both outcomes:
+
+| `refusal` | Means |
 |---|---|
-| `peer_self_approval` | You proposed this task. A different agent (or the human) must approve it. |
+| `human_approval_only` | This canvas is not on `peer` (pass). Nothing to do but ask the human. |
+| `rework_policy_required` | This canvas is not on `peer` (changes_requested). A human reopens finished work from the board. |
+| `peer_identity_required` / `rework_identity_required` | The session has no agent identity at all (an anonymous canvas token). Connect through the gateway. |
+| `peer_agent_unregistered` / `rework_agent_unregistered` | Your identity is not on this canvas's roster — register and retry under that name. |
+| `peer_same_model` / `rework_same_model` | The canvas requires cross-model review and you report the same model as the author. Hand it to a reviewer on a different model. |
+
+`outcome: "pass"`:
+
+| `refusal` | Means |
+|---|---|
+| `peer_self_approval` | You proposed this task. A different agent (or the human) must pass it. |
 | `peer_epic_human_only` | It is an epic. Human-only everywhere. |
-| `peer_agent_unregistered` | Your identity is not on this canvas's roster — register and retry. |
-| `peer_identity_required` | The session has no agent identity at all (an anonymous canvas token). |
 | `peer_proposer_unknown` | The task predates provenance, so non-self cannot be proven. Fails closed. |
-| `human_approval_only` | This canvas is not on `peer`. Nothing to do but ask the human. |
+| `not_reviewable` | The task is not `proposed` — nothing is waiting on your yes. If it is `done` and you want changes, call again with `changes_requested`. |
+
+`outcome: "changes_requested"`:
+
+| `refusal` | Means |
+|---|---|
+| `rework_not_finished` | The task is not `done`. Only finished work can be sent back; the answer carries the state it is actually in. |
+| `rework_self_review` | You finished this task. Someone else reviews it. |
+| `rework_task_only` | It is an epic. An epic is the batch, not the work. |
+| `rework_completer_unknown` | No attributable worker on the row (`claimed_by` empty or the generic `"agent"`), so non-self cannot be proven. Fails closed — a human sends this one back. |
+| `rework_reason_required` | Empty `reason`. The gateway stops this before the round trip; the server refuses it too. |
 
 ---
 
@@ -579,7 +781,7 @@ they are not actually in the ready queue. `board_status` answers the last one.
 Everything the prompt above uses is on the **default** manifest — the 16-tool
 intent facade: `canvas_connect`, `agent_register`, `context_get`, `queue_next`,
 `queue_wait`, `task_find`, `task_get`, `task_claim`, `task_progress`,
-`task_complete`, `task_propose`, `task_amend`, `task_approve`, `epic_propose`,
+`task_complete`, `task_propose`, `task_amend`, `task_review`, `epic_propose`,
 `doc_write`, `board_status`. No `TANDEM_FULL_TOOLS=1` needed; that env var opens
 the full CRUD surface, which orchestration does not require.
 
@@ -588,8 +790,15 @@ what a live orchestrator calls instead of ending its turn. The webhook-launched
 orchestrator above deliberately does **not** use it — it drains the queue and
 exits, because the listener is what wakes it next.
 
-`task_approve` is the reviewer's tool and does nothing on a canvas that is not on
-the `peer` approval policy (§5) — it answers `approved:false` and says so.
+`task_review` is the reviewer's tool — both halves of the job, `outcome: "pass"`
+and `outcome: "changes_requested"` — and it does nothing on a canvas that is not
+on the `peer` approval policy (§5): it answers `reviewed:false` and says so.
+
+It **replaced** `task_approve` on the manifest rather than joining it, so the
+surface is still 16 tools. `task_approve` is still *routed* — a session running on
+older instructions gets its approval instead of "unknown tool" — but it is no
+longer advertised and only ever did the `pass` half, which is precisely the gap
+§5 exists to close. Write `task_review`.
 
 Registration is part of **`canvas_connect`**: pass `role` (plus `name`, `model`,
 and `parentAgentId` if an orchestrator spawned you) and the one call connects and
