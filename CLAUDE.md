@@ -115,7 +115,10 @@ out of what the human actually said?**
   one-ticket epic outright, because that is a task.
 
 Propose the **whole** batch in one `epic_propose` — don't start on "the easy one"
-while the rest waits — then `queue_wait` on the returned `epicId`. If a ticket
+while the rest waits — then **tell the human it is waiting on them** and
+`queue_wait` on the returned `epicId`. The propose answer hands you a paste-ready
+`tellHuman` line (what is waiting, the ticket range, the board URL); relay it in
+chat before you park, because a gate nobody was told about is just a stall. If a ticket
 comes back, `task_get` answers with a `review` block carrying the decider's
 reason verbatim: a **rejection** is a correction to the *plan* (`task_amend` the
 neighbours it also condemns; re-proposing it lands the same way), a **bounce** is
@@ -176,12 +179,24 @@ Full recipe, including the four-policy table and every refusal code:
 sessions that learned it, but it is no longer advertised and only does the `pass`
 half — write `task_review`.)
 
-**After proposing, LISTEN for the approval.** Don't end your turn and don't poll
-on an interval — call `queue_wait` (optionally with the `epicId`); it returns the
-moment work is approved, and a `status: "timeout"` answer means nothing yet, not
-an error, so call it again. On `ready` you get the tasks with their `handoff`
-blocks: work them, or dispatch one subagent per task. Jaxon approving on the
-board **is** the go signal; he shouldn't have to prompt you a second time.
+**After proposing: TELL the human, then LISTEN for the approval.** The loop is
+**propose → tell → wait**, and the middle beat is not optional — nobody can
+approve a gate they were never told is open, and an agent silently parked on
+`queue_wait` is indistinguishable from an agent that has hung.
+
+1. **Tell them in chat, now.** `epic_propose` / `task_propose` answer with a
+   `tellHuman` line — what is waiting, the ticket range, the board URL — written
+   to be relayed as-is. Say it before you make another tool call.
+2. **Then `queue_wait`** (optionally with the `epicId`). Don't end your turn and
+   don't poll on an interval; it returns the moment work is approved, and a
+   `status: "timeout"` answer means nothing yet, not an error, so call it again.
+   The first timeout carries a `_tell_human` reminder: if you skipped step 1,
+   that is your cue to do it now and keep waiting. It is the backstop, not the
+   substitute.
+3. **On `ready`** you get the tasks with their `handoff` blocks: work them, or
+   dispatch one subagent per task. Jaxon approving on the board **is** the go
+   signal; he shouldn't have to prompt you a second time — and he shouldn't have
+   to guess that you were waiting on him in the first place.
 
 Also keep the canvas current as you make meaningful progress (finish a feature,
 fix a notable bug, change direction) — as you go, not just at the end. Roadmap

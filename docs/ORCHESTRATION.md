@@ -68,11 +68,23 @@ task passes the approval gate. Answers come back on `status`:
 Default wait is 25s, clamped 1–60. The tool is annotated read-only, so connectors
 can auto-approve it.
 
+**Before the first wait: say what you are waiting for.** Waiting is the second
+beat, not the first. If the agent just proposed the batch it is now parked on,
+the sequence is **propose → tell the human → `queue_wait`** — the `epic_propose` /
+`task_propose` answer carries a paste-ready `tellHuman` line (what is waiting, the
+ticket range, the board URL), and relaying it in chat is what turns a parked
+session into a request someone can act on. Skip it and the gate is open, the
+agent is silent, and the human has no idea either is true. The first `timeout`
+answer carries a `_tell_human` reminder for exactly that miss; it is the
+backstop, not a licence to wait quietly.
+
 **Say this to an agent, not "poll on a backing-off interval":**
 
-> Don't end your turn and don't poll on an interval — call `queue_wait`
-> (optionally with the `epicId`); it returns the moment work is approved, and a
-> `status: "timeout"` answer means nothing yet, not an error, so call it again.
+> First tell me what is waiting and where to approve it — relay the `tellHuman`
+> line from the propose answer, board URL included. Then don't end your turn and
+> don't poll on an interval — call `queue_wait` (optionally with the `epicId`);
+> it returns the moment work is approved, and a `status: "timeout"` answer means
+> nothing yet, not an error, so call it again.
 
 That phrasing is deliberate. The instruction it replaced asked an agent to sleep
 between polls, which an MCP session cannot do: on 2026-07-31 an orchestrator was
@@ -849,9 +861,19 @@ canvas's `approval_policy` is *who lets it through*, and only the owner sets it
 
 ### After you propose
 
-Do not end the turn and do not poll. `queue_wait` with the returned `epicId`
-returns the moment the batch is approved; `status: "timeout"` means nothing yet,
-so call it again (§0).
+Three beats, in this order: **propose → tell the human → wait.**
+
+1. **Relay the approval ask.** The `epic_propose` answer carries a `tellHuman`
+   line — batch title, ticket range, board URL — written to be pasted straight
+   into chat. Do that before your next tool call. You are the only thing that
+   knows a gate just opened; the board does not tap anyone on the shoulder.
+2. **Then wait.** Do not end the turn and do not poll. `queue_wait` with the
+   returned `epicId` returns the moment the batch is approved; `status:
+   "timeout"` means nothing yet, so call it again (§0). The first timeout answer
+   carries a `_tell_human` reminder — the backstop for step 1, not a substitute
+   for it.
+3. **On `ready`**, claim one (working alone) or dispatch one subagent per task
+   with the `handoff` block it comes back with.
 
 Tickets come back, and that is the gate working. `task_get` answers with a
 `review` block — `{ outcome, reason, by, at }`, the decider's words verbatim —
