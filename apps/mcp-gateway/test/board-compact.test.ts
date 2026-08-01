@@ -332,3 +332,76 @@ test("the default read is O(batches): its size does not move when tickets pile u
     `30x the tickets must not grow the board read (${small} → ${huge} bytes)`
   );
 });
+
+/**
+ * The ABSOLUTE ceiling, and the API-side guard's counterpart (TDM-185).
+ *
+ * The test above pins that the read does not move when tickets pile up. It says
+ * nothing about what a batch costs in the first place: a fat new field on every
+ * row would keep that delta at zero and still double every board read. So this
+ * pins bytes-per-BATCH — and per-batch rather than a flat total on purpose,
+ * because what survives the diet is ~one irreducible identity row per batch, so
+ * the TOTAL legitimately drifts up as Jaxon creates batches while the per-batch
+ * cost must not.
+ *
+ * Run twice, against both kinds of server. The second run is the one that pins
+ * the GATEWAY as its own line of defense: pointed at an API that never learned
+ * the compact shape (a pre-TDM-183 server, or a rollback), board_status must
+ * still drop the lines itself rather than passing the archive through.
+ */
+/**
+ * 600 B/batch. The fixture below is the WORST case — every row carries a
+ * maxed-out summary that hits the excerpt cap and a full-length title — and
+ * measures 459; the live 34-batch board measures ~231. What the ceiling has to
+ * stay under is a row that carries its ticket lines again, which the last
+ * assertion in this test computes rather than trusting a comment.
+ */
+const MAX_BOARD_BYTES_PER_EPIC = 600;
+
+test("a batch's row costs a bounded number of bytes, whatever the server sends", async () => {
+  const epics = Array.from({ length: 34 }, (_, i) =>
+    rollup({
+      id: `epic-${i}`,
+      title: `E${i} · Board reads on a token diet — board_status stops shipping the archive`,
+      summary: `The batch landed the read-path diet end to end. ${"It shipped the API half, the gateway half, and the guard. ".repeat(5)}`,
+      tasks: { total: 8, byState: { done: 8 } },
+      done: Array.from({ length: 8 }, (_, n) => doneLine(n)),
+    })
+  );
+
+  for (const [server, rows] of [
+    ["a compacting API", epics.map(asCompact)],
+    ["an API that still sends the lines", epics],
+  ] as const) {
+    const { restore } = install({ epics: (full) => (full ? epics : rows) });
+    try {
+      const res = (await handleFacadeTool(await connect(), "board_status", {})) as any;
+      assert.ok(
+        res.epics.every((e: any) => !("done" in e)),
+        `${server}: the default read must carry no per-ticket lines`
+      );
+      const bytes = JSON.stringify(res).length;
+      const perEpic = Math.round(bytes / epics.length);
+      assert.ok(
+        perEpic <= MAX_BOARD_BYTES_PER_EPIC,
+        `${server}: the board read costs ${perEpic} B/batch (${bytes} bytes over ${epics.length} ` +
+          `batches), over the ${MAX_BOARD_BYTES_PER_EPIC} B/batch ceiling. Something fat was added to ` +
+          `every row — check boardEpicRow and BOARD_SUMMARY_CHARS. If the growth is deliberate, raise ` +
+          `MAX_BOARD_BYTES_PER_EPIC deliberately and say why.`
+      );
+    } finally {
+      restore();
+    }
+  }
+
+  // And the ceiling has to be able to fail. A row that still carried its
+  // per-ticket account is what this guard exists to catch, so the ceiling must
+  // sit well under what one of those costs — otherwise it would pass straight
+  // through a revert of the diet.
+  const preDietPerEpic = Math.round(JSON.stringify(epics).length / epics.length);
+  assert.ok(
+    MAX_BOARD_BYTES_PER_EPIC < preDietPerEpic / 2,
+    `the ceiling no longer discriminates: a pre-diet row costs ${preDietPerEpic} B/batch and the ` +
+      `ceiling is ${MAX_BOARD_BYTES_PER_EPIC} — tighten it, or this test stops noticing the archive coming back`
+  );
+});
