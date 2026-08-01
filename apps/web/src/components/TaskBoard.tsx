@@ -9,6 +9,7 @@ import {
   ChevronDown,
   ChevronRight,
   CircleDashed,
+  CornerUpLeft,
   GitCommitHorizontal,
   Layers,
   Link2,
@@ -77,11 +78,13 @@ import {
 import {
   auditActorLabel,
   auditChangeLabel,
+  blockedBounce,
   lastReapprovalEdit,
   lastStateMove,
   moveVerbLabel,
   moveVerbShort,
   stateMoveNote,
+  type Bounce,
 } from "../lib/taskAudit";
 import TaskLinks from "./TaskLinks";
 import { useCardFlight } from "../lib/useCardFlight";
@@ -862,6 +865,147 @@ function MoveMark({ move }: { move: ContentAuditEntry }) {
         {moveVerbShort(move)} by {who}
       </span>
     </span>
+  );
+}
+
+/* ── The reviewer's block (TDM-157) ──────────────────────────────────────────
+   A ticket that came BACK. Under the 'peer' policy a reviewer agent sends
+   finished work back for rework (TDM-154): done → approved, the claim and the
+   stale result cleared, the ticket in the ready queue again. A person makes the
+   identical move from the detail panel (Reopen).
+
+   THE PROBLEM THIS SOLVES. That rewind is invisible. The card lands in Ready
+   looking exactly like a ticket nobody has ever worked — same lane, same chip,
+   and the rewind deliberately cleared the two fields (`result`, `claimedBy`)
+   that could have hinted otherwise. The reviewer's reason exists only in
+   payload.audit[], which nothing on the board reads. So the single most
+   consequential thing that happens on a peer canvas was the quietest.
+
+   ROSE, WHICH THE READY LANE OTHERWISE NEVER WEARS. The board's six semantic
+   hues belong to STATE and rose belongs to failed — and that is the point: this
+   IS the one card in Ready that is not ready, and borrowing the failure hue is
+   what makes it findable across a room full of sky-blue cards. It is bounded
+   (only while the instruction is outstanding — see blockedBounce) so rose never
+   becomes the lane's ambient colour.
+
+   THE REASON IS THE COMPONENT. Everything else here is a frame around it: it is
+   the instruction the author has to act on, so it renders as text at reading
+   weight, never as a tooltip and never as a chip. `payload.audit[].note` carries
+   it verbatim — the `summary` field excerpts at 80 runes, which turns an
+   instruction into a fragment (lib/taskAudit.stateMoveNote prefers the former).
+
+   WHO said no gets the provenance vocabulary the rest of the board uses (the
+   Bot / PenLine / CircleDashed glyphs of ProvenanceChip), because an agent
+   refusing another agent's work and a person reopening their own are different
+   events wearing the same transition. */
+
+/** The model a bouncing AGENT declared at registration, or undefined — for an
+ *  unregistered reviewer, a human, or an agent that never said. Read off the
+ *  live roster by name, never guessed: an agent's declared model is the only
+ *  thing that can answer "a different model refused this", which is the entire
+ *  claim the peer review makes. */
+export function bounceModel(state: CanvasState | undefined, bounce: Bounce): string | undefined {
+  if (bounce.by?.kind !== "agent") return undefined;
+  const name = bounce.by.label;
+  for (const a of Object.values(state?.agents ?? {})) {
+    if (a.name === name) return (a.model ?? "").trim() || undefined;
+  }
+  return undefined;
+}
+
+export function BouncedNotice({
+  bounce,
+  model,
+  /** Card form: tighter, and the reason clamps rather than letting one essay
+   *  own the lane. The full text is always one tap away on the ticket page. */
+  compact = false,
+  className = "",
+}: {
+  bounce: Bounce;
+  model?: string;
+  compact?: boolean;
+  className?: string;
+}) {
+  const kind = bounce.by?.kind;
+  const Glyph = kind === "agent" ? Bot : kind === "human" ? PenLine : CircleDashed;
+  const who =
+    kind === "agent"
+      ? `${bounce.who}, a reviewer agent`
+      : kind === "human"
+        ? "a person"
+        : bounce.who;
+  return (
+    <div
+      role="note"
+      aria-label={`Sent back for rework by ${who}${bounce.reason ? `: ${bounce.reason}` : ""}`}
+      className={`rounded-md border border-rose-500/35 bg-rose-500/[0.09] ${
+        compact ? "px-2 py-1.5" : "px-3 py-2.5"
+      } ${className}`}
+    >
+      <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
+        <CornerUpLeft
+          size={compact ? 11 : 13}
+          className="shrink-0 text-rose-600 dark:text-rose-400"
+          aria-hidden="true"
+        />
+        <span
+          className={`min-w-0 font-semibold text-rose-700 dark:text-rose-400 ${
+            compact ? "text-[11.5px] sm:text-[11px]" : "text-[12.5px]"
+          }`}
+        >
+          Sent back by {bounce.who}
+        </span>
+        {/* The provenance bit, in the board's own glyph vocabulary — plus the
+            model, which is the fact that makes a peer block worth having. An
+            agent that registered without declaring one says so rather than
+            leaving a gap the reader fills in with a guess. */}
+        <span
+          className={`inline-flex min-w-0 shrink-0 items-center gap-1 text-ink/50 ${T_META}`}
+          title={
+            kind === "agent"
+              ? model
+                ? `${bounce.who} registered on this canvas declaring the model ${model}. A reviewer agent may only send back work a DIFFERENT agent finished — the server enforces that from provenance.`
+                : `${bounce.who} is a reviewer agent that registered without declaring a model.`
+              : kind === "human"
+                ? "A signed-in person sent this back from the board. Derived from the session, so an agent can't claim it."
+                : "The server could not attribute this bounce to a person or an agent."
+          }
+        >
+          <Glyph size={10} className="shrink-0" aria-hidden="true" />
+          {kind === "agent" && (
+            <span className="max-w-[9rem] truncate font-code">{model ?? "model not declared"}</span>
+          )}
+        </span>
+        <span
+          className={`ml-auto shrink-0 font-code text-ink/45 ${T_META}`}
+          title={fullDate(bounce.at)}
+        >
+          {ageOf(bounce.at)}
+        </span>
+      </div>
+      {bounce.reason ? (
+        <p
+          className={`mt-1 whitespace-pre-wrap break-words text-ink/80 ${
+            compact ? `line-clamp-6 leading-[1.45] ${T_BTN}` : "text-[13px] leading-relaxed"
+          }`}
+        >
+          {bounce.reason}
+        </p>
+      ) : (
+        /* /rework REQUIRES a reason, so this is a human Reopen with nothing
+           typed — or a row from before the field existed. Say which, rather
+           than rendering an empty red box the reader has to interpret. */
+        <p className={`mt-1 italic text-ink/50 ${compact ? T_BTN : "text-[12.5px]"}`}>
+          No reason recorded — the mover didn't leave one.
+        </p>
+      )}
+      {!compact && (
+        <p className="mt-1.5 text-[11.5px] leading-relaxed text-ink/55">
+          The result and the claim were cleared, so this is back in the ready queue for another
+          pass. Revising it and completing again is all that is asked.
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -1681,6 +1825,18 @@ export default function TaskBoard({
     [visibleTasks, now],
   );
 
+  // Which visible cards are carrying a reviewer's block (TDM-157). A Set rather
+  // than a count, because the lane headers each want their OWN number: a bounced
+  // ticket sits in Ready until someone picks it up and in Working while they
+  // revise it, and "3 blocked" over the wrong lane is worse than no number.
+  // Same argument as `stalledCount` on the Working lane — a refusal has to be
+  // legible from the lane label, before you read a single card, and on a phone
+  // the switcher is the only place it can be seen from another lane at all.
+  const blockedIds = useMemo(
+    () => new Set(visibleTasks.filter((t) => blockedBounce(t) !== null).map((t) => t.id)),
+    [visibleTasks],
+  );
+
   // The lane showing on mobile: the explicit choice if there is one, else the
   // first lane with cards, else Proposed (COLUMNS[0]) on a genuinely empty scope.
   const activeCol =
@@ -2300,6 +2456,9 @@ export default function TaskBoard({
     // The last time a PERSON moved this card (TDM-97) — null for a task only
     // agents have ever transitioned, which is most of them.
     const handMove = lastStateMove(p);
+    // Came BACK: a reviewer sent finished work down again (TDM-154/157). Null
+    // on every card that isn't currently carrying an unmet instruction.
+    const bounce = blockedBounce(t);
     const epicId = p.epicId;
     const epicTitle = withEpicChip && epicId ? epicTitleById.get(epicId) : undefined;
     // Just flew in from another lane (or the camera brought us here for it) —
@@ -2401,13 +2560,21 @@ export default function TaskBoard({
         className={`group cursor-pointer rounded-lg border bg-surface p-2.5 transition-[border-color,box-shadow] hover:border-ink/25 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${
           isSelected ? "ring-2 ring-inset ring-accent/50" : ""
         } ${
-          justLanded
-            ? "tandem-card-land border-agent/40"
-            : lease.health === "stale"
-              ? "border-amber-500/40"
-              : isSelected
-                ? "border-accent/45"
-                : "border-ink/10"
+          /* A bounce outranks the ordinary arrival ring in BOTH halves: the
+             flight it just made is a refusal, and the border it settles into
+             has to keep saying so after the animation is spent. Everything
+             else here is unchanged. */
+          justLanded && bounce
+            ? "tandem-card-bounce border-rose-500/55"
+            : justLanded
+              ? "tandem-card-land border-agent/40"
+              : bounce
+                ? "border-rose-500/45"
+                : lease.health === "stale"
+                  ? "border-amber-500/40"
+                  : isSelected
+                    ? "border-accent/45"
+                    : "border-ink/10"
         }`}
       >
         <div className="flex items-start justify-between gap-2">
@@ -2465,6 +2632,17 @@ export default function TaskBoard({
               ambiguous (the merged Failed / Rejected lane). */}
           {showState && <StateChip state={t.state} />}
         </div>
+        {/* Directly under the title, above everything else the card carries:
+            the block changes what the title MEANS (this is not fresh work, it
+            is work that came back), so nothing may sit between the two. */}
+        {bounce && (
+          <BouncedNotice
+            bounce={bounce}
+            model={bounceModel(state, bounce)}
+            compact
+            className="mt-1.5"
+          />
+        )}
         {/* Who is on it, and whether they are still breathing. One row: the pair
             is a single fact ("this agent, this recently"), and splitting them
             would put a name on one line and its own vital sign on another. */}
@@ -2508,8 +2686,11 @@ export default function TaskBoard({
           )}
           {/* Who last moved this by hand. Left of the record group because it is
               a fact about the WORK (someone walked it here) rather than about
-              the row, and it yields its width to the epic chip beside it. */}
-          {handMove && <MoveMark move={handMove} />}
+              the row, and it yields its width to the epic chip beside it.
+              Suppressed under a bounce: the block above IS that move, said in
+              full, and "sent back by reviewer-b" twice on one card reads as two
+              events. */}
+          {handMove && !bounce && <MoveMark move={handMove} />}
           {/* Record metadata, right-aligned as one group: who else went for it,
               who wrote it, which gate let it through, when. All four are facts
               about the row rather than its status, so they read at the same dim
@@ -3569,6 +3750,7 @@ export default function TaskBoard({
             >
               {columnBuckets.map(({ col, all, shown }) => {
                 const selected = col.key === activeCol;
+                const laneBlocked = shown.filter((t) => blockedIds.has(t.id)).length;
                 return (
                   <button
                     key={col.key}
@@ -3604,6 +3786,18 @@ export default function TaskBoard({
                         {stalledCount}
                       </span>
                     )}
+                    {/* Same argument for a reviewer's block: on a phone one lane
+                        is the whole screen, so a ticket sent back into a lane
+                        you are not looking at is invisible until you tap it. */}
+                    {laneBlocked > 0 && (
+                      <span
+                        className="inline-flex shrink-0 items-center gap-0.5 font-code text-[10px] font-semibold text-rose-600 dark:text-rose-400"
+                        aria-label={`${laneBlocked} sent back for rework`}
+                      >
+                        <CornerUpLeft size={10} className="shrink-0" aria-hidden="true" />
+                        {laneBlocked}
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -3619,6 +3813,7 @@ export default function TaskBoard({
                 {columnBuckets.map(({ col, all: colAll, shown: colTasks }) => {
                   const slim = colTasks.length === 0;
                   const showState = col.states.length > 1;
+                  const laneBlocked = colTasks.filter((t) => blockedIds.has(t.id)).length;
                   return (
                     <div
                       key={col.key}
@@ -3653,6 +3848,21 @@ export default function TaskBoard({
                           >
                             <Timer size={10} className="shrink-0" aria-hidden="true" />
                             {stalledCount} stalled
+                          </span>
+                        )}
+                        {/* How many of this lane's cards a reviewer sent back
+                            (TDM-157). `ml-auto` only where nothing has claimed
+                            it — the Working lane's stalled badge takes the slot
+                            first, and two right-aligned badges would fight. */}
+                        {laneBlocked > 0 && (
+                          <span
+                            title={`${laneBlocked} ticket${laneBlocked === 1 ? "" : "s"} here came back for rework — a reviewer read the finished work and sent it down again. The reason is on the card.`}
+                            className={`inline-flex shrink-0 items-center gap-1 rounded-[4px] bg-rose-500/10 px-1.5 py-px font-semibold text-rose-600 dark:text-rose-400 ${
+                              col.key === "working" && stalledCount > 0 ? "" : "ml-auto"
+                            } ${T_META}`}
+                          >
+                            <CornerUpLeft size={10} className="shrink-0" aria-hidden="true" />
+                            {laneBlocked} blocked
                           </span>
                         )}
                         {/* Bulk triage on the lane header. "Approve all" is the
@@ -3821,6 +4031,10 @@ function TaskDetail({
   // The last edit that cost an approval, if any — epics are gated the same way,
   // so this reads through the shared payload shape too.
   const reapproval = lastReapprovalEdit(p);
+  // The reviewer's block (TDM-157), if this task is currently under one. Same
+  // read the card makes, so the panel and the card can never disagree about
+  // whether a ticket came back.
+  const bounce = blockedBounce(action);
   // Collisions on this task (TDM-100). Read off the payload the panel already
   // holds, so it stays live with the socket like everything else here.
   const contentionEvents = isTask ? ((p as TaskPayload).contention ?? []) : [];
@@ -4236,6 +4450,13 @@ function TaskDetail({
               be further down the panel than the thing it qualifies. */}
           {!editing && action.state === "proposed" && reapproval && (
             <ReapprovalNotice edit={reapproval} />
+          )}
+
+          {/* Why this is back in the queue. Same slot and the same argument as
+              the re-approval notice above it: it qualifies the brief, so it
+              cannot sit further down the panel than the brief does. */}
+          {!editing && bounce && (
+            <BouncedNotice bounce={bounce} model={bounceModel(state, bounce)} className="mt-3" />
           )}
 
           {/* What this BATCH achieved (TDM-93) — epics only, and the one place a

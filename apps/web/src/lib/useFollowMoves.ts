@@ -70,6 +70,10 @@ const TRANSITIONS: Partial<
   released: { from: "working", to: "ready", verb: "Released" },
   requeued: { from: "closed", to: "ready", verb: "Re-queued" },
   claim_expired: { from: "working", to: "ready", verb: "Lost the claim on" },
+  // A reviewer's bounce (TDM-154) — done → ready, the only backwards move that
+  // starts in the DONE lane. It is a card move like any other, so the follow
+  // camera narrates it; the reason it carries is on the card it lands on.
+  reworked: { from: "done", to: "ready", verb: "Sent back" },
 };
 
 function toMove(a: FleetActivity, nonce: number): FollowMove | null {

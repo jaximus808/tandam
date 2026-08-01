@@ -419,6 +419,30 @@ body {
   }
 }
 
+/* A card that just flew back to Ready because a REVIEWER sent it back
+   (TDM-154/157). Same flight, same two-and-a-half seconds, different colour and
+   one extra beat: the ring is rose rather than terracotta, and the card recoils
+   a few pixels on arrival. Terracotta means "an agent moved something", which is
+   true here and beside the point — this is the one board move that is a refusal,
+   and the demo's whole punchline is that you can see it happen from across the
+   room. Under reduced motion it holds a steady rose ring and does not move. */
+@keyframes tandem-card-bounce {
+  0%   { box-shadow: 0 0 0 0 rgb(244 63 94 / 0.6), 0 0 0 0 rgb(244 63 94 / 0.3); transform: none; }
+  18%  { box-shadow: 0 0 0 3px rgb(244 63 94 / 0.45), 0 0 26px 3px rgb(244 63 94 / 0.32); transform: translateX(-4px); }
+  30%  { transform: translateX(3px); }
+  42%  { transform: translateX(-2px); }
+  54%  { transform: none; }
+  100% { box-shadow: 0 0 0 0 rgb(244 63 94 / 0), 0 0 0 0 rgb(244 63 94 / 0); transform: none; }
+}
+.tandem-card-bounce { animation: tandem-card-bounce 2.4s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .tandem-card-bounce {
+    animation: none;
+    box-shadow: 0 0 0 2px rgb(244 63 94 / 0.4);
+  }
+}
+
 /* Terminal block-cursor blink — machine text on the landing demo terminals. */
 @keyframes tandem-caret {
   0%, 49% { opacity: 1; }

@@ -79,6 +79,13 @@ function verbOf(e: FeedEvent): { label: string; tone: Tone } {
       return { label: "released", tone: "amber" };
     case "requeued":
       return { label: "requeued", tone: "amber" };
+    // A reviewer sent finished work back (TDM-154). ROSE, alone among the
+    // "went backwards" family: requeued and released are recoveries, and this
+    // one is a refusal — somebody read work that reported success and said no.
+    // The verb says "sent back" rather than "reworked" because nothing has been
+    // reworked yet; that is the instruction, not the outcome.
+    case "reworked":
+      return { label: "sent back", tone: "rose" };
     case "claim_expired":
       return { label: "expired", tone: "amber" };
     // A collision (TDM-100): the actor is the agent that was REFUSED, not the one

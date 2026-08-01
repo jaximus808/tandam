@@ -81,7 +81,17 @@ export type FleetActivityAction =
   // for the same reason: the loser changed nothing, so the derived REST backfill
   // has no column to read it off. The durable record is the task's
   // payload.contention[] trail, which rides every state push.
-  | "contended";
+  | "contended"
+  // TDM-154: a REVIEWER sent finished work back (done → approved with a required
+  // reason). Distinct from "requeued", which is a human rescuing a FAILED task:
+  // this is a judgement on work that reported SUCCESS, and on a 'peer' canvas it
+  // is the fact a watcher most wants to see land live. `actor` is the reviewer,
+  // server-derived — not the worker whose task just moved. Live-only, like
+  // claim_expired and contended: the rewind clears the claim and the result, so
+  // the derived REST backfill has no column left to read it off. The durable
+  // record is the task's payload.audit[] entry, which carries the reviewer, the
+  // states and the verbatim reason (lib/taskAudit.lastBounce).
+  | "reworked";
 
 export type FleetActivity = {
   action: FleetActivityAction;

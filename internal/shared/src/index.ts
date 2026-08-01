@@ -250,6 +250,15 @@ export interface ContentAuditEntry {
   reverted: boolean;
   /** Compact old→new hint, e.g. `title: "Ship it" → "Ship it and rm -rf /"`. */
   summary: string;
+  /**
+   * The mover's own words, VERBATIM, on the entries that carry one (state
+   * moves). `summary` quotes the same note excerpted at 80 runes, which is right
+   * for a glance and wrong for the one case where the note IS the payload: a
+   * reviewer sending finished work back for rework (TDM-154) writes the
+   * instruction the author has to act on. Read this, never the excerpt.
+   * Absent on content entries, and on any row written before TDM-154.
+   */
+  note?: string;
 }
 
 // One collision on a task (TDM-100). SERVER-OWNED like `audit` and for the same

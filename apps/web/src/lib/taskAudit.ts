@@ -19,8 +19,8 @@
 // trail the server had been faithfully recording since E10 rendered as nothing.
 // Tell the two kinds apart by `change` — never by `reverted`.
 
-import type { ContentAuditEntry, EpicPayload, TaskPayload } from "../types";
-import { parseAuthoredBy } from "./provenance";
+import type { Action, ContentAuditEntry, EpicPayload, TaskPayload } from "../types";
+import { parseAuthoredBy, type Provenance } from "./provenance";
 
 /**
  * The most recent edit that cost an approval, or null when there isn't one.
@@ -90,6 +90,18 @@ const MOVE_VERB: Record<string, string> = {
 };
 
 export function moveVerbLabel(entry: ContentAuditEntry): string {
+  // done → approved is ONE transition with two readings: a person reopening
+  // work that wasn't really finished, and a reviewer bouncing somebody else's
+  // (TDM-154, which reuses the same rewind rather than widening the state
+  // machine). The actor is the only thing that tells them apart, and calling an
+  // agent's block "reopened" would bury the fact the move exists to state.
+  if (
+    entry.fromState === "done" &&
+    entry.toState === "approved" &&
+    parseAuthoredBy(entry.actor)?.kind === "agent"
+  ) {
+    return "sent this back";
+  }
   return MOVE_VERB[`${entry.fromState}→${entry.toState}`] ?? "moved this";
 }
 
@@ -105,10 +117,94 @@ export function moveVerbShort(entry: ContentAuditEntry): string {
 // note back out so it can be typeset as what it is: a person's own words.
 const MOVE_SUMMARY = /^state:\s*"[^"]*"\s*→\s*"[^"]*"(?:\s+—\s+([\s\S]+))?$/;
 
-/** The note the mover typed, or null when they didn't (or the format moved). */
+/**
+ * The note the mover typed, or null when they didn't.
+ *
+ * `entry.note` is the verbatim field (TDM-154) and is preferred whenever it is
+ * there; the summary parse is the fallback for entries written before it
+ * existed, where the excerpt is all there is. Never the other way round — the
+ * summary truncates at 80 runes, and on a rework bounce that is a truncated
+ * instruction.
+ */
 export function stateMoveNote(entry: ContentAuditEntry): string | null {
+  const verbatim = entry.note?.trim();
+  if (verbatim) return verbatim;
   const note = MOVE_SUMMARY.exec(entry.summary ?? "")?.[1]?.trim();
   return note ? note : null;
+}
+
+/* ── The reviewer's bounce (TDM-154 / TDM-157) ────────────────────────────────
+   Finished work sent BACK: done → approved, the claim and the stale result
+   cleared, the task in the ready queue again for its author to revise. Under
+   the 'peer' policy an agent reviewer makes this move (POST …/rework); a person
+   makes the identical one from the board (Reopen). The audit entry is the same
+   shape for both, and so is what it means to whoever picks the task up — the
+   only difference is WHO said no, which is exactly what the provenance
+   vocabulary is for.
+
+   THE ENTRY IS THE ONLY RECORD. The rewind clears `result` and `claimedBy` by
+   design, so nothing on the row itself remembers that this approved task is not
+   a fresh one. Without this read, a bounced ticket is indistinguishable from a
+   ticket nobody has ever worked. */
+
+export interface Bounce {
+  /** The audit entry itself, for a caller that wants the raw record. */
+  entry: ContentAuditEntry;
+  /** Who sent it back, in the board's provenance vocabulary. Null when the
+   *  server could not attribute the move ("unknown"), which is rare and honest. */
+  by: Provenance | null;
+  /** Their name, always renderable: "reviewer-b", "a person", "someone". */
+  who: string;
+  /** The reviewer's own words. Empty only for a legacy entry with no note —
+   *  /rework REQUIRES a reason, so a bounce from an agent always carries one. */
+  reason: string;
+  /** When it came back. */
+  at: string;
+}
+
+/**
+ * The bounce this task is CURRENTLY sitting under, or null.
+ *
+ * "Currently" is the whole subtlety. The bounce is live only while it is the
+ * last thing a hand did to the card: if someone has since reopened, released or
+ * re-queued it, that later move is the state the task is in and this one is
+ * history. So the last state move must BE the done → approved rewind — scanning
+ * for the most recent bounce anywhere in the trail would make a badge that,
+ * once earned, never comes off.
+ *
+ * Note what this deliberately does NOT check: the task's own state. A caller
+ * decides whether a bounce is worth showing where it is showing it — the board
+ * shows it on the two states where it is still an instruction (waiting in the
+ * queue, and being revised), and stops the moment the work is finished again.
+ */
+export function lastBounce(payload: TaskPayload | EpicPayload | undefined): Bounce | null {
+  const entry = lastStateMove(payload);
+  if (!entry || entry.fromState !== "done" || entry.toState !== "approved") return null;
+  const by = parseAuthoredBy(entry.actor);
+  return {
+    entry,
+    by,
+    who: by?.label ?? "someone",
+    reason: stateMoveNote(entry) ?? "",
+    at: entry.at,
+  };
+}
+
+/**
+ * The bounce a TASK should be wearing on the board, or null.
+ *
+ * Two states qualify and the reason is the same for both: the reviewer's words
+ * are an instruction that has not been carried out yet. In 'approved' the task
+ * is re-queued and nobody has picked the note up; in 'executing' somebody is
+ * acting on it and needs to be able to read it without opening a panel. Once
+ * the task reports done again the instruction is spent — and an agent's own
+ * completion writes no audit entry, so the state is the only thing that can
+ * retire this.
+ */
+export function blockedBounce(action: Action): Bounce | null {
+  if (action.type !== "task") return null;
+  if (action.state !== "approved" && action.state !== "executing") return null;
+  return lastBounce((action.payload ?? {}) as TaskPayload);
 }
 
 /** "title", "body", or "title and body" — what a person would say out loud. */

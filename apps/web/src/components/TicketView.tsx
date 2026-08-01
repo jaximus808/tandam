@@ -33,6 +33,7 @@ import { CHIP_BASE, STATE_CHIP } from "../lib/stateChips";
 import {
   auditActorLabel,
   auditChangeLabel,
+  blockedBounce,
   isStateMove,
   lastReapprovalEdit,
   moveVerbLabel,
@@ -49,6 +50,8 @@ import { useFreshnessNow } from "./Freshness";
 import {
   ageOf,
   ApprovalLine,
+  BouncedNotice,
+  bounceModel,
   ClaimantChip,
   extractCommits,
   fullDate,
@@ -656,6 +659,10 @@ export default function TicketView({
       : undefined;
   const commits = extractCommits(task?.result);
   const reapproval = lastReapprovalEdit(p);
+  // The reviewer's block (TDM-157). This page is the one someone lands on from a
+  // pasted link to find out what is being asked of a ticket, and after a bounce
+  // the ask is the reviewer's reason — which lives nowhere on the row itself.
+  const bounce = task ? blockedBounce(task) : null;
   // Which gate this task passed — human, peer agent, or a policy that let it
   // through without anyone looking (TDM-147).
   const approval = parseApproval(task?.approvedBy);
@@ -894,6 +901,18 @@ export default function TicketView({
                     sending the reader back to the board — except for a viewer
                     with the read role, for whom the moves don't render at all. */}
                 <LeaseNotice lease={lease} canRelease={!readOnly} className="mt-4" />
+
+                {/* A reviewer sent this back (TDM-157). Above the moves, because
+                    the move you are about to make on a bounced ticket is Start,
+                    and starting it without reading what was asked is the exact
+                    wasted run the reason exists to prevent. */}
+                {bounce && (
+                  <BouncedNotice
+                    bounce={bounce}
+                    model={bounceModel(state, bounce)}
+                    className="mt-4"
+                  />
+                )}
 
                 {/* The moves, high: this page's whole job is "one piece of
                     work", and the act it exists to support is walking that work
