@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/agentcanvas/api/internal/store"
+	"github.com/agentcanvas/api/internal/webhooks"
 	"github.com/google/uuid"
 )
 
@@ -441,6 +442,79 @@ func TestReworkHumanBypassesPeerRuleButNotTheReason(t *testing.T) {
 	if w2.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (body %s)", w2.Code, w2.Body.String())
 	}
+}
+
+// ── The bounce as an outbound event (TDM-170) ────────────────────────────────
+//
+// THE BUG THIS PINS. The bounce woke a parked queue_wait in-process and told a
+// webhook receiver nothing, so a live orchestrator heard "redo this" and a
+// webhook-launched one never did — on a 'peer' canvas, the review loop's whole
+// output reaching only one of the two documented orchestration modes.
+func TestReworkFiresTaskReturned(t *testing.T) {
+	canvasID := uuid.New()
+	fake, taskID := reworkStore(policyPeer, "worker-a", "worker-a", "reviewer-b")
+	em := &recordingEmitter{}
+	h := NewHandler(fake, nil, nil, WithTaskEvents(em))
+
+	reason := "the fail-open branch is still there — redo it with a test that proves the closed path"
+	w := httptest.NewRecorder()
+	h.ReworkAction(w, withAgentAuthor(reworkRequest(t, canvasID, taskID,
+		map[string]any{"reason": reason}), "agent:reviewer-b"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", w.Code, w.Body.String())
+	}
+
+	// EXACTLY ONE event, and not task.approved: a receiver must never read a
+	// bounce as "something passed the gate".
+	em.settleTypes(t, webhooks.EventTaskReturned)
+
+	ev := em.recorded()[0]
+	if ev.canvasID != canvasID {
+		t.Errorf("event canvas = %s, want %s", ev.canvasID, canvasID)
+	}
+	returned, ok := ev.body["returned"].(map[string]any)
+	if !ok {
+		t.Fatalf("task.returned payload has no `returned` block — a relaunched orchestrator "+
+			"cannot tell this from a fresh approval: %v", ev.body)
+	}
+	if returned["from"] != "done" {
+		t.Errorf("returned.from = %v, want done", returned["from"])
+	}
+	// Server-derived, like every other identity in this feature — the body of the
+	// request carried no reviewer name and could not have.
+	if returned["by"] != "agent:reviewer-b" {
+		t.Errorf("returned.by = %v, want agent:reviewer-b", returned["by"])
+	}
+	// Verbatim: an excerpt would make the event a hint where an instruction was
+	// written, the same lesson the audit summary taught in TDM-154.
+	if returned["reason"] != reason {
+		t.Errorf("returned.reason = %v, want the reason verbatim", returned["reason"])
+	}
+	// And the task projection says where it landed, so a receiver that only reads
+	// `task` still sees ready work rather than finished work.
+	taskObj := ev.body["task"].(map[string]any)
+	if taskObj["state"] != "approved" {
+		t.Errorf("task.state = %v, want approved (back in the ready queue)", taskObj["state"])
+	}
+}
+
+// A refused bounce moves nothing, so it must notify nobody: an event for work
+// that never returned would relaunch an orchestrator onto a task still sitting
+// 'done'. Asserted on the self-review refusal, the one a reviewer hits by
+// accident.
+func TestRefusedReworkFiresNothing(t *testing.T) {
+	canvasID := uuid.New()
+	fake, taskID := reworkStore(policyPeer, "worker-a", "worker-a")
+	em := &recordingEmitter{}
+	h := NewHandler(fake, nil, nil, WithTaskEvents(em))
+
+	w := httptest.NewRecorder()
+	h.ReworkAction(w, withAgentAuthor(reworkRequest(t, canvasID, taskID,
+		map[string]any{"reason": "actually let me redo my own work"}), "agent:worker-a"))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (body %s)", w.Code, w.Body.String())
+	}
+	em.settleTypes(t)
 }
 
 // The human board's move matrix is UNCHANGED by this feature: moveRework is a

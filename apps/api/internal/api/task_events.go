@@ -13,7 +13,8 @@ import (
 // feature. internal/webhooks owns the queue and the wire; this file owns WHEN an
 // event fires and WHAT it says.
 //
-// EXACTLY THREE EVENTS EXIST, and every emit call site is in action_handler.go:
+// EXACTLY FOUR EVENTS EXIST. Three are emitted from action_handler.go; the
+// fourth from task_move.go:
 //
 //	task.approved       a task entered the ready-to-work queue by passing the
 //	                    approval gate. Four paths, all fanning one event per
@@ -24,6 +25,9 @@ import (
 //	task.completed      a task reached a TERMINAL state — 'done' or 'failed'.
 //	task.claim_expired  an agent's claim lapsed past the TTL and the task was
 //	                    taken over by another agent.
+//	task.returned       FINISHED work went back to the ready queue: done →
+//	                    approved, by a reviewer agent's rework bounce or a
+//	                    human's reopen. See "the fourth event" below.
 //
 // WHAT DELIBERATELY FIRES NOTHING (the negative half of the contract, and the
 // half a regression would break silently):
@@ -37,10 +41,60 @@ import (
 //     RequeueAction. Both put a task back in the queue, but neither is an
 //     APPROVAL: the gate was already passed once, and re-firing task.approved
 //     would make a fleet subscribed to it re-run work it already picked up.
-//     If re-queueing needs a notification it wants its own event name, not a
-//     second approval.
+//     They do not fire task.returned either — see the boundary below.
 //   - a SELF-takeover of an expired claim (the same agent restamping). See
 //     store.ClaimOutcome — nothing changed hands.
+//
+// ── THE FOURTH EVENT: task.returned (TDM-170) ────────────────────────────────
+//
+// THE HOLE IT CLOSES. TDM-154's rework bounce moves finished work done →
+// approved. In-process that wakes a parked queue_wait (rewindTask signals
+// queue-ready), so a LIVE orchestrator hears it — but no webhook fired, so a
+// WEBHOOK-LAUNCHED orchestrator did not. The two documented orchestration modes
+// disagreed about whether a bounce is an event, which made the webhook recipe
+// quietly incomplete for any canvas on 'peer': a reviewer says "redo this", the
+// ticket sits in the ready queue, and nothing ever relaunches to pick it up.
+//
+// WHY A NEW NAME RATHER THAN A SECOND task.approved. The paragraph above already
+// contains the argument: re-firing task.approved for a re-queue would tell a
+// subscribed fleet that something passed the gate when nothing did, and this
+// file has said since TDM-37 that if a re-queue ever needs a notification "it
+// wants its own event name, not a second approval". This is that name. It is
+// also the safe direction to grow in — an existing config's `events` array does
+// not contain task.returned, so no receiver that exists today starts getting
+// deliveries it never asked for. (The cost of that safety, and it is real: an
+// existing webhook must be edited to tick the new box. Configs created from here
+// on get it by default, since an omitted filter means KnownWebhookEvents.)
+//
+// WHERE THE BOUNDARY IS, and it is not "every path back into the queue". Only
+// done → approved fires. Release (executing → approved) and requeue (failed →
+// approved) stay silent, as they always have, and the difference is not scope
+// laziness:
+//
+//   - A bounce RETRACTS AN EVENT WE ALREADY SENT. task.completed means "finished
+//     and it will not move again on its own"; done → approved makes that false.
+//     A receiver told the work was done and never told otherwise holds a belief
+//     the board no longer supports — that is the defect, and it is unique to
+//     this transition.
+//   - A release never contradicted anything: the work was never finished, so no
+//     terminal event was ever published. A requeue follows a task.completed with
+//     state:"failed" — the receiver was already told, correctly, and the retry is
+//     someone acting on that.
+//
+// BOTH DOORS FIRE IT — the reviewer's ReworkAction and the human's board reopen.
+// They are the same transition and the same fact to a receiver, and
+// review_feedback.go deliberately does not tell them apart either; the payload's
+// `returned.by` says which it was, which is all a receiver needs to branch on.
+//
+// A RECEIVER MUST BE ABLE TO TELL A BOUNCE FROM A FRESH APPROVAL, or a
+// relaunched orchestrator treats returned work as new work. Two independent
+// signals: the event TYPE (a different name and a different Tandem-Event header,
+// so a receiver that never subscribes cannot be confused at all), and the
+// `returned` block in the body — `from`, `by`, and the reviewer's `reason`
+// verbatim. Note what the block does NOT require anyone to do: the queue is
+// still the work order. `reason` is a courtesy copy so a listener can log why it
+// woke; the agent that picks the ticket up reads it off task_get's `review`
+// block, which is the durable channel (review_feedback.go).
 //
 // FAILED TASKS FIRE task.completed, with task.state = "failed" and the error
 // text in task.error. The vocabulary has no task.failed (it is CHECK-constrained
@@ -98,6 +152,11 @@ type taskEvent struct {
 	// holds it now, and the agent that went dark — the actual subject of the
 	// event — would otherwise be unrecoverable from the payload.
 	ExpiredClaim *taskEventExpiredClaim `json:"expired_claim,omitempty"`
+	// Returned is present on task.returned ONLY, for the same reason
+	// ExpiredClaim exists: the rewind has already cleared the claim and the
+	// result off the row, so the task projection alone cannot say where the work
+	// came back FROM or who sent it.
+	Returned *taskEventReturned `json:"returned,omitempty"`
 }
 
 // taskEventTask is a deliberately compact projection of the task — the fields a
@@ -123,6 +182,24 @@ type taskEventTask struct {
 type taskEventExpiredClaim struct {
 	ClaimedBy string    `json:"claimed_by"`
 	ClaimedAt time.Time `json:"claimed_at,omitempty"`
+}
+
+// taskEventReturned is the discriminator on task.returned: what a receiver needs
+// to tell returned work from newly approved work without a second call.
+type taskEventReturned struct {
+	// From is the state the task came BACK from — "done" today, and the field
+	// exists so it can stay honest if that ever widens.
+	From string `json:"from"`
+	// By is server-derived provenance, the same vocabulary as authoredBy:
+	// "agent:<name>" for a reviewer's bounce, "human" for a board reopen,
+	// "anonymous" on a public canvas. Never read off a request body.
+	By string `json:"by,omitempty"`
+	// Reason is the reviewer's reason (required on the rework door) or the
+	// human's optional reopen note, VERBATIM. It is the same text task_get's
+	// `review` block hands the agent that picks the ticket up — carried here so a
+	// listener can log WHY it woke without a round trip, not so anything decides
+	// off it.
+	Reason string `json:"reason,omitempty"`
 }
 
 // taskEventFields are the payload keys the projection reads. Everything else in
@@ -208,6 +285,13 @@ func (h *Handler) emitTaskEvent(canvasID uuid.UUID, eventType string, a *store.A
 		opt(&ev)
 	}
 	h.events.EmitAsyncWithEventID(canvasID, eventID, eventType, ev)
+}
+
+// withReturned attaches the bounce facts to a task.returned.
+func withReturned(from, by, reason string) func(*taskEvent) {
+	return func(ev *taskEvent) {
+		ev.Returned = &taskEventReturned{From: from, By: by, Reason: reason}
+	}
 }
 
 // withExpiredClaim attaches the lapsed-claim facts to a task.claim_expired.

@@ -27,10 +27,10 @@ import (
 	"github.com/agentcanvas/api/internal/store"
 )
 
-// The MVP event vocabulary, mirroring the CHECK in migration 0038. TDM-37 wires
-// these to the task-queue transitions; nothing else may be emitted (the DB
-// rejects it, which is the point — a typo'd event name that silently never
-// fires is the worst failure mode here).
+// The event vocabulary, mirroring the CHECK in migration 0038 (widened once, by
+// 0043). TDM-37 wires these to the task-queue transitions; nothing else may be
+// emitted (the DB rejects it, which is the point — a typo'd event name that
+// silently never fires is the worst failure mode here).
 const (
 	// EventTaskApproved — a task entered the ready-to-work queue.
 	EventTaskApproved = "task.approved"
@@ -39,6 +39,12 @@ const (
 	// EventTaskClaimExpired — an agent's claim on a task went stale and was
 	// released.
 	EventTaskClaimExpired = "task.claim_expired"
+	// EventTaskReturned — FINISHED work was put back in the ready queue: a
+	// reviewer agent's rework bounce, or a human reopening a done task (TDM-170).
+	// It is the retraction of a task.completed a receiver has already been sent —
+	// the one transition that falsifies an event we already published — which is
+	// why it is a new name and not a second task.approved. See task_events.go.
+	EventTaskReturned = "task.returned"
 )
 
 // EmitStore is the slice of the store an Emitter uses.

@@ -159,13 +159,17 @@ func TestEmitPayloadMarshalling(t *testing.T) {
 // emitting a name the DB rejects would fail at insert time, in the background,
 // where nobody sees it.
 func TestEventConstantsMatchSchema(t *testing.T) {
-	for _, e := range []string{EventTaskApproved, EventTaskCompleted, EventTaskClaimExpired} {
+	for _, e := range []string{EventTaskApproved, EventTaskCompleted, EventTaskClaimExpired, EventTaskReturned} {
 		if !store.IsKnownWebhookEvent(e) {
-			t.Errorf("event %q is not in store.KnownWebhookEvents (the 0038 CHECK)", e)
+			t.Errorf("event %q is not in store.KnownWebhookEvents (the 0038 CHECK, widened by 0043)", e)
 		}
 	}
-	if len(store.KnownWebhookEvents) != 3 {
-		t.Errorf("KnownWebhookEvents has %d entries, want 3 — widen the CHECK in a migration first",
+	// The count is the tripwire, and it is meant to fail: adding a constant
+	// without widening the CHECK ships an event the DB rejects at insert time, in
+	// a background goroutine, where nobody sees it. If you are here because this
+	// line failed, write the migration before you change the number.
+	if len(store.KnownWebhookEvents) != 4 {
+		t.Errorf("KnownWebhookEvents has %d entries, want 4 — widen the CHECK in a migration first",
 			len(store.KnownWebhookEvents))
 	}
 }

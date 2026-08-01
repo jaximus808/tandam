@@ -16,11 +16,11 @@ import (
 )
 
 // TDM-37: the outbound task-lifecycle events. The whole point of these tests is
-// the NEGATIVE half of the contract — exactly three event types exist and
-// everything else in the task lifecycle is silent. A regression that starts
-// emitting on, say, every claim would be invisible in production until someone's
-// receiver melted, so each transition is asserted with its full event list, not
-// just "the one I expected is in there".
+// the NEGATIVE half of the contract — exactly four event types exist (TDM-170
+// added the fourth) and everything else in the task lifecycle is silent. A
+// regression that starts emitting on, say, every claim would be invisible in
+// production until someone's receiver melted, so each transition is asserted
+// with its full event list, not just "the one I expected is in there".
 
 // ── Recording emitter ────────────────────────────────────────────────────────
 
@@ -265,6 +265,26 @@ func (f *eventFakeStore) AppendActionAudit(_ context.Context, _ uuid.UUID, id uu
 	return next, nil
 }
 
+// ReopenAction is the done → approved rewind — the ONE re-queue that notifies
+// (task.returned, TDM-170), and the reason the two rows below it in the table
+// still must not. Mirrors the real store's contract: predicated on `from`,
+// clearing the claim and the result of the life being undone.
+func (f *eventFakeStore) ReopenAction(_ context.Context, _ uuid.UUID, id uuid.UUID, from, to string) (*store.Action, int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	a, ok := f.actions[id]
+	if !ok {
+		return nil, 0, store.ErrActionNotFound
+	}
+	if a.State != from {
+		return nil, 0, fmt.Errorf("%w: cannot move task from %q to %q (it is %q now)",
+			store.ErrIllegalActionState, from, to, a.State)
+	}
+	a.State = to
+	a.ClaimedBy, a.ClaimedAt, a.Result, a.Error = nil, nil, nil, nil
+	return a, 1, nil
+}
+
 func (f *eventFakeStore) RequeueAction(_ context.Context, _ uuid.UUID, id uuid.UUID) (*store.Action, int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -466,6 +486,40 @@ func TestTaskEventsPerTransition(t *testing.T) {
 				h.RequeueAction(w, canvasRequest(t, "POST", "/requeue", nil, canvasID, task.ID.String()))
 				if w.Code != http.StatusOK {
 					t.Fatalf("requeue = %d: %s", w.Code, w.Body)
+				}
+			},
+			want: nil,
+		},
+		{
+			// TDM-170, and the row that draws the line the two above it sit on: a
+			// reopen puts FINISHED work back in the queue, which retracts the
+			// task.completed this canvas already sent. That earns an event of its
+			// own — never a second task.approved, which would tell a subscribed
+			// fleet the gate was passed again.
+			name: "reopen (done → approved) fires task.returned, not task.approved",
+			from: "done",
+			setup: func(t *testing.T, h *Handler, task *store.Action) {
+				w := httptest.NewRecorder()
+				h.MoveAction(w, canvasRequest(t, "POST", "/move",
+					map[string]any{"to": "approved", "note": "the migration is missing"},
+					canvasID, task.ID.String()))
+				if w.Code != http.StatusOK {
+					t.Fatalf("reopen = %d: %s", w.Code, w.Body)
+				}
+			},
+			want: []string{webhooks.EventTaskReturned},
+		},
+		{
+			// The other end of the same rewind: rejected → proposed does NOT land in
+			// the ready queue, so nothing is returned and nothing fires.
+			name: "reconsider (rejected → proposed) fires NOTHING",
+			from: "rejected",
+			setup: func(t *testing.T, h *Handler, task *store.Action) {
+				w := httptest.NewRecorder()
+				h.MoveAction(w, canvasRequest(t, "POST", "/move",
+					map[string]any{"to": "proposed"}, canvasID, task.ID.String()))
+				if w.Code != http.StatusOK {
+					t.Fatalf("reconsider = %d: %s", w.Code, w.Body)
 				}
 			},
 			want: nil,
@@ -823,12 +877,15 @@ func TestNilEmitterIsANoOp(t *testing.T) {
 // otherwise the delivery INSERT is rejected and the event silently never fires,
 // the worst failure mode this feature has.
 func TestEmittedTypesAreKnownWebhookEvents(t *testing.T) {
-	for _, e := range []string{webhooks.EventTaskApproved, webhooks.EventTaskCompleted, webhooks.EventTaskClaimExpired} {
+	for _, e := range []string{
+		webhooks.EventTaskApproved, webhooks.EventTaskCompleted,
+		webhooks.EventTaskClaimExpired, webhooks.EventTaskReturned,
+	} {
 		if !store.IsKnownWebhookEvent(e) {
 			t.Errorf("%q is not in store.KnownWebhookEvents", e)
 		}
 	}
-	if len(store.KnownWebhookEvents) != 3 {
-		t.Errorf("vocabulary is %v — the handlers emit exactly 3 event types; adding a 4th needs a call site", store.KnownWebhookEvents)
+	if len(store.KnownWebhookEvents) != 4 {
+		t.Errorf("vocabulary is %v — the handlers emit exactly 4 event types; adding a 5th needs a call site", store.KnownWebhookEvents)
 	}
 }

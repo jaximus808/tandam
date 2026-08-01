@@ -110,7 +110,7 @@ Fill in:
 |---|---|
 | URL | your tunnel's public URL + `/webhook` (see §2) |
 | Name | anything — `laptop orchestrator` |
-| Send when | check **`task.approved`** |
+| Send when | check **`task.approved`** — and **`task.returned`** too if this canvas is on the `peer` policy, so a reviewer's bounce relaunches you as well (§4, §5) |
 
 Save. A one-time callout shows the signing secret — `whsec_` followed by 64 hex
 chars. **Copy it now.** It is never shown again; after that the UI only shows the
@@ -365,15 +365,37 @@ minutes into a long run → exactly one more orchestrator, once the first finish
 | `task.approved` | A task enters the ready-to-work queue by passing the approval gate — human approval, batch approval, the epic cascade, or a task born approved under the `auto`/`epic` policy. One event per task. | **Yes** |
 | `task.completed` | A task reaches a terminal state. `task.state` is `done` **or** `failed` — there is no `task.failed` event, so branch on `state` and read `result` or `error`. | No |
 | `task.claim_expired` | An agent's claim lapsed past its TTL and another agent took the task over. `expired_claim` names who went dark; `task.claimedBy` names who holds it now. | No |
+| `task.returned` | **Finished** work went back to the ready queue — `done` → `approved`, by a reviewer agent's bounce (§5) or a human's reopen. `returned` carries `from`, `by` and the reason verbatim. | No |
 
 `listen` filters to `task.approved` unless you pass `--events`. Subscribe the
 webhook itself to more only if something consumes them — every extra event is a
 delivery row and a wake-up.
 
+**If you run a `peer` canvas, you want `task.returned` too.** Tick it on the
+webhook config and start the listener with
+`--events task.approved,task.returned`; otherwise a reviewer's "redo this" reaches
+a live session (which is parked on `queue_wait`) and never reaches a
+webhook-launched orchestrator, and the bounced ticket sits in the ready queue with
+nobody relaunching to pick it up. **Existing webhooks are not subscribed to it
+automatically** — the event is newer than they are, and nothing silently adds
+event types to a config you already saved. Webhooks created from now on get all
+four by default.
+
 **What deliberately fires nothing:** claiming a task, rejecting or deleting one,
-retitling one, and re-queueing a released or failed task. That last one is on
+retitling one, and re-queueing a **released or failed** task. That last one is on
 purpose — re-queueing is not a *new approval*, and firing `task.approved` for it
 would make a subscribed fleet re-run work it already picked up.
+
+Note where that line falls now, because the boundary is narrow and deliberate:
+`task.returned` covers `done` → `approved` and nothing else. A **release**
+(`executing` → `approved`) and a **requeue** (`failed` → `approved`) stay silent
+as they always have. The difference is not that one is more important — it is that
+a bounce **retracts an event this canvas already sent you**. `task.completed`
+means "finished, and it will not move again on its own"; `done` → `approved` makes
+that false, and a receiver left holding it believes something the board no longer
+supports. A release contradicts nothing (the work was never finished, so no
+terminal event was ever published), and a requeue follows a `task.completed` with
+`state:"failed"` that already told you the truth.
 
 ### Payload
 
@@ -390,6 +412,27 @@ would make a subscribed fleet re-run work it already picked up.
   }
 }
 ```
+
+`task.returned` carries one extra block, and it exists so a relaunched
+orchestrator cannot mistake returned work for new work:
+
+```json
+{
+  "type": "task.returned",
+  "task": { "id": "9f1c…", "ticketId": "TDM-61", "state": "approved", "…": "…" },
+  "returned": {
+    "from":   "done",
+    "by":     "agent:codex-reviewer",
+    "reason": "the migration is missing; TDM-40 needs the index too"
+  }
+}
+```
+
+`by` is server-derived — `agent:<name>` for a reviewer's bounce, `human` for a
+board reopen — and `reason` is verbatim. Treat `reason` as *why you woke up*, the
+same way you treat `TANDEM_TICKETS`: the queue is still the work order, and the
+agent that picks the ticket up reads the reason off `task_get`'s `review` block,
+which is the durable copy.
 
 The envelope is snake_case; `task` is camelCase, mirroring the canvas API's
 action shape. There is no `attempt` field in the body — the payload is marshaled
@@ -511,11 +554,15 @@ un-truncated**.
 
 Two consequences worth knowing:
 
-- **A bounce wakes a parked `queue_wait`** (§0) — the task is genuinely back in
-  the ready queue. It deliberately fires **no** `task.approved` webhook, because
-  re-queueing is not a second approval and a subscribed fleet would re-run work
-  it already picked up. So a webhook-launched orchestrator (§1–4) does *not* get
-  relaunched by a bounce; a live one does.
+- **A bounce reaches both orchestration modes, but you have to subscribe.** It
+  wakes a parked `queue_wait` (§0), and it fires a **`task.returned`** webhook
+  (§4) — *not* `task.approved`, because re-queueing is not a second approval and a
+  fleet subscribed to that event would read returned work as newly gated work. The
+  practical consequence for a webhook-launched orchestrator (§1–4): tick
+  `task.returned` on the webhook config and pass
+  `--events task.approved,task.returned` to `listen`, or the bounce still reaches
+  only the live session. Existing webhook configs are **not** subscribed to it
+  retroactively.
 - **The fleet feed's `reworked` verb is live-only.** It broadcasts the moment the
   bounce lands, but the historical activity derivation cannot reconstruct it
   afterwards — the rewind clears the very columns it would read. `payload.audit[]`
@@ -858,6 +905,13 @@ UI is the tunnel hostname with `/webhook` on the end; the endpoint is toggled
 **on**; `task.approved` is checked in *Send when*. Then look at the delivery list
 — an endpoint that is being tried and failing looks completely different from one
 that was never called.
+
+**A reviewer bounced a task and nothing relaunched** — the bounce fires
+`task.returned`, not `task.approved`, and neither an existing webhook config nor
+the listener's default filter subscribes to it. Check both: *Send when* in the UI
+has `task.returned` ticked, and `listen` was started with
+`--events task.approved,task.returned`. A delivery that reached the listener but
+was filtered shows as `ok (ignored)` in its stderr, which tells the two apart.
 
 **`webhook target blocked` in the delivery list** — you pointed the API at a
 private address (`localhost`, `127.0.0.1`, `192.168.x.x`, `host.docker.internal`).

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/agentcanvas/api/internal/store"
+	"github.com/agentcanvas/api/internal/webhooks"
 	"github.com/google/uuid"
 )
 
@@ -471,9 +472,16 @@ func TestMoveReopenClearsTheLastLife(t *testing.T) {
 	if entry := lastAudit(t, stored); !strings.Contains(entry.Summary, "never applied") {
 		t.Fatalf("the reopen note is not in the audit entry: %+v", entry)
 	}
-	// A rewind is not an approval. Re-firing task.approved would make a fleet
-	// subscribed to it re-run work it already picked up.
-	em.settleTypes(t)
+	// A rewind is not an approval — re-firing task.approved would make a fleet
+	// subscribed to it re-run work it already picked up. But this particular
+	// rewind undoes a TERMINAL state, retracting the task.completed this canvas
+	// already published, so since TDM-170 it fires an event of its own. A human's
+	// reopen and a reviewer's bounce are the same fact to a receiver; `returned.by`
+	// is what tells them apart.
+	em.settleTypes(t, webhooks.EventTaskReturned)
+	if by := em.recorded()[0].body["returned"].(map[string]any)["by"]; by != AuthorHuman {
+		t.Fatalf("returned.by = %v, want %q for a board reopen", by, AuthorHuman)
+	}
 }
 
 func TestMoveReconsiderReturnsToTheGate(t *testing.T) {

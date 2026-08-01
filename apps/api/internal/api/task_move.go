@@ -529,6 +529,23 @@ func (h *Handler) rewindTask(w http.ResponseWriter, r *http.Request, move humanM
 	// and after a release there is. Cheap when nobody is waiting.
 	if action != nil && action.Type == "task" && action.State == "approved" {
 		h.signalQueueReady(canvasID)
+		// …and for the ONE rewind that undoes a terminal state, the webhook half of
+		// the same news (TDM-170). Until this existed, a bounce woke a live
+		// orchestrator through the signal above and told a webhook-launched one
+		// nothing — the two orchestration modes disagreed about whether returned
+		// work is an event, and on a 'peer' canvas the reviewer's whole "redo this"
+		// reached nobody outside the process.
+		//
+		// SCOPED TO done → approved on purpose: that transition falsifies a
+		// task.completed this canvas already published, and retracting our own
+		// claim is what earns an event. Release and requeue contradict nothing and
+		// stay silent (see task_events.go for the full boundary). `move.from` is the
+		// discriminator rather than the row, because the row has already been
+		// rewound by here and no longer remembers where it came from.
+		if move.from == moveRework.from {
+			h.emitTaskEvent(canvasID, webhooks.EventTaskReturned, action,
+				withReturned(move.from, moveActor(r), note))
+		}
 	}
 	// The fleet verb, with the actor the SERVER derived rather than the "human"
 	// actorFor assumes for these verbs: a rewind on a public canvas may well be
