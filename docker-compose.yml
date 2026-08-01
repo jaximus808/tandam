@@ -28,6 +28,10 @@ services:
       # Public origin — the OAuth issuer + base for the authorization-server
       # metadata URLs. Must be the externally-reachable domain (behind Caddy).
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://tandemcanvas.com}
+      # Comma-separated owner allowlist for /api/metrics/history. Unset ⇒ the
+      # whole subtree 404s (RequireMetricsOwner fails closed), so the default
+      # here is empty rather than required.
+      METRICS_OWNER_EMAILS: ${METRICS_OWNER_EMAILS:-}
     volumes:
       # FIX: Hardcoded the absolute path on the container side (/app/canvas-images)
       - canvas-images:/app/canvas-images

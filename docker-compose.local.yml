@@ -23,6 +23,10 @@ services:
       IMAGE_DIR: "/app/canvas-images" 
       JWT_TOKEN_TTL: ${JWT_TOKEN_TTL:-24h}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?set GOOGLE_CLIENT_ID in .env}
+      # Comma-separated owner allowlist for /api/metrics/history. Unset ⇒ the
+      # whole subtree 404s (RequireMetricsOwner fails closed), so the default
+      # here is empty rather than required.
+      METRICS_OWNER_EMAILS: ${METRICS_OWNER_EMAILS:-}
     volumes:
       - canvas-images-local:/app/canvas-images
     healthcheck:

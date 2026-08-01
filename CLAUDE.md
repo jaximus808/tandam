@@ -193,6 +193,18 @@ it, epics and their approval state. Treat the canvas as the source of truth for
 "where the project is." Also note any friction you hit using the tools — that
 feedback is itself valuable.
 
+**Docs live on the canvas, not the repo.** Product and strategy writing — the
+Thesis, Strategy, Pivot Strategy (Jul 2026), launch drafts, QA verdicts — lives
+as document tabs on `TEGLQFXR`. Asked to read "the thesis" (or any strategy
+doc), fetch it from the canvas; asked to write or update one, `doc_write` it to
+the right tab (a new `document` name creates the tab) instead of adding markdown
+under `docs/`. Repo `docs/` stays for code-adjacent material (ORCHESTRATION.md,
+DESIGN.md, specs). Reading a tab's content isn't on the 16-tool facade yet
+(`context_get` lists tabs but not note bodies): the `session` handle from
+`canvas_connect` is base64 JSON whose `token` field is a bearer token — `GET
+/api/canvas/state?fields=notes` with `Authorization: Bearer <token>` returns
+every note with its `documentId`; match against `fields=documents` for the tab.
+
 ## Build / verify
 
 - API: `cd apps/api && go build ./... && go test ./...`

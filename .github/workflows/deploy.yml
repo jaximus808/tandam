@@ -33,6 +33,10 @@ jobs:
           # lift only). NOT named GITHUB_* — Actions reserves that prefix for its
           # built-in token. Optional: absent = proxy runs unauthenticated (60/hr).
           GH_STATUS_TOKEN: ${{ secrets.GH_STATUS_TOKEN }}
+          # Comma-separated owner allowlist for the metrics-history console.
+          # Optional: absent = the whole /api/metrics/history subtree 404s
+          # (RequireMetricsOwner fails closed rather than advertising the page).
+          METRICS_OWNER_EMAILS: ${{ secrets.METRICS_OWNER_EMAILS }}
         run: |
           echo "Writing secrets to .env file..."
           cat <<EOF > .env
@@ -44,6 +48,7 @@ jobs:
           GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID
           POSTHOG_KEY=$POSTHOG_KEY
           GH_STATUS_TOKEN=$GH_STATUS_TOKEN
+          METRICS_OWNER_EMAILS=$METRICS_OWNER_EMAILS
           EOF
           
       - name: Clean up for transfer
