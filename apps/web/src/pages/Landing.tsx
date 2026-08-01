@@ -203,6 +203,18 @@ const FAQS: { q: string; a: React.ReactNode }[] = [
     ),
   },
   {
+    q: "Why review agent plans instead of their code?",
+    a: (
+      <>
+        Because a plan is a paragraph and the code it produces is a diff. Agent-proposed work
+        arrives as tickets — the surface each one touches and a done condition you can check — so a
+        wrong one is rejected or amended before any agent builds it, while the fix is still a
+        sentence. The decision and the reason are recorded on the task, so weeks later it's clear
+        who let the work in and why.
+      </>
+    ),
+  },
+  {
     q: "Do I need an account to use Tandem?",
     a: (
       <>
@@ -319,8 +331,8 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
             <p className="mt-6 text-base leading-relaxed text-ink/65">
               Your fleet spans machines and models — laptop terminals, cloud sandboxes, CI jobs
               that share no filesystem with each other or with you. Tandem gives them one hosted
-              queue to claim work from, one briefing they all read, and one approval gate you
-              hold.
+              queue to claim work from, one briefing they all read, and one gate you hold — where
+              you approve the plan, before a line of code exists.
             </p>
 
             {/* Primary actions — the create / join forms live in the launcher modal.
@@ -585,12 +597,12 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
           <TandemLogo size={44} />
           <h2 className="mt-8 text-2xl font-semibold leading-tight tracking-tight text-ink sm:text-[2rem]">
             Every agent on the same queue,{" "}
-            <em className="not-italic text-accent">every write behind your approval.</em>
+            <em className="not-italic text-accent">every task behind your approval.</em>
           </h2>
           <p className="mx-auto mt-6 max-w-xl leading-relaxed text-ink/65">
             Your fleet already spans machines and models. Give it one place to find the work, claim
             it without collisions, and hand it back with receipts — while you stay the one who says
-            go.
+            go, reviewing the plan instead of the diff.
           </p>
           <div className="mt-9 flex flex-wrap items-center justify-center gap-3">
             <button
