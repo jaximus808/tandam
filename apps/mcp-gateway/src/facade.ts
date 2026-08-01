@@ -956,35 +956,178 @@ type DocumentNotesResponse = {
   notes?: DocumentNoteLine[];
 };
 
+// ── The output budget (TDM-181) ──────────────────────────────────────────────
+//
+// A document tab is unbounded: the strategy docs on this very canvas are tens of
+// KB, and nothing stops a tab from being a megabyte. doc_read handing all of it
+// back in one answer is how a single tool call eats a context window — and the
+// agent cannot even see it coming, because it asked for "one tab" and got a
+// corpus. So the answer is capped and PAGED: a fixed byte budget per call, and a
+// cursor the caller passes back for the next slice.
+//
+// The budget is on the MARKDOWN (note bodies), not the JSON envelope: the bodies
+// are the part that scales without limit, and measuring what the caller actually
+// reads keeps the number meaningful.
+
+/** Per-call ceiling on returned markdown. ~20KB ≈ 5k tokens — a big read, not a ruinous one. */
+const DOC_READ_BUDGET_BYTES = 20_000;
+
+/**
+ * Don't start a partial slice with less than this left in the budget: a 40-byte
+ * sliver of a note costs a whole extra round-trip to say almost nothing. Under
+ * it we stop cleanly and point the cursor at where the note resumes.
+ */
+const DOC_READ_MIN_SLICE_BYTES = 512;
+
+/** Where a truncated read resumes: the note to continue at, and how far into it. */
+type DocReadCursor = { noteCursor?: string; offset?: number };
+
+const utf8Len = (s: string) => Buffer.byteLength(s, "utf8");
+
+/**
+ * Take at most `maxBytes` of `body` starting at byte `start`, never splitting a
+ * UTF-8 codepoint — a slice that ends mid-sequence decodes to U+FFFD and quietly
+ * corrupts the markdown the agent is trying to read.
+ */
+function sliceUtf8(body: string, start: number, maxBytes: number): { text: string; bytes: number } {
+  const buf = Buffer.from(body, "utf8");
+  if (start >= buf.length || maxBytes <= 0) return { text: "", bytes: 0 };
+  let end = Math.min(buf.length, start + maxBytes);
+  // Back off any trailing continuation bytes (0b10xxxxxx) so `end` lands on a
+  // codepoint boundary. At most 3 steps.
+  while (end > start && end < buf.length && (buf[end] & 0b1100_0000) === 0b1000_0000) end--;
+  return { text: buf.subarray(start, end).toString("utf8"), bytes: end - start };
+}
+
 /**
  * Project a tab into the answer the model reads: one entry per note, each
  * carrying its markdown AND the `noteId` doc_write needs to rewrite it in place
  * (without the id, revising a doc means appending a second copy of it).
  *
  * PURE, and the single shaping point for BOTH read paths below — so the two
- * cannot drift, and anything that has to reason about the size of this answer
- * has one place to do it.
+ * cannot drift, and the output budget (above) is enforced in exactly one place.
+ *
+ * Fits in the budget? The answer is what it always was — no cursor, no
+ * `truncated`, no paging noise for the small tab that is the common case.
+ * Doesn't fit? First slice only, `truncated: true`, and a `nextCursor` that says
+ * how much is left and the literal call that fetches it.
  */
 function shapeDocRead(
   doc: { id: string; name: string; type?: string },
   notes: DocumentNoteLine[],
-  url: string
+  url: string,
+  cursor: DocReadCursor = {},
+  budget = DOC_READ_BUDGET_BYTES
 ) {
-  const lines = notes.map((n) => ({
-    noteId: n.id,
-    body: n.body ?? "",
-    ...(n.createdBy ? { createdBy: n.createdBy } : {}),
-    ...(n.updatedAt ? { updatedAt: n.updatedAt } : {}),
-  }));
-  return {
+  const all = notes.map((n) => ({ id: n.id, body: n.body ?? "", createdBy: n.createdBy, updatedAt: n.updatedAt }));
+  const totalBytes = all.reduce((sum, n) => sum + utf8Len(n.body), 0);
+
+  // Where this page starts. A cursor that names nothing is not silently ignored:
+  // the note was deleted or rewritten under the caller, and continuing from note
+  // 0 would hand back a page it already read as if it were the next one.
+  let startIndex = 0;
+  if (cursor.noteCursor) {
+    const at = all.findIndex((n) => n.id === cursor.noteCursor);
+    if (at < 0) {
+      throw new Error(
+        `\`noteCursor\` "${cursor.noteCursor}" is not in "${doc.name}" any more — the note was ` +
+          `deleted or replaced since your last page. Re-read the tab from the start: doc_read ` +
+          `{ document: "${doc.name}" }.`
+      );
+    }
+    startIndex = at;
+  }
+  const startOffset = Math.max(0, Math.min(Math.floor(cursor.offset ?? 0), utf8Len(all[startIndex]?.body ?? "")));
+
+  const page: Array<Record<string, unknown>> = [];
+  let spent = 0;
+  let next: Required<DocReadCursor> | null = null;
+
+  for (let i = startIndex; i < all.length; i++) {
+    const n = all[i];
+    const from = i === startIndex ? startOffset : 0;
+    const bodyBytes = utf8Len(n.body);
+    const left = bodyBytes - from;
+    const room = budget - spent;
+
+    if (left <= room) {
+      page.push({
+        noteId: n.id,
+        body: from ? sliceUtf8(n.body, from, left).text : n.body,
+        ...(from ? { partial: true, resumedAtByte: from } : {}),
+        ...(n.createdBy ? { createdBy: n.createdBy } : {}),
+        ...(n.updatedAt ? { updatedAt: n.updatedAt } : {}),
+      });
+      spent += left;
+      continue;
+    }
+
+    // Doesn't fit. Take a slice if there's enough room to be worth a call;
+    // otherwise stop here and resume at this exact byte next time.
+    if (room >= DOC_READ_MIN_SLICE_BYTES) {
+      const { text, bytes } = sliceUtf8(n.body, from, room);
+      page.push({
+        noteId: n.id,
+        body: text,
+        partial: true,
+        ...(from ? { resumedAtByte: from } : {}),
+        bytesReturned: bytes,
+        bytesRemaining: bodyBytes - (from + bytes),
+        ...(n.createdBy ? { createdBy: n.createdBy } : {}),
+        ...(n.updatedAt ? { updatedAt: n.updatedAt } : {}),
+      });
+      spent += bytes;
+      next = { noteCursor: String(n.id), offset: from + bytes };
+    } else {
+      next = { noteCursor: String(n.id), offset: from };
+    }
+    break;
+  }
+
+  const consumedBefore = all
+    .slice(0, startIndex)
+    .reduce((sum, n) => sum + utf8Len(n.body), 0) + startOffset;
+  const bytesRemaining = Math.max(0, totalBytes - consumedBefore - spent);
+  // The cursor only ever points at a note with bytes still unread (a note that
+  // fit entirely was consumed and the loop moved on), so the tail from it is the
+  // count — the one it points into included, since it is partly unread.
+  const notesRemaining = next ? all.length - all.findIndex((n) => n.id === next!.noteCursor) : 0;
+
+  const base = {
     document: { id: doc.id, name: doc.name, ...(doc.type ? { type: doc.type } : {}) },
-    noteCount: lines.length,
-    notes: lines,
+    noteCount: page.length,
+    notes: page,
     url,
-    _next: lines.length
-      ? "Every note carries its `noteId`: to revise one, doc_write with that noteId — writing " +
-        "without it appends a second copy of the same document."
-      : "The tab exists but is empty — doc_write with this `document` name starts it.",
+  };
+
+  if (!next) {
+    return {
+      ...base,
+      _next: page.length
+        ? "Every note carries its `noteId`: to revise one, doc_write with that noteId — writing " +
+          "without it appends a second copy of the same document." +
+          (startIndex || startOffset ? " This was the LAST page — the tab is fully read." : "")
+        : "The tab exists but is empty — doc_write with this `document` name starts it.",
+    };
+  }
+
+  const pct = totalBytes ? Math.round(((consumedBefore + spent) / totalBytes) * 100) : 100;
+  return {
+    ...base,
+    truncated: true,
+    budgetBytes: budget,
+    bytesReturned: spent,
+    totalBytes,
+    bytesRemaining,
+    notesRemaining,
+    nextCursor: { document: doc.id, noteCursor: next.noteCursor, offset: next.offset },
+    _next:
+      `TRUNCATED at the ${Math.round(budget / 1000)}KB per-call budget — you have read ${pct}% of ` +
+      `"${doc.name}" (${spent} of ${totalBytes} bytes). ${bytesRemaining} bytes still unread across ` +
+      `${notesRemaining} note(s). Fetch the next slice with doc_read { document: "${doc.id}", ` +
+      `noteCursor: "${next.noteCursor}", offset: ${next.offset} } and repeat until the answer has no ` +
+      `\`truncated\` flag. A note marked \`partial\` is a FRAGMENT: never doc_write it back with its ` +
+      `noteId, that would replace the whole note with the piece you happen to be holding.`,
   };
 }
 
@@ -1001,7 +1144,7 @@ function shapeDocRead(
  * API version problem the agent cannot fix and should not be punished for — so
  * fall back to the state read there, and only there.
  */
-async function docReadFallback(gateway: Gateway, ref: string) {
+async function docReadFallback(gateway: Gateway, ref: string, cursor: DocReadCursor = {}) {
   const { documents = [] } = (await gateway.get("/api/canvas/documents")) as {
     documents?: Array<{ id: string; type: string; name: string }>;
   };
@@ -1027,7 +1170,7 @@ async function docReadFallback(gateway: Gateway, ref: string) {
   const mine = Object.values(state.state?.notes ?? {})
     .filter((n) => n.documentId === hit.id)
     .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || String(a.id).localeCompare(String(b.id)));
-  return shapeDocRead(hit, mine, canvasBlock(gateway).url);
+  return shapeDocRead(hit, mine, canvasBlock(gateway).url, cursor);
 }
 
 // ── Dispatch handoff (TDM-62 / E9.2) ─────────────────────────────────────────
@@ -2523,15 +2666,31 @@ async function runFacadeTool(
             "id. context_get lists the tabs on this canvas."
         );
       }
+      // Paging (TDM-181). Both come straight back from a truncated answer's
+      // `nextCursor`, so the caller never composes them by hand.
+      const rawOffset = args.offset;
+      if (rawOffset !== undefined && (typeof rawOffset !== "number" || !Number.isFinite(rawOffset) || rawOffset < 0)) {
+        throw new Error(
+          "`offset` must be a non-negative byte offset into the note named by `noteCursor` — pass " +
+            "the `nextCursor` from a truncated doc_read back verbatim rather than computing one."
+        );
+      }
+      const cursor: DocReadCursor = {
+        ...(typeof args.noteCursor === "string" && args.noteCursor.trim()
+          ? { noteCursor: args.noteCursor.trim() }
+          : {}),
+        ...(typeof rawOffset === "number" ? { offset: rawOffset } : {}),
+      };
+
       // ONE scoped call on the happy path (TDM-179): this tab's notes, in the
       // order the tab shows them, and nothing from any other document.
       const served = await gateway.getIfAvailable<DocumentNotesResponse>(
         `/api/canvas/documents/${encodeURIComponent(ref)}/notes`
       );
       if (served?.document) {
-        return shapeDocRead(served.document, served.notes ?? [], canvasBlock(gateway).url);
+        return shapeDocRead(served.document, served.notes ?? [], canvasBlock(gateway).url, cursor);
       }
-      return docReadFallback(gateway, ref);
+      return docReadFallback(gateway, ref, cursor);
     }
 
     case "board_status": {
@@ -3190,7 +3349,12 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
       "notes in the order it shows them, each with its markdown and its `noteId` — keep the id if " +
       "you'll revise that note, because doc_write WITHOUT it appends a second copy instead of " +
       "updating. Scoped server-side: reading one tab never pulls the rest of the canvas. An " +
-      "unknown name comes back naming the tabs that do exist. " +
+      "unknown name comes back naming the tabs that do exist. BUDGETED: at most ~20KB of markdown " +
+      "per call, so a huge tab can never blow your context in one answer. A tab that fits comes " +
+      "back whole with no paging fields at all; one that doesn't answers `truncated: true` plus a " +
+      "`nextCursor` ({ document, noteCursor, offset }) — pass those two values straight back to " +
+      "read the next slice, and repeat until the answer has no `truncated` flag. A note marked " +
+      "`partial` is a FRAGMENT of that note: never doc_write it back under its noteId. " +
       SESSION_CONVENTION,
     inputSchema: {
       type: "object" as const,
@@ -3200,6 +3364,18 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
           description:
             "The tab to read — an existing document's name (case-insensitive) or its id. " +
             "Unlike doc_write, this never creates one.",
+        },
+        noteCursor: {
+          type: "string",
+          description:
+            "Continue a truncated read: the `nextCursor.noteCursor` from the previous page (the " +
+            "noteId to resume at). Omit for the first page.",
+        },
+        offset: {
+          type: "number",
+          description:
+            "Byte offset into the note named by `noteCursor` — the `nextCursor.offset` from the " +
+            "previous page. Omit for the first page; don't compute one by hand.",
         },
       },
       required: ["document"],
