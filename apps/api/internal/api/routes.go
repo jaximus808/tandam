@@ -287,6 +287,11 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 		r.Get("/api/canvas/gate", h.GateMetrics)
 		r.Get("/api/canvas/roadmap-items", h.ListRoadmapItems)
 		r.Get("/api/canvas/documents", h.ListDocuments)
+		// One document's notes (TDM-179) — the read side of doc_write. Without
+		// it the only way to read a tab back is /api/canvas/state?fields=notes,
+		// which returns every note on the canvas. {ref} is a document id or
+		// name, like the PATCH/DELETE routes below. See document_notes.go.
+		r.Get("/api/canvas/documents/{ref}/notes", h.ListDocumentNotes)
 		// Fleet presence + activity (TDM-46). The roster pairs every registered
 		// agent with the task(s) it currently holds, and lists claimants that
 		// never registered; the feed is derived from action state timestamps
