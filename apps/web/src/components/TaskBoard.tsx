@@ -89,6 +89,9 @@ import {
 import TaskLinks from "./TaskLinks";
 import { useCardFlight } from "../lib/useCardFlight";
 import { spaLink } from "../lib/spaNav";
+import { reviewPlan, type PlanReview } from "../lib/ticketQuality";
+import { PlanDigest, TicketReviewLines } from "./ProposedEpicReview";
+import { T_BTN, T_HEAD, T_META, T_ROW, T_TITLE, TAP } from "../lib/boardScale";
 
 /* ─────────────────────────────────────────────────────────────────────────────
    TaskBoard — the Board surface: the one home for tasks on a canvas. Humans
@@ -158,6 +161,16 @@ import { spaLink } from "../lib/spaNav";
    this board re-renders under live websocket pushes and a selection keyed by
    position would drift onto tickets nobody looked at; see the note on
    `selected` for the two rules that keep it honest against a moving lane.
+
+   A PROPOSED EPIC IS A PLAN, NOT A LANE (TDM-163). Scoped to an epic that is
+   still awaiting approval, the board switches to a review read: the header
+   carries a digest of the whole batch (what it touches, how many tickets the
+   quality contract flags and for what), the Proposed lane runs in the plan's
+   own ticket order instead of newest-first, and every proposed card states the
+   surface it claims to touch and the condition it says it is done by. All of it
+   is derived — see lib/ticketQuality and components/ProposedEpicReview — and it
+   applies ONLY under a proposed epic scope, so an approved epic, the "All
+   tasks" board and every other lane render exactly as they did.
    ──────────────────────────────────────────────────────────────────────────── */
 
 // Kanban columns. `dot` is the header hue (from the shared six-hue state set);
@@ -237,37 +250,9 @@ async function runBatch(ids: string[], fn: (id: string) => Promise<void>): Promi
   return landed;
 }
 
-/* ── Mobile type scale (TDM-85) ───────────────────────────────────────────────
-   The board's desktop scale is deliberately DENSE: five lanes side by side, so
-   a card title is 13px and its record metadata 10px. On a phone none of those
-   reasons hold — one lane is on screen at a time (TDM-86), the card is
-   full-width, and the reading distance is shorter. Rendering the desktop sizes
-   unchanged is how a dense-by-design board turns into a cramped one.
-
-   So the scale is MOBILE-FIRST here: the bare size is the PHONE size and `sm:`
-   restores the desktop density verbatim — ≥640px is unchanged, pixel for pixel.
-   Written as constants because the same few rungs recur across cards, sidebar
-   rows and column headers, and a scale is only a scale if it is applied once.
-
-   This pairs with the text-size-adjust fix in index.css: until iOS stopped
-   font-boosting the wide kanban, tuning these numbers was pointless because the
-   browser was overriding them anyway. */
-
-/** Card titles. */
-const T_TITLE = "text-[14px] sm:text-[13px]";
-/** Sidebar epic + pseudo-entry titles (one rung below a card title). */
-const T_ROW = "text-[13.5px] sm:text-[12.5px]";
-/** Record metadata: ticket chips, ages, counts — the smallest readable rung. */
-const T_META = "text-[11px] sm:text-[10px]";
-/** Column headers and the uppercase group labels. */
-const T_HEAD = "text-[11.5px] sm:text-[11px]";
-/** In-card and in-row action buttons (approve / reject / state moves). */
-const T_BTN = "text-[12px] sm:text-[11px]";
-/** Comfortable touch height for a real control, collapsing to dense on sm+.
-    The rule itself lives in index.css as `.tandem-tap` so the composer, the
-    sheets and the dialogs share ONE definition of the floor rather than each
-    re-deriving it. */
-const TAP = "tandem-tap";
+/* The mobile type scale (TDM-85) moved to lib/boardScale when the proposed-epic
+   review became its own component (TDM-163) and had to render on the same
+   rungs. Same values, same names, one definition — see the note there. */
 
 // Sidebar scope — which lens the kanban shows: "all" | "none" | an epic id.
 // Persisted so the board reopens where you left it.
@@ -1406,6 +1391,11 @@ export default function TaskBoard({
   // per-ticket cost this whole feature exists to remove, and the tickets in one
   // selection are almost always being turned down for one reason.
   const [bulkReason, setBulkReason] = useState<string | null>(null);
+  // Plan review (TDM-163): whether the Proposed lane is sorting the tickets the
+  // quality contract flagged to the top. Off by default and reset on a scope
+  // change — a plan's own order is part of its argument, so resequencing it is
+  // a thing you ask for, not a thing the board decides for you.
+  const [flaggedFirst, setFlaggedFirst] = useState(false);
   const [detailId, setDetailId] = useState<string | null>(null);
   // Whether the scoped epic's finished-ticket rollup is expanded (TDM-93).
   // Collapsed by default: the summary above it is the answer, and the receipts
@@ -1751,22 +1741,79 @@ export default function TaskBoard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tasks, scopedTasks, effectiveScope, searchQuery, filters, ticketHit]);
 
+  /* ── The proposed epic, read as a plan (TDM-163) ───────────────────────────
+     A batch still waiting on its approval is a DOCUMENT to judge; once it is
+     approved it is a queue to drain, and the board it already had is the right
+     shape for that. So the review read is gated on exactly one condition — the
+     scope is an epic in `proposed` — and everything below it is derived from
+     the tickets the board is already holding. No fetch, no stored field, and
+     nothing to keep in sync with the server.
+
+     Why derived at all: the quality contract that produces these warnings
+     (TDM-159) runs inside `epic_propose` and returns them on the RESPONSE.
+     Nothing persists them, so the board cannot read back what the tool saw —
+     lib/ticketQuality recomputes them from the same rules. That file carries
+     the argument for the duplication and what it buys; the short version is
+     that it also covers the batches the contract never ran on at all. */
+  const reviewEpic = scopedEpic && scopedEpic.state === "proposed" ? scopedEpic : null;
+  const planReview: PlanReview | null = useMemo(() => {
+    if (!reviewEpic) return null;
+    // The batch as PROPOSED, in the plan's own order. Cross-ticket rules
+    // (context repeated verbatim) are answers about a batch, so they have to
+    // see the whole of it — filters narrow what is on screen, never what the
+    // contract read.
+    const batch = (tasksByEpic.get(reviewEpic.id) ?? [])
+      .filter((t) => t.state === "proposed")
+      .sort((a, b) => (a.ticket ?? 0) - (b.ticket ?? 0));
+    return reviewPlan(
+      batch.map((t) => {
+        const p = taskPayload(t);
+        return {
+          id: t.id,
+          title: p.title ?? "",
+          body: p.body ?? "",
+          linked: (p.linkedIds ?? []).length > 0,
+        };
+      }),
+      // Context linked on the EPIC covers every ticket in it — the same rule
+      // the gateway applies to the call's own linkedIds.
+      (epicPayload(reviewEpic).linkedIds ?? []).length > 0,
+    );
+  }, [reviewEpic, tasksByEpic]);
+
   // One bucket per lane, computed once: the mobile switcher needs every lane's
   // counts before any lane renders, and the lanes themselves need the same
   // lists. `all` is the lane within the scope; `shown` is what survives the
   // filters (identical when nothing is filtered).
-  const columnBuckets = useMemo(
-    () =>
-      COLUMNS.map((col) => {
-        const all = scopedTasks.filter((t) => col.states.includes(t.state));
-        return {
-          col,
-          all,
-          shown: filtering ? visibleTasks.filter((t) => col.states.includes(t.state)) : all,
-        };
-      }),
-    [scopedTasks, visibleTasks, filtering],
-  );
+  const columnBuckets = useMemo(() => {
+    const buckets = COLUMNS.map((col) => {
+      const all = scopedTasks.filter((t) => col.states.includes(t.state));
+      return {
+        col,
+        all,
+        shown: filtering ? visibleTasks.filter((t) => col.states.includes(t.state)) : all,
+      };
+    });
+    if (!planReview) return buckets;
+    /* Under a proposed epic the Proposed lane reads in TICKET order, oldest
+       first. Everywhere else this board sorts newest-first, which is right for
+       a feed of work and wrong for a plan: it prints ticket 11 above ticket 1
+       and turns a sequence someone wrote as an argument into a pile. With
+       "read first" on, the flagged tickets come up to the top and the plan's
+       order holds within each half.
+
+       Sorting HERE rather than at the render site is deliberate: proposedOrder
+       (and with it every range gesture from TDM-164) is derived from `shown`,
+       so the selection axis and the reading order stay the same list. */
+    const rank = (t: Action) =>
+      (flaggedFirst && planReview.flagged.has(t.id) ? 0 : 1) * 1e9 + (t.ticket ?? 0);
+    const inPlanOrder = (list: Action[]) => [...list].sort((a, b) => rank(a) - rank(b));
+    return buckets.map((b) =>
+      b.col.key === "proposed"
+        ? { ...b, all: inPlanOrder(b.all), shown: inPlanOrder(b.shown) }
+        : b,
+    );
+  }, [scopedTasks, visibleTasks, filtering, planReview, flaggedFirst]);
 
   // ── The selection, reconciled against the live lane (TDM-164) ─────────────
   // The proposed lane in DISPLAY ORDER: the axis every range gesture runs along
@@ -1813,6 +1860,9 @@ export default function TaskBoard({
     setSelectMode(false);
     setAnchor(null);
     setBulkReason(null);
+    // The reading order is per-plan too (TDM-163): carrying "flagged first"
+    // into another epic would resequence a plan you have not looked at yet.
+    setFlaggedFirst(false);
   }, [effectiveScope]);
 
   // How many visible cards are held by a LAPSED lease (TDM-101). The Working
@@ -2643,6 +2693,15 @@ export default function TaskBoard({
             className="mt-1.5"
           />
         )}
+        {/* The three lines that make a plan judgeable without opening a card
+            (TDM-163): what this ticket says it touches, how you would know it
+            is done, and what the quality contract has against it. Directly
+            under the title because they are the ticket's CONTENT — everything
+            below is about the row (who wrote it, when, which gate) — and only
+            under a proposed epic, where the board is being read as a plan. */}
+        {planReview && t.state === "proposed" && (
+          <TicketReviewLines review={planReview.byId.get(t.id)} className="mt-1.5" />
+        )}
         {/* Who is on it, and whether they are still breathing. One row: the pair
             is a single fact ("this agent, this recently"), and splitting them
             would put a name on one line and its own vital sign on another. */}
@@ -2981,6 +3040,18 @@ export default function TaskBoard({
           <p className="mt-1 line-clamp-2 text-[12.5px] leading-relaxed text-ink/60 sm:text-[12px]">
             {p.body}
           </p>
+        )}
+        {/* The batch read at once, BEFORE the Approve button (TDM-163). What
+            this epic touches and how much of it the quality contract has
+            something to say about is the case for pressing that button, so it
+            has to be above it — on a phone this header is the first thing on
+            screen and the lane of cards is the second. */}
+        {planReview && planReview.total > 0 && (
+          <PlanDigest
+            review={planReview}
+            flaggedFirst={flaggedFirst}
+            onToggleFlaggedFirst={() => setFlaggedFirst((v) => !v)}
+          />
         )}
         {/* What the batch ACHIEVED, above its tickets — the answer you came for,
             with the receipts collapsed under it. */}
