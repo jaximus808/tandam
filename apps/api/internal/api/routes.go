@@ -436,6 +436,20 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 			// tool maps to it. Addressed by uuid, not by ticket ref: refs
 			// name tasks. See epic_move.go for the matrix and the argument.
 			r.Post("/api/canvas/epics/{id}/move", h.MoveEpic)
+			// The OWNER's state moves on ONE TICKET (TDM-190): the same
+			// reversibility, one level down — un-approve (approved →
+			// proposed), re-open finished work that isn't finished (done →
+			// proposed, claim and stale result cleared) and revive a
+			// rejected ticket, all through ONE endpoint validated against
+			// the ticket gate matrix. Every target is 'proposed', i.e.
+			// BEHIND the gate: nothing here can approve, and a ticket a
+			// worker is holding has no move at all (release it first).
+			// Human-only from the same server-derived provenance /approve
+			// and /reject use — unlike the board's /move above, which is
+			// human-only only by surface — and no MCP tool maps to it.
+			// Ticket refs work here like every other action route. See
+			// task_owner_move.go for the matrix and the argument.
+			r.With(ResolveTicketRef(s)).Post("/api/canvas/tasks/{id}/move", h.MoveTask)
 			r.With(ResolveTicketRef(s)).Patch("/api/canvas/actions/{id}", h.UpdateActionState)
 			r.With(ResolveTicketRef(s)).Delete("/api/canvas/actions/{id}", h.DeleteAction)
 

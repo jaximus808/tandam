@@ -146,14 +146,18 @@ func deriveReviewFeedback(a *store.Action) *reviewFeedback {
 	}
 }
 
-// lastReworkAudit finds the most recent done → approved entry in an action's
-// audit log — the pair BOTH ways of sending finished work back write: a
-// reviewer agent's rework (TDM-154) and a human's reopen (E10, task_move.go).
+// lastReworkAudit finds the most recent entry in an action's audit log that
+// took finished work back OFF the done pile — the pair every way of sending it
+// back writes: a reviewer agent's rework and a human's reopen, both done →
+// approved (TDM-154, E10 task_move.go), and the owner's re-open to the gate,
+// done → proposed (TDM-190, task_owner_move.go).
 //
 // They are deliberately not told apart here. To the author they are the same
-// event, and `By` already says which one it was — "agent:codex-reviewer" or
-// "human". Splitting them into two outcomes would make an author agent branch on
-// a distinction that changes nothing about what it has to do next.
+// event — "what I finished came back, and here is why" — and the feedback's
+// `By` already says who and its `State` already says where it landed, which is
+// the only part that changes what happens next (back in the queue vs. back at
+// the gate). Splitting them into separate outcomes would make an author agent
+// branch on a distinction it can already read.
 //
 // KNOWN FLOOR, inherited from the log: payload.audit[] keeps only its
 // store.MaxContentAudit most recent entries, so a task with a very busy edit
@@ -163,7 +167,10 @@ func lastReworkAudit(a *store.Action) *store.ContentAudit {
 	log := readActionAudit(a.Payload)
 	var found *store.ContentAudit
 	for i := range log {
-		if log[i].FromState == "done" && log[i].ToState == "approved" {
+		if log[i].FromState != "done" {
+			continue
+		}
+		if log[i].ToState == "approved" || log[i].ToState == "proposed" {
 			found = &log[i]
 		}
 	}
