@@ -24,13 +24,18 @@
  * builds, the deadline it sets, and the four answers it renders. Nothing here
  * proves a live wait against a running API; that is Jaxon's runtime QA.
  */
-import { test, mock } from "node:test";
+import { test, mock, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 
 import { Gateway } from "../src/gateway.js";
-import { handleFacadeTool } from "../src/facade.js";
+import { handleFacadeTool, resetTellHumanLedger } from "../src/facade.js";
 import { handleTool } from "../src/tools.js";
 import { FACADE_TOOLS } from "../src/server.js";
+
+// The missed-ask reminder is once-per-scope-per-session (TDM-187), and every
+// test here connects as the SAME session — so start each one having reminded
+// nobody, or the assertions would depend on the order the file happens to run in.
+beforeEach(resetTellHumanLedger);
 
 const AUTH_RESPONSE = {
   token: "jwt-token",
@@ -112,18 +117,24 @@ type WaitResult = {
   lostByYou?: unknown[];
   _lostByYou?: string;
   _dispatch?: string;
+  _tell_human?: string;
   _next?: string;
 };
 
-/** Connect as a registered planner, then wait. */
-async function wait(args: Record<string, unknown> = {}): Promise<WaitResult> {
+/** A connected, registered planner — the identity the ledger keys on. */
+async function planner(): Promise<Gateway> {
   const gw = new Gateway({ apiUrl: "http://api.test" });
   await handleTool(gw, "canvas_connect", {
     code: "TESTCODE",
     role: "planner",
     name: "the-planner",
   });
-  return (await handleFacadeTool(gw, "queue_wait", args)) as WaitResult;
+  return gw;
+}
+
+/** Connect as a registered planner, then wait. */
+async function wait(args: Record<string, unknown> = {}): Promise<WaitResult> {
+  return (await handleFacadeTool(await planner(), "queue_wait", args)) as WaitResult;
 }
 
 const readyBody = (actions: unknown[] = READY_ACTIONS, waitedMs = 4200) => ({
@@ -273,6 +284,93 @@ test("an unrecognized status is treated as 'nothing yet', never as work", async 
     assert.equal(result.status, "timeout");
     assert.deepEqual(result.tasks, []);
   });
+});
+
+// ── the missed-ask backstop (TDM-187) ────────────────────────────────────────
+//
+// The deadlock this catches: the gate is open, the agent is parked here, and the
+// human was never told either is true. TDM-186 put the ask on the propose
+// answer; this is the last place it can be caught once that ask was skipped —
+// and it must stay a BACKSTOP, so it fires once and then shuts up.
+
+test("the FIRST timeout carries the _tell_human reminder, with the board URL in it", async () => {
+  await withFetch({ wait: () => json(timeoutBody()) }, async () => {
+    const result = await wait();
+
+    const tell = result._tell_human ?? "";
+    assert.ok(tell, "a timeout is the one moment the missed ask can still be caught");
+    // Relayable as-is: it names the gate, and it says where to click.
+    assert.match(tell, /approval/i);
+    assert.match(tell, /http[^\s"]*\/c\/TESTCODE/, "the board URL must be in the sentence");
+    // Say it NOW, and keep waiting — not "stop and ask", which would undo the tool.
+    assert.match(tell, /NOT YET TOLD THE HUMAN/i);
+    assert.match(tell, /queue_wait again/i);
+    // Honest about what it is, so an agent that DID relay the ask ignores it.
+    assert.match(tell, /already relayed/i);
+    assert.match(tell, /backstop/i);
+    // It never displaces the timeout's own "this is not an error" message.
+    assert.match(result._next ?? "", /NOT an error/i);
+  });
+});
+
+test("it does not nag: later timeouts on the same wait carry no reminder", async () => {
+  await withFetch({ wait: () => json(timeoutBody()) }, async () => {
+    const gw = await planner();
+    const again = async () => (await handleFacadeTool(gw, "queue_wait", {})) as WaitResult;
+
+    assert.ok((await again())._tell_human, "first timeout reminds");
+    for (let i = 0; i < 3; i++) {
+      assert.equal((await again())._tell_human, undefined, "a loop must not be nagged every round");
+    }
+  });
+});
+
+test("one reminder per BATCH: a second epic is a second thing nobody was told about", async () => {
+  await withFetch({ wait: () => json(timeoutBody()) }, async () => {
+    const gw = await planner();
+    const waitOn = async (epicId?: string) =>
+      (await handleFacadeTool(gw, "queue_wait", epicId ? { epicId } : {})) as WaitResult;
+
+    const first = await waitOn("epic-9");
+    assert.ok(first._tell_human);
+    assert.match(first._tell_human!, /epic-9/, "the ask names the batch it is about");
+    assert.equal((await waitOn("epic-9"))._tell_human, undefined);
+
+    // A different batch is owed its own ask…
+    assert.ok((await waitOn("epic-10"))._tell_human);
+    // …and so is the unscoped whole-queue wait.
+    assert.ok((await waitOn())._tell_human);
+  });
+});
+
+test("a wait that comes back READY spends no reminder — there is nothing to ask for", async () => {
+  await withFetch(
+    {
+      // ready first, then timeouts: the ready answer must not consume the ask.
+      wait: (() => {
+        let n = 0;
+        return () => json(n++ === 0 ? readyBody() : timeoutBody());
+      })(),
+    },
+    async () => {
+      const gw = await planner();
+      const ready = (await handleFacadeTool(gw, "queue_wait", {})) as WaitResult;
+      assert.equal(ready.status, "ready");
+      assert.equal(ready._tell_human, undefined, "approved work needs no approval ask");
+
+      const timedOut = (await handleFacadeTool(gw, "queue_wait", {})) as WaitResult;
+      assert.equal(timedOut.status, "timeout");
+      assert.ok(timedOut._tell_human, "the reminder was still there to be spent");
+    }
+  );
+});
+
+test("the description carries the tell-first contract, not just the wait", () => {
+  const d = FACADE_TOOLS.find((t) => t.name === "queue_wait")!.description;
+  assert.match(d, /TELL THE HUMAN BEFORE YOU WAIT/i);
+  assert.match(d, /tellHuman/, "it points at the line the propose answer already composed");
+  assert.match(d, /_tell_human/, "and names the field the first timeout hands back");
+  assert.match(d, /backstop, not a substitute/i);
 });
 
 // ── the deadline that makes the whole thing work ─────────────────────────────

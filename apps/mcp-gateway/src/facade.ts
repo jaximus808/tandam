@@ -59,6 +59,7 @@ import {
   notYourClaimMessage,
   readConflict,
   recordLoss,
+  sessionKey,
   tapOutBlock,
   writeReason,
   type ConflictBody,
@@ -1221,6 +1222,81 @@ function taskProposalAsk(
   };
 }
 
+// ── The missed-ask backstop (TDM-187) ────────────────────────────────────────
+//
+// TDM-186 put the ask on the PROPOSE answer, which is where it belongs: the
+// moment the gate opens is the moment to say so. But the ask can still be
+// skipped — a session that proposed in an earlier turn, one that was handed an
+// epicId and told to wait, or one that simply did not relay `tellHuman`. The
+// symptom is the same deadlock: the human never hears the board needs them, the
+// agent parks on the wait, and a silent parked session is indistinguishable
+// from a hung one.
+//
+// queue_wait is the only call that fires while that deadlock is happening, so
+// its 'timeout' answer is the last honest chance to catch it — hence
+// `_tell_human` on the FIRST timeout, and only the first. It is a BACKSTOP, not
+// a second channel: an agent that already relayed the ask ignores it, and an
+// agent that did not gets one unmissable cue rather than a nag on every round.
+//
+// Once per scope, because the wait is a LOOP. A reminder repeated on every
+// timeout is read once and skipped forever after, and it would drown the
+// timeout's real message ("this is not an error, call again"). One epicId is one
+// batch, so the scope key is the epic — a session waiting on two batches is
+// owed two asks, and a session grinding out ten timeouts on one batch is owed
+// exactly one.
+
+/** Sessions → the wait scopes they have already been reminded about. */
+const TELL_HUMAN_LEDGER = new Map<string, Set<string>>();
+
+/** Bound the ledger so a long-lived stdio process cannot grow forever. */
+const MAX_TELL_HUMAN_SCOPES = 100;
+
+/** Test seam: forget who has been reminded. Never called on a production path. */
+export function resetTellHumanLedger(): void {
+  TELL_HUMAN_LEDGER.clear();
+}
+
+/**
+ * True the FIRST time this session times out waiting on this scope, false every
+ * time after. Recording happens HERE, on the read, so the caller cannot ask
+ * twice and get two reminders.
+ */
+function firstTimeoutOnScope(gateway: Gateway, epicId: string): boolean {
+  const key = sessionKey(gateway);
+  let scopes = TELL_HUMAN_LEDGER.get(key);
+  if (!scopes) {
+    scopes = new Set<string>();
+    TELL_HUMAN_LEDGER.set(key, scopes);
+  }
+  // "" is the whole-queue wait — a scope like any other, just an unnamed one.
+  const scope = epicId || "*";
+  if (scopes.has(scope)) return false;
+  if (scopes.size >= MAX_TELL_HUMAN_SCOPES) scopes.clear();
+  scopes.add(scope);
+  return true;
+}
+
+/**
+ * The reminder itself: the ask sentence (TDM-186's own composer, so the wording
+ * the human hears is identical whichever path produced it) wrapped in "say this
+ * now if you have not already, then keep waiting".
+ */
+function tellHumanReminder(gateway: Gateway, epicId: string): string {
+  const ask = approvalAsk({
+    subject: epicId ? "A batch you proposed" : "Work you proposed",
+    detail: epicId ? `epic ${epicId}` : undefined,
+    url: canvasBlock(gateway).url,
+  });
+  return (
+    `IF YOU HAVE NOT YET TOLD THE HUMAN this is waiting on their approval, say so NOW — in ` +
+    `your very next message, board URL included — and then call queue_wait again: "${ask}". ` +
+    `You are the only thing that knows the gate is open; the board does not tap anyone on the ` +
+    `shoulder, and nothing here can be approved by an agent. If you already relayed that ask, ` +
+    `ignore this and keep waiting — it is a backstop for a missed ask, not a second ask, and ` +
+    `you will not be reminded again on this wait.`
+  );
+}
+
 /** `## title` + blank line + body, when a title was given. */
 function composeMarkdown(title: unknown, body: unknown): string {
   const t = typeof title === "string" ? title.trim() : "";
@@ -1459,6 +1535,11 @@ async function runFacadeTool(
       // TIMEOUT — the normal, expected, cheap answer. Everything about this
       // branch exists to stop it reading as a failure.
       if (body.status !== "ready") {
+        // The missed-ask backstop (TDM-187): on the FIRST timeout for this scope
+        // only, in case nobody was ever told the gate is open. Composed after
+        // the branch is decided so a 'ready' answer never spends the session's
+        // one reminder.
+        const remind = firstTimeoutOnScope(gateway, epicId);
         return {
           status: "timeout",
           tasks: [],
@@ -1466,6 +1547,7 @@ async function runFacadeTool(
           waited: true,
           waitedMs,
           timeoutSeconds: effectiveTimeout,
+          ...(remind ? { _tell_human: tellHumanReminder(gateway, epicId) } : {}),
           _next:
             `Nothing has been approved yet — this is NOT an error and NOT a failure. It is the ` +
             `normal answer to "I waited ${effectiveTimeout}s and the human hasn't approved ` +
@@ -2513,6 +2595,13 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
       "approval' moment: you proposed an epic, you finished a task and there may be more coming, " +
       "the queue is empty but work is expected. Do NOT stop and ask the human to prompt you " +
       "again — the approval on the board IS the go signal, and this call is how you hear it. " +
+      "TELL THE HUMAN BEFORE YOU WAIT: waiting is the SECOND beat, never the first. If you (or " +
+      "whoever briefed you) just proposed this work, relay the `tellHuman` line from the " +
+      "epic_propose / task_propose answer in chat FIRST — nobody can approve a gate they were " +
+      "never told is open, and a session parked here in silence looks exactly like one that " +
+      "hung. Skipped it? The FIRST 'timeout' answer hands back a `_tell_human` reminder for " +
+      "precisely that miss: say it then and keep waiting. It is a backstop, not a substitute, " +
+      "and it comes once per batch — not on every round. " +
       "ANSWERS, always one of these, always on `status`: " +
       "'ready' — approved tasks, each already carrying the same paste-ready `handoff` queue_next " +
       "gives you, so the next step is claim (working alone) or dispatch (with subagents), with " +
