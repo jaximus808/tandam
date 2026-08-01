@@ -65,9 +65,10 @@ Typed task lifecycle, atomic claims (typed already-claimed error), claimant iden
 ### F6 — Delta briefing *(deferred, 60-day)*
 `context_get(since: <session marker>)` — returns only changes since last connect. Depends on F1–F3.
 
-### Intent facade (14 tools) + `npx tandem init`
+### Intent facade (14 tools as of 2026-07-28) + `npx tandem init`
 - The facade **replaces** the 80-tool CRUD surface as the **default** connector manifest. Full CRUD moves behind an opt-in flag (`TANDEM_FULL_TOOLS=1`, or `tandem-mcp --full-tools`). Fourteen tools on top of eighty is tool ninety-four — the default surface IS the facade.
 - Shipped set (`apps/mcp-gateway/src/facade.ts`): `canvas_connect` (kept; also mints identity via `role`), `agent_register`, `context_get`, `queue_next`, `task_find`, `task_get`, `task_claim`, `task_progress`, `task_complete`, `task_propose`, `task_amend`, `epic_propose`, `doc_write` (agent output container), `board_status`. This planned at ~10; `agent_register` and `epic_propose` were added during E2/E9, `task_amend` in TDM-117 and `task_find` in TDM-95, so **14 is the number** — it is what `manifest.test.ts` asserts and what the docs must say.
+- **Superseded — the two bullets above are the ratified spec, not the current surface.** The facade has since grown to **16**: `queue_wait` (TDM-149) and `task_review` (TDM-156, which *replaced* `task_approve` rather than joining it — still routed, no longer advertised). `FACADE_NAMES` in `apps/mcp-gateway/src/facade.ts` is the source of truth, and `manifest.test.ts` asserts against it; the root [README](../README.md#mcp) and [apps/mcp-gateway/README.md](../apps/mcp-gateway/README.md#tools) carry the live list.
 - `npx tandem init` (bin in `@jaximus/tandem-mcp`): create canvas → register MCP config → print share code → emit CLAUDE.md/AGENTS.md snippet.
 - **Acceptance test:** an agent completes a real job in ≤5 tool calls with no usage manual (the founder's friction log is the test).
 
