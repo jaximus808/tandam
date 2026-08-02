@@ -1,15 +1,18 @@
 import type { LucideIcon } from "lucide-react";
-import { Files, SquareKanban } from "lucide-react";
+import { Files, Gauge, SquareKanban } from "lucide-react";
 
 /* ─────────────────────────────────────────────────────────────────────────────
    Workspace navigation registry.
 
-   A canvas has two TOP-LEVEL SURFACES — different kinds of workspace, not
+   A canvas has three TOP-LEVEL SURFACES — different kinds of workspace, not
    tabs of one another:
 
      · Board      — the task kanban (epics + Proposed/Ready/Working/Done).
                     THE canonical home for tasks and agent work.
      · Documents  — the tabbed document worksurface (maps, docs, sheets, …).
+     · Summary    — the read-only "where does this project stand" overview
+                    (epic timeline, completion stats, stale work). Derived
+                    entirely from canvas state; it never edits anything.
 
    They're switched from the labeled left nav (WorkspaceNav). Everything
    surface-local — the document tab strip, the explorer panel — lives INSIDE
@@ -17,7 +20,7 @@ import { Files, SquareKanban } from "lucide-react";
    panel), reachable from the nav's bottom slot but not a surface.
    ──────────────────────────────────────────────────────────────────────────── */
 
-export type Surface = "board" | "documents";
+export type Surface = "board" | "documents" | "summary";
 
 export interface SurfaceItem {
   id: Surface;
@@ -28,11 +31,12 @@ export interface SurfaceItem {
 export const SURFACE_ITEMS: SurfaceItem[] = [
   { id: "board", icon: SquareKanban, label: "Board" },
   { id: "documents", icon: Files, label: "Documents" },
+  { id: "summary", icon: Gauge, label: "Summary" },
 ];
 
 // Guard a persisted string back into a valid surface (unknown → null).
 export function parseSurface(v: unknown): Surface | null {
-  return v === "board" || v === "documents" ? v : null;
+  return v === "board" || v === "documents" || v === "summary" ? v : null;
 }
 
 /* The side panel views. "documents" is the explorer (belongs to the Documents

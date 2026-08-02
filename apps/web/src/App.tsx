@@ -43,6 +43,7 @@ import FleetView from "./components/FleetView";
 import NotificationBell from "./components/NotificationBell";
 import AgentToasts from "./components/AgentToasts";
 import TaskBoard from "./components/TaskBoard";
+import SummaryPanel from "./components/SummaryPanel";
 import TicketView from "./components/TicketView";
 import ConnectionStatus from "./components/ConnectionStatus";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -357,8 +358,9 @@ export default function App() {
   const [connectOpen, setConnectOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   // ── Workspace navigation ────────────────────────────────────────────────────
-  // The canvas has two top-level SURFACES, switched from the labeled left nav
-  // (WorkspaceNav): the task Board and the tabbed Documents worksurface. The
+  // The canvas has three top-level SURFACES, switched from the labeled left nav
+  // (WorkspaceNav): the task Board, the tabbed Documents worksurface, and the
+  // read-only Summary overview (TDM-192). The
   // side-panel state is tracked separately: which panel view is selected
   // (the document explorer — toggled from the Documents tab strip — or
   // Settings, from the nav's gear) and whether it's OPEN. The selection
@@ -471,6 +473,13 @@ export default function App() {
   const [boardVisited, setBoardVisited] = useState(false);
   useEffect(() => {
     if (surface === "board") setBoardVisited(true);
+  }, [surface]);
+  // Summary keep-alive: same contract as the Board's — mount on first visit,
+  // then hide with CSS so scroll position survives surface switches. The panel
+  // is a pure read of canvasState, so a kept-alive copy stays live off-screen.
+  const [summaryVisited, setSummaryVisited] = useState(false);
+  useEffect(() => {
+    if (surface === "summary") setSummaryVisited(true);
   }, [surface]);
   // TDM-14: one-shot focus handoff — clicking an agent's task in the header
   // presence (avatar / mini-chip / swarm tree) opens the Board centred on that
@@ -1886,7 +1895,10 @@ export default function App() {
             annotation pills stay light (a light map framed by dark chrome),
             while its toolbar, sidebar, and popups follow the theme. */}
         <div className="relative flex flex-1 min-h-0 bg-paper text-ink">
-        <ErrorBoundary resetKey={`${canvas.id}:${surface === "board" ? "board" : effectiveMode}`}>
+        {/* One arm per surface: the two full-page surfaces key on their own
+            name, Documents keys on the focused mode (so a crash in one mode
+            clears when you switch tabs). */}
+        <ErrorBoundary resetKey={`${canvas.id}:${surface === "documents" ? effectiveMode : surface}`}>
         {/* The Board surface's full-page view. Mounted on first visit, then
             kept alive and toggled with CSS like the modes below. It renders
             from the same canvas-state props as every other view, so WS pushes
@@ -1927,6 +1939,24 @@ export default function App() {
               // Hide the nav FAB while a board sheet/modal is up (TDM-135).
               onOverlayOpenChange={setBoardOverlayOpen}
             />
+          </div>
+        )}
+        {/* The Summary surface's full-page view — the read-only "where does
+            this stand" overview. Same keep-alive contract as the Board: mounted
+            on first visit, then toggled with CSS. It reads the same canvasState
+            props, so WS pushes keep it current while it's hidden.
+
+            `tandem-fab-reserve` keeps its scroll box clear of the mobile nav
+            FAB, exactly as on the Board. */}
+        {(surface === "summary" || summaryVisited) && (
+          <div
+            className={
+              surface === "summary"
+                ? "tandem-fab-reserve relative isolate flex flex-1 min-h-0 min-w-0"
+                : "hidden"
+            }
+          >
+            <SummaryPanel code={canvas.code} state={canvasState} />
           </div>
         )}
         {(["welcome", "map", "itinerary", "docs", "roadmap", "sheets", "charts"] as CanvasMode[]).map((m) => {

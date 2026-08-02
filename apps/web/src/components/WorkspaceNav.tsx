@@ -6,7 +6,7 @@ import { SURFACE_ITEMS, type Surface } from "../lib/sidebar";
 
    Two kinds of things live here, visually separated:
 
-   · Top: the SURFACES — Board and Documents — icon + label, one always active
+   · Top: the SURFACES — Board, Documents, Summary — icon + label, one active
      (left accent bar + accent ink, matching the active-tab idiom). Clicking
      switches the whole content area; it never toggles panels.
    · Bottom: Settings — secondary chrome. It opens/closes the settings side
