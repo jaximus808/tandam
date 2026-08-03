@@ -10,3 +10,11 @@ allowBuilds:
 
 onlyBuiltDependencies:
   - esbuild
+
+# Force patched versions of @modelcontextprotocol/sdk transitives (TDM-198).
+# The SDK's own ranges already permit these; the overrides stop pnpm from
+# reusing the older, advisory-affected resolutions already in the lockfile.
+overrides:
+  hono: '>=4.12.27'
+  '@hono/node-server': '>=2.0.5'
+  body-parser: '>=2.3.0'
