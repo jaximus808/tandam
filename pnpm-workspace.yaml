@@ -18,3 +18,7 @@ overrides:
   hono: '>=4.12.27'
   '@hono/node-server': '>=2.0.5'
   body-parser: '>=2.3.0'
+  # tsup 8.5.1 (latest) still pins esbuild ^0.27.0, which has no in-range fix for
+  # the arbitrary-file-read advisory (>=0.27.3 <0.28.1). Scope the override to the
+  # 0.27 line only so vite's own esbuild ^0.25 resolution is left alone (TDM-199).
+  'esbuild@^0.27.0': '>=0.28.1'
