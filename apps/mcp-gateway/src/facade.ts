@@ -1364,6 +1364,103 @@ function buildHandoff(
   };
 }
 
+// ── Is the parent we are about to ship a REAL agent? (TDM-201) ───────────────
+//
+// THE FAILURE THIS FIXES. The handoff's parentAgentId is copied straight off the
+// session, and until now nothing checked that the id names anybody. On
+// 2026-08-03 a one-character corruption in a carried session handle produced an
+// agentId that existed nowhere on the canvas, and every handoff dispatched in
+// that batch told its worker to register under it — a whole fan-out of workers
+// parented to a ghost, with the fleet tree silently wrong and no error anywhere.
+//
+// So before composing handoffs, the id is checked against the canvas's REGISTERED
+// agents, ONCE per queue_next / queue_wait call and reused across every row (a
+// per-row read would turn a 10-task queue into 10 extra round trips for one
+// answer that cannot change mid-batch).
+//
+// AN UNRECOGNIZED ID IS OMITTED, NOT SHIPPED. Workers connecting unparented is a
+// path that already works — it is what an unregistered planner's handoffs do
+// today — so the honest degradation is no parent link plus a `_warning` naming
+// the id, rather than a link to nothing.
+//
+// AND THE CHECK FAILS OPEN. If the agent list cannot be read at all (older API,
+// timeout, expired token) the handoff ships exactly as it does today: "we could
+// not check" must never become "we could not dispatch". This is the one place
+// where availability beats strictness — the cost of failing open is the status
+// quo, while the cost of failing closed is a queue that stops handing out work
+// because a probe timed out.
+
+/** The outcome of the parent check: the id to ship (if any), and why not. */
+type ParentCheck = { parentAgentId?: string; warning?: string };
+
+/**
+ * Every agentId registered on this canvas, or undefined when that could not be
+ * established — undefined is the fail-open signal and every caller treats it as
+ * "assume the id is fine".
+ *
+ * Reads the same cheap `fields=agents` projection approvalPolicyOf uses (one
+ * small table plus the canvas row, not the board). The response shapes it
+ * tolerates are the two the API has: the state projection's id-keyed map, and a
+ * plain list, either at `state.agents` or top level — so a roster-shaped answer
+ * is understood rather than read as "no agents", which would fail open anyway.
+ *
+ * An EMPTY list is treated as unknown, not as "nobody is registered": a canvas
+ * that answered the queue for a registered caller has at least one agent, so an
+ * empty answer is far more likely a projection that carried none than proof the
+ * id is bogus.
+ */
+async function registeredAgentIds(gateway: Gateway): Promise<Set<string> | undefined> {
+  let raw: unknown;
+  try {
+    const res = await gateway.getIfAvailable<{ state?: { agents?: unknown }; agents?: unknown }>(
+      "/api/canvas/state?fields=agents"
+    );
+    raw = res?.state?.agents ?? res?.agents;
+  } catch {
+    // Fail open — see the block comment above. Nothing here may fail the queue
+    // read the caller actually made.
+    return undefined;
+  }
+  if (!raw || typeof raw !== "object") return undefined;
+  const ids = new Set<string>();
+  const entries: Array<[string, unknown]> = Array.isArray(raw)
+    ? raw.map((row, i) => [String(i), row] as [string, unknown])
+    : Object.entries(raw as Record<string, unknown>);
+  for (const [key, value] of entries) {
+    const row = (value ?? {}) as Record<string, unknown>;
+    if (typeof row.id === "string" && row.id) ids.add(row.id);
+    else if (!Array.isArray(raw) && key) ids.add(key);
+  }
+  return ids.size > 0 ? ids : undefined;
+}
+
+/** What to tell a planner whose own agentId names nobody on this canvas. */
+function unknownParentWarning(agentId: string): string {
+  return (
+    `Your session's agentId (${agentId}) is NOT a registered agent on this canvas, so the ` +
+    `handoffs below carry no parentAgentId — the workers will connect unparented rather than ` +
+    `nest under an id that names nobody. Nothing is broken about the tasks themselves. The ` +
+    `usual cause is a session handle that got corrupted or truncated in transit. Re-run ` +
+    `canvas_connect (role "planner", with your name) to get a fresh handle and a real agentId, ` +
+    `then call this again so your workers show up under you on the fleet view.`
+  );
+}
+
+/**
+ * Resolve the parentAgentId to put on this call's handoffs. Called ONCE per
+ * queue_next / queue_wait — never per row.
+ */
+async function verifyParentAgentId(gateway: Gateway): Promise<ParentCheck> {
+  const agentId = gateway.getSession().agentId;
+  // Never registered: already handled downstream (placeholder parent + the
+  // "you are not registered" half of _dispatch). Nothing to verify, nothing to
+  // warn about, and no reason to spend a round trip.
+  if (!agentId) return {};
+  const registered = await registeredAgentIds(gateway);
+  if (!registered || registered.has(agentId)) return { parentAgentId: agentId };
+  return { warning: unknownParentWarning(agentId) };
+}
+
 /**
  * Turn raw ready-queue rows into DISPATCH-READY rows: a `handoff` on everything
  * claimable, a tap-out annotation on anything this session already raced for and
@@ -1389,7 +1486,14 @@ function buildHandoff(
 function decorateReadyQueue(
   gateway: Gateway,
   tasks: unknown[],
-  limit: number
+  limit: number,
+  /**
+   * The parent to stamp on every handoff — already VERIFIED against the canvas's
+   * registered agents by the caller (TDM-201), which is why it is passed in
+   * rather than read off the session here: the check is one round trip for the
+   * whole batch, and doing it in this per-row map would be one per task.
+   */
+  parentAgentId?: string
 ): { shown: Array<Record<string, unknown>>; lostByYou: Array<Record<string, unknown>> } {
   const session = gateway.getSession();
   const lostByYou: Array<Record<string, unknown>> = [];
@@ -1416,7 +1520,7 @@ function decorateReadyQueue(
         return marked;
       }
     }
-    return { ...row, handoff: buildHandoff(row, session.canvasCode, session.agentId) };
+    return { ...row, handoff: buildHandoff(row, session.canvasCode, parentAgentId) };
   });
   return { shown, lostByYou };
 }
@@ -1784,12 +1888,16 @@ async function runFacadeTool(
         ...(args.epicId ? { epicId: args.epicId } : {}),
       })) as { tasks?: unknown[]; hint?: string };
       const tasks = listed.tasks ?? [];
-      const session = gateway.getSession();
+
+      // Is this session's agentId a real agent here (TDM-201)? Asked once, for
+      // the whole batch, and ONLY when there is something to compose handoffs
+      // for — an empty queue ships no parent links, so it buys nothing.
+      const parent: ParentCheck = tasks.length > 0 ? await verifyParentAgentId(gateway) : {};
 
       // Handoffs on the claimable rows, tap-outs on anything already lost.
       // Shared with queue_wait so a waited-for task is the same object as a
       // read-for one — see decorateReadyQueue.
-      const { shown, lostByYou } = decorateReadyQueue(gateway, tasks, limit);
+      const { shown, lostByYou } = decorateReadyQueue(gateway, tasks, limit, parent.parentAgentId);
       // An EMPTY queue is where the surface says who may open the approval gate,
       // and that answer is per-canvas (TDM-146): on strict|epic|auto it is the
       // human's, full stop; on 'peer' a reviewer agent is also a way through, and
@@ -1816,8 +1924,9 @@ async function runFacadeTool(
         tasks: shown,
         ...(tasks.length > limit ? { truncated: tasks.length - limit } : {}),
         ...(lostByYou.length > 0 ? { lostByYou, _lostByYou: lostByYouNote(lostByYou.length) } : {}),
+        ...(parent.warning ? { _warning: parent.warning } : {}),
         ...(shown.length > 0
-          ? { _dispatch: dispatchNote(session.agentId) }
+          ? { _dispatch: dispatchNote(parent.parentAgentId) }
           : { _next: emptyQueueNext }),
       };
     }
@@ -1935,8 +2044,10 @@ async function runFacadeTool(
       // attach the SAME handoffs, so the next step is dispatch with nothing to
       // compose.
       const rows = await projectTaskRows(gateway, body.actions, epicId || undefined);
-      const { shown, lostByYou } = decorateReadyQueue(gateway, rows, limit);
-      const session = gateway.getSession();
+      // Same one-per-call parent check queue_next does (TDM-201) — a waited-for
+      // handoff must be the same object as a read-for one, ghost parent included.
+      const parent: ParentCheck = rows.length > 0 ? await verifyParentAgentId(gateway) : {};
+      const { shown, lostByYou } = decorateReadyQueue(gateway, rows, limit, parent.parentAgentId);
       // Every row lost by this session is the one way "ready" can still leave the
       // caller with nothing to do — say so instead of handing back an empty-ish list.
       const claimable = shown.filter((t) => t.lostByYou !== true);
@@ -1949,7 +2060,8 @@ async function runFacadeTool(
         timeoutSeconds: effectiveTimeout,
         ...(rows.length > limit ? { truncated: rows.length - limit } : {}),
         ...(lostByYou.length > 0 ? { lostByYou, _lostByYou: lostByYouNote(lostByYou.length) } : {}),
-        ...(claimable.length > 0 ? { _dispatch: dispatchNote(session.agentId) } : {}),
+        ...(parent.warning ? { _warning: parent.warning } : {}),
+        ...(claimable.length > 0 ? { _dispatch: dispatchNote(parent.parentAgentId) } : {}),
         _next:
           claimable.length > 0
             ? READY_NEXT
