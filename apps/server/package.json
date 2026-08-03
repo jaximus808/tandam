@@ -10,16 +10,15 @@
   },
   "dependencies": {
     "@agentcanvas/shared": "workspace:*",
-    "@fastify/multipart": "^8.3.0",
-    "@fastify/static": "^7.0.4",
-    "@fastify/websocket": "^8.3.1",
+    "@fastify/multipart": "^10.1.0",
+    "@fastify/static": "^10.1.2",
+    "@fastify/websocket": "^11.3.0",
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "fastify": "^4.28.1",
-    "uuid": "^9.0.1"
+    "fastify": "^5.11.0",
+    "uuid": "^11.1.1"
   },
   "devDependencies": {
     "@types/node": "^20.12.7",
-    "@types/uuid": "^9.0.8",
     "tsup": "^8.0.2",
     "tsx": "^4.7.3",
     "typescript": "^5.4.5"

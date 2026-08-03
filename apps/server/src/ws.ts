@@ -1,6 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import type { SocketStream } from "@fastify/websocket";
-import type { WebSocket } from "ws";
+import type { WebSocket } from "@fastify/websocket";
 import type { CanvasMeta, CanvasState, PendingEdit, WSClientMessage } from "@agentcanvas/shared";
 import { newId } from "./entities.js";
 import * as state from "./state.js";
@@ -15,8 +14,9 @@ export function broadcast(canvas: CanvasMeta, canvases: CanvasMeta[], canvasStat
 }
 
 export function registerWs(fastify: FastifyInstance) {
-  fastify.get("/ws", { websocket: true }, (connection: SocketStream) => {
-    const socket = connection.socket;
+  // @fastify/websocket v9+ hands the handler the WebSocket directly
+  // (previously a SocketStream whose `.socket` you had to reach through).
+  fastify.get("/ws", { websocket: true }, (socket: WebSocket) => {
     clients.add(socket);
 
     socket.send(JSON.stringify({
