@@ -1671,6 +1671,7 @@ function composeMarkdown(title: unknown, body: unknown): string {
 
 const FACADE_NAMES = new Set([
   "canvas_connect",
+  "canvas_create",
   "agent_register",
   "context_get",
   "queue_next",
@@ -1694,9 +1695,12 @@ const FACADE_NAMES = new Set([
  * both manifests run one implementation. canvas_connect and agent_register are
  * the identity pair: connect takes the registration fields (TDM-61) and
  * agent_register re-registers afterwards — the same handler serves both
- * surfaces, only the description differs.
+ * surfaces, only the description differs. canvas_create joins them so the
+ * default surface can START a canvas, not just join one — "make me a canvas"
+ * from a session with no code is the product's own onboarding ask, and a tool
+ * that is callable but unadvertised is indistinguishable from missing.
  */
-const IMPLEMENTED_BY_CRUD = new Set(["canvas_connect", "agent_register"]);
+const IMPLEMENTED_BY_CRUD = new Set(["canvas_connect", "canvas_create", "agent_register"]);
 
 /**
  * Still ROUTED, no longer ADVERTISED (TDM-156). `task_review` replaced
@@ -3003,6 +3007,13 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
       "still connect: the result carries `agent.problem` saying so. " +
       "Next: context_get to learn the canvas, or queue_next to go straight to the work.",
     inputSchema: schemaOf("canvas_connect"),
+  },
+  {
+    // The other connector: START a canvas instead of joining one. Description
+    // and schema are the CRUD tool's verbatim — one implementation, one prose.
+    name: "canvas_create",
+    description: descriptionOf("canvas_create"),
+    inputSchema: schemaOf("canvas_create"),
   },
   {
     name: "agent_register",

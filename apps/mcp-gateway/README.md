@@ -163,11 +163,12 @@ Same fields, one JSON object per line, so the numbers can be scraped straight ou
 
 ## Tools
 
-The default surface is a **17-tool intent facade** shaped like the work loop, not like the API:
+The default surface is an **18-tool intent facade** shaped like the work loop, not like the API:
 
 | Tool             | Purpose                                                                                                     |
 | ---------------- | ----------------------------------------------------------------------------------------------------------- |
 | `canvas_connect` | Bind the session to a canvas by 8-char code. Required first; returns the `session` handle and the share URL. Pass `role` (+ `name`, `model`, `parentAgentId`) to **register in the same call** — you get an `agentId` and a handle already carrying it. |
+| `canvas_create`  | The other entry point: CREATE a canvas and bind to it in one step, when the user gave no code. Returns the share `url` (surface it immediately) plus, for agent-created canvases, a private `claimUrl` the user opens to take ownership. |
 | `agent_register` | Register or re-register this session's identity after connect — fix a rejected `parentAgentId`, record the model, switch role. |
 | `context_get`    | The canvas briefing in one cheap call — identity, mode, document tabs, per-kind counts, queue state.        |
 | `queue_next`     | The approved tasks ready to work, compact. The entry point for work.                                        |
@@ -187,7 +188,7 @@ The default surface is a **17-tool intent facade** shaped like the work loop, no
 
 The loop: `canvas_connect` → `queue_next` → `task_get` → `task_claim` → work (`task_progress`, `doc_write`) → `task_complete`.
 
-Every tool but `canvas_connect` takes the `session` handle — pass it on every call, since the hosted connection can reset between calls.
+Every tool but the two connectors (`canvas_connect`, `canvas_create`) takes the `session` handle — pass it on every call, since the hosted connection can reset between calls; the connectors are what RETURN it.
 
 Reading a tab is `doc_read`, not a hand-built HTTP call: `context_get` lists the tabs, `doc_read` returns one tab's notes. Keep the `noteId` of anything you plan to revise — `doc_write` without it appends a second note instead of updating the one you read.
 

@@ -18,12 +18,12 @@ Live at https://tandemcanvas.com. Deploy = push to `main` (GitHub Actions → GC
 The living roadmap for THIS project is itself a Tandem canvas: **code `TEGLQFXR`**
 ("tandem planning"). Dogfooding — we plan Tandem in Tandem.
 
-The tool names below are the **default MCP surface** — the 17-tool intent facade
+The tool names below are the **default MCP surface** — the 18-tool intent facade
 (`FACADE_NAMES` in `apps/mcp-gateway/src/facade.ts`): `canvas_connect`,
-`agent_register`, `context_get`, `queue_next`, `queue_wait`, `task_find`,
-`task_get`, `task_claim`, `task_progress`, `task_complete`, `task_propose`,
-`task_amend`, `task_review`, `epic_propose`, `doc_write`, `doc_read`,
-`board_status`. The old ~80-tool
+`canvas_create`, `agent_register`, `context_get`, `queue_next`, `queue_wait`,
+`task_find`, `task_get`, `task_claim`, `task_progress`, `task_complete`,
+`task_propose`, `task_amend`, `task_review`, `epic_propose`, `doc_write`,
+`doc_read`, `board_status`. The old ~80-tool
 `canvas_*` CRUD surface is still callable but is only *advertised* behind
 `TANDEM_FULL_TOOLS=1`, so write against these names.
 

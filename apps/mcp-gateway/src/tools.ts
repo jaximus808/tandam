@@ -3401,8 +3401,9 @@ const RAW_TOOLS = [
 // model-carried binding note in handleTool and Gateway.exportSession.
 //
 // It says "when you connected to (or created) the canvas" rather than naming
-// canvas_create: this argument is on every facade tool, and canvas_create is a
-// CRUD-only tool the default manifest doesn't advertise (TDM-72).
+// canvas_create so the sentence reads for either entry point: both connectors
+// (canvas_connect and canvas_create, on the default manifest since the demo
+// prep) RETURN the handle rather than taking it.
 const SESSION_ARG = {
   type: "string",
   description:

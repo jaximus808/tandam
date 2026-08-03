@@ -22,6 +22,7 @@ import {
 
 const EXPECTED_FACADE = [
   "canvas_connect",
+  "canvas_create",
   "agent_register",
   "context_get",
   "queue_next",
@@ -40,10 +41,10 @@ const EXPECTED_FACADE = [
   "board_status",
 ];
 
-test("default manifest is exactly the 17-tool intent facade", () => {
+test("default manifest is exactly the 18-tool intent facade", () => {
   const names = manifestFor(false).map((t) => t.name);
   assert.deepEqual(names, EXPECTED_FACADE);
-  assert.equal(names.length, 17);
+  assert.equal(names.length, 18);
 });
 
 test("TANDEM_FULL_TOOLS adds the CRUD surface without dropping or duplicating", () => {
@@ -125,10 +126,10 @@ test("SECURITY: no manifest may ever expose a webhook tool", () => {
   }
 });
 
-test("every facade tool but the connector advertises the session handle", () => {
+test("every facade tool but the connectors advertises the session handle", () => {
   for (const tool of FACADE_TOOLS) {
     const props = (tool.inputSchema.properties ?? {}) as Record<string, unknown>;
-    if (tool.name === "canvas_connect") {
+    if (tool.name === "canvas_connect" || tool.name === "canvas_create") {
       assert.equal(props.session, undefined, "connector must not take a session");
       continue;
     }
