@@ -8,6 +8,7 @@
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createHmac, timingSafeEqual } from "node:crypto";
 
 import { recordApiCall } from "./trace.js";
 
@@ -68,28 +69,125 @@ export interface CanvasSession {
 }
 
 /**
+ * The serialized form of a CanvasSession: the session's own fields plus `sig`,
+ * the integrity tag. `sig` never lives on an in-memory CanvasSession — it is
+ * added on the way out and verified-then-stripped on the way in.
+ */
+interface SessionEnvelope extends CanvasSession {
+  sig?: string;
+}
+
+const INVALID_HANDLE_MESSAGE =
+  "Invalid session handle. Re-run `canvas_connect` (or `canvas_create`) to get a fresh one.";
+
+/**
+ * Every field a gateway has ever written into a handle. Used ONLY on the legacy
+ * (sig-less) path: a handle whose `"sig"` KEY was itself mangled — `"#ig"` — has
+ * no sig to check and would otherwise be waved through as legacy, so an
+ * unrecognized field on that path is treated as the corruption it is. The signed
+ * path stays tolerant of unknown fields (the MAC already covers them), which is
+ * what keeps a handle minted by a newer gateway readable here.
+ */
+const KNOWN_SESSION_FIELDS = new Set<string>([
+  "token",
+  "canvasId",
+  "canvasName",
+  "canvasCode",
+  "claimToken",
+  "agentId",
+  "agentName",
+  "claimantId",
+  "claimGeneration",
+]);
+
+/**
+ * Deterministic JSON: object keys sorted, undefined dropped. Both sides of the
+ * MAC must serialize the same bytes regardless of key insertion order, since a
+ * handle is written by one process and verified by another.
+ */
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value) ?? "null";
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(",")}]`;
+  }
+  const obj = value as Record<string, unknown>;
+  const parts: string[] = [];
+  for (const key of Object.keys(obj).sort()) {
+    const v = obj[key];
+    if (v === undefined) continue;
+    parts.push(`${JSON.stringify(key)}:${canonicalJson(v)}`);
+  }
+  return `{${parts.join(",")}}`;
+}
+
+/**
+ * Integrity tag over every field of the envelope EXCEPT `sig`, keyed on the
+ * envelope's own `token`.
+ *
+ * This is CORRUPTION DETECTION, not an anti-forgery boundary: the key rides in
+ * the handle, so anyone holding a handle can mint a matching tag. What it buys
+ * is that a handle mangled in transit (a flipped character in agentId, a
+ * truncated claimantId) fails loudly at parse instead of half-working — the
+ * TDM-200 incident, where one corrupted agentId poisoned the parentAgentId of
+ * every dispatched handoff. A flip inside the `token` itself is caught
+ * server-side by the JWT's own signature; this catches the rest.
+ */
+function sessionMac(fields: CanvasSession): string {
+  return createHmac("sha256", String(fields.token ?? ""))
+    .update(canonicalJson(fields))
+    .digest("base64url");
+}
+
+function macsEqual(a: string, b: string): boolean {
+  const left = Buffer.from(a, "utf8");
+  const right = Buffer.from(b, "utf8");
+  if (left.length !== right.length) return false;
+  return timingSafeEqual(left, right);
+}
+
+/**
  * Pure handle codec — the session handle IS the session state on the hosted
  * transport, so everything identity-related (agentId/agentName/claimantId)
  * must round-trip through these two functions.
  */
 export function serializeSession(session: CanvasSession): string {
-  return Buffer.from(JSON.stringify(session)).toString("base64url");
+  const { sig: _stale, ...fields } = session as SessionEnvelope;
+  const envelope: SessionEnvelope = { ...fields, sig: sessionMac(fields) };
+  return Buffer.from(JSON.stringify(envelope)).toString("base64url");
 }
 
-/** Parse a handle produced by serializeSession; throws on garbage. */
+/**
+ * Parse a handle produced by serializeSession; throws on garbage, and on a
+ * signed handle whose `sig` does not match its contents.
+ *
+ * A handle with NO `sig` is accepted unchanged: handles minted by an older
+ * gateway are still live inside running sessions, and rejecting them would log
+ * every one of those sessions out the moment this deploys.
+ */
 export function parseSession(handle: string): CanvasSession {
-  let parsed: CanvasSession;
+  let parsed: SessionEnvelope;
   try {
     parsed = JSON.parse(Buffer.from(handle, "base64url").toString("utf8"));
   } catch {
-    throw new Error(
-      "Invalid session handle. Re-run `canvas_connect` (or `canvas_create`) to get a fresh one."
-    );
+    throw new Error(INVALID_HANDLE_MESSAGE);
   }
   if (!parsed?.token || !parsed?.canvasId) {
-    throw new Error(
-      "Invalid session handle. Re-run `canvas_connect` (or `canvas_create`) to get a fresh one."
-    );
+    throw new Error(INVALID_HANDLE_MESSAGE);
+  }
+  if ("sig" in parsed) {
+    const { sig, ...fields } = parsed;
+    // Fail closed: a present-but-unusable tag is corruption too.
+    if (typeof sig !== "string" || !macsEqual(sig, sessionMac(fields))) {
+      throw new Error(INVALID_HANDLE_MESSAGE);
+    }
+    return fields;
+  }
+  for (const key of Object.keys(parsed)) {
+    if (!KNOWN_SESSION_FIELDS.has(key)) {
+      throw new Error(INVALID_HANDLE_MESSAGE);
+    }
   }
   return parsed;
 }
