@@ -409,6 +409,18 @@ async function runTool(
       const rawName = typeof args.name === "string" ? args.name.trim() : "";
       const name = rawName || "Untitled canvas";
       const session = await gateway.createCanvas(name);
+      // One-call create + register, mirroring canvas_connect (TDM-61). On
+      // create, `name` is the CANVAS name, so the agent's own name arrives as
+      // `agentName` — remap before handing to the shared registration path.
+      // Registering HERE is what lets the model talk to the user right after
+      // this call instead of chaining agent_register first (the observed
+      // "looks broken while it silently registers and explores" stall).
+      const agent = await registerOnConnect(gateway, {
+        role: args.role,
+        name: args.agentName,
+        model: args.model,
+        parentAgentId: args.parentAgentId,
+      });
       const result: Record<string, unknown> = {
         created: true,
         canvasId: session.canvasId,
@@ -416,17 +428,27 @@ async function runTool(
         canvasCode: session.canvasCode,
         // Ownership-free view/share link — safe to give anyone.
         url: gateway.canvasUrl(session.canvasCode),
+        ...(agent?.registered === true ? { agentId: agent.agentId } : {}),
+        ...(agent ? { agent } : {}),
+        // Exported AFTER registration so the handle already carries the agent
+        // identity — there is no second handle to switch to.
         session: gateway.exportSession(),
         _surface_url_now:
-          "FIRST, before any research or edits: tell the user their canvas is live and give them " +
-          "this `url` so they can open it now and WATCH your changes land in real time. Don't make " +
-          "them wait staring at nothing while you research or plan. THEN do the work. When you " +
-          "finish, summarize what you changed and repeat the `url` so they can jump straight to it.",
+          "STOP — your NEXT output is TEXT to the user, not another tool call: tell them their " +
+          "canvas is live and give them this `url` so they can open it now and WATCH your changes " +
+          "land in real time. Don't make them wait staring at nothing while you register, research " +
+          "or plan. THEN do the work. When you finish, summarize what you changed and repeat the " +
+          "`url` so they can jump straight to it.",
         _session_note:
-          "Pass `session` back as the `session` argument on EVERY later canvas_* call. The hosted " +
-          "MCP connection can reset between calls; carrying this handle keeps your edits on this " +
-          "canvas without having to reconnect. Note: agent_register returns an UPDATED handle " +
-          "carrying your agent identity — switch to that one after registering.",
+          agent?.registered === true
+            ? "You are ALREADY registered — do NOT call agent_register. Pass `session` back as the " +
+              "`session` argument on EVERY later canvas_* call; it already carries your agent " +
+              "identity. The hosted MCP connection can reset between calls; carrying this handle " +
+              "keeps your edits on this canvas without having to reconnect."
+            : "Pass `session` back as the `session` argument on EVERY later canvas_* call. The hosted " +
+              "MCP connection can reset between calls; carrying this handle keeps your edits on this " +
+              "canvas without having to reconnect. Note: agent_register returns an UPDATED handle " +
+              "carrying your agent identity — switch to that one after registering.",
       };
       // For an anonymous create, also surface the PRIVATE claim link so the user
       // can take ownership. Keep the two links distinct in what you tell the user.
@@ -1415,9 +1437,13 @@ const RAW_TOOLS = [
       "canvas' and gave no code). Good moment to OFFER this: when the user is brainstorming or " +
       "planning and would benefit from seeing it laid out — ask if they want it on a Tandem " +
       "canvas. Returns: `url` (ownership-free view/share link). Surface `url` to the user " +
-      "IMMEDIATELY — before any research, planning, or edits — so they can open the canvas and " +
-      "watch your changes appear live instead of waiting with nothing to look at; then repeat it " +
-      "in your final summary of what changed. Also returns, for these agent-created canvases, " +
+      "IMMEDIATELY — the very next thing you emit after this tool returns is TEXT giving them the " +
+      "url, before any research, planning, edits, or further tool calls — so they can open the " +
+      "canvas and watch your changes appear live instead of waiting with nothing to look at; then " +
+      "repeat it in your final summary of what changed. ALSO REGISTER HERE: pass `role` (plus " +
+      "`agentName`, `model`, `parentAgentId`) to register as an agent in the SAME call — you get " +
+      "back an `agentId` and a `session` handle already carrying that identity, so there is no " +
+      "follow-up agent_register call to make. Also returns, for these agent-created canvases, " +
       "`claimUrl` + `claimHint`. The " +
       "claimUrl is a PRIVATE link that lets the user claim the canvas as their own (it then " +
       "appears in their account and stays the very canvas you keep editing). Give claimUrl only " +
@@ -1430,6 +1456,15 @@ const RAW_TOOLS = [
           type: "string",
           description: "Human-readable canvas name (e.g. the project or plan title). Optional.",
         },
+        role: AGENT_IDENTITY_PROPS.role,
+        agentName: {
+          ...AGENT_IDENTITY_PROPS.name,
+          description:
+            "YOUR agent name shown on the board (e.g. 'opus-orchestrator') — distinct from " +
+            "`name`, which names the canvas. Defaults to the role.",
+        },
+        model: AGENT_IDENTITY_PROPS.model,
+        parentAgentId: AGENT_IDENTITY_PROPS.parentAgentId,
       },
     },
   },
@@ -3048,7 +3083,8 @@ const RAW_TOOLS = [
     name: "agent_register",
     description:
       "Register (or re-register) this session's agent identity. Prefer doing it IN " +
-      "canvas_connect — pass `role` there and you connect and register in one call. " +
+      "canvas_connect or canvas_create — pass `role` there and you connect and register " +
+      "in one call. " +
       "Use this tool when you didn't, or to CHANGE your identity afterwards: correct " +
       "a parentAgentId the canvas rejected, record the model you're actually running, " +
       "or switch role. Returns an agentId that is recorded as the author (provenance) " +

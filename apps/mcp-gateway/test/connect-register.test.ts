@@ -48,6 +48,12 @@ function withRecordedFetch(
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     calls.push({ method, path: url.pathname, body });
 
+    if (url.pathname === "/api/canvases") {
+      return new Response(JSON.stringify({ code: "TESTCODE", claimToken: "claim-1" }), {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      });
+    }
     if (url.pathname === "/api/mcp/auth") {
       return new Response(JSON.stringify(AUTH_RESPONSE), {
         status: 200,
@@ -239,6 +245,82 @@ test("a plain connect is untouched — no registration, no agent block", async (
     assert.equal("agentId" in res, false);
     assert.match(claimantFromHandle(res.session), /^session-/);
   });
+});
+
+// ── canvas_create + register in ONE call ─────────────────────────────────────
+// The observed failure mode this exists to kill: after canvas_create the model
+// chains straight into agent_register before saying anything, so the user
+// stares at a silent session that looks hung even though the url came back on
+// the very first call. With registration folded into create there is no second
+// call to chain — the next thing the model does is surface the url.
+
+test("create + role registers in one call; agentName names the agent, name the canvas", async () => {
+  await withRecordedFetch(async (calls) => {
+    const res = (await handleTool(freshGateway(), "canvas_create", {
+      name: "Rejection Loop Fixes",
+      role: "planner",
+      agentName: "opus-orchestrator",
+      model: "claude-opus-4-8",
+    })) as Record<string, any>;
+
+    assert.equal(calls.length, 3, "canvas create + auth handshake + one registration");
+    const post = calls[2];
+    assert.equal(post.path, "/api/canvas/agents");
+    assert.deepEqual(post.body, {
+      name: "opus-orchestrator",
+      role: "planner",
+      model: "claude-opus-4-8",
+    });
+
+    assert.equal(res.created, true);
+    assert.equal(res.agentId, "agent-42", "the agentId must be on the create result");
+    assert.deepEqual(res.agent, {
+      registered: true,
+      agentId: "agent-42",
+      name: "opus-orchestrator",
+      role: "planner",
+    });
+    // The whole point: the handle handed back already carries the identity, so
+    // there is nothing left to chain before talking to the user.
+    assert.equal(claimantFromHandle(res.session), "opus-orchestrator");
+    assert.match(res._session_note, /ALREADY registered/);
+    assert.match(res._session_note, /do NOT call agent_register/);
+  });
+});
+
+test("a plain create is untouched — no registration, no agent block", async () => {
+  await withRecordedFetch(async (calls) => {
+    const res = (await handleTool(freshGateway(), "canvas_create", {
+      name: "Plain Canvas",
+    })) as Record<string, any>;
+
+    assert.equal(calls.length, 2, "create + auth only — no agents POST");
+    assert.equal("agent" in res, false);
+    assert.equal("agentId" in res, false);
+    assert.match(res._session_note, /agent_register returns an UPDATED handle/);
+    assert.match(claimantFromHandle(res.session), /^session-/);
+  });
+});
+
+test("create with a rejected parentAgentId still creates, registered unparented", async () => {
+  await withRecordedFetch(
+    async (calls) => {
+      const res = (await handleTool(freshGateway(), "canvas_create", {
+        name: "Fleet Canvas",
+        role: "executor",
+        agentName: "orphan-worker",
+        parentAgentId: "not-a-real-agent",
+      })) as Record<string, any>;
+
+      assert.equal(calls.length, 4, "create + auth + rejected registration + unparented retry");
+      assert.equal(res.created, true, "a bad parent must not cost the canvas");
+      assert.equal(res.agent.registered, true);
+      assert.equal(res.agent.parentAgentId, null);
+      assert.match(res.agent.problem, /not-a-real-agent/);
+      assert.equal(claimantFromHandle(res.session), "orphan-worker");
+    },
+    { rejectParent: true }
+  );
 });
 
 test("agent_register still works on its own, for re-registration after connect", async () => {
