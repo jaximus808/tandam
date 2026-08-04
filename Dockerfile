@@ -11,7 +11,7 @@
 FROM node:22-alpine AS web-builder
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
-RUN corepack enable && corepack prepare pnpm@10.4.1 --activate
+RUN corepack enable && corepack prepare pnpm@11.2.2 --activate
 
 WORKDIR /repo
 
