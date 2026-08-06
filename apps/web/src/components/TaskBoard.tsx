@@ -1003,18 +1003,26 @@ export function BouncedNotice({
    list to make a decision is what turns an eleven-ticket epic into a desktop
    chore, and the gate has to survive being worked one-handed on a phone.
 
-   REJECT COSTS EXACTLY WHAT APPROVE COSTS. It used to be two taps (Reject →
-   Confirm reject) against approve's one, which is not a neutral gate: the
-   cheaper button wins, and a board where every ticket gets approved is a board
-   with no gate on it. So on a TASK reject fires on the first tap and the board
-   arms an Undo strip (rejected → proposed is a legal move — lib/taskMoves'
-   RECONSIDER), which is the same safety at equal cost. Same geometry, same tap
-   count, and reject carries its own rose so it reads as a real decision rather
-   than as the Cancel of the pair.
+   REJECT STILL COSTS WHAT APPROVE COSTS, on the tap that decides. It used to be
+   two taps (Reject → Confirm reject) against approve's one, which is not a
+   neutral gate: the cheaper button wins, and a board where every ticket gets
+   approved is a board with no gate on it. Reject carries its own rose so it
+   reads as a real decision rather than as the Cancel of the pair, and the board
+   arms an Undo strip afterwards (rejected → proposed is a legal move —
+   lib/taskMoves' RECONSIDER) instead of asking "are you sure".
 
-   EPICS KEEP THE CONFIRM (`confirmReject`). Rejecting an epic archives a whole
-   batch, and the undo for that is not one move — the asymmetry there is
-   earned. Neither path takes a reason; the detail panel keeps the long form.
+   THE SECOND STEP IS THE REASON, NOT A CONFIRM (TDM-1). Tapping Reject opens
+   one optional textarea with submit + cancel — the same strip the bulk triage
+   bar offers, because a rejection rate only means something if the record says
+   why. Optional everywhere: submitting it empty rejects exactly as the one-tap
+   path did, so saying no costs nothing extra for anyone with nothing to add.
+   ⌘/Ctrl+Enter submits, Escape backs out keeping the ticket.
+
+   EPICS KEEP THE HEAVIER COPY (`confirmReject`). Rejecting an epic archives a
+   whole batch and the undo for that is not one move, so its submit reads
+   "Confirm reject" over the same field. The reason rides through rejectAction
+   into the ticket's error column, which the detail panel and TicketView already
+   print as "Rejection reason".
 
    stopPropagation so the card's click-through to the detail panel doesn't fire
    underneath the buttons. */
@@ -1031,34 +1039,77 @@ function TriageControls({
   busy: boolean;
   rejecting: boolean;
   approveLabel?: string;
-  /** Two-step reject (epics). Tasks reject on the first tap and offer Undo. */
+  /** Heavier reject copy (epics): "Confirm reject" over the same reason field. */
   confirmReject?: boolean;
   onApprove: () => void;
-  onReject: () => void;
+  /** The reason is optional — undefined means "rejected without one". */
+  onReject: (reason?: string) => void;
   /** Opens the in-place editor. Omitted where amending makes no sense (epics). */
   onAmend?: () => void;
   setRejecting: (v: boolean) => void;
 }) {
+  // The draft lives here, not on the board: it dies with the strip, and a
+  // second ticket's strip opens empty rather than wearing the first one's text.
+  const [reason, setReason] = useState("");
+
+  function close() {
+    setReason("");
+    setRejecting(false);
+  }
+
+  function submit() {
+    onReject(reason.trim() || undefined);
+    setReason("");
+  }
+
   return (
-    <div className="mt-2 flex gap-1.5" onClick={(e) => e.stopPropagation()}>
+    <div className="mt-2" onClick={(e) => e.stopPropagation()}>
       {rejecting ? (
-        <>
-          <button
-            onClick={onReject}
-            disabled={busy}
-            className={`flex-1 rounded-md bg-rose-600 px-2 py-1 font-medium text-white transition-colors hover:bg-rose-700 disabled:opacity-40 ${T_BTN} ${TAP}`}
-          >
-            Confirm reject
-          </button>
-          <button
-            onClick={() => setRejecting(false)}
-            className={`rounded-md border border-ink/15 px-2 py-1 font-medium text-ink/60 transition-colors hover:border-ink/30 ${T_BTN} ${TAP}`}
-          >
-            Cancel
-          </button>
-        </>
+        <div className="flex flex-col gap-1.5">
+          <textarea
+            autoFocus
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            onKeyDown={(e: ReactKeyboardEvent) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                submit();
+              }
+              // Escape closes THIS strip and stops there: the board's global
+              // handler would otherwise read it as "clear the filters".
+              if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                close();
+              }
+            }}
+            rows={2}
+            placeholder={
+              confirmReject
+                ? "Why this batch is being turned down (optional)"
+                : "Why this is being turned down (optional)"
+            }
+            aria-label="Reason for rejecting this ticket"
+            className={`w-full resize-y rounded-md border border-ink/15 bg-paper px-2 py-1.5 leading-relaxed text-ink placeholder:text-ink/35 focus:border-rose-500/50 focus:outline-none focus:ring-2 focus:ring-rose-500/20 ${T_BTN}`}
+          />
+          <div className="flex gap-1.5">
+            <button
+              onClick={submit}
+              disabled={busy}
+              className={`flex-1 rounded-md bg-rose-600 px-2 py-1 font-medium text-white transition-colors hover:bg-rose-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500/40 disabled:opacity-40 ${T_BTN} ${TAP}`}
+            >
+              {confirmReject ? "Confirm reject" : "Reject"}
+            </button>
+            <button
+              onClick={close}
+              className={`rounded-md border border-ink/15 px-2 py-1 font-medium text-ink/60 transition-colors hover:border-ink/30 ${T_BTN} ${TAP}`}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
       ) : (
-        <>
+        <div className="flex gap-1.5">
           <button
             onClick={onApprove}
             disabled={busy}
@@ -1067,9 +1118,14 @@ function TriageControls({
             <Check size={12} /> {approveLabel}
           </button>
           <button
-            onClick={() => (confirmReject ? setRejecting(true) : onReject())}
+            onClick={() => setRejecting(true)}
             disabled={busy}
-            title={confirmReject ? undefined : "Reject this ticket — you can undo it"}
+            aria-expanded={false}
+            title={
+              confirmReject
+                ? undefined
+                : "Reject this ticket — say why if you want, and you can undo it"
+            }
             className={`flex flex-1 items-center justify-center gap-1 rounded-md border border-rose-500/30 px-2 py-1 font-medium text-rose-600 transition-colors hover:border-rose-500/60 hover:bg-rose-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500/40 disabled:opacity-40 dark:text-rose-400 ${T_BTN} ${TAP}`}
           >
             <X size={12} /> Reject
@@ -1085,7 +1141,7 @@ function TriageControls({
               <Pencil size={12} />
             </button>
           )}
-        </>
+        </div>
       )}
     </div>
   );
@@ -2006,29 +2062,36 @@ export default function TaskBoard({
     });
   }
 
-  // The write itself, id-only: the one place the board rejects anything.
-  function rejectOne(id: string) {
+  // The write itself: the one place the board rejects anything. The reason is
+  // whatever the card's strip collected, and undefined when it was left empty —
+  // the same optional field the bulk bar writes (TDM-1).
+  function rejectOne(id: string, reason?: string) {
     return run(id, async () => {
-      await rejectAction(code, id);
+      await rejectAction(code, id, reason);
       setRejectingId(null);
-      posthog.capture("agent_task_rejected", { canvas_code: code, surface: "board" });
+      posthog.capture("agent_task_rejected", {
+        canvas_code: code,
+        with_reason: !!reason,
+        surface: "board",
+      });
     });
   }
 
-  // One tap on a TASK — no confirm, but the strip that arms Undo. The label is
-  // captured before the write because the card leaves the Proposed lane the
-  // moment the broadcast lands, and "Rejected TDM-163" has to survive that.
-  function reject(a: Action) {
+  // Submitting a TASK's reject strip — no confirm, but the strip that arms Undo.
+  // The label is captured before the write because the card leaves the Proposed
+  // lane the moment the broadcast lands, and "Rejected TDM-163" has to survive
+  // that.
+  function reject(a: Action, reason?: string) {
     if (a.type === "epic") {
       void run(a.id, async () => {
-        await rejectAction(code, a.id);
+        await rejectAction(code, a.id, reason);
         setRejectingId(null);
       });
       return;
     }
     const label = a.ticketId || taskPayload(a).title || "that ticket";
     if (amendingId === a.id) setAmendingId(null);
-    void rejectOne(a.id).then((ok) => {
+    void rejectOne(a.id, reason).then((ok) => {
       if (ok) setUndoReject({ ids: [a.id], label });
     });
   }
@@ -2494,7 +2557,7 @@ export default function TaskBoard({
         approveLabel={approveLabel}
         confirmReject={isEpic}
         onApprove={() => approve(a)}
-        onReject={() => reject(a)}
+        onReject={(reason) => reject(a, reason)}
         onAmend={isEpic ? undefined : () => setAmendingId(a.id)}
         setRejecting={(v) => setRejectingId(v ? a.id : null)}
       />
@@ -4148,6 +4211,11 @@ function TaskDetail({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<DetailConfirm>(null);
+  // The optional reason typed into the reject strip (TDM-1). Lives beside
+  // `confirm` because confirmStrip is a render helper, not its own component;
+  // opening or cancelling the strip clears it, so it never leaks into the next
+  // decision.
+  const [confirmReason, setConfirmReason] = useState("");
   const [editing, setEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(p.title ?? "");
   const [editBody, setEditBody] = useState(p.body ?? "");
@@ -4293,10 +4361,11 @@ function TaskDetail({
     });
   }
 
-  function reject() {
+  function reject(reason?: string) {
     void run(async () => {
-      await rejectAction(code, action.id);
+      await rejectAction(code, action.id, reason);
       setConfirm(null);
+      setConfirmReason("");
     });
   }
 
@@ -4355,29 +4424,74 @@ function TaskDetail({
   }
 
   // Two-step confirm strip for a destructive move (mirrors the board's reject).
-  function confirmStrip(kind: Exclude<DetailConfirm, null>, message: string, label: string, onGo: () => void) {
+  // `withReason` adds the optional reason field — reject takes one, delete does
+  // not: a deleted task has nowhere left to carry the note (TDM-1).
+  function confirmStrip(
+    kind: Exclude<DetailConfirm, null>,
+    message: string,
+    label: string,
+    onGo: (reason?: string) => void,
+    withReason = false,
+  ) {
     if (confirm !== kind) return null;
+    const go = () => onGo(withReason ? confirmReason.trim() || undefined : undefined);
+    const cancel = () => {
+      setConfirm(null);
+      setConfirmReason("");
+    };
+    const buttons = (
+      <div className="flex shrink-0 gap-1.5">
+        <button
+          onClick={go}
+          disabled={busy}
+          className={`flex flex-1 items-center justify-center rounded-md bg-rose-600 px-2.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-rose-700 disabled:opacity-40 sm:flex-none ${TAP}`}
+        >
+          {label}
+        </button>
+        <button
+          onClick={cancel}
+          className={`flex flex-1 items-center justify-center rounded-md border border-ink/15 px-2.5 py-1.5 text-xs font-medium text-ink/60 hover:border-ink/30 sm:flex-none ${TAP}`}
+        >
+          Cancel
+        </button>
+      </div>
+    );
     // Below sm the question takes its own line: a destructive confirm must be
     // readable before it is tappable, and squeezing prose + two buttons into a
     // 390px row leaves the prose one word wide.
     return (
-      <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center">
-        <span className="min-w-0 flex-1 text-[12px] leading-snug text-ink/60">{message}</span>
-        <div className="flex shrink-0 gap-1.5">
-          <button
-            onClick={onGo}
-            disabled={busy}
-            className={`flex flex-1 items-center justify-center rounded-md bg-rose-600 px-2.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-rose-700 disabled:opacity-40 sm:flex-none ${TAP}`}
-          >
-            {label}
-          </button>
-          <button
-            onClick={() => setConfirm(null)}
-            className={`flex flex-1 items-center justify-center rounded-md border border-ink/15 px-2.5 py-1.5 text-xs font-medium text-ink/60 hover:border-ink/30 sm:flex-none ${TAP}`}
-          >
-            Cancel
-          </button>
+      <div className="flex flex-col gap-1.5">
+        <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center">
+          <span className="min-w-0 flex-1 text-[12px] leading-snug text-ink/60">{message}</span>
+          {!withReason && buttons}
         </div>
+        {withReason && (
+          <>
+            <textarea
+              autoFocus
+              value={confirmReason}
+              onChange={(e) => setConfirmReason(e.target.value)}
+              onKeyDown={(e: ReactKeyboardEvent) => {
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault();
+                  go();
+                }
+                // Escape puts the strip away rather than closing the whole
+                // panel out from under a half-typed reason.
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  cancel();
+                }
+              }}
+              rows={2}
+              placeholder="Why it is being turned down (optional) — recorded on the ticket"
+              aria-label="Reason for rejecting this ticket"
+              className="w-full resize-y rounded-md border border-ink/15 bg-paper px-2 py-1.5 text-[12px] leading-relaxed text-ink placeholder:text-ink/35 focus:border-rose-500/50 focus:outline-none focus:ring-2 focus:ring-rose-500/20"
+            />
+            {buttons}
+          </>
+        )}
       </div>
     );
   }
@@ -4864,7 +4978,13 @@ function TaskDetail({
             )}
             {action.state === "proposed" &&
               (confirm === "reject" ? (
-                confirmStrip("reject", `Reject this ${isTask ? "task" : "epic"}?`, "Reject", reject)
+                confirmStrip(
+                  "reject",
+                  `Reject this ${isTask ? "task" : "epic"}?`,
+                  "Reject",
+                  reject,
+                  true,
+                )
               ) : (
                 <div className="flex flex-col gap-2">
                   {/* One control, not a 14px box with a label loosely wired to
@@ -4903,7 +5023,14 @@ function TaskDetail({
                         <Pencil size={12} /> Edit
                       </button>
                     )}
-                    <button onClick={() => setConfirm("reject")} disabled={busy} className={quietBtn}>
+                    <button
+                      onClick={() => {
+                        setConfirmReason("");
+                        setConfirm("reject");
+                      }}
+                      disabled={busy}
+                      className={quietBtn}
+                    >
                       <X size={13} /> Reject
                     </button>
                   </div>
