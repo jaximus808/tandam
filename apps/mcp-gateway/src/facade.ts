@@ -1402,10 +1402,40 @@ type Handoff = {
 const UNREGISTERED_PARENT =
   '<the planner\'s agentId — you have none yet: reconnect with canvas_connect role "planner" to get one>';
 
+// ── Shared-checkout conventions (TDM-9) ──────────────────────────────────────
+//
+// THE FAILURE THIS FIXES. A fan-out puts several workers in ONE working copy at
+// once, and every collision observed in practice came from a worker behaving
+// exactly as it would alone: two agents independently invented a package-level
+// test fixture with the same obvious name (compile collision, one had to be
+// renamed); a worker nearly "fixed" formatter noise that belonged to somebody
+// else's uncommitted edit; a whole-directory `git add` swept a second ticket's
+// half-finished hunks into the wrong commit.
+//
+// None of that is a repo rule — it is what "you are not alone in this checkout"
+// means, so it belongs in the dispatch payload rather than in any one project's
+// contributor docs (the reason TDM-8, which put it in this repo's CLAUDE.md, was
+// rejected). The handoff is the only thing every parallel worker provably reads.
+//
+// ONLY WHEN THE READ IS ACTUALLY PARALLEL. A single dispatchable task means one
+// worker, and telling a lone agent to defend against collisions that cannot
+// happen is noise that trains agents to skim the steps — so this appears only
+// when the same queue read hands back two or more tasks to dispatch.
+const SHARED_CHECKOUT_CONVENTIONS =
+  "You are one of SEVERAL workers in one shared checkout right now, so: keep every edit inside " +
+  "your own ticket's surface; give any package-level test fixture or helper a ticket-unique name " +
+  "(a sibling worker inventing the same obvious name is a compile error, not a merge conflict); " +
+  "leave lint/format noise that belongs to another ticket alone and note it in your result " +
+  "instead of fixing it; stage your commit by explicit path, never a repo-wide `git add -A`/`.`; " +
+  "and if a file you touched already carries another ticket's uncommitted hunks, say so and let " +
+  "that ticket commit first.";
+
 function buildHandoff(
   task: Record<string, unknown>,
   canvasCode: string,
-  parentAgentId?: string
+  parentAgentId?: string,
+  /** True when this same read is dispatching 2+ tasks — see the block above. */
+  parallel = false
 ): Handoff {
   const taskId = String(task.id ?? "");
   const ticketId = typeof task.ticketId === "string" ? task.ticketId : undefined;
@@ -1423,6 +1453,7 @@ function buildHandoff(
       `task_claim id "${taskId}"${ticketSuffix} — "${title}". Claim it yourself; the planner deliberately did not claim it for you.`,
       `If it comes back claimed:false, another session got there first — call queue_next and take a different ready task. Never work a task you did not claim.`,
       `task_get id "${taskId}" for the full brief (linked notes and roadmap items), then do the work.`,
+      ...(parallel ? [SHARED_CHECKOUT_CONVENTIONS] : []),
       `task_progress on long work — one line per meaningful step, so the board shows movement instead of silence.`,
       `task_complete with a result summary (what changed, which files) plus \`links\` to any commit or PR.`,
     ],
@@ -1562,7 +1593,10 @@ function decorateReadyQueue(
 ): { shown: Array<Record<string, unknown>>; lostByYou: Array<Record<string, unknown>> } {
   const session = gateway.getSession();
   const lostByYou: Array<Record<string, unknown>> = [];
-  const shown = tasks.slice(0, Math.max(1, limit)).map((t) => {
+  // PASS 1 — settle each row's tap-out status. No handoffs yet: whether this
+  // batch is parallel (TDM-9) is a property of the whole read, and it cannot be
+  // known while still walking it.
+  const settled = tasks.slice(0, Math.max(1, limit)).map((t) => {
     const row = (t ?? {}) as Record<string, unknown>;
     const id = typeof row.id === "string" ? row.id : undefined;
     const ticketId = typeof row.ticketId === "string" ? row.ticketId : undefined;
@@ -1582,11 +1616,24 @@ function decorateReadyQueue(
             `claim or dispatch. No handoff is attached on purpose. Take a different task.`,
         };
         lostByYou.push({ id, ...(ticketId ? { ticketId } : {}) });
-        return marked;
+        return { row: marked, dispatchable: false };
       }
     }
-    return { ...row, handoff: buildHandoff(row, session.canvasCode, parentAgentId) };
+    return { row, dispatchable: true };
   });
+
+  // Counted over the DISPATCHABLE rows, not the returned ones: a task marked
+  // lostByYou carries no handoff and spawns no worker, so a read of "one live
+  // task plus three tap-outs" is a solo run and gets the solo steps.
+  const parallel = settled.filter((s) => s.dispatchable).length > 1;
+
+  // PASS 2 — attach the handoffs, now that every one of them can agree about
+  // whether its worker has company.
+  const shown = settled.map(({ row, dispatchable }) =>
+    dispatchable
+      ? { ...row, handoff: buildHandoff(row, session.canvasCode, parentAgentId, parallel) }
+      : row
+  );
   return { shown, lostByYou };
 }
 
