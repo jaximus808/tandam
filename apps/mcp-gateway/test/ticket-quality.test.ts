@@ -28,6 +28,13 @@ import assert from "node:assert/strict";
 
 import { Gateway, serializeSession } from "../src/gateway.js";
 import { handleFacadeTool } from "../src/facade.js";
+import {
+  TICKET_CONTEXT_CHARS,
+  TICKET_COORDINATE_CHARS_PER_REF,
+  TICKET_COORDINATE_MIN_REFS,
+  coordinateRefs,
+  isCoordinateBrief,
+} from "@agentcanvas/shared/ticket-quality";
 
 type Routes = Record<string, (url: URL, body: any) => Response>;
 
@@ -293,4 +300,141 @@ test("an executing ticket is told to settle the questions before writing code", 
   assert.ok(codes(res).length > 0);
   assert.match(String(res._quality), /before you write code/i);
   assert.doesNotMatch(String(res._quality), /task_amend/);
+});
+
+// ── 7. context_not_linked measures DENSITY, not length (TDM-7) ───────────────
+//
+// The rule fired on `body.length > TICKET_CONTEXT_CHARS && !linked`, which is
+// pure weight — and a coordinate brief is heavy for the right reason. A body
+// that is mostly `path/file.go:123` IS the brief; there is no note it could
+// have linked, so the advice ("link it instead of pasting it") had nothing to
+// point at. What these pin is that the exemption is narrow: prose stays prose
+// however many paths it name-drops, and both sides of the density bar are here.
+
+/** TDM-7's calibration case, verbatim: TDM-1's real body — 1416 chars, a walk
+ *  down one component naming 15 distinct coordinates and nothing else. */
+const COORDINATE_BRIEF =
+  "Surface: apps/web/src/components/TaskBoard.tsx only. Today only the bulk triage bar " +
+  "(lines ~3583-3667, `bulkReason` textarea, ⌘/Ctrl+Enter submit) collects a reason; single " +
+  "rejects never do. Add an optional-reason step, reusing the bulk bar's textarea pattern and " +
+  "styling, to: (a) card-level `TriageControls` (~line 1021) — tapping Reject on a task opens " +
+  "an inline reason strip (textarea + Reject submit + cancel) instead of firing `onReject()` " +
+  "immediately (~1069-1076); (b) the epic two-step 'Confirm reject' strip (~1044-1058) — add " +
+  "the textarea there; (c) the detail slide-over `confirmStrip` for reject (~4358-4383, " +
+  "invoked ~4866) — add a textarea to the reject variant only (not delete). Reason stays " +
+  "OPTIONAL everywhere — empty submit still rejects. Thread the string through `rejectOne` " +
+  "(~2010), `reject` (~2021), and TaskDetail's `reject` (~4296) into the existing " +
+  "`rejectAction(code, id, reason)` (apps/web/src/lib/api.ts:647 — no API changes needed). " +
+  "Keep the `agent_task_rejected` analytics event and add a `with_reason` property mirroring " +
+  "the batch event (~2233). Update the now-false header comment at ~999-1019 ('Neither path " +
+  "takes a reason'). DONE WHEN: rejecting one task from card, epic strip, or detail panel can " +
+  "carry a reason that shows in the existing 'Rejection reason' display (TaskBoard.tsx ~4804) " +
+  "and TicketView; `cd apps/web && pnpm build` passes. Do not touch apps/api or apps/mcp-gateway.";
+
+/** Prose with no coordinate in it, for padding a body out to a length. */
+const FILLER =
+  "the fence rejects a heartbeat from a lease that has been superseded, by generation rather " +
+  "than by name, so a worker whose task has moved on cannot report into it ";
+
+/** A body of exactly `length` chars carrying exactly `refs` distinct coordinates. */
+function body(refs: number, length: number): string {
+  const head = Array.from(
+    { length: refs },
+    (_, i) => `apps/api/internal/api/action_handler.go:${100 + i}`
+  ).join(", ");
+  let out = head;
+  while (out.length < length) out += ` ${FILLER}`;
+  return out.slice(0, Math.max(length, head.length));
+}
+
+/** Reads a heavy body with nothing linked on it or its epic — the firing case. */
+async function heavy(text: string) {
+  return readTask({
+    id: "task-1",
+    state: "proposed",
+    payload: { title: "Thread the rejection reason through", body: text },
+  });
+}
+
+test("a coordinate brief is not pasted context — TDM-1's body warns about nothing", async () => {
+  assert.ok(COORDINATE_BRIEF.length > TICKET_CONTEXT_CHARS, "must be heavy enough to have fired");
+  assert.equal(coordinateRefs(COORDINATE_BRIEF).length, 15);
+
+  const res = await heavy(COORDINATE_BRIEF);
+  assert.equal(
+    codes(res).includes("context_not_linked"),
+    false,
+    "the map IS the brief — there is no note it could have linked instead"
+  );
+  // And nothing else took its place: a brief this specific is simply a good
+  // ticket, so the read stays silent rather than swapping one warning for another.
+  assert.equal("quality" in res, false, JSON.stringify(codes(res)));
+});
+
+test("prose stays prose however many paths it name-drops", async () => {
+  // 1400 chars, two file mentions — one coordinate per ~700 chars. This is the
+  // body the rule is FOR: the context is real, and it belongs in a linked note.
+  const prose = `We should revisit how apps/api/internal/api/hub.go and the board in ` +
+    `apps/web/src/components/TaskBoard.tsx came to disagree about presence. ${FILLER.repeat(9)}`;
+  assert.ok(prose.length > TICKET_CONTEXT_CHARS);
+
+  const res = await heavy(prose);
+  assert.ok(codes(res).includes("context_not_linked"));
+});
+
+test("the density bar, from both sides", async () => {
+  // Same eight coordinates. Under the bar (8 × 200 ≥ 1500) it is a brief; the
+  // only thing that changes below is how much prose is wrapped around them.
+  const tight = await heavy(body(8, 1500));
+  assert.equal(codes(tight).includes("context_not_linked"), false);
+
+  // 8 × 200 = 1600 < 1700: the same coordinates, now diluted. Kept under
+  // TICKET_SPRAWL_CHARS so this is the context rule answering, not sprawl.
+  const diluted = await heavy(body(8, 1700));
+  assert.ok(codes(diluted).includes("context_not_linked"));
+  assert.equal(codes(diluted).includes("may_exceed_one_sitting"), false);
+});
+
+test("one path repeated is repetition, not a map", async () => {
+  // Thirty mentions, one distinct coordinate. Counting matches instead of
+  // distinct refs would have handed this an exemption, and a body that repeats
+  // itself is exactly the shape the rule exists to notice.
+  const repeated = `apps/api/internal/api/action_handler.go:412 `.repeat(30);
+  assert.equal(coordinateRefs(repeated).length, 1);
+  assert.ok(repeated.length > TICKET_CONTEXT_CHARS);
+
+  const res = await heavy(repeated);
+  assert.ok(codes(res).includes("context_not_linked"));
+});
+
+test("the exemption's constants say what the comment says they say", () => {
+  // 200 is TICKET_CONTEXT_CHARS / TICKET_COORDINATE_MIN_REFS, so the floor and
+  // the density are the same bar at the length where the rule starts firing.
+  // Retune one of the three and this fails rather than drifting quietly.
+  assert.equal(
+    TICKET_CONTEXT_CHARS / TICKET_COORDINATE_MIN_REFS,
+    TICKET_COORDINATE_CHARS_PER_REF
+  );
+
+  // The floor on its own: five coordinates in a short body is a mention, not a
+  // map, however dense. (Unreachable through the rule while the trigger is
+  // 1200 chars — which is the point of keeping it.)
+  const five = body(5, 400);
+  assert.equal(coordinateRefs(five).length, 5);
+  assert.equal(isCoordinateBrief(five), false);
+  assert.equal(isCoordinateBrief(body(6, 400)), true);
+});
+
+test("a linked coordinate brief is still just linked", async () => {
+  // The exemption is a second reason not to warn, never a reason to. The
+  // pre-existing suppressions have to keep working underneath it.
+  const res = await readTask(
+    {
+      id: "task-1",
+      state: "proposed",
+      payload: { title: "Thread the reason through", body: body(8, 1700), epicId: "epic-1" },
+    },
+    { epic: { id: "epic-1", title: "E22", state: "proposed", hasLinkedContext: true } }
+  );
+  assert.equal(codes(res).includes("context_not_linked"), false);
 });

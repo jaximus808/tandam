@@ -80,6 +80,14 @@ export const TICKET_MIN_BODY_CHARS = 24;
 export const TICKET_MIN_BODY_WORDS = 5;
 /** Past this, a body is heavy enough that its context belongs in `linkedIds`. */
 export const TICKET_CONTEXT_CHARS = 1200;
+/**
+ * …unless the weight IS coordinates. A brief made of `path/file.go:123` refs has
+ * no note it could have linked — the map is the brief. Exempt at one coordinate
+ * per this many characters of body (see `isCoordinateBrief`).
+ */
+export const TICKET_COORDINATE_CHARS_PER_REF = 200;
+/** …and never on fewer than this many, however short the body. */
+export const TICKET_COORDINATE_MIN_REFS = 6;
 /** Past this, one ticket is very unlikely to be one sitting of work. */
 export const TICKET_SPRAWL_CHARS = 3000;
 /** A numbered plan this long inside ONE ticket is an epic wearing a ticket. */
@@ -208,6 +216,72 @@ export function numberedSteps(body: string): number {
   return (body.match(/^\s*\d+[.)]\s+\S/gm) ?? []).length;
 }
 
+/**
+ * One CODE COORDINATE: a place in the tree precise enough to open. Alternation
+ * order is longest-first, so a full path is consumed whole rather than counted
+ * again as the bare filename inside it.
+ *
+ *   1. a slashed path ending in a file, with an optional `:line` / `:line:col`
+ *      / `:line-line` — `apps/web/src/lib/api.ts:647`
+ *   2. a bare filename in a language we actually build — `TaskBoard.tsx`,
+ *      `action_handler.go:412`
+ *   3. a spelled-out line reference — `line 1021`, `lines ~3583-3667`
+ *   4. the tilde shorthand the same briefs use once the file is established —
+ *      `~2233`, `~1069-1076`
+ *   5. a GitHub permalink fragment — `#L88`
+ *
+ * Deliberately NARROW, and narrower than `NAMES_A_SURFACE`: everything this
+ * matches BUYS a ticket an exemption from `context_not_linked`, so the cost of a
+ * loose match is a heavy pasted body that stops being flagged — the expensive
+ * direction. A bare package directory (`apps/api`) is a surface but not a
+ * coordinate, and is left out for that reason; it names an area to look in, not
+ * a place to open, which is exactly the body the rule should still catch.
+ *
+ * (4) is the one that could plausibly catch prose — `~50` in "~50 tools". Two
+ * digits minimum keeps "~5 minutes" out, and the density gate below means an
+ * occasional approximation cannot carry a body on its own.
+ */
+export const COORDINATE_REF =
+  /[\w@.-]+(?:\/[\w@.-]+)+\.[A-Za-z]{1,6}(?::\d{1,6}(?:[:-]\d{1,6})?)?|\b[\w@.-]+\.(?:tsx?|jsx?|mjs|cjs|go|sql|py|rs|rb|java|kt|swift|sh|ya?ml|toml|css|scss|md)\b(?::\d{1,6}(?:[:-]\d{1,6})?)?|\blines?\s*~?\s*\d{1,6}(?:\s*[-–—]\s*\d{1,6})?|~\s*\d{2,6}(?:\s*[-–—]\s*\d{1,6})?|#L\d{1,6}\b/gi;
+
+/**
+ * The DISTINCT coordinates a body names. Distinct rather than total on purpose:
+ * a body that repeats one path twenty times is not a map, it is repetition, and
+ * repetition is the shape `context_not_linked` exists to notice.
+ */
+export function coordinateRefs(body: string): string[] {
+  const seen = new Set<string>();
+  for (const m of body.matchAll(COORDINATE_REF)) {
+    const hit = m[0].trim().replace(/[.,;:]+$/, "");
+    if (hit) seen.add(hit);
+  }
+  return [...seen];
+}
+
+/**
+ * Is this body a COORDINATE BRIEF — a map of where the work is, rather than
+ * context that should have been a linked note?
+ *
+ * The threshold is one coordinate per `TICKET_COORDINATE_CHARS_PER_REF` (200)
+ * characters, with a floor of `TICKET_COORDINATE_MIN_REFS` (6). 200 is not
+ * arbitrary: it is `TICKET_CONTEXT_CHARS / TICKET_COORDINATE_MIN_REFS`, so the
+ * two clauses meet exactly at the length where `context_not_linked` starts
+ * firing, and the density is simply that same bar carried up to longer bodies.
+ * The floor is therefore redundant at 1200 chars and kept anyway, so lowering
+ * `TICKET_CONTEXT_CHARS` later cannot quietly hand an exemption to a body with
+ * two file names in it.
+ *
+ * Calibration: the body this was written for (TDM-1 — 1416 chars, a walk down
+ * one component naming 14 distinct coordinates) sits at ~101 chars/ref, roughly
+ * twice inside the bar. A 1400-char body that name-drops three files sits at
+ * ~470 and still warns, which is the case worth keeping: prose is prose whether
+ * or not it mentions a path.
+ */
+export function isCoordinateBrief(body: string): boolean {
+  const refs = coordinateRefs(body).length;
+  return refs >= TICKET_COORDINATE_MIN_REFS && refs * TICKET_COORDINATE_CHARS_PER_REF >= body.length;
+}
+
 /** The body's substantial lines, normalized — the unit we compare across tickets. */
 export function longLines(body: string): string[] {
   return body
@@ -322,7 +396,11 @@ export function ticketQualityWarnings(
           "three, it is an epic of its own, so split it."
       );
     }
-    if (body.length > TICKET_CONTEXT_CHARS && !linked && !batchLinked) {
+    // Length alone read a coordinate brief as pasted context: a body that is
+    // mostly `path/file.go:123` IS the brief, and there is no note it could
+    // have linked instead — the advice would be to go write one. Density, not
+    // length, is what separates the two.
+    if (body.length > TICKET_CONTEXT_CHARS && !linked && !batchLinked && !isCoordinateBrief(body)) {
       add(
         "context_not_linked",
         `Heavy body (${body.length} chars) with nothing in \`linkedIds\` — link the note or ` +
