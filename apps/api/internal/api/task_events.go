@@ -13,8 +13,8 @@ import (
 // feature. internal/webhooks owns the queue and the wire; this file owns WHEN an
 // event fires and WHAT it says.
 //
-// EXACTLY FOUR EVENTS EXIST. Three are emitted from action_handler.go; the
-// fourth from task_move.go:
+// EXACTLY FIVE EVENTS EXIST. Four are emitted from action_handler.go; the
+// fourth in this list from task_move.go:
 //
 //	task.approved       a task entered the ready-to-work queue by passing the
 //	                    approval gate. Four paths, all fanning one event per
@@ -28,14 +28,19 @@ import (
 //	task.returned       FINISHED work went back to the ready queue: done →
 //	                    approved, by a reviewer agent's rework bounce or a
 //	                    human's reopen. See "the fourth event" below.
+//	task.rejected       a PROPOSED task was rejected at the human gate, with the
+//	                    reason. See "the fifth event" below.
 //
 // WHAT DELIBERATELY FIRES NOTHING (the negative half of the contract, and the
 // half a regression would break silently):
 //
 //   - approved → executing (a claim). Claiming is not a queue transition anyone
 //     outside the canvas needs pushed; the claimant already knows.
-//   - proposed → rejected, and DELETE. Rejection/deletion are the human saying
-//     "no" — there is no work to hand off, and no event name for it.
+//   - DELETE. Deleting a card is the human taking it off the board entirely;
+//     there is nobody to tell and nothing to tell them about. (Rejection USED to
+//     be listed here beside it, on the argument that "there is no work to hand
+//     off". TDM-2 kept the premise and reversed the conclusion — see the fifth
+//     event.)
 //   - payload-only edits (retitling a task). The state machine didn't move.
 //   - executing → approved via ReleaseAction, and failed → approved via
 //     RequeueAction. Both put a task back in the queue, but neither is an
@@ -95,6 +100,41 @@ import (
 // still the work order. `reason` is a courtesy copy so a listener can log why it
 // woke; the agent that picks the ticket up reads it off task_get's `review`
 // block, which is the durable channel (review_feedback.go).
+//
+// ── THE FIFTH EVENT: task.rejected (TDM-2) ───────────────────────────────────
+//
+// THE HOLE IT CLOSES. A human rejects a proposed task with a reason. Until
+// TDM-2, that verdict reached exactly nobody outside the browser tab it was
+// clicked in: no webhook, no audit entry, and — the one that actually strands an
+// agent — no wake for the orchestrator parked on queue_wait. The agent that
+// proposed the batch is, by the documented loop, sitting on queue_wait for the
+// human's answer. It got one. It was not told. It waits out its timeout, calls
+// again, and waits for an approval that is never coming, while the human who
+// typed the reason reasonably believes they have replied.
+//
+// WHY IT IS AN EVENT DESPITE HANDING OVER NO WORK, which is the argument this
+// file used for years to keep rejection silent. Both halves of "there is no work
+// to hand off, and no event name for it" were true; only the second was a
+// reason. A coordination plane's job is to end waits, not only to start them,
+// and a verdict that closes a ticket ends one just as surely as an approval that
+// opens it. The same reasoning already appears above for task.completed on a
+// FAILED task: silence is the worse failure for a receiver that is waiting,
+// because it hangs precisely on the cases that need attention.
+//
+// WHAT A RECEIVER MUST NOT DO WITH IT, and it is the inverse of every other
+// event here: do not launch a worker. task.approved / task.returned mean "there
+// is work"; task.rejected means "this ticket is dead — stop waiting for it".
+// That is exactly why it is a new name rather than a reuse: a fleet subscribed
+// to task.approved must never see a rejection arrive on that channel. The
+// `rejected` block carries `by` and the human's `reason` VERBATIM, the same text
+// task_get's `review` block hands the proposing agent, so a listener can log why
+// it woke without a round trip.
+//
+// THE IN-PROCESS HALF IS THE POINT, and it does not depend on webhooks at all.
+// emitTaskEvent below signals the canvas's queue waiters on a rejection just as
+// it does on an approval, and WaitForQueue answers a woken waiter with
+// status:"rejected" and the reasons (queue_wait.go). A canvas with no webhook
+// configured — which is most of them — gets the whole behaviour.
 //
 // FAILED TASKS FIRE task.completed, with task.state = "failed" and the error
 // text in task.error. The vocabulary has no task.failed (it is CHECK-constrained
@@ -157,6 +197,12 @@ type taskEvent struct {
 	// result off the row, so the task projection alone cannot say where the work
 	// came back FROM or who sent it.
 	Returned *taskEventReturned `json:"returned,omitempty"`
+	// Rejected is present on task.rejected ONLY. Unlike the two blocks above it
+	// is not recovering something the row lost — task.error IS the reason — but
+	// WHO rejected is nowhere on the row, and a receiver reading `error` cannot
+	// tell a rejection reason from a failed task's error text. One named block
+	// per event type keeps that unambiguous.
+	Rejected *taskEventRejected `json:"rejected,omitempty"`
 }
 
 // taskEventTask is a deliberately compact projection of the task — the fields a
@@ -199,6 +245,24 @@ type taskEventReturned struct {
 	// `review` block hands the agent that picks the ticket up — carried here so a
 	// listener can log WHY it woke without a round trip, not so anything decides
 	// off it.
+	Reason string `json:"reason,omitempty"`
+}
+
+// taskEventRejected is the discriminator on task.rejected: who said no, and why.
+type taskEventRejected struct {
+	// From is the state the task was rejected OUT of — "proposed" today, and the
+	// field exists (as it does on `returned`) so it can stay honest if the state
+	// machine ever grows a second door into 'rejected'.
+	From string `json:"from"`
+	// By is server-derived provenance, the same vocabulary as authoredBy:
+	// "human" for the signed-in person who pressed reject, "anonymous" on a
+	// public canvas. Never read off a request body. In practice it is always a
+	// person — RejectAction refuses anyone the server cannot see as a human, and
+	// the 'peer' policy deliberately does not relax that.
+	By string `json:"by,omitempty"`
+	// Reason is the human's rejection reason, VERBATIM and optional (the reject
+	// endpoint does not require one). It is the same text that lands in
+	// actions.error and that task_get's `review` block hands the proposing agent.
 	Reason string `json:"reason,omitempty"`
 }
 
@@ -255,24 +319,16 @@ func (h *Handler) emitTaskEvent(canvasID uuid.UUID, eventType string, a *store.A
 	if a == nil || a.Type != "task" {
 		return
 	}
-	// THE LONG-POLL WAKE (TDM-148), and it sits ABOVE the h.events nil check on
-	// purpose: waking an agent that is waiting for work is a property of the
-	// canvas, not of whether anyone configured outbound webhooks. Hanging this off
-	// the emitter would mean waiters only ever wake on canvases with webhooks
-	// wired — which is neither of the deployments this runs in.
-	//
-	// This is THE reason the wait endpoint needs no timer against the database:
-	// every approval door in action_handler.go already funnels through here, so
-	// they all signal by construction, and a door added later inherits it.
-	if eventType == webhooks.EventTaskApproved {
-		h.signalQueueReady(canvasID)
-	}
-	if h.events == nil {
-		return
-	}
 	// The event id is minted HERE, not inside the emitter, so the same id can be
 	// both the delivery rows' fan-out key and a field a receiver can read. See
 	// webhooks.EmitWithEventID.
+	//
+	// The projection is built BEFORE the h.events nil check (TDM-2) because the
+	// long-poll wake below reads it: `ev` is the one place the task facts and the
+	// caller's opts (who rejected, with what reason) are assembled, and building
+	// it twice — once for waiters, once for receivers — is how the two would
+	// eventually disagree. It costs a uuid and one payload unmarshal on a path
+	// that has already committed a database write.
 	eventID := uuid.New()
 	ev := taskEvent{
 		EventID:   eventID,
@@ -284,6 +340,30 @@ func (h *Handler) emitTaskEvent(canvasID uuid.UUID, eventType string, a *store.A
 	for _, opt := range opts {
 		opt(&ev)
 	}
+	// THE LONG-POLL WAKE (TDM-148), and it sits ABOVE the h.events nil check on
+	// purpose: waking an agent that is waiting for work is a property of the
+	// canvas, not of whether anyone configured outbound webhooks. Hanging this off
+	// the emitter would mean waiters only ever wake on canvases with webhooks
+	// wired — which is neither of the deployments this runs in.
+	//
+	// This is THE reason the wait endpoint needs no timer against the database:
+	// every approval door in action_handler.go already funnels through here, so
+	// they all signal by construction, and a door added later inherits it.
+	switch eventType {
+	case webhooks.EventTaskApproved:
+		h.signalQueueReady(canvasID)
+	case webhooks.EventTaskRejected:
+		// The OTHER answer a parked agent can get (TDM-2). Same funnel, same
+		// argument, opposite news: a waiter woken by this one is told the ticket is
+		// dead and why, rather than handed work. Carrying the facts on the signal
+		// (instead of leaving the waiter to re-read the board) is what makes the
+		// reason reach it — a rejected task is not in the ready queue the waiter
+		// re-reads, so there would otherwise be nothing for it to find.
+		h.signalQueueRejected(canvasID, rejectedTaskFromEvent(ev))
+	}
+	if h.events == nil {
+		return
+	}
 	h.events.EmitAsyncWithEventID(canvasID, eventID, eventType, ev)
 }
 
@@ -291,6 +371,13 @@ func (h *Handler) emitTaskEvent(canvasID uuid.UUID, eventType string, a *store.A
 func withReturned(from, by, reason string) func(*taskEvent) {
 	return func(ev *taskEvent) {
 		ev.Returned = &taskEventReturned{From: from, By: by, Reason: reason}
+	}
+}
+
+// withRejected attaches the verdict to a task.rejected.
+func withRejected(from, by, reason string) func(*taskEvent) {
+	return func(ev *taskEvent) {
+		ev.Rejected = &taskEventRejected{From: from, By: by, Reason: reason}
 	}
 }
 

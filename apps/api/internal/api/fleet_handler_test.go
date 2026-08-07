@@ -62,6 +62,27 @@ func (f *fleetFakeStore) GetAction(_ context.Context, _ uuid.UUID, id uuid.UUID)
 	return nil, fmt.Errorf("action %s not found", id)
 }
 
+// AppendActionAudit is reached by every path that records a human state move —
+// including RejectAction since TDM-2, which these activity tests drive. Modelled
+// on the real store method (read, append through the REAL store.AppendAudit,
+// write back) so the fake can't drift from the rule.
+func (f *fleetFakeStore) AppendActionAudit(_ context.Context, _ uuid.UUID, id uuid.UUID, entry store.ContentAudit) (json.RawMessage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, a := range f.actions {
+		if a.ID != id {
+			continue
+		}
+		next, err := store.AppendAudit(a.Payload, entry)
+		if err != nil {
+			return nil, err
+		}
+		a.Payload = next
+		return next, nil
+	}
+	return nil, store.ErrActionNotFound
+}
+
 func (f *fleetFakeStore) UpdateActionState(_ context.Context, _ uuid.UUID, id uuid.UUID, patch store.ActionStatePatch) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

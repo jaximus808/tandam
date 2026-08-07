@@ -29,7 +29,8 @@ const (
 	// receiver that has already applied a delivery can dedupe the retry.
 	HeaderDeliveryID = "Tandem-Delivery-Id"
 	// HeaderEvent carries the event type ("task.approved" | "task.completed" |
-	// "task.claim_expired" | "task.returned") — see store.KnownWebhookEvents.
+	// "task.claim_expired" | "task.returned" | "task.rejected") — see
+	// store.KnownWebhookEvents.
 	HeaderEvent = "Tandem-Event"
 )
 

@@ -489,7 +489,10 @@ func TestParseQueueWaitTimeout(t *testing.T) {
 // Every door into the ready queue funnels through emitTaskEvent, so the wake is
 // asserted there — including the negative half, since waking on a completion
 // would spin an agent through a store read for work that isn't there.
-func TestOnlyApprovalWakesQueueWaiters(t *testing.T) {
+//
+// TDM-2 added the second waking event: a REJECTION also ends a wait, because the
+// gate an agent is parked on has been answered. Everything else stays silent.
+func TestOnlyApprovalOrRejectionWakesQueueWaiters(t *testing.T) {
 	canvasID := uuid.New()
 	task := readyQueueTask("t", "")
 	epic := &store.Action{ID: uuid.New(), Type: "epic", State: "approved", Payload: json.RawMessage(`{"title":"batch"}`)}
@@ -505,19 +508,21 @@ func TestOnlyApprovalWakesQueueWaiters(t *testing.T) {
 		{"claim expired", webhooks.EventTaskClaimExpired, task, false},
 		{"epic approved", webhooks.EventTaskApproved, epic, false},
 		{"nil action", webhooks.EventTaskApproved, nil, false},
+		{"task rejected", webhooks.EventTaskRejected, task, true},
+		{"epic rejected", webhooks.EventTaskRejected, epic, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := NewHandler(&queueFakeStore{}, nil, nil) // no emitter wired
-			ready, release, _, ok := h.waiters.add(canvasID, "", "")
+			waiter, release, _, ok := h.waiters.add(canvasID, "", "")
 			if !ok {
 				t.Fatal("could not register a waiter")
 			}
 			defer release(waitEndGone)
 			h.emitTaskEvent(canvasID, tc.eventType, tc.action)
 			select {
-			case <-ready:
+			case <-waiter.ready:
 				if !tc.wake {
-					t.Fatalf("%s woke a waiter; only work entering the ready queue should", tc.name)
+					t.Fatalf("%s woke a waiter; only work entering the ready queue — or a rejection ending the wait — should", tc.name)
 				}
 			default:
 				if tc.wake {
@@ -536,7 +541,7 @@ func TestReleasingATaskWakesQueueWaiters(t *testing.T) {
 	task.ClaimedBy = ptr("worker-that-died")
 	h := NewHandler(newMoveStore(task), nil, nil)
 
-	ready, release, _, ok := h.waiters.add(canvasID, "", "")
+	waiter, release, _, ok := h.waiters.add(canvasID, "", "")
 	if !ok {
 		t.Fatal("could not register a waiter")
 	}
@@ -549,7 +554,7 @@ func TestReleasingATaskWakesQueueWaiters(t *testing.T) {
 		t.Fatalf("release status %d (body %s)", w.Code, w.Body.String())
 	}
 	select {
-	case <-ready:
+	case <-waiter.ready:
 	default:
 		t.Fatal("a released task went back to 'approved' without waking anyone waiting for work")
 	}
@@ -927,5 +932,225 @@ func TestWorkingBeatsWaitingInTheCounts(t *testing.T) {
 	}
 	if roster.Agents[0].Waiting == nil {
 		t.Fatal("the wait itself should still be reported on the row")
+	}
+}
+
+// ── 8. The rejection wake (TDM-2) ────────────────────────────────────────────
+//
+// The hole these close: a human answers the gate with NO, and the agent parked
+// here is told nothing. It times out, calls back, and waits for an approval that
+// is never coming — while the human who typed the reason believes they replied.
+// The wait must END on a rejection, and it must carry the reason, because a
+// rejected task is precisely the one the waiter's re-read of the READY queue
+// cannot find.
+
+// rejectedQueueTask is a task as the reject path leaves it: state 'rejected',
+// the human's reason in actions.error, optionally inside an epic.
+func rejectedQueueTask(title, reason, epicID string, ticket int) *store.Action {
+	payload := map[string]any{"title": title, "assignee": "agent"}
+	if epicID != "" {
+		payload["epicId"] = epicID
+	}
+	raw, _ := json.Marshal(payload)
+	return &store.Action{
+		ID: uuid.New(), Type: "task", State: "rejected",
+		Ticket: &ticket, Payload: raw, Error: ptr(reason),
+	}
+}
+
+// rejectOnCanvas drives the wake the way RejectAction does — through
+// emitTaskEvent, the one funnel — without needing the whole reject handler's
+// store surface. task_events_test.go asserts the handler end of the same wire.
+func rejectOnCanvas(h *Handler, canvasID uuid.UUID, task *store.Action, by, reason string) {
+	h.emitTaskEvent(canvasID, webhooks.EventTaskRejected, task, withRejected("proposed", by, reason))
+}
+
+// THE POINT OF THE TICKET: a parked wait ends on a rejection, with the human's
+// words verbatim and a status that cannot be mistaken for work.
+func TestQueueWaitAnswersRejectedWithTheReason(t *testing.T) {
+	canvasID := uuid.New()
+	h := NewHandler(&queueFakeStore{}, nil, nil)
+
+	w, done := runWait(h, waitRequest(t, canvasID, "?timeout=30"))
+	awaitParked(t, h, canvasID, 1)
+
+	task := rejectedQueueTask("rewrite the auth layer", "too big — split it per surface first", "", 7)
+	rejectOnCanvas(h, canvasID, task, AuthorHuman, "too big — split it per surface first")
+	mustAnswer(t, done, 2*time.Second, "a wait woken by a rejection")
+
+	msg := decodeWait(t, w)
+	if msg.Status != queueWaitRejected {
+		t.Fatalf("status = %q, want %q — a rejection must not read as ready or as a timeout", msg.Status, queueWaitRejected)
+	}
+	if len(msg.Rejected) != 1 || msg.Count != 1 {
+		t.Fatalf("rejected = %+v (count %d), want exactly one", msg.Rejected, msg.Count)
+	}
+	if len(msg.Actions) != 0 {
+		t.Fatalf("actions = %+v, want none — a rejection hands over no work", msg.Actions)
+	}
+	got := msg.Rejected[0]
+	if got.ID != task.ID {
+		t.Fatalf("id = %s, want %s", got.ID, task.ID)
+	}
+	if got.TicketID != "TDM-7" {
+		t.Fatalf("ticketId = %q, want TDM-7 — the ref is how the agent looks the ticket up", got.TicketID)
+	}
+	if got.Title != "rewrite the auth layer" {
+		t.Fatalf("title = %q", got.Title)
+	}
+	// VERBATIM is the whole contract: the reason is the brief for the next
+	// attempt, and an excerpt would throw away the instruction.
+	if got.Reason != "too big — split it per surface first" {
+		t.Fatalf("reason = %q, want the human's words unedited", got.Reason)
+	}
+	if got.By != AuthorHuman {
+		t.Fatalf("by = %q, want %q (server-derived provenance)", got.By, AuthorHuman)
+	}
+	if got.At.IsZero() {
+		t.Fatal("at is zero — a verdict with no timestamp cannot be ordered against anything")
+	}
+	// A caller that skims must not start the work anyway.
+	if !strings.Contains(msg.Hint, "REJECTED") {
+		t.Fatalf("hint does not say plainly that this is a rejection: %q", msg.Hint)
+	}
+	if h.waiters.countFor(canvasID) != 0 {
+		t.Fatal("the waiter was not released after a rejection answer")
+	}
+}
+
+// READY WINS. An agent with approved work AND a rejection waiting is sent to
+// work: the rejection is still on the board and the next wait reports it, but
+// parking a fleet on a verdict while approved tickets sit unclaimed is the worse
+// failure by far.
+func TestQueueWaitPrefersReadyWorkOverARejection(t *testing.T) {
+	canvasID := uuid.New()
+	fake := &queueFakeStore{}
+	h := NewHandler(fake, nil, nil)
+
+	w, done := runWait(h, waitRequest(t, canvasID, "?timeout=30"))
+	awaitParked(t, h, canvasID, 1)
+
+	// Both facts are true at the moment of the wake: work is in the queue, and a
+	// different ticket was rejected.
+	fake.publish(readyQueueTask("the one that was approved", ""))
+	rejectOnCanvas(h, canvasID, rejectedQueueTask("the one that wasn't", "no", "", 8), AuthorHuman, "no")
+	mustAnswer(t, done, 2*time.Second, "a wait with both ready work and a rejection")
+
+	msg := decodeWait(t, w)
+	if msg.Status != queueWaitReady {
+		t.Fatalf("status = %q, want %q — approved work outranks a verdict", msg.Status, queueWaitReady)
+	}
+	if len(msg.Actions) != 1 || len(msg.Rejected) != 0 {
+		t.Fatalf("answer = %d actions / %d rejections, want 1 / 0", len(msg.Actions), len(msg.Rejected))
+	}
+}
+
+// The ?epicId= narrowing applies to rejections exactly as it does to ready work
+// (contract A). An agent waiting on ITS batch must not be woken out of the wait
+// by someone else's rejected ticket.
+func TestQueueWaitRejectionHonoursTheEpicFilter(t *testing.T) {
+	mine, theirs := uuid.New().String(), uuid.New().String()
+
+	t.Run("another epic's rejection does not end the wait", func(t *testing.T) {
+		canvasID := uuid.New()
+		h := NewHandler(&queueFakeStore{}, nil, nil)
+		w, done := runWait(h, waitRequest(t, canvasID, "?timeout=1&epicId="+mine))
+		awaitParked(t, h, canvasID, 1)
+
+		rejectOnCanvas(h, canvasID, rejectedQueueTask("not my batch", "no", theirs, 9), AuthorHuman, "no")
+		mustAnswer(t, done, 3*time.Second, "a wait narrowed to another epic")
+
+		if msg := decodeWait(t, w); msg.Status != queueWaitTimeout {
+			t.Fatalf("status = %q, want %q — a rejection in another epic is not this agent's news",
+				msg.Status, queueWaitTimeout)
+		}
+	})
+
+	t.Run("my epic's rejection ends it", func(t *testing.T) {
+		canvasID := uuid.New()
+		h := NewHandler(&queueFakeStore{}, nil, nil)
+		w, done := runWait(h, waitRequest(t, canvasID, "?timeout=30&epicId="+mine))
+		awaitParked(t, h, canvasID, 1)
+
+		rejectOnCanvas(h, canvasID, rejectedQueueTask("my batch", "scope creep", mine, 10), AuthorHuman, "scope creep")
+		mustAnswer(t, done, 2*time.Second, "a wait narrowed to the rejected task's epic")
+
+		msg := decodeWait(t, w)
+		if msg.Status != queueWaitRejected {
+			t.Fatalf("status = %q, want %q", msg.Status, queueWaitRejected)
+		}
+		if len(msg.Rejected) != 1 || msg.Rejected[0].Reason != "scope creep" {
+			t.Fatalf("rejected = %+v", msg.Rejected)
+		}
+	})
+}
+
+// A rejection that lands in the window between registering and the first queue
+// read must not be lost — the same race the ready side is built around, and the
+// reason signalRejected appends BEFORE it wakes.
+func TestQueueWaitReportsARejectionThatLandedDuringRegistration(t *testing.T) {
+	canvasID := uuid.New()
+	h := NewHandler(&queueFakeStore{}, nil, nil)
+
+	// Register by hand, then reject, then let the handler start: the rejection is
+	// already buffered on a waiter nobody has read yet.
+	waiter, release, _, ok := h.waiters.add(canvasID, "", "")
+	if !ok {
+		t.Fatal("could not register a waiter")
+	}
+	defer release(waitEndGone)
+	rejectOnCanvas(h, canvasID, rejectedQueueTask("early", "already answered", "", 11), AuthorHuman, "already answered")
+
+	got := h.waiters.takeRejections(waiter, "")
+	if len(got) != 1 || got[0].Reason != "already answered" {
+		t.Fatalf("takeRejections = %+v, want the buffered rejection", got)
+	}
+	// Drained, not peeked: a second read finds nothing, so one rejection cannot
+	// wake the same waiter over and over.
+	if again := h.waiters.takeRejections(waiter, ""); len(again) != 0 {
+		t.Fatalf("takeRejections a second time = %+v, want empty", again)
+	}
+}
+
+// Every waiter on the canvas hears it, and a filtered-out rejection is still
+// DRAINED — otherwise one unrelated ticket would re-wake a narrowed waiter on
+// every loop for the rest of its wait.
+func TestRejectionFansOutToEveryWaiterAndIsDrainedEvenWhenFilteredOut(t *testing.T) {
+	canvasID := uuid.New()
+	h := NewHandler(&queueFakeStore{}, nil, nil)
+	mine := uuid.New().String()
+
+	a, releaseA, _, _ := h.waiters.add(canvasID, "a", "")
+	b, releaseB, _, _ := h.waiters.add(canvasID, "b", mine)
+	defer releaseA(waitEndGone)
+	defer releaseB(waitEndGone)
+
+	rejectOnCanvas(h, canvasID, rejectedQueueTask("somebody else's", "no", uuid.New().String(), 12), AuthorHuman, "no")
+
+	if got := h.waiters.takeRejections(a, ""); len(got) != 1 {
+		t.Fatalf("unnarrowed waiter got %+v, want the rejection", got)
+	}
+	if got := h.waiters.takeRejections(b, mine); len(got) != 0 {
+		t.Fatalf("waiter narrowed to another epic got %+v, want nothing", got)
+	}
+	// …and b's buffer is empty now, not holding the filtered entry forever.
+	if len(b.rejected) != 0 {
+		t.Fatalf("filtered rejections were left buffered: %+v", b.rejected)
+	}
+}
+
+// The buffer is bounded: a bulk rejection cannot grow one connection's slice
+// without limit. The answer stays "your batch was rejected" either way.
+func TestPendingRejectionsAreBounded(t *testing.T) {
+	canvasID := uuid.New()
+	h := NewHandler(&queueFakeStore{}, nil, nil)
+	waiter, release, _, _ := h.waiters.add(canvasID, "", "")
+	defer release(waitEndGone)
+
+	for i := 0; i < maxPendingRejections+25; i++ {
+		rejectOnCanvas(h, canvasID, rejectedQueueTask(fmt.Sprintf("t%d", i), "no", "", i), AuthorHuman, "no")
+	}
+	if got := len(h.waiters.takeRejections(waiter, "")); got != maxPendingRejections {
+		t.Fatalf("buffered %d rejections, want the cap of %d", got, maxPendingRejections)
 	}
 }

@@ -901,7 +901,35 @@ func (h *Handler) RejectAction(w http.ResponseWriter, r *http.Request) {
 	}
 	// No claimant, same reason as approve: rejection is the other exit from the
 	// human gate, and 'proposed' is never claimed.
-	h.transitionAction(w, r, "rejected", store.ActionStatePatch{Error: reason}, claimant{})
+	fresh, moved := h.transitionAction(w, r, "rejected", store.ActionStatePatch{Error: reason}, claimant{})
+	if !moved {
+		return
+	}
+	// Everything below runs AFTER the write committed and the response was
+	// written — the same ordering every other post-transition follow-up uses, so
+	// none of it can fail a rejection that already happened (TDM-2).
+	canvasID := CanvasIDFromCtx(r.Context())
+	// WHO rejected, server-derived. RejectAction has already refused anyone the
+	// server cannot see as a signed-in human, so falling back to "human" here is
+	// a FACT and not a guess — the same argument reviewActorForRejection makes for
+	// its own fallback (review_feedback.go). moveActor is still preferred because
+	// it can say "anonymous" on a public canvas, which "human" would misreport.
+	actor := orString(moveActor(r), AuthorHuman)
+	// (1) The audit entry. Until this existed the rejection recorded neither who
+	// nor when: the reason went into actions.error and nothing else was written,
+	// so task_get's `review` block had to fall back to a derived actor and to
+	// updated_at. Now the trail carries the real thing. Best-effort by contract —
+	// recordMove's argument applies unchanged: the state change has committed and
+	// the person has seen their card move, so a dropped entry is logged, never
+	// surfaced as a failed rejection.
+	h.recordMove(r.Context(), canvasID, fresh, humanMove{from: "proposed", to: "rejected", label: "reject"},
+		body.Reason, actor)
+	// (2) The event, and with it the wake for every agent parked on this canvas's
+	// queue. This is the half that closes the dead end: the agent that proposed
+	// the batch is sitting on queue_wait by the documented loop, and before this
+	// the human's "no" reached it never.
+	h.emitTaskEvent(canvasID, webhooks.EventTaskRejected, fresh,
+		withRejected("proposed", actor, body.Reason))
 }
 
 // PATCH /api/canvas/actions/{id}  — two modes:

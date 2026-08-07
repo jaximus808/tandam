@@ -27,10 +27,10 @@ import (
 	"github.com/agentcanvas/api/internal/store"
 )
 
-// The event vocabulary, mirroring the CHECK in migration 0038 (widened once, by
-// 0043). TDM-37 wires these to the task-queue transitions; nothing else may be
-// emitted (the DB rejects it, which is the point — a typo'd event name that
-// silently never fires is the worst failure mode here).
+// The event vocabulary, mirroring the CHECK in migration 0038 (widened twice, by
+// 0043 and 0044). TDM-37 wires these to the task-queue transitions; nothing else
+// may be emitted (the DB rejects it, which is the point — a typo'd event name
+// that silently never fires is the worst failure mode here).
 const (
 	// EventTaskApproved — a task entered the ready-to-work queue.
 	EventTaskApproved = "task.approved"
@@ -45,6 +45,11 @@ const (
 	// the one transition that falsifies an event we already published — which is
 	// why it is a new name and not a second task.approved. See task_events.go.
 	EventTaskReturned = "task.returned"
+	// EventTaskRejected — a PROPOSED task was rejected at the human gate, with
+	// the reason attached (TDM-2). It is the only event in this vocabulary that
+	// says work is NOT coming: every other one hands a receiver something to do,
+	// and this one tells it to stop waiting. See task_events.go.
+	EventTaskRejected = "task.rejected"
 )
 
 // EmitStore is the slice of the store an Emitter uses.

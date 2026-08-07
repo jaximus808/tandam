@@ -34,6 +34,14 @@ import (
 //   - The caller disappears → the wait ends with the request. No goroutine, no
 //     registration, and no memory outlives an abandoned poll.
 //
+// And the fifth line, added by TDM-2, because "the human has answered" and "the
+// human has approved" are not the same fact:
+//
+//   - The work being waited on is REJECTED → answer 200 with status "rejected"
+//     and the reasons. A gate can be answered with a no, and an agent told
+//     nothing waits out its timeout and calls straight back for an approval that
+//     is never coming. Ready still wins when both are true.
+//
 // HOW IT KNOWS (and why nothing polls the database). The server does NOT run a
 // timer against Supabase. Every path that puts a task into the ready queue
 // already announces itself in-process — emitTaskEvent fires task.approved from
@@ -136,27 +144,103 @@ const (
 	waitEndTimeout
 )
 
-// The two statuses this endpoint answers with. THE distinguishing field: both
+// The three statuses this endpoint answers with. THE distinguishing field: all
 // come back as HTTP 200, and `status` is what the caller branches on.
 const (
 	queueWaitReady   = "ready"
 	queueWaitTimeout = "timeout"
+	// queueWaitRejected is the answer that is NOT work (TDM-2): the human
+	// answered the batch this agent is waiting on by saying no, and the wait ends
+	// with the reasons instead of with tasks. It is a third status rather than a
+	// "ready" carrying zero tasks precisely so a caller that only knows the
+	// original two cannot mistake it for either — an unknown status reads as
+	// "something happened, look at the board", which is the correct fallback,
+	// whereas a "ready" with an empty list would read as a server bug.
+	queueWaitRejected = "rejected"
 )
+
+// rejectedTask is one rejection as a waiter is told about it — the wire shape of
+// queueWaitMsg.Rejected, fixed by the epic's contract A.
+//
+// It is a SNAPSHOT taken at rejection time, not a pointer into the board: by the
+// time a waiter reads it the human may have already re-proposed the ticket, and
+// the answer to "why did my wait end" must stay the reason that ended it.
+type rejectedTask struct {
+	ID       uuid.UUID `json:"id"`
+	TicketID string    `json:"ticketId,omitempty"` // "TDM-42"
+	Title    string    `json:"title"`
+	// Reason is the rejecting human's words, VERBATIM. Optional, because the
+	// reject endpoint does not require one — an empty reason is an honest "they
+	// gave none", never a placeholder.
+	Reason string `json:"reason,omitempty"`
+	// By is server-derived provenance ("human", or "anonymous" on a public
+	// canvas), never read off a request body.
+	By string    `json:"by,omitempty"`
+	At time.Time `json:"at"`
+	// epicID is the narrowing a waiter's ?epicId= filter matches against. NOT on
+	// the wire: it is the same value as the task's payload epicId, which the
+	// caller already knows because it is the filter it asked with.
+	epicID string
+}
+
+// rejectedTaskFromEvent projects the task-event assembled in emitTaskEvent onto
+// the waiter's shape. One source for both channels — the webhook body and the
+// parked waiter learn the same facts from the same struct, so they cannot drift.
+func rejectedTaskFromEvent(ev taskEvent) rejectedTask {
+	rt := rejectedTask{
+		ID:       ev.Task.ID,
+		TicketID: ev.Task.TicketID,
+		Title:    ev.Task.Title,
+		At:       ev.Timestamp,
+		epicID:   ev.Task.EpicID,
+	}
+	if ev.Rejected != nil {
+		rt.Reason, rt.By = ev.Rejected.Reason, ev.Rejected.By
+	}
+	// Belt and braces: the reason also lands in actions.error, so a call site that
+	// forgets the withRejected option still tells the waiter WHY.
+	if rt.Reason == "" {
+		rt.Reason = ev.Task.Error
+	}
+	return rt
+}
+
+// queueWaiter is one parked wait.
+//
+// `ready` is a channel with ONE buffered slot. Buffered so a signal that arrives
+// while the waiter is between its read and its select is kept rather than
+// dropped; capacity one because the WAKE carries no information beyond "look
+// again" — ten approvals and one approval mean the same thing to a waiter that
+// is about to re-read the queue anyway.
+//
+// `rejected` is the exception that proves that rule (TDM-2), and it is why a
+// waiter is a struct now and not a bare channel. A rejection is NOT discoverable
+// by re-reading the ready queue — the rejected task is precisely the one that is
+// no longer in it — so the facts have to travel WITH the wake. They are appended
+// here, under queueWaiters.mu, and drained by the waiter itself.
+type queueWaiter struct {
+	ready chan struct{}
+	// rejected accumulates rejections that landed since this wait began, in
+	// arrival order. Guarded by queueWaiters.mu — the waiter goroutine only ever
+	// touches it through takeRejections. Capped at maxPendingRejections.
+	rejected []rejectedTask
+}
+
+// maxPendingRejections bounds one waiter's rejection buffer. A human rejecting
+// more than this many tasks inside a single 25-second wait is not a scenario, it
+// is a bulk action; the waiter is answering with "your batch was rejected" either
+// way, and the overflow is dropped rather than allowed to grow a per-connection
+// slice without limit.
+const maxPendingRejections = 50
 
 // queueWaiters is the parked-waiter registry: canvas → the set of waiters
 // currently blocked on it.
-//
-// Each waiter is a channel with ONE buffered slot. Buffered so a signal that
-// arrives while the waiter is between its read and its select is kept rather than
-// dropped; capacity one because the signal carries no information beyond "look
-// again" — ten approvals and one approval mean the same thing to a waiter that is
-// about to re-read the queue anyway.
 //
 // The zero value is usable, so a Handler built as a struct literal (as several
 // tests do) still has a working registry.
 type queueWaiters struct {
 	mu    sync.Mutex
-	rooms map[uuid.UUID]map[chan struct{}]struct{}
+	rooms map[uuid.UUID]map[*queueWaiter]struct{}
 	total int
 	// streaks is the IDENTITY side of the registry (TDM-151): canvas → asserted
 	// agent name → the continuous wait that name is on. Separate from `rooms`
@@ -190,8 +274,8 @@ func (s *waitStreak) waiting(now time.Time) bool {
 	return s.parked > 0 || now.Sub(s.endedAt) < queueWaitStreakGrace
 }
 
-// add registers a waiter for a canvas and returns its channel plus the release
-// func that removes it. ok=false means a cap was hit and NOTHING was registered.
+// add registers a waiter for a canvas and returns it plus the release func that
+// removes it. ok=false means a cap was hit and NOTHING was registered.
 //
 // `agent` is the caller's asserted identity (the X-Tandem-Agent header, the same
 // string it claims tasks under) and may be empty: a wait with no identity still
@@ -208,22 +292,22 @@ func (s *waitStreak) waiting(now time.Time) bool {
 // started (and release's own bool) report whether the canvas's WAITING SET
 // actually moved — this identity was not waiting a moment ago, or has stopped —
 // so the board is told when the answer changed and not once per re-poll.
-func (q *queueWaiters) add(canvasID uuid.UUID, agent, epicID string) (ready <-chan struct{}, release func(waitEnd) bool, started, ok bool) {
+func (q *queueWaiters) add(canvasID uuid.UUID, agent, epicID string) (waiter *queueWaiter, release func(waitEnd) bool, started, ok bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.total >= maxQueueWaitersTotal || len(q.rooms[canvasID]) >= maxQueueWaitersPerCanvas {
 		return nil, nil, false, false
 	}
 	if q.rooms == nil {
-		q.rooms = make(map[uuid.UUID]map[chan struct{}]struct{})
+		q.rooms = make(map[uuid.UUID]map[*queueWaiter]struct{})
 	}
 	room := q.rooms[canvasID]
 	if room == nil {
-		room = make(map[chan struct{}]struct{})
+		room = make(map[*queueWaiter]struct{})
 		q.rooms[canvasID] = room
 	}
-	ch := make(chan struct{}, 1)
-	room[ch] = struct{}{}
+	wt := &queueWaiter{ready: make(chan struct{}, 1)}
+	room[wt] = struct{}{}
 	q.total++
 
 	now := time.Now().UTC()
@@ -255,13 +339,13 @@ func (q *queueWaiters) add(canvasID uuid.UUID, agent, epicID string) (ready <-ch
 
 	var once sync.Once
 	ended := false
-	return ch, func(how waitEnd) bool {
+	return wt, func(how waitEnd) bool {
 		once.Do(func() {
 			q.mu.Lock()
 			defer q.mu.Unlock()
 			if room, ok := q.rooms[canvasID]; ok {
-				if _, held := room[ch]; held {
-					delete(room, ch)
+				if _, held := room[wt]; held {
+					delete(room, wt)
 					q.total--
 				}
 				if len(room) == 0 {
@@ -365,12 +449,73 @@ func (q *queueWaiters) isWaiting(canvasID uuid.UUID, agent string, now time.Time
 func (q *queueWaiters) signal(canvasID uuid.UUID) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	for ch := range q.rooms[canvasID] {
+	q.wakeLocked(canvasID)
+}
+
+// wakeLocked pokes every waiter on a canvas. Caller holds q.mu.
+func (q *queueWaiters) wakeLocked(canvasID uuid.UUID) {
+	for wt := range q.rooms[canvasID] {
 		select {
-		case ch <- struct{}{}:
+		case wt.ready <- struct{}{}:
 		default: // a wake is already pending for this waiter
 		}
 	}
+}
+
+// signalRejected hands one rejection to every waiter on a canvas, then wakes
+// them (TDM-2).
+//
+// APPEND-THEN-WAKE, in that order and under one lock: a waiter that woke first
+// and read an empty buffer would go straight back to sleep having burned the
+// wake, which is the same ordering bug the register-then-read dance at the top
+// of WaitForQueue exists to avoid on the ready side.
+//
+// EVERY waiter gets a copy, including ones whose ?epicId= filter does not match.
+// Filtering happens at the drain, where the waiter's own filter lives — a
+// rejection is a few strings, and centralising the filter here would mean the
+// registry had to track each waiter's narrowing and keep it correct.
+//
+// Non-blocking, like signal: this runs on the mutation path, after the reject has
+// already committed.
+func (q *queueWaiters) signalRejected(canvasID uuid.UUID, rt rejectedTask) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for wt := range q.rooms[canvasID] {
+		if len(wt.rejected) < maxPendingRejections {
+			wt.rejected = append(wt.rejected, rt)
+		}
+	}
+	q.wakeLocked(canvasID)
+}
+
+// takeRejections drains what this waiter has been handed, keeping only what its
+// epic filter matches ("" = the whole canvas).
+//
+// It DRAINS rather than peeks — including the entries the filter rejected — so a
+// waiter narrowed to one epic is not woken over and over by rejections in
+// another. Those are not its business, and re-reading them on every wake would
+// turn one unrelated rejection into a wake per loop iteration.
+func (q *queueWaiters) takeRejections(wt *queueWaiter, epicID string) []rejectedTask {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(wt.rejected) == 0 {
+		return nil
+	}
+	pending := wt.rejected
+	wt.rejected = nil
+	if epicID == "" {
+		return pending
+	}
+	out := make([]rejectedTask, 0, len(pending))
+	for _, rt := range pending {
+		if rt.epicID == epicID {
+			out = append(out, rt)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // count is every parked waiter in the process — the queue_waiters gauge, and the
@@ -397,6 +542,14 @@ func (q *queueWaiters) countFor(canvasID uuid.UUID) int {
 // need to guard it.
 func (h *Handler) signalQueueReady(canvasID uuid.UUID) {
 	h.waiters.signal(canvasID)
+}
+
+// signalQueueRejected tells anyone waiting on this canvas that a task they may
+// be waiting on was rejected, and hands them the reason (TDM-2). Same ordering
+// rule as signalQueueReady — call it AFTER the state write commits — and the
+// same "cheap with zero waiters" property, so the reject path does not guard it.
+func (h *Handler) signalQueueRejected(canvasID uuid.UUID, rt rejectedTask) {
+	h.waiters.signalRejected(canvasID, rt)
 }
 
 // QueueWaiterCount exposes the parked-waiter count for the metrics gauge. If this
@@ -463,13 +616,20 @@ func (h *Handler) recheckFleetWaiting(canvasID uuid.UUID, agent string) {
 // parses once and branches on `status`.
 type queueWaitMsg struct {
 	Type   string `json:"type"`   // "queue.wait"
-	Status string `json:"status"` // "ready" | "timeout"
+	Status string `json:"status"` // "ready" | "timeout" | "rejected"
 	// Actions is the ready queue, in the SAME shape as GET /api/canvas/actions,
 	// so whatever already projects that list can project this one unchanged.
 	// Non-empty exactly when status is "ready"; always present (never null) so a
 	// caller can range over it without a nil check.
 	Actions []*store.Action `json:"actions"`
-	// Count saves the caller a length check when it only wants to branch.
+	// Rejected is the verdicts that ended the wait, present exactly when status
+	// is "rejected" and omitted otherwise — a caller that has never heard of this
+	// status sees a field it does not know rather than an empty one it might
+	// misread. Contract A (TDM-2).
+	Rejected []rejectedTask `json:"rejected,omitempty"`
+	// Count saves the caller a length check when it only wants to branch. It
+	// counts whatever the answer CARRIES: ready tasks on "ready", rejections on
+	// "rejected", zero on "timeout".
 	Count          int    `json:"count"`
 	WaitedMs       int64  `json:"waitedMs"`
 	TimeoutSeconds int    `json:"timeoutSeconds"`
@@ -517,7 +677,7 @@ func (h *Handler) WaitForQueue(w http.ResponseWriter, r *http.Request) {
 	// Ordering here is what makes an approval that lands mid-request impossible to
 	// miss: registered-then-read means an approval either shows up in the read or
 	// is already buffered in `ready`.
-	ready, release, started, ok := h.waiters.add(canvasID, agent, epicID)
+	waiter, release, started, ok := h.waiters.add(canvasID, agent, epicID)
 	if !ok {
 		// Deliberately an ERROR, not a "timeout": a timeout invites an immediate
 		// re-call, and re-calling into a full registry is a hot loop. 429 tells the
@@ -563,12 +723,21 @@ func (h *Handler) WaitForQueue(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if len(tasks) > 0 {
-			writeQueueWait(w, queueWaitReady, tasks, time.Since(start), timeout)
+			writeQueueWait(w, queueWaitReady, tasks, nil, time.Since(start), timeout)
+			return
+		}
+		// READY WINS, which is why this sits below the read and not above it
+		// (contract A). An agent that has both approved work and a rejection
+		// waiting should be sent to WORK; the rejection is still on the board, and
+		// on its next wait it gets told. The reverse order would park a fleet on a
+		// verdict while approved tickets sat unclaimed.
+		if rejected := h.waiters.takeRejections(waiter, epicID); len(rejected) > 0 {
+			writeQueueWait(w, queueWaitRejected, nil, rejected, time.Since(start), timeout)
 			return
 		}
 
 		select {
-		case <-ready:
+		case <-waiter.ready:
 			// Something entered the queue — loop and re-read. A wake that turns out
 			// not to match this caller's filters (another epic, a human's todo)
 			// simply costs one read and goes back to waiting, which is why the loop
@@ -576,7 +745,7 @@ func (h *Handler) WaitForQueue(w http.ResponseWriter, r *http.Request) {
 		case <-deadline.C:
 			// NOT an error. The queue is empty, the caller should call again.
 			ending = waitEndTimeout
-			writeQueueWait(w, queueWaitTimeout, nil, time.Since(start), timeout)
+			writeQueueWait(w, queueWaitTimeout, nil, nil, time.Since(start), timeout)
 			return
 		case <-ctx.Done():
 			// Client disconnected (or the server is shutting down). Return without
@@ -616,22 +785,37 @@ func (h *Handler) readyQueue(ctx context.Context, canvasID uuid.UUID, epicID, as
 	return out, nil
 }
 
-func writeQueueWait(w http.ResponseWriter, status string, tasks []*store.Action, waited, timeout time.Duration) {
+func writeQueueWait(w http.ResponseWriter, status string, tasks []*store.Action, rejected []rejectedTask, waited, timeout time.Duration) {
 	if tasks == nil {
 		tasks = []*store.Action{}
 	}
 	hint := "Nothing approved within the wait window. This is NOT an error and NOT a failure — " +
 		"it means 'nothing yet, call again'. Call this endpoint again to keep waiting; the human " +
 		"has not approved anything yet."
-	if status == queueWaitReady {
+	count := len(tasks)
+	switch status {
+	case queueWaitReady:
 		hint = "Approved work is ready. Claim ONE task (task_claim) and work it, or — if you " +
 			"dispatch to subagents — hand each ready task to a worker that claims its own."
+	case queueWaitRejected:
+		count = len(rejected)
+		// The one hint that has to stop an agent doing the obvious thing. A wait
+		// that ends is normally a wait that found work, and an agent that skims
+		// will re-propose or start coding; say plainly that this is a NO, that the
+		// reason is the brief, and that re-proposing the same ticket lands the same
+		// way (the same rule task_get's `review` block states).
+		hint = "REJECTED, not approved — the human said no to work you are waiting on, and the " +
+			"`reason` on each entry is their words verbatim. Do NOT start this work and do NOT " +
+			"re-propose it unchanged: it will be rejected again. Read the reason, fix the plan it " +
+			"condemns (task_amend the neighbours it also applies to), and tell the human what you " +
+			"changed. If you are still expecting other approvals, call this endpoint again."
 	}
 	writeJSON(w, http.StatusOK, queueWaitMsg{
 		Type:           "queue.wait",
 		Status:         status,
 		Actions:        tasks,
-		Count:          len(tasks),
+		Rejected:       rejected,
+		Count:          count,
 		WaitedMs:       waited.Milliseconds(),
 		TimeoutSeconds: int(timeout / time.Second),
 		Hint:           hint,

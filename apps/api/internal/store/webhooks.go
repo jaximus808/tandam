@@ -87,14 +87,18 @@ const deliveryCols = "id,webhook_id,canvas_id,event_id,event_type,payload,status
 	"attempt_count,last_attempt_at,next_attempt_at,response_status,response_body,error,created_at"
 
 // KnownWebhookEvents is the event vocabulary, mirroring the
-// webhooks_events_known CHECK in migration 0038 as widened by 0043. Kept here
-// (not in the webhooks package) so the store can validate before a round trip
-// and so config handlers have one list to render.
+// webhooks_events_known CHECK in migration 0038 as widened by 0043 and 0044.
+// Kept here (not in the webhooks package) so the store can validate before a
+// round trip and so config handlers have one list to render.
 //
 // ORDER MATTERS ONLY FOR APPEARANCE: it is the order the settings UI renders the
 // checkboxes in, and the default filter a config created with no `events` gets.
-// task.returned goes LAST because it is the newest and the least often wanted.
-var KnownWebhookEvents = []string{"task.approved", "task.completed", "task.claim_expired", "task.returned"}
+// The two newest go LAST, newest of all at the end — task.returned (0043) then
+// task.rejected (0044) — which is both the least-often-wanted first ordering and
+// the one that keeps an existing config's rendered list from reshuffling.
+var KnownWebhookEvents = []string{
+	"task.approved", "task.completed", "task.claim_expired", "task.returned", "task.rejected",
+}
 
 // IsKnownWebhookEvent reports whether e is one of KnownWebhookEvents.
 func IsKnownWebhookEvent(e string) bool {

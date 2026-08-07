@@ -16,8 +16,9 @@ import (
 )
 
 // TDM-37: the outbound task-lifecycle events. The whole point of these tests is
-// the NEGATIVE half of the contract — exactly four event types exist (TDM-170
-// added the fourth) and everything else in the task lifecycle is silent. A
+// the NEGATIVE half of the contract — exactly five event types exist (TDM-170
+// added the fourth, TDM-2 the fifth) and everything else in the task lifecycle
+// is silent. A
 // regression that starts emitting on, say, every claim would be invisible in
 // production until someone's receiver melted, so each transition is asserted
 // with its full event list, not just "the one I expected is in there".
@@ -361,8 +362,9 @@ func proposedTask(title string) *store.Action {
 // ── The state machine, transition by transition ──────────────────────────────
 
 // Every task transition in one table, each asserting the COMPLETE event list.
-// The silent rows are the contract: claiming, rejecting, editing, deleting,
-// releasing and requeueing must never notify.
+// The silent rows are the contract: claiming, editing, deleting, releasing and
+// requeueing must never notify. (Rejecting was one of them until TDM-2 — see
+// that row.)
 func TestTaskEventsPerTransition(t *testing.T) {
 	canvasID := uuid.New()
 
@@ -426,7 +428,11 @@ func TestTaskEventsPerTransition(t *testing.T) {
 			want: []string{webhooks.EventTaskCompleted},
 		},
 		{
-			name: "proposed → rejected fires NOTHING",
+			// TDM-2 moved this one out of the silent column. It used to fire
+			// nothing on the argument that a rejection hands over no work; it now
+			// fires task.rejected, because the agent waiting on the gate needs to
+			// hear the answer whichever way it went.
+			name: "proposed → rejected fires task.rejected",
 			from: "proposed",
 			setup: func(t *testing.T, h *Handler, task *store.Action) {
 				w := httptest.NewRecorder()
@@ -436,7 +442,7 @@ func TestTaskEventsPerTransition(t *testing.T) {
 					t.Fatalf("reject = %d: %s", w.Code, w.Body)
 				}
 			},
-			want: nil,
+			want: []string{webhooks.EventTaskRejected},
 		},
 		{
 			name: "payload edit fires NOTHING",
@@ -880,12 +886,152 @@ func TestEmittedTypesAreKnownWebhookEvents(t *testing.T) {
 	for _, e := range []string{
 		webhooks.EventTaskApproved, webhooks.EventTaskCompleted,
 		webhooks.EventTaskClaimExpired, webhooks.EventTaskReturned,
+		webhooks.EventTaskRejected,
 	} {
 		if !store.IsKnownWebhookEvent(e) {
 			t.Errorf("%q is not in store.KnownWebhookEvents", e)
 		}
 	}
-	if len(store.KnownWebhookEvents) != 4 {
-		t.Errorf("vocabulary is %v — the handlers emit exactly 4 event types; adding a 5th needs a call site", store.KnownWebhookEvents)
+	if len(store.KnownWebhookEvents) != 5 {
+		t.Errorf("vocabulary is %v — the handlers emit exactly 5 event types; adding a 6th needs a call site", store.KnownWebhookEvents)
+	}
+}
+
+// ── task.rejected: the payload and the trail it leaves (TDM-2) ───────────────
+
+// The wire shape. A receiver has to be able to tell a rejection from every other
+// event WITHOUT a round trip: the type, the state, and a `rejected` block
+// carrying who said no and their words unedited.
+func TestRejectEmitsTheVerdictWithItsReason(t *testing.T) {
+	canvasID := uuid.New()
+	task := proposedTask("rewrite the auth layer")
+	fake := &eventFakeStore{policy: "strict", actions: map[uuid.UUID]*store.Action{task.ID: task}}
+	em := &recordingEmitter{}
+	h := NewHandler(fake, nil, nil)
+	h.events = em
+
+	w := httptest.NewRecorder()
+	h.RejectAction(w, canvasRequest(t, "POST", "/reject",
+		map[string]any{"reason": "too big — split it per surface first"}, canvasID, task.ID.String()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("reject = %d: %s", w.Code, w.Body)
+	}
+	em.settleTypes(t, webhooks.EventTaskRejected)
+
+	ev := em.recorded()[0]
+	got, ok := ev.body["task"].(map[string]any)
+	if !ok {
+		t.Fatalf("event body has no task: %v", ev.body)
+	}
+	if got["state"] != "rejected" {
+		t.Fatalf("task.state = %v, want rejected", got["state"])
+	}
+	if got["ticketId"] != "TDM-42" {
+		t.Fatalf("task.ticketId = %v, want TDM-42", got["ticketId"])
+	}
+	rejected, ok := ev.body["rejected"].(map[string]any)
+	if !ok {
+		t.Fatalf("task.rejected carries no `rejected` block — a receiver cannot tell WHO said no from the row: %v", ev.body)
+	}
+	if rejected["from"] != "proposed" {
+		t.Fatalf("rejected.from = %v, want proposed", rejected["from"])
+	}
+	if rejected["by"] != AuthorHuman {
+		t.Fatalf("rejected.by = %v, want %q — provenance is server-derived, never off the body", rejected["by"], AuthorHuman)
+	}
+	if rejected["reason"] != "too big — split it per surface first" {
+		t.Fatalf("rejected.reason = %v, want the human's words verbatim", rejected["reason"])
+	}
+	// The other two discriminator blocks belong to other events and must not
+	// appear here — a receiver branching on their presence would misroute.
+	if _, wrong := ev.body["returned"]; wrong {
+		t.Fatal("a rejection must not carry the `returned` block: returned work is work, a rejection is not")
+	}
+}
+
+// A rejection with no reason still fires. The endpoint does not require one, and
+// silence about a verdict is the failure this event exists to prevent — an
+// omitted reason must read as "they gave none", never as "nothing happened".
+func TestRejectWithoutAReasonStillFires(t *testing.T) {
+	canvasID := uuid.New()
+	task := proposedTask("no reason given")
+	fake := &eventFakeStore{policy: "strict", actions: map[uuid.UUID]*store.Action{task.ID: task}}
+	em := &recordingEmitter{}
+	h := NewHandler(fake, nil, nil)
+	h.events = em
+
+	w := httptest.NewRecorder()
+	h.RejectAction(w, canvasRequest(t, "POST", "/reject", map[string]any{}, canvasID, task.ID.String()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("reject = %d: %s", w.Code, w.Body)
+	}
+	em.settleTypes(t, webhooks.EventTaskRejected)
+	if reason, present := em.recorded()[0].body["rejected"].(map[string]any)["reason"]; present {
+		t.Fatalf("rejected.reason = %v, want the key omitted when the human typed nothing", reason)
+	}
+}
+
+// THE AUDIT TRAIL. Before TDM-2 a rejection recorded neither who nor when: the
+// reason went into actions.error and nothing else was written, so task_get's
+// `review` block had to DERIVE the actor and fall back to updated_at for the
+// time. Now the trail carries the real thing, which is what makes the block's
+// by/at provenance rather than inference.
+func TestRejectWritesAnAuditEntry(t *testing.T) {
+	canvasID := uuid.New()
+	task := proposedTask("audit me")
+	fake := &eventFakeStore{policy: "strict", actions: map[uuid.UUID]*store.Action{task.ID: task}}
+	h := NewHandler(fake, nil, nil) // no emitter: the trail is not a webhook feature
+
+	w := httptest.NewRecorder()
+	h.RejectAction(w, canvasRequest(t, "POST", "/reject",
+		map[string]any{"reason": "duplicates TDM-9"}, canvasID, task.ID.String()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("reject = %d: %s", w.Code, w.Body)
+	}
+
+	log := readActionAudit(fake.actions[task.ID].Payload)
+	if len(log) != 1 {
+		t.Fatalf("audit log = %+v, want exactly one entry for the rejection", log)
+	}
+	e := log[0]
+	if e.FromState != "proposed" || e.ToState != "rejected" {
+		t.Fatalf("audit entry moved %q → %q, want proposed → rejected", e.FromState, e.ToState)
+	}
+	if e.Actor != AuthorHuman {
+		t.Fatalf("audit actor = %q, want %q — RejectAction refuses anyone the server cannot see as human", e.Actor, AuthorHuman)
+	}
+	if e.Note != "duplicates TDM-9" {
+		t.Fatalf("audit note = %q, want the reason verbatim", e.Note)
+	}
+	if e.At == "" {
+		t.Fatal("audit entry has no timestamp — the `at` the review block reports comes from here")
+	}
+	// And the read path now finds provenance instead of falling back.
+	actor, at := reviewActorForRejection(fake.actions[task.ID])
+	if actor != AuthorHuman || at != e.At {
+		t.Fatalf("reviewActorForRejection = (%q, %q), want the audit entry's (%q, %q)", actor, at, e.Actor, e.At)
+	}
+}
+
+// A rejection REFUSED at the human gate must leave nothing behind: no event, no
+// audit entry. An agent that tried to kill a peer's proposal and failed must not
+// show up in the trail as though it had a say.
+func TestRefusedRejectEmitsNothingAndWritesNoAudit(t *testing.T) {
+	canvasID := uuid.New()
+	task := proposedTask("not yours to kill")
+	fake := &eventFakeStore{policy: "strict", actions: map[uuid.UUID]*store.Action{task.ID: task}}
+	em := &recordingEmitter{}
+	h := NewHandler(fake, nil, nil)
+	h.events = em
+
+	w := httptest.NewRecorder()
+	r := canvasRequest(t, "POST", "/reject", map[string]any{"reason": "nope"}, canvasID, task.ID.String())
+	h.RejectAction(w, r.WithContext(WithAuthor(r.Context(), "agent:reviewer-b")))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("reject by an agent = %d, want 403 (body %s)", w.Code, w.Body)
+	}
+	em.settleTypes(t)
+	if log := readActionAudit(fake.actions[task.ID].Payload); len(log) != 0 {
+		t.Fatalf("a refused rejection wrote %+v to the audit trail", log)
 	}
 }
