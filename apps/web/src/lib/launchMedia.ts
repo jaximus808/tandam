@@ -15,4 +15,8 @@
 // Annotated `string` (not the inferred `""` literal) so the emptiness checks
 // downstream stay ordinary runtime conditions rather than types TS can narrow
 // to `never` the moment the value is still the empty default.
-export const FULL_DEMO_VIDEO_URL: string = "";
+// Self-hosted (TDM-204): the 4m03s walkthrough, compressed 304MB→16.6MB
+// (1600w, crf 28, aac 96k), served from public/ like the section loops — no
+// external host in the loop. Swap for a YouTube URL any time; the modal
+// handles both shapes.
+export const FULL_DEMO_VIDEO_URL: string = "/demo/tandem-demo-full.mp4";
