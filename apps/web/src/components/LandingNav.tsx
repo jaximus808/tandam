@@ -24,6 +24,8 @@ interface Props {
   // surface that doesn't pass a handler still renders a crawlable link — the
   // browser just navigates normally instead of routing in-app.
   onWhy?: () => void;
+  // /features, the capability reference. Optional for the same reason as onWhy.
+  onFeatures?: () => void;
   // Landing passes its own setUser so signing in through the AccountMenu keeps
   // the hero in sync; other pages omit it.
   onUserChange?: (u: User | null) => void;
@@ -58,6 +60,7 @@ export default function LandingNav({
   onShowSettings,
   onAbout,
   onWhy,
+  onFeatures,
   onUserChange,
   samePageAnchors = false,
 }: Props) {
@@ -116,10 +119,20 @@ export default function LandingNav({
               640px and ~1000px the full set doesn't fit next to the brand +
               CTA, and flex was answering by wrapping every label into a
               2–3 line stack. Same-page anchors (How it works / Quickstart)
-              are the most expendable → lg. Real pages (Why Tandem / About)
-              → md. The CTA + Dashboard + account survive every width.
-              whitespace-nowrap everywhere: a label that doesn't fit is
-              hidden by its tier, never folded. */}
+              are the most expendable → lg. The CTA + Dashboard + account
+              survive every width. whitespace-nowrap everywhere: a label that
+              doesn't fit is hidden by its tier, never folded.
+
+              The md TIER HOLDS EXACTLY TWO page links — that is its width
+              budget, not a coincidence. At 768px the brand plus CTA plus
+              Dashboard plus the account control already spend ~590px of the
+              ~720px of usable row, which leaves room for two labels and no
+              third. So Features (TDM-209) taking a md slot means About gives
+              one up: /features is the page a visitor evaluating the product
+              needs, /about is the page they read after deciding, and the
+              essay (/why-tandem) is what makes the case. About stays fully
+              reachable at lg, from both marketing footers, and from the
+              account menu at every width. */}
           <a
             href={howItWorksHref}
             className="hidden whitespace-nowrap rounded-md px-3 py-1.5 text-ink/55 transition-colors hover:bg-ink/5 hover:text-ink lg:inline"
@@ -133,8 +146,15 @@ export default function LandingNav({
             Quickstart
           </a>
           {/* Real anchors, not buttons — see lib/spaNav: these are the only
-              internal links to /why-tandem, /about and /mcp a crawler can
-              follow. */}
+              internal links to /features, /why-tandem, /about and /mcp a
+              crawler can follow. */}
+          <a
+            href="/features"
+            onClick={onFeatures ? spaLink(onFeatures) : undefined}
+            className="hidden whitespace-nowrap rounded-md px-3 py-1.5 text-ink/55 transition-colors hover:bg-ink/5 hover:text-ink md:inline"
+          >
+            Features
+          </a>
           <a
             href="/why-tandem"
             onClick={onWhy ? spaLink(onWhy) : undefined}
@@ -145,7 +165,7 @@ export default function LandingNav({
           <a
             href="/about"
             onClick={spaLink(onAbout)}
-            className="hidden whitespace-nowrap rounded-md px-3 py-1.5 text-ink/55 transition-colors hover:bg-ink/5 hover:text-ink md:inline"
+            className="hidden whitespace-nowrap rounded-md px-3 py-1.5 text-ink/55 transition-colors hover:bg-ink/5 hover:text-ink lg:inline"
           >
             About
           </a>

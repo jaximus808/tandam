@@ -22,6 +22,7 @@ import Landing from "./pages/Landing";
 import MCPSupport from "./pages/MCPSupport";
 import About from "./pages/About";
 import WhyTandem from "./pages/WhyTandem";
+import Features from "./pages/Features";
 import MyCanvases from "./pages/MyCanvases";
 import StatsPage from "./pages/StatsPage";
 import MetricsPage from "./pages/MetricsPage";
@@ -189,6 +190,7 @@ type Route =
   | "settings"
   | "about"
   | "why"
+  | "features"
   | "authorize";
 
 function routeFromPath(): Route {
@@ -200,6 +202,7 @@ function routeFromPath(): Route {
   if (p === "/me") return "settings";
   if (p === "/about") return "about";
   if (p === "/why-tandem") return "why";
+  if (p === "/features") return "features";
   // OAuth consent screen (hosted MCP connector). This is the authorization_endpoint
   // advertised to clients; it renders a self-contained consent page.
   if (p === "/oauth/authorize") return "authorize";
@@ -863,6 +866,11 @@ export default function App() {
     setRoute("why");
   }
 
+  function showFeatures() {
+    window.history.pushState(null, "", "/features");
+    setRoute("features");
+  }
+
   // ── The ticket page ─────────────────────────────────────────────────────────
   // A card's ticket chip opens /c/CODE/ticket/TDM-n. pushState, like every other
   // route here, so browser back goes where the user came from.
@@ -1242,6 +1250,32 @@ export default function App() {
         onShowCanvases={showMyCanvases}
         onShowSettings={showSettings}
         onAbout={showAbout}
+        onOpenCanvas={(code) => {
+          setRoute("home");
+          handleJoin(code);
+        }}
+      />
+    );
+  }
+
+  // /features — the capability reference. Same marketing-surface wiring as
+  // About and WhyTandem; it is a real route so the nav anchor and a direct URL
+  // load land in the same place.
+  if (route === "features") {
+    return (
+      <Features
+        onBack={() => {
+          window.history.pushState(null, "", "/");
+          setRoute("home");
+        }}
+        onOpenMCP={() => {
+          setMCPInURL();
+          setRoute("mcp");
+        }}
+        onShowCanvases={showMyCanvases}
+        onShowSettings={showSettings}
+        onAbout={showAbout}
+        onWhy={showWhy}
         onOpenCanvas={(code) => {
           setRoute("home");
           handleJoin(code);
