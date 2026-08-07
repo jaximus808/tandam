@@ -114,6 +114,7 @@ type WaitResult = {
   waitedMs?: number;
   timeoutSeconds?: number;
   truncated?: number;
+  rejected?: Array<Record<string, any>>;
   lostByYou?: unknown[];
   _lostByYou?: string;
   _dispatch?: string;
@@ -274,6 +275,127 @@ test("timeout is a NON-ERROR that says, in words, to call again", async () => {
     assert.match(next, /DO NOT end your turn/i);
     // No dispatch instruction on an empty answer — there is nothing to dispatch.
     assert.equal(result._dispatch, undefined);
+  });
+});
+
+// ── status: rejected — woken by a NO (TDM-4, contract A) ─────────────────────
+//
+// The dead end this closes: a rejection used to signal nothing, so an agent
+// parked here waited out its whole budget on a ticket that could never become
+// ready, and the timeout copy had to warn it about that in the abstract. Now the
+// rejection wakes the wait and brings the reason with it, which turns "keep
+// waiting" into "here is work you can do right now".
+
+const REJECTED = [
+  {
+    id: "task-ccc",
+    ticketId: "TDM-203",
+    title: "Rewrite the whole queue in Rust",
+    reason: "Out of scope for this batch — the queue is fine; the gap is the rejection loop.",
+    by: "human",
+    at: "2026-08-06T12:00:00Z",
+  },
+];
+
+const rejectedBody = (rejected: unknown[] = REJECTED, waitedMs = 1200) => ({
+  type: "queue.wait",
+  status: "rejected",
+  rejected,
+  count: rejected.length,
+  waitedMs,
+  timeoutSeconds: 25,
+});
+
+test("a rejection wakes the wait, and the reason comes back VERBATIM", async () => {
+  await withFetch({ wait: () => json(rejectedBody()) }, async () => {
+    const result = await wait();
+
+    assert.equal(result.status, "rejected");
+    assert.equal(result.count, 1);
+    assert.equal(result.waited, true);
+    assert.equal(result.waitedMs, 1200);
+    // Nothing to claim or dispatch — a rejection is not work in the queue.
+    assert.deepEqual(result.tasks, []);
+    assert.equal(result._dispatch, undefined);
+
+    // The whole point: the decider's words, uncut. An excerpt would send the
+    // author back to the board for the thing this answer exists to deliver.
+    assert.deepEqual(result.rejected, REJECTED);
+    assert.equal(result.rejected![0].reason, REJECTED[0].reason);
+  });
+});
+
+test("the rejected answer says: not an error, resubmit with task_amend, do not re-file", async () => {
+  await withFetch({ wait: () => json(rejectedBody()) }, async () => {
+    const next = (await wait())._next ?? "";
+
+    assert.match(next, /REJECTED/);
+    assert.match(next, /TDM-203/, "it names the ticket that came back");
+    assert.match(next, /NOT an error/i);
+    // The two moves the reason licenses, and the one it forbids.
+    assert.match(next, /task_amend/);
+    assert.match(next, /note/i, "the resubmit's note is what the human reads");
+    assert.match(next, /'proposed'/, "amending a rejected ticket sends it back to the gate");
+    assert.match(next, /neighbouring tickets/i, "a rejection usually condemns more than one");
+    assert.match(next, /Do not re-file the same ticket as a new one/i);
+    // And it must not send the agent straight back to waiting on a dead ticket.
+    assert.match(next, /work you can do right now/i);
+  });
+});
+
+test("several rejections come back together, each with its own reason", async () => {
+  const two = [
+    REJECTED[0],
+    { id: "task-ddd", ticketId: "TDM-204", title: "Second one", reason: "Same problem.", by: "human" },
+  ];
+  await withFetch({ wait: () => json(rejectedBody(two)) }, async () => {
+    const result = await wait();
+    assert.equal(result.count, 2);
+    assert.deepEqual(
+      result.rejected!.map((r) => [r.ticketId, r.reason]),
+      [
+        ["TDM-203", REJECTED[0].reason],
+        ["TDM-204", "Same problem."],
+      ]
+    );
+    assert.match(result._next ?? "", /2 tickets/, "plural, and it says how many");
+    assert.match(result._next ?? "", /TDM-203, TDM-204/);
+  });
+});
+
+test("a rejection is not a timeout: it spends no _tell_human reminder", async () => {
+  // The reminder exists for a human who was never asked to approve anything. A
+  // human who just REJECTED something has plainly seen the board.
+  await withFetch(
+    {
+      wait: (() => {
+        let n = 0;
+        return () => json(n++ === 0 ? rejectedBody() : timeoutBody());
+      })(),
+    },
+    async () => {
+      const gw = await planner();
+      const first = (await handleFacadeTool(gw, "queue_wait", {})) as WaitResult;
+      assert.equal(first.status, "rejected");
+      assert.equal(first._tell_human, undefined);
+      // …and the backstop is still unspent for the timeout that follows.
+      assert.ok(((await handleFacadeTool(gw, "queue_wait", {})) as WaitResult)._tell_human);
+    }
+  );
+});
+
+test("the timeout no longer claims a rejected ticket leaves you waiting forever", async () => {
+  await withFetch({ wait: () => json(timeoutBody()) }, async () => {
+    const next = (await wait())._next ?? "";
+    // That sentence was true only while rejections signalled nothing. Saying it
+    // now would send an agent to board_status on every quiet round.
+    assert.doesNotMatch(next, /waiting forever/i);
+    assert.doesNotMatch(next, /never becomes ready/i);
+    // What replaces it: a rejection WOULD have woken you, so silence means
+    // nobody has decided — with the older-API caveat kept as the exception.
+    assert.match(next, /wakes this call/i);
+    assert.match(next, /nobody has decided yet/i);
+    assert.match(next, /board_status/, "the fallback for an API that cannot signal one");
   });
 });
 

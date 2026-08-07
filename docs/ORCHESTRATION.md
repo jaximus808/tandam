@@ -61,12 +61,17 @@ task passes the approval gate. Answers come back on `status`:
 | `status` | Means | Do |
 |---|---|---|
 | `ready` | Approved tasks, each already carrying the same paste-ready `handoff` block `queue_next` attaches | Claim one (alone) or dispatch one subagent per task |
+| `rejected` | Nothing was approved; instead a ticket you proposed came **back**, on `rejected[]` with the decider's `reason` verbatim. **Not an error** | Fix what the reason names and `task_amend` that ticket with a `note` to resubmit it, and/or amend the neighbours it also condemns (§6). Then say what you did and wait again |
 | `timeout` | Nothing was approved inside the window. **Not an error** | Call `queue_wait` again |
 | `busy` | This canvas is at its waiter cap. The call read the queue for you first | Treat it as `queue_next`, then call again |
 | `unsupported` | The API is older than the endpoint. It read the queue for you first | Treat it as `queue_next` |
 
 Default wait is 25s, clamped 1–60. The tool is annotated read-only, so connectors
-can auto-approve it.
+can auto-approve it. `ready` wins when both an approval and a rejection landed in
+the same window — approved work is the thing you can act on immediately — and the
+`epicId` filter applies to rejections exactly as it does to approvals. An API
+deployed before rejections woke waiters cannot signal one; there a rejected
+ticket still shows on `board_status`, under its epic's `returned`.
 
 **Before the first wait: say what you are waiting for.** Waiting is the second
 beat, not the first. If the agent just proposed the batch it is now parked on,
@@ -879,10 +884,15 @@ Tickets come back, and that is the gate working. `task_get` answers with a
 `review` block — `{ outcome, reason, by, at }`, the decider's words verbatim —
 whichever produced it (TDM-161):
 
-- **`rejected`** — a human killed it. Read it as a correction to the *plan*, not
+- **`rejected`** — a human said no. Read it as a correction to the *plan*, not
   to the one ticket: it usually condemns neighbours too, so `task_amend` those
-  while they are still `proposed`. Re-proposing the same ticket lands the same
-  way.
+  while they are still `proposed`. Then answer the rejection on the **same
+  ticket**: `task_amend` it with the fix and a `note` saying what changed, and it
+  goes back to `proposed` for the human, with the original reason and your note
+  kept on its audit trail. Filing a fresh near-duplicate instead lands the same
+  way — it arrives with no memory of the rejection. The resubmitted ticket is
+  *not* approved and signals no queue waiter: tell the human it is back, then
+  `queue_wait`.
 - **`rework`** — finished work sent back (§5). The reason is the brief for the
   next attempt at that same ticket; it is back in the ready queue for a fresh
   claim, not a new ticket to file.

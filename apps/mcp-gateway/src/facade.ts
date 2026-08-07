@@ -278,14 +278,18 @@ function reviewNote(fb: ReviewFeedback | undefined): { _review?: string } {
   if (fb.outcome === "rejected") {
     return {
       _review:
-        `This ticket was REJECTED${by}, so nobody will work it — do not claim it, and do not ` +
-        `re-propose the same ticket, which lands the same way.${quoted}` +
+        `This ticket was REJECTED${by}, so nobody will work it as it stands — do not claim it, ` +
+        `and do not file a NEW copy of it, which lands the same way. What it does have is a way ` +
+        `back: task_amend this same ticket with the fix AND a \`note\` saying what you changed, ` +
+        `and it returns to 'proposed' for the human to approve — one ticket with its history, ` +
+        `not a duplicate.${quoted}` +
         (fb.reason
-          ? " Treat that as a correction to the PLAN, not just to this ticket: it usually " +
-            "condemns neighbours too. Read the batch (the epic read lists every ticket that " +
-            "came back with its reason) and task_amend the ones it also applies to before a " +
-            "worker picks them up."
-          : " No reason was recorded, so ask rather than guess at what was wrong.") +
+          ? " Fix what the reason names before you resubmit, and treat it as a correction to the " +
+            "PLAN rather than to this ticket alone: it usually condemns neighbours too. Read the " +
+            "batch (the epic read lists every ticket that came back with its reason) and " +
+            "task_amend the ones it also applies to before a worker picks them up."
+          : " No reason was recorded, so ask rather than guess at what was wrong — resubmitting " +
+            "blind spends the human's next look for nothing.") +
         " If it contradicts the brief you were working from, say so — do not quietly re-file it.",
     };
   }
@@ -921,6 +925,60 @@ function reworkRefusalNext(refusal: ApprovalRefusal): string {
       `report that, rather than retrying.`;
 }
 
+// ── Resubmitting a rejected ticket (TDM-4) ───────────────────────────────────
+//
+// The way OUT of a rejection, and the reason task_amend now looks at more than
+// one state. `POST /api/canvas/actions/{id}/resubmit` is the agent-only
+// counterpart of the human board's "Re-propose": it merges the amended payload,
+// writes a `rejected→proposed` audit entry that PRESERVES the original rejection
+// reason, and puts the ticket back in front of the human. No queue signal and no
+// webhook — a resubmit is a request for approval, not approved work.
+//
+// Before it existed, a rejected ticket was a dead end whose only exit was filing
+// a near-duplicate, which is why the old copy said "re-proposing lands the same
+// way": it did, because the fix and the rejection lived on two different
+// tickets and the human could not see one from the other. Amend-and-resubmit
+// keeps them on ONE ticket with its history attached.
+//
+// Same division as approvalRefusalNext / reworkRefusalNext: the API decides,
+// this only turns its decision into the author's next move.
+
+/** What to do about a refused resubmit, by the server's stable code (contract B). */
+function resubmitRefusalNext(refusal: ApprovalRefusal): string {
+  switch (refusal.code) {
+    case "task_not_found":
+      return (
+        "No task with that id or ticket ref is on this canvas — so there is nothing to resubmit " +
+        "and nothing to retry. Check the ref (task_find matches by title, task_get by ref), or " +
+        "propose the work fresh if it was deleted rather than rejected."
+      );
+    case "resubmit_wrong_state":
+      return (
+        `Only a REJECTED ticket can be resubmitted, and this one is ` +
+        `'${refusal.extra.state ?? "in another state"}'. A 'proposed' ticket is already in front ` +
+        `of the human — amend it in place instead. Anything approved or in flight is no longer ` +
+        `yours to move: propose a follow-up, or ask the human.`
+      );
+    case "resubmit_not_author":
+      return (
+        `You did not propose this ticket${refusal.extra.authoredBy ? ` (the server has it authored by ${refusal.extra.authoredBy})` : ""}, ` +
+        `so resubmitting it is not yours to do — the author answers the rejection, or the human ` +
+        `re-proposes it on the board. If the reason names something you can fix, say so and let ` +
+        `whoever proposed it resubmit.`
+      );
+    case "resubmit_note_required":
+      return (
+        "A resubmit carries the note the human reads to see what changed since they said no, so " +
+        "an empty one is refused. Call task_amend again with a `note` naming what you changed " +
+        "in response to the rejection reason."
+      );
+  }
+  return refusal.code
+    ? unknownRefusalNext(refusal)
+    : `The server refused this resubmit: "${refusal.message}". Leave the ticket rejected and ` +
+      `report that, rather than retrying the same call.`;
+}
+
 /**
  * The briefing bundle, composed from endpoints that exist TODAY: the canvas
  * state SUMMARY (counts + capped names — never the full board), the document
@@ -1536,13 +1594,33 @@ function lostByYouNote(count: number): string {
 
 // ── The queue long poll (TDM-149, over the API's TDM-148) ────────────────────
 
+/**
+ * One ticket that came back while this call was parked, exactly as the wait
+ * reports it. The `reason` is the human's own words and is NEVER excerpted here
+ * — it is the whole point of waking for a rejection (contract A, TDM-4).
+ */
+type RejectedWaitTicket = {
+  id?: string;
+  ticketId?: string;
+  title?: string;
+  reason?: string;
+  by?: string;
+  at?: string;
+};
+
 /** The API's one response shape for GET /api/canvas/queue/wait. */
 type QueueWaitBody = {
   type?: string;
-  /** "ready" | "timeout" — the single field to branch on; both arrive as 200. */
+  /**
+   * "ready" | "rejected" | "timeout" — the single field to branch on; all three
+   * arrive as 200. `ready` still WINS when both approvals and rejections landed
+   * in the window, because approved work is the thing you can act on right now.
+   */
   status?: string;
   /** Byte-identical to GET /api/canvas/actions, so the queue projection applies. */
   actions?: RawTaskAction[];
+  /** Set only on status "rejected": what came back, with the reason attached. */
+  rejected?: RejectedWaitTicket[];
   count?: number;
   waitedMs?: number;
   timeoutSeconds?: number;
@@ -1943,6 +2021,12 @@ async function runFacadeTool(
     // So the response TEXT is as load-bearing as the plumbing, and it is written
     // against exactly one decision the model makes: end the turn, or call again?
     //   - "ready"   → the work, dispatch-ready, with handoffs already attached.
+    //   - "rejected"→ nothing was approved, but something of yours came BACK,
+    //                 with the human's reason (TDM-4). Also not a failure, and
+    //                 the one answer that hands you work to do without handing
+    //                 you a task: fix and resubmit, or amend the neighbours the
+    //                 reason also condemns. Waiting on a rejected ticket is the
+    //                 dead end this branch exists to end.
     //   - "timeout" → NOT a failure. It says so, in those words, and says call
     //                 again. A timeout that reads like an error trains the model
     //                 out of the only tool that keeps it alive.
@@ -2009,6 +2093,50 @@ async function runFacadeTool(
       const effectiveTimeout =
         typeof body.timeoutSeconds === "number" ? body.timeoutSeconds : timeoutSeconds;
 
+      // REJECTED — woken by a NO rather than a yes (contract A, TDM-4). Checked
+      // before the timeout branch and after the ready one, mirroring the
+      // server's own precedence: approved work wins, and everything that is not
+      // ready-or-rejected is the timeout.
+      //
+      // The reasons are passed through VERBATIM and uncapped. An excerpt of "the
+      // scope is wrong, this belongs behind the flag" is worse than useless —
+      // the whole value of waking for a rejection is that the author reads the
+      // correction in the decider's own words, here, instead of going to look
+      // for it on the board.
+      if (body.status === "rejected") {
+        const rejected = Array.isArray(body.rejected) ? body.rejected : [];
+        const one = rejected.length === 1;
+        const named = rejected
+          .map((r) => r.ticketId ?? r.id)
+          .filter((r): r is string => typeof r === "string" && r.length > 0);
+        const withReason = rejected.filter((r) => typeof r.reason === "string" && r.reason.trim());
+        return {
+          status: "rejected",
+          tasks: [],
+          rejected,
+          count: rejected.length,
+          waited: true,
+          waitedMs,
+          timeoutSeconds: effectiveTimeout,
+          _next:
+            `Nothing was approved — instead ${one ? "a ticket you proposed was" : `${rejected.length} tickets you proposed were`} ` +
+            `REJECTED${named.length > 0 ? ` (${named.join(", ")})` : ""}, and that woke this call ` +
+            `so you would not sit here waiting on ${one ? "a ticket that" : "tickets that"} can ` +
+            `never become ready. This is NOT an error, and it is not a reason to keep waiting: ` +
+            `it is work you can do right now. ` +
+            (withReason.length > 0
+              ? `Read the \`reason\` on each — it is the decider's own words, and it is the brief. `
+              : `No reason was recorded, so ask the human what was wrong rather than guessing. `) +
+            `Then either (a) fix what the reason names and task_amend that same ticket with a ` +
+            `\`note\` saying what changed — a rejected ticket amended that way goes back to ` +
+            `'proposed' for the human, which is how you resubmit without filing a duplicate — ` +
+            `or (b) treat it as a correction to the PLAN and task_amend the neighbouring tickets ` +
+            `it also condemns while they are still 'proposed'. Do not re-file the same ticket as ` +
+            `a new one, and do not claim ${one ? "it" : "them"}. Once you have acted, tell the ` +
+            `human what you changed and call queue_wait again.`,
+        };
+      }
+
       // TIMEOUT — the normal, expected, cheap answer. Everything about this
       // branch exists to stop it reading as a failure.
       if (body.status !== "ready") {
@@ -2031,12 +2159,14 @@ async function runFacadeTool(
             `anything yet". You were parked on the server the whole time, not polling, and it ` +
             `cost one call. DO NOT end your turn and DO NOT report a failure: call queue_wait ` +
             `AGAIN, right now, and keep doing that until it answers status "ready" (or you have ` +
-            `waited long enough that telling the human is the honest thing to do). One thing ` +
-            `worth checking after several timeouts, ONCE and not every round: a REJECTED ticket ` +
-            `never becomes ready, so waiting on one is waiting forever. board_status names the ` +
-            `tickets that came back on each epic's \`returned\`, with the reason — and a ` +
-            `rejection is usually a correction to the rest of the plan, which is work you can ` +
-            `do right now instead of waiting.`,
+            `waited long enough that telling the human is the honest thing to do). A rejection ` +
+            `does NOT leave you stuck here: it wakes this call too, as status "rejected" with ` +
+            `the reason attached, so a timeout means nobody has decided yet — not that a "no" ` +
+            `went unheard. The one thing worth checking after SEVERAL timeouts, once and not ` +
+            `every round: an API deployed before rejections woke waiters cannot signal one, and ` +
+            `there board_status names what came back on each epic's \`returned\`, with the ` +
+            `reason. Either way a rejection is usually a correction to the rest of the plan — ` +
+            `work you can do right now instead of waiting.`,
         };
       }
 
@@ -2439,21 +2569,34 @@ async function runFacadeTool(
     }
 
     case "task_amend": {
-      // Self-correction for a PROPOSAL, deliberately narrow (TDM-117). An agent may
-      // amend or withdraw a task IT proposed — but ONLY while it is still `proposed`
-      // and unclaimed. Once a human approves it, it is theirs (ask, don't edit);
-      // once someone claims it, the claim fence owns it. The three-way guard below
-      // is checked against the SERVER's view of the task, never anything
-      // self-reported: authoredBy is server-derived provenance (TDM-40). This lets
-      // the default surface self-heal a mis-proposed plan without opening a hole to
-      // rewrite approved or in-flight work.
+      // Self-correction for a PROPOSAL, deliberately narrow (TDM-117) — and, since
+      // TDM-4, the one way OUT of a rejection. An agent may amend or withdraw a
+      // task IT proposed while it is still `proposed` and unclaimed, and it may
+      // amend a `rejected` one it proposed to send it back for approval. Once a
+      // human approves a task it is theirs (ask, don't edit); once someone claims
+      // it, the claim fence owns it. The guards below are checked against the
+      // SERVER's view of the task, never anything self-reported: authoredBy is
+      // server-derived provenance (TDM-40). This lets the default surface self-heal
+      // a mis-proposed plan without opening a hole to rewrite approved or in-flight
+      // work.
+      //
+      // WHY REJECTED BELONGS HERE rather than in a tool of its own. A rejected
+      // ticket used to be a dead end: the only move left was filing a near-copy,
+      // which arrived with no memory of the rejection and usually got rejected
+      // again. Answering a rejection IS amending a proposal — same author, same
+      // fence, same ticket — so it is the same verb, and only the endpoint under
+      // it differs (PATCH in place vs the resubmit that walks it back to
+      // 'proposed').
       const id = requireTaskId(args);
       const withdraw = args.withdraw === true;
+      const note = typeof args.note === "string" ? args.note.trim() : "";
       const amendable = ["title", "body", "epicId", "linkedIds"] as const;
-      if (!withdraw && !amendable.some((k) => args[k] !== undefined)) {
+      const changed = amendable.some((k) => args[k] !== undefined);
+      if (!withdraw && !changed && !note) {
         throw new Error(
           "Nothing to amend — pass at least one of title / body / epicId / linkedIds, or " +
-            "`withdraw: true` to retract the proposal."
+            "`withdraw: true` to retract the proposal. Resubmitting a REJECTED ticket: pass the " +
+            "fix plus a `note` saying what you changed in response to the rejection."
         );
       }
 
@@ -2470,20 +2613,25 @@ async function runFacadeTool(
       };
       if (!action) throw new Error(`No task "${id}" found on this canvas.`);
 
-      // GUARD 1 — still a proposal. Approved / executing / done are off-limits.
+      // GUARD 1 — not yet the human's. A task the author can still speak for is
+      // one that is `proposed` (in front of the human, not yet approved) or
+      // `rejected` (the human has spoken, and the answer is the author's to
+      // address). Approved / executing / done stay off-limits.
+      //
       // Who did the approving depends on the canvas (TDM-146): everywhere but a
       // 'peer' canvas it was necessarily a human, and saying so is the clearest
       // way to explain why the task is no longer the proposer's to edit. On 'peer'
       // it may have been a reviewer agent, so the sentence names the approval
       // rather than asserting a human made it.
-      if (action.state !== "proposed") {
+      const isRejected = action.state === "rejected";
+      if (action.state !== "proposed" && !isRejected) {
         const approver = (await canvasAllowsPeerApproval(gateway))
           ? "Once a task is approved — by a human, or by a reviewer agent under this canvas's " +
             "'peer' policy — it is theirs"
           : "Once a human approves a task it is theirs";
         throw new Error(
-          `This task is "${action.state}", not "proposed" — you cannot amend it. ${approver}: ` +
-            `propose a follow-up, or ask the human to reject this one.`
+          `This task is "${action.state}", not "proposed" or "rejected" — you cannot amend it. ` +
+            `${approver}: propose a follow-up, or ask the human to reject this one.`
         );
       }
       // GUARD 2 — unclaimed. A proposed task normally has no holder; refuse if it does.
@@ -2506,21 +2654,111 @@ async function runFacadeTool(
       }
 
       // Withdraw: delete the proposal outright (unclaimed + no holder ⇒ unfenced).
+      // Not on a REJECTED ticket, though: it is already off the queue, so there is
+      // nothing to retract, and deleting it would take the rejection reason with
+      // it — erasing the record of a decision the human made, which is not a
+      // self-correction.
       if (withdraw) {
+        if (isRejected) {
+          throw new Error(
+            `This ticket is "rejected" — it is already off the queue, so there is nothing to ` +
+              `withdraw, and deleting it would take the human's rejection reason with it. ` +
+              `Either leave it as the record of that decision, or fix what the reason names and ` +
+              `amend it with a \`note\` to resubmit it.`
+          );
+        }
         await gateway.del(`/api/canvas/actions/${encodeURIComponent(id)}`);
         return { withdrawn: true, id, url: canvasBlock(gateway).url };
       }
 
-      // Amend: merge the changed fields onto the existing payload and PATCH the
-      // whole thing. The payload-only PATCH replaces + canonicalizes (title
-      // required), so carry the existing values forward for anything not changed.
-      const payload: Record<string, unknown> = { ...(action.payload ?? {}) };
-      if (typeof args.title === "string" && args.title.trim()) payload.title = args.title.trim();
-      if (typeof args.body === "string") payload.body = args.body;
-      if (args.epicId !== undefined) payload.epicId = args.epicId;
-      if (args.linkedIds !== undefined) payload.linkedIds = args.linkedIds;
+      // The amendment itself, as the fields the caller actually changed. Kept
+      // separate from the merge below because the two endpoints want opposite
+      // things: PATCH REPLACES the payload (so it needs the whole thing), while
+      // the resubmit MERGES a partial one key by key (contract B) — and sending
+      // the whole stored payload there would quietly write back every field this
+      // amend never meant to touch.
+      const changes: Record<string, unknown> = {};
+      if (typeof args.title === "string" && args.title.trim()) changes.title = args.title.trim();
+      if (typeof args.body === "string") changes.body = args.body;
+      if (args.epicId !== undefined) changes.epicId = args.epicId;
+      if (args.linkedIds !== undefined) changes.linkedIds = args.linkedIds;
+      const payload: Record<string, unknown> = { ...(action.payload ?? {}), ...changes };
       if (typeof payload.title !== "string" || !(payload.title as string).trim()) {
         throw new Error("A task needs a non-empty `title` — pass a new one, or leave the existing.");
+      }
+
+      // REJECTED — the resubmit path (contract B). A PATCH would edit a dead
+      // ticket in place and leave it dead; the resubmit endpoint merges the same
+      // payload, preserves the rejection reason on the audit trail, and walks the
+      // ticket back to 'proposed' so the human sees it again.
+      if (isRejected) {
+        if (!note) {
+          // Argument shape, not policy — the server refuses a note-less resubmit
+          // too (`resubmit_note_required`, mapped below for the case where it
+          // gets there anyway). Stopping it here costs no round trip and lets the
+          // message say what a usable note IS, which a 400 cannot.
+          throw new Error(
+            "Resubmitting a REJECTED ticket needs a `note` — one line saying what you CHANGED in " +
+              "response to the rejection reason (\"scoped it to the gateway; the API half is now " +
+              "TDM-9\"). It is what the human reads to see how this differs from the version " +
+              "they said no to, so \"please reconsider\" is not one."
+          );
+        }
+        const { data, refusal } = await gateway.postWithRefusal<
+          { action?: TaskRow & { type?: string } },
+          unknown
+        >(
+          `/api/canvas/actions/${encodeURIComponent(id)}/resubmit`,
+          // The PARTIAL payload, and only when something actually changed: an
+          // unchanged resubmit (the reason was answered elsewhere — a neighbour
+          // amended, a question settled) is "the ticket text stands, I am asking
+          // again", and must not rewrite the ticket's fields on its way past.
+          { note, ...(changed ? { payload: changes } : {}) },
+          // Both are ANSWERS here, not faults: the endpoint 404s an id that names
+          // nothing (`task_not_found`) and 400s a ticket in the wrong state or a
+          // missing note. Thrown, the code would reach the model buried in an
+          // opaque "POST … failed" string.
+          [400, 404]
+        );
+        if (refusal) {
+          const parsed = readApprovalRefusal(refusal);
+          return {
+            resubmitted: false,
+            id,
+            refusal: parsed.code ?? "resubmit_refused",
+            message: parsed.message,
+            ...parsed.extra,
+            _next: resubmitRefusalNext(parsed),
+          };
+        }
+        const resubmitted = data?.action;
+        return {
+          resubmitted: true,
+          id,
+          ...(resubmitted?.ticketId ? { ticketId: resubmitted.ticketId } : {}),
+          state: resubmitted?.state ?? "proposed",
+          note,
+          url: canvasBlock(gateway).url,
+          _next:
+            "Resubmitted. This is the SAME ticket back at 'proposed' — not a new one — with the " +
+            "original rejection reason and your note preserved on its audit trail, so the human " +
+            "can see what changed since they said no. It is NOT approved and NOT claimable: it " +
+            "is behind the human gate again, and nothing was signalled to the queue. So tell " +
+            "them in chat that it is waiting and what you changed, then queue_wait. Do not claim " +
+            "it, and do not resubmit it a second time without a new answer to the reason.",
+        };
+      }
+
+      // Still 'proposed', so a note alone has nowhere to go: there is no rejection
+      // to answer, and the board has no field for a comment on a live proposal.
+      // Writing the payload back unchanged would report "amended" for a no-op.
+      if (!changed) {
+        throw new Error(
+          `A \`note\` on its own only does something when the ticket is REJECTED — it is the ` +
+            `"here is what I changed" a resubmit carries. This one is "proposed" and still in ` +
+            `front of the human: pass the actual change (title / body / epicId / linkedIds), or ` +
+            `\`withdraw: true\` to retract it.`
+        );
       }
       await gateway.patch(`/api/canvas/actions/${encodeURIComponent(id)}`, {
         payload,
@@ -3190,6 +3428,12 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
       "'ready' — approved tasks, each already carrying the same paste-ready `handoff` queue_next " +
       "gives you, so the next step is claim (working alone) or dispatch (with subagents), with " +
       "nothing to compose. " +
+      "'rejected' — nothing was approved, but one or more tickets you proposed came BACK, each " +
+      "with the decider's `reason` verbatim. Also not an error, and the one answer that hands you " +
+      "work without handing you a task: fix what the reason names and task_amend that same " +
+      "ticket with a `note` to resubmit it, and/or amend the neighbouring tickets the reason " +
+      "also condemns. Do not keep waiting on a rejected ticket and do not re-file it as a new " +
+      "one. " +
       "'timeout' — nothing was approved inside the window. THIS IS NOT AN ERROR AND NOT A " +
       "FAILURE: it means 'nothing yet', it cost one call, and the correct response is to call " +
       "queue_wait AGAIN immediately. Keep going until you get 'ready', or until enough time has " +
@@ -3419,13 +3663,21 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
     name: "task_amend",
     description:
       "Correct or retract a task YOU proposed — the self-heal for a mis-proposed plan (wrong " +
-      "epic, typo'd title, a duplicate). Deliberately narrow: it works ONLY while the task is " +
-      "still 'proposed' AND unclaimed AND was authored by you. Pass the fields to change " +
-      "(title / body / epicId / linkedIds) to edit it, or `withdraw: true` to delete it. Once a " +
-      "task has been approved it is THEIRS — this tool refuses, and the move is to propose a " +
-      "follow-up or ask the human to reject it; once another agent has claimed it, its claim " +
-      "owns it. Use this to re-parent tasks that landed unparented, not to rewrite work already " +
-      "approved or in flight. " +
+      "epic, typo'd title, a duplicate) — AND the way to answer a rejection. Deliberately " +
+      "narrow: the task must be 'proposed' or 'rejected', unclaimed, and authored by you. Pass " +
+      "the fields to change (title / body / epicId / linkedIds) to edit it, or `withdraw: true` " +
+      "to delete a proposal. " +
+      "RESUBMITTING A REJECTED TICKET: pass the fix PLUS a `note` saying what you changed, and " +
+      "this same ticket goes back to 'proposed' for the human — with the original rejection " +
+      "reason and your note kept on its audit trail. That is how you answer a 'no': not by " +
+      "filing a fresh near-duplicate, which arrives with no memory of the rejection and lands " +
+      "the same way. The resubmitted ticket is NOT approved — tell the human it is waiting, then " +
+      "queue_wait. (`withdraw` does not apply to a rejected ticket: it is already off the queue, " +
+      "and deleting it would erase the human's reason.) " +
+      "Once a task has been APPROVED it is THEIRS — this tool refuses, and the move is to " +
+      "propose a follow-up or ask the human to reject it; once another agent has claimed it, its " +
+      "claim owns it. Use this to re-parent tasks that landed unparented, not to rewrite work " +
+      "already approved or in flight. " +
       SESSION_CONVENTION,
     inputSchema: {
       type: "object" as const,
@@ -3447,11 +3699,20 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
           items: { type: "string" },
           description: "Replace the linked context ids. Omit to leave them unchanged.",
         },
+        note: {
+          type: "string",
+          description:
+            "REQUIRED when the ticket is 'rejected': one line saying what you CHANGED in " +
+            "response to the rejection reason (\"scoped it to the gateway; the API half is now " +
+            "TDM-9\"). It is what the human reads to see how this differs from the version they " +
+            "said no to, so \"please reconsider\" is not one. Ignored on a still-'proposed' task.",
+        },
         withdraw: {
           type: "boolean",
           description:
             "Set true to RETRACT (delete) the proposal instead of editing it — for a task " +
-            "proposed by mistake or a duplicate. Ignores the edit fields.",
+            "proposed by mistake or a duplicate. Ignores the edit fields. Not available on a " +
+            "rejected ticket, which is already off the queue.",
         },
       },
       required: ["id"],

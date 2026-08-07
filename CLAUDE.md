@@ -122,8 +122,14 @@ while the rest waits — then **tell the human it is waiting on them** and
 chat before you park, because a gate nobody was told about is just a stall. If a ticket
 comes back, `task_get` answers with a `review` block carrying the decider's
 reason verbatim: a **rejection** is a correction to the *plan* (`task_amend` the
-neighbours it also condemns; re-proposing it lands the same way), a **bounce** is
-the brief for the next attempt at that same ticket.
+neighbours it also condemns), a **bounce** is the brief for the next attempt at
+that same ticket. A rejection is not a dead end and does not leave you waiting:
+it **wakes `queue_wait`** as `status: "rejected"` with the reason attached, and
+you answer it on the same ticket — `task_amend` it with the fix plus a `note`
+saying what changed, which sends it back to `proposed` for the human with the
+original reason and your note on its audit trail. Never file a fresh copy
+instead; it arrives with no memory of the rejection and lands the same way. A
+resubmit is not an approval — tell the human it is back, then `queue_wait`.
 
 None of this is a fifth mode: it is the default `epic` policy's shape, where one
 human approval per batch releases every ticket under it. The owner picks the

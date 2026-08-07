@@ -100,9 +100,13 @@ test("task_get hands back the rejection reason and what to do about it", async (
     assert.ok(String(res._review).includes(REJECTION.reason));
     assert.match(String(res._review), /REJECTED/);
     assert.match(String(res._review), /by human/);
-    // The two things that turn triage into a treadmill if they are not said.
-    assert.match(String(res._review), /do not\s+re-propose/i);
-    assert.match(String(res._review), /task_amend/);
+    // The two things that turn triage into a treadmill if they are not said:
+    // filing a fresh copy is still forbidden — but since TDM-4 the copy has to
+    // name the way BACK, or "do not re-file it" is just a dead end with manners.
+    assert.match(String(res._review), /do not file a NEW copy/i);
+    assert.match(String(res._review), /task_amend this same ticket/i);
+    assert.match(String(res._review), /note/i, "a resubmit carries what changed");
+    assert.match(String(res._review), /'proposed'/, "and lands behind the human gate again");
   } finally {
     restore();
   }
