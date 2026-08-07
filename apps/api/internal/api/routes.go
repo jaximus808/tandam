@@ -424,6 +424,15 @@ func NewRouter(s store.Store, hub *ws.Hub, authSvc *auth.Service, googleVerifier
 			// human-only; this is the reversible move, which is the class 'peer'
 			// already permits. See task_move.go's ReworkAction.
 			r.With(ResolveTicketRef(s)).Post("/api/canvas/actions/{id}/rework", h.ReworkAction)
+			// The AUTHOR's answer to a rejection (TDM-3): rejected → proposed
+			// with a required note, so the agent that wrote a ticket amends
+			// and asks again instead of opening a near-duplicate. Gated on the
+			// caller's server-derived provenance matching the row's
+			// authored_by — an agent may bring back its OWN rejected work and
+			// nobody else's — and it lands BEHIND the human gate, so it
+			// signals no ready queue and fires no webhook. See
+			// task_resubmit.go.
+			r.With(ResolveTicketRef(s)).Post("/api/canvas/actions/{id}/resubmit", h.ResubmitAction)
 			// The OWNER's state moves on a BATCH (TDM-189): un-approve
 			// (approved → proposed), re-open / retire a drained epic
 			// (done → proposed | rejected) and revive a rejected one

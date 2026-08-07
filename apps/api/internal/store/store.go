@@ -1171,6 +1171,26 @@ type Store interface {
 	// arbitrary pair from a request body. Human-only by surface, exactly like
 	// release and requeue: no MCP tool maps to it.
 	ReopenAction(ctx context.Context, canvasID, id uuid.UUID, from, to string) (*Action, int, error)
+	// ResubmitAction is the AUTHOR's rewind (TDM-3): rejected → proposed, made by
+	// the agent that wrote the ticket rather than by a human at the board. Same
+	// conditional-UPDATE + re-read-to-disambiguate pattern as ReopenAction —
+	// predicated on (state='rejected', type='task') — and it clears the same
+	// bookkeeping: the claim, the stale result, the rejection reason in `error`,
+	// and approved_by (it is going back INTO the gate).
+	//
+	// It is NOT ReopenAction with different arguments, and the two differences are
+	// the reason it exists: it WRITES the payload (a resubmit is an amend-and-
+	// retry — `payload` is the full, caller-validated payload to store, empty
+	// meaning "leave the content alone"), and it appends `entry` to the audit log
+	// in the SAME write, because that entry is the only surviving copy of the
+	// rejection reason this write clears. Server-owned payload keys (claim,
+	// contention, audit) are carried from the stored row whatever `payload` says.
+	//
+	// Deliberately not idempotent: a task already 'proposed' yields
+	// ErrIllegalActionState naming its current state, so a re-sent request is
+	// visible instead of appending a second entry. Gated at the route surface on
+	// the caller's provenance matching authored_by (see api.ResubmitAction).
+	ResubmitAction(ctx context.Context, canvasID, id uuid.UUID, payload json.RawMessage, entry ContentAudit) (*Action, int, error)
 	// AppendActionAudit appends ONE server-authored entry to an action's
 	// payload.audit[] log and returns the stored payload. Unlike
 	// UpdateActionPayload it takes no caller payload at all — it exists for the
