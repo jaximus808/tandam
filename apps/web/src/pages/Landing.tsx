@@ -10,6 +10,7 @@ import SignInModal from "../components/SignInModal";
 import HeroBoardDemo from "../components/landing/HeroBoardDemo";
 import VillainSection from "../components/landing/VillainSection";
 import HowItWorksSection from "../components/landing/HowItWorksSection";
+import SeeItInActionSection from "../components/landing/SeeItInActionSection";
 import AudienceSection from "../components/landing/AudienceSection";
 import SolvesSection from "../components/landing/SolvesSection";
 import PlanReviewSection from "../components/landing/PlanReviewSection";
@@ -485,6 +486,11 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
       <div id="how-it-works">
         <HowItWorksSection />
       </div>
+
+      {/* SEE IT: the recorded demo, two beats — connect, then steer (TDM-214).
+          Same paper as How-it-works; the clips' hairline frames carry the
+          structure. Its full-demo CTA opens the same modal as the hero's. */}
+      <SeeItInActionSection onWatchFull={() => setDemoOpen(true)} />
 
       {/* WHO: the fleet manifest — four places work happens, none of them
           aware of the others (surface band) */}
