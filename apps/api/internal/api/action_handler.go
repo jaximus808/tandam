@@ -525,6 +525,7 @@ func (h *Handler) ReadAction(w http.ResponseWriter, r *http.Request) {
 			if epic, err := h.store.GetAction(r.Context(), canvasID, epicID); err == nil && epic.Type == "epic" {
 				var ep struct {
 					Title     string      `json:"title"`
+					Body      string      `json:"body"`
 					LinkedIDs []uuid.UUID `json:"linkedIds"`
 				}
 				_ = json.Unmarshal(epic.Payload, &ep)
@@ -543,8 +544,23 @@ func (h *Handler) ReadAction(w http.ResponseWriter, r *http.Request) {
 				// before any write; the board, on text a human is editing) have to
 				// evaluate them in-process, so a Go copy would be a third
 				// implementation rather than a replacement for either.
+				//
+				// body is the batch's brief, verbatim (TDM-5). An epic body is
+				// where a proposer puts the contracts every ticket under it has
+				// to honour, so a worker handed one ticket needs it to start —
+				// and with only {id, title} it had to spend a SECOND read on the
+				// epic id to get it. Shipping it here is what makes this one
+				// read enough, which is the whole point of hydrating the epic.
+				// Always present, empty string when the epic has no body: a
+				// missing key would make the client's default the deciding vote
+				// (same reasoning as hasLinkedContext above).
+				//
+				// This does not reopen the id-list question: a body is the
+				// batch's own text, already written to be read with the ticket,
+				// where linkedIds would be a list of things to go and fetch.
 				resp["epic"] = map[string]any{
 					"id": epic.ID, "title": ep.Title, "state": epic.State,
+					"body":             ep.Body,
 					"hasLinkedContext": len(ep.LinkedIDs) > 0,
 				}
 			}
