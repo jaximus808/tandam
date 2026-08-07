@@ -19,9 +19,97 @@
  * after VillainSection as the answer to it.
  */
 
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 type Tone = "ok" | "warn";
+
+/** Mirrors HeroBoardDemo's hook — this section stays self-contained by design. */
+function usePrefersReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const onChange = () => setReduced(mq.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+  return reduced;
+}
+
+interface ClipProps {
+  /** Path under /public — absent until the asset ticket lands (see onError). */
+  src: string;
+  poster: string;
+  /** Optional line above the frame; the prominent clip earns one, the inline one doesn't. */
+  title?: string;
+  caption: string;
+  /** `feature` is the section's money shot: heading-weight title, wider frame. */
+  variant?: "inline" | "feature";
+  className?: string;
+}
+
+/**
+ * A screen recording, played as a silent loop — evidence, not decoration, so it
+ * gets the same hairline frame as the call transcripts above it.
+ *
+ * Two things it deliberately does:
+ *  · `onError` unmounts the WHOLE block (frame, title, caption). The mp4s land in
+ *    a separate ticket, and a section missing a clip must read as finished, not
+ *    as a broken player or an empty frame.
+ *  · `prefers-reduced-motion` swaps autoplay+loop for the poster with native
+ *    controls, so the clip is still reachable without anything moving on its own.
+ */
+function DemoClip({ src, poster, title, caption, variant = "inline", className = "" }: ClipProps) {
+  const reduced = usePrefersReducedMotion();
+  const [failed, setFailed] = useState(false);
+
+  if (failed) return null;
+
+  const feature = variant === "feature";
+
+  return (
+    <figure className={className}>
+      {title &&
+        (feature ? (
+          <h3 className="mb-3 text-xl font-semibold tracking-tight text-ink">{title}</h3>
+        ) : (
+          <p className="mb-2 text-xs font-medium uppercase tracking-wide text-ink/50">{title}</p>
+        ))}
+      <div className="overflow-hidden rounded-lg border border-ink/10 bg-surface">
+        <video
+          // React can drop the `muted` prop on the initial mount; without the
+          // attribute set on the element, autoplay is blocked outright.
+          ref={(el) => {
+            if (el) el.muted = true;
+          }}
+          className="block h-auto w-full"
+          src={src}
+          poster={poster}
+          preload="metadata"
+          muted
+          playsInline
+          autoPlay={!reduced}
+          loop={!reduced}
+          controls={reduced}
+          aria-label={caption}
+          onError={() => setFailed(true)}
+        />
+      </div>
+      <figcaption
+        className={
+          feature
+            ? "mt-3 max-w-2xl text-sm leading-relaxed text-ink/60"
+            : "mt-2 text-[12px] leading-relaxed text-ink/50"
+        }
+      >
+        {caption}
+      </figcaption>
+    </figure>
+  );
+}
 
 interface Call {
   call: string;
@@ -89,7 +177,14 @@ function DecisionChip({ verdict, label, detail }: Decision) {
 }
 
 // `human` marks the step nobody's agent performs — see DecisionChip.
-const STEPS: { title: string; body: ReactNode; calls?: Call[]; human?: Decision[] }[] = [
+// `clip` is a recording of that step actually happening, if one exists for it.
+const STEPS: {
+  title: string;
+  body: ReactNode;
+  calls?: Call[];
+  human?: Decision[];
+  clip?: Omit<ClipProps, "className">;
+}[] = [
   {
     title: "Every agent joins the same board",
     body: "One canvas code, any MCP client. A terminal on your laptop, a sandbox that lives ninety seconds, and a CI job all connect to the same queue. Nothing needs a disk in common.",
@@ -142,6 +237,12 @@ const STEPS: { title: string; body: ReactNode; calls?: Call[]; human?: Decision[
         ),
       },
     ],
+    clip: {
+      src: "/demo/queue-loop.mp4",
+      poster: "/demo/queue-loop-poster.jpg",
+      caption:
+        "An agent connects, proposes a batch, and waits. One approval turns the whole epic pullable.",
+    },
   },
   {
     title: "Sessions pull approved work",
@@ -240,6 +341,8 @@ export default function HowItWorksSection() {
                   ))}
                 </div>
               )}
+
+              {step.clip && <DemoClip {...step.clip} className="mt-4" />}
             </div>
           </li>
         ))}
@@ -260,6 +363,18 @@ export default function HowItWorksSection() {
           Steps 04–06 repeat, on every machine at once, until the queue is empty.
         </p>
       </div>
+
+      {/* The money shot: the loop above is running, and you change it while it
+          runs. Widest frame in the section on purpose — it outranks the step
+          transcripts. Hides itself whole if the recording isn't there yet. */}
+      <DemoClip
+        src="/demo/steer-loop.mp4"
+        poster="/demo/steer-loop-poster.jpg"
+        title="…and you can change your mind while it runs"
+        caption="Reject a ticket, amend the plan, add work mid-batch. Sessions already in flight pick the change up on their next pull — you don't stop the fleet to steer it."
+        variant="feature"
+        className="mt-16 max-w-4xl"
+      />
     </section>
   );
 }
