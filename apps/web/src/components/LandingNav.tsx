@@ -103,21 +103,32 @@ export default function LandingNav({
           <span>Tandem</span>
           {/* Static dot — the one-pulse motion budget is reserved for LIVE
               "working" indicators; a nav badge is decoration. */}
-          <span className="ml-1 hidden items-center gap-1.5 rounded border border-ink/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-ink/50 md:inline-flex">
+          {/* lg, not md: at md the nav already carries Why Tandem + About +
+              CTA + Dashboard, and with wrapping now forbidden this badge is
+              the ~95px that would push a signed-in header past the edge. */}
+          <span className="ml-1 hidden items-center gap-1.5 whitespace-nowrap rounded border border-ink/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-ink/50 lg:inline-flex">
             <span className="inline-flex h-1 w-1 rounded-full bg-agent" />
             agent-native
           </span>
         </button>
         <nav className="ml-auto flex items-center gap-1 text-sm sm:gap-1.5">
+          {/* Link visibility is TIERED, not all-or-nothing at sm: between
+              640px and ~1000px the full set doesn't fit next to the brand +
+              CTA, and flex was answering by wrapping every label into a
+              2–3 line stack. Same-page anchors (How it works / Quickstart)
+              are the most expendable → lg. Real pages (Why Tandem / About)
+              → md. The CTA + Dashboard + account survive every width.
+              whitespace-nowrap everywhere: a label that doesn't fit is
+              hidden by its tier, never folded. */}
           <a
             href={howItWorksHref}
-            className="hidden rounded-md px-3 py-1.5 text-ink/55 transition-colors hover:bg-ink/5 hover:text-ink sm:inline"
+            className="hidden whitespace-nowrap rounded-md px-3 py-1.5 text-ink/55 transition-colors hover:bg-ink/5 hover:text-ink lg:inline"
           >
             How it works
           </a>
           <a
             href={quickstartHref}
-            className="hidden rounded-md px-3 py-1.5 text-ink/55 transition-colors hover:bg-ink/5 hover:text-ink sm:inline"
+            className="hidden whitespace-nowrap rounded-md px-3 py-1.5 text-ink/55 transition-colors hover:bg-ink/5 hover:text-ink lg:inline"
           >
             Quickstart
           </a>
@@ -127,28 +138,28 @@ export default function LandingNav({
           <a
             href="/why-tandem"
             onClick={onWhy ? spaLink(onWhy) : undefined}
-            className="hidden rounded-md px-3 py-1.5 text-ink/55 transition-colors hover:bg-ink/5 hover:text-ink sm:inline"
+            className="hidden whitespace-nowrap rounded-md px-3 py-1.5 text-ink/55 transition-colors hover:bg-ink/5 hover:text-ink md:inline"
           >
             Why Tandem
           </a>
           <a
             href="/about"
             onClick={spaLink(onAbout)}
-            className="hidden rounded-md px-3 py-1.5 text-ink/55 transition-colors hover:bg-ink/5 hover:text-ink sm:inline"
+            className="hidden whitespace-nowrap rounded-md px-3 py-1.5 text-ink/55 transition-colors hover:bg-ink/5 hover:text-ink md:inline"
           >
             About
           </a>
           <a
             href="/mcp"
             onClick={spaLink(onOpenMCP)}
-            className="rounded-md px-3 py-1.5 font-medium text-ink/80 transition-colors hover:bg-ink/5"
+            className="whitespace-nowrap rounded-md px-3 py-1.5 font-medium text-ink/80 transition-colors hover:bg-ink/5"
           >
             Connect an agent
           </a>
           {user && (
             <button
               onClick={onShowCanvases}
-              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-ink/15 bg-surface px-3 text-[13px] font-medium text-ink transition-colors hover:border-ink/25"
+              className="inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-ink/15 bg-surface px-3 text-[13px] font-medium text-ink transition-colors hover:border-ink/25"
             >
               Dashboard
               <ArrowIcon className="h-3.5 w-3.5" />
