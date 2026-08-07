@@ -556,5 +556,8 @@ func buildRouteVariants(base []byte) map[string][]byte {
 		"/about": rewrite("/about",
 			"About Tandem — why a shared canvas for AI agents",
 			"Who built Tandem, and why a chat log is the wrong place for work an AI agent did on your behalf."),
+		"/features": rewrite("/features",
+			"What a shared task queue for AI agents does — Tandem features",
+			"The full capability reference: the approval-gated task queue, epics and tickets, the 18-tool MCP facade, the live board and fleet view, documents, webhooks — and the honest limits."),
 	}
 }
