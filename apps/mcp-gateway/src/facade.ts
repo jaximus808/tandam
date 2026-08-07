@@ -1759,7 +1759,15 @@ function ticketRange(ticketIds: Array<string | undefined>): string {
   return `${ids[0]}..${ids[ids.length - 1]}`;
 }
 
-/** One relayable sentence: what is waiting, which tickets, and where to click. */
+/**
+ * One relayable sentence: what is waiting, which tickets, where to click — and
+ * what happens when they do. The closing promise is load-bearing (feedback,
+ * 2026-08-06): without it the human reads "waiting for approval", approves, and
+ * then can't tell whether the agent parked on the queue or silently hung — the
+ * propose→approve gap looks identical either way from the chat. Saying "approval
+ * auto-starts the work" up front is what makes the approval feel like (and be)
+ * the go signal instead of the first half of a second ask.
+ */
 function approvalAsk(opts: {
   subject: string;
   detail?: string;
@@ -1769,7 +1777,9 @@ function approvalAsk(opts: {
   const detail = opts.detail ? ` (${opts.detail})` : "";
   return (
     `${opts.subject}${detail} ${opts.plural ? "are" : "is"} waiting for YOUR approval ` +
-    `on the board: ${opts.url}`
+    `on the board: ${opts.url} — I'll wait here; the moment you approve, ` +
+    `${opts.plural ? "they get" : "it gets"} picked up and worked automatically, ` +
+    `no second prompt needed.`
   );
 }
 
