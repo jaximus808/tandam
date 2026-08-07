@@ -16,6 +16,8 @@ import PlanReviewSection from "../components/landing/PlanReviewSection";
 import DogfoodProofSection from "../components/landing/DogfoodProofSection";
 import ReceiptsSection from "../components/landing/ReceiptsSection";
 import QuickstartSection from "../components/landing/QuickstartSection";
+import FullDemoModal from "../components/landing/FullDemoModal";
+import { FULL_DEMO_VIDEO_URL } from "../lib/launchMedia";
 
 interface Props {
   onJoin: (code: string) => void;
@@ -253,6 +255,10 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
   const [recents, setRecents] = useState(() => listRecent());
   const [user, setUser] = useState<User | null>(getCachedUser);
   const [signInOpen, setSignInOpen] = useState(false);
+  // Click-to-play only, and only once a recording is configured — with
+  // FULL_DEMO_VIDEO_URL empty the CTA below never renders and the hero is
+  // untouched. See lib/launchMedia.ts.
+  const [demoOpen, setDemoOpen] = useState(false);
   const [canvasCount, setCanvasCount] = useState<number | null>(null);
 
   const hasRecents = useMemo(() => recents.length > 0, [recents]);
@@ -392,6 +398,14 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
                 <Icon name="spark" className="h-3.5 w-3.5" />
                 connect an AI agent →
               </a>
+              {FULL_DEMO_VIDEO_URL !== "" && (
+                <button
+                  onClick={() => setDemoOpen(true)}
+                  className="text-[13px] font-medium text-ink/70 underline underline-offset-2 transition-colors hover:text-ink"
+                >
+                  Watch the full demo
+                </button>
+              )}
               <span>
                 no sign-up to start
                 {showSignUp && (
@@ -677,6 +691,8 @@ export default function Landing({ onJoin, onOpenMCP, onShowCanvases, onShowSetti
           }}
         />
       )}
+
+      {demoOpen && <FullDemoModal onClose={() => setDemoOpen(false)} />}
 
       {signInOpen && (
         <SignInModal
