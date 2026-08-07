@@ -507,14 +507,7 @@ export default function MCPSupport({
               </p>
             </div>
 
-          {/* Card body follows the theme (via/to-surface); the sky-50 corner and
-              the blur glow below stay a fixed soft-sky accent in both modes. */}
-          <div className="relative overflow-hidden rounded-2xl border border-sky-200/70 bg-gradient-to-br from-sky-50 via-surface to-surface p-6 sm:p-8">
-            {/* soft accent glow, decorative */}
-            <div
-              aria-hidden
-              className="pointer-events-none absolute -right-12 -top-12 h-40 w-40 rounded-full bg-sky-200/40 blur-2xl"
-            />
+          <div className="relative overflow-hidden rounded-2xl border border-sky-200/70 bg-surface p-6 sm:p-8 dark:border-sky-800/50">
             <ol className="relative space-y-4">
               <li className="flex gap-3">
                 <StepNum>1</StepNum>
