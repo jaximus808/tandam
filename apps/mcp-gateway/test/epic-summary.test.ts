@@ -335,6 +335,81 @@ test("task_get stays quiet about the batch when work is still queued behind this
   );
 });
 
+// ── The batch's own brief travels with the task (TDM-6) ───────────────────────
+
+test("task_get passes the epic's body through — the batch's contracts, in the one call", async () => {
+  await withRecordedFetch(
+    async () => {
+      const res = (await handleFacadeTool(connectedGateway(), "task_get", { id: "TDM-99" })) as any;
+      // The epic body is where the conventions shared by every ticket in the
+      // batch are written once. Dropping it here means the worker starts without
+      // them, because the handoff sends it through exactly this call.
+      assert.equal(res.epic.body, "Every ticket here: no new deps, and stage files by path.");
+      // …and the rollup it is merged with is still all there.
+      assert.equal(res.epic.title, "E10 · Demo blockers");
+      assert.equal(res.epic.openTasks, 3);
+    },
+    {
+      taskRead: {
+        action: { id: "task-9", type: "task", state: "approved", payload: { title: "One of many", epicId: EPIC_ID } },
+        linked: [],
+        epic: {
+          id: EPIC_ID,
+          title: "E10 · Demo blockers",
+          state: "approved",
+          body: "Every ticket here: no new deps, and stage files by path.",
+        },
+      },
+      epics: [rollup({ tasks: { total: 5, byState: { done: 2, approved: 3 } } })],
+    }
+  );
+});
+
+test("task_get keeps the epic's body when the rollup endpoint is absent", async () => {
+  await withRecordedFetch(
+    async () => {
+      const res = (await handleFacadeTool(connectedGateway(), "task_get", { id: "TDM-99" })) as any;
+      // No rollup to deepen the block with — the API's own epic hydration, body
+      // included, still has to reach the worker.
+      assert.equal(res.epic.body, "Batch contract: ship behind the flag.");
+      assert.equal("openTasks" in res.epic, false);
+    },
+    {
+      taskRead: {
+        action: { id: "task-9", type: "task", state: "approved", payload: { title: "Solo", epicId: EPIC_ID } },
+        linked: [],
+        epic: {
+          id: EPIC_ID,
+          title: "E10 · Demo blockers",
+          state: "approved",
+          body: "Batch contract: ship behind the flag.",
+        },
+      },
+      epics: null,
+    }
+  );
+});
+
+test("task_get invents no body on an API that does not send one", async () => {
+  await withRecordedFetch(
+    async () => {
+      const res = (await handleFacadeTool(connectedGateway(), "task_get", { id: "TDM-99" })) as any;
+      // An API deployed before the epic body was hydrated still answers — the
+      // block is the rollup's, with no body fabricated onto it.
+      assert.equal("body" in res.epic, false);
+      assert.equal(res.epic.openTasks, 3);
+    },
+    {
+      taskRead: {
+        action: { id: "task-9", type: "task", state: "approved", payload: { title: "One of many", epicId: EPIC_ID } },
+        linked: [],
+        epic: { id: EPIC_ID, title: "E10 · Demo blockers", state: "approved" },
+      },
+      epics: [rollup({ tasks: { total: 5, byState: { done: 2, approved: 3 } } })],
+    }
+  );
+});
+
 test("task_complete advertises epicSummary as the epic-level write path", async () => {
   const { FACADE_TOOLS } = await import("../src/server.js");
   const tool = FACADE_TOOLS.find((t) => t.name === "task_complete")!;

@@ -216,6 +216,13 @@ type EpicRollup = {
   firstActivity?: string;
   lastActivity?: string;
   done: Array<{ id: string; ticketId?: string; title: string; state: string; result?: string }>;
+  /**
+   * How many per-ticket lines the SERVER already left out of `done` (TDM-183):
+   * the compact rollup read trims the archive rather than shipping it, and says
+   * how many it held back. Absent when nothing was trimmed — a row that quotes
+   * everything says nothing here rather than `doneOmitted: 0`.
+   */
+  doneOmitted?: number;
   drained: boolean;
   /** Drained with nobody saying what it delivered — the story is about to be lost. */
   summaryNeeded: boolean;
@@ -2276,7 +2283,7 @@ async function runFacadeTool(
       requireTaskId(args);
       const got = (await handleTool(gateway, "canvas_task_get", args)) as {
         action?: { state?: string; payload?: unknown };
-        epic?: { id?: string; hasLinkedContext?: boolean };
+        epic?: { id?: string; body?: string; hasLinkedContext?: boolean };
         review?: ReviewFeedback;
       };
       // WHY IT CAME BACK, if it did (TDM-161). The API attaches `review` — a
@@ -2315,6 +2322,16 @@ async function runFacadeTool(
       // on. One extra read, and only for a task that HAS an epic.
       const epicId = typeof got?.epic?.id === "string" ? got.epic.id : "";
       if (!epicId) return { ...got, ...review, ...qualityBlock };
+      // The BATCH's own brief (TDM-6). The API hydrates the epic's `body` on this
+      // read, and it is where the contracts shared by every ticket in the batch
+      // live — the conventions, the interfaces, the "don't touch X" — written
+      // once on the epic rather than copied into each ticket. Re-attached
+      // EXPLICITLY after the rollup snapshot rather than left to the `...got.epic`
+      // spread, because epicSnapshot composes a fresh object from the rollup and
+      // any future field of that name there would silently win. A worker reads
+      // its batch contracts in the one call the handoff already sends it through.
+      const epicBody = typeof got?.epic?.body === "string" ? got.epic.body : "";
+      const bodyBlock = epicBody ? { body: epicBody } : {};
       const rollup = await fetchEpicRollup(gateway, epicId);
       if (!rollup) return { ...got, ...review, ...qualityBlock };
       const open = rollup.tasks.total - terminalCount(rollup);
@@ -2322,7 +2339,7 @@ async function runFacadeTool(
         ...got,
         ...review,
         ...qualityBlock,
-        epic: { ...got.epic, ...epicSnapshot(rollup), openTasks: open },
+        epic: { ...got.epic, ...epicSnapshot(rollup), ...bodyBlock, openTasks: open },
         ...(open <= 1
           ? {
               _epic:
@@ -3505,7 +3522,9 @@ export const FACADE_RAW_TOOLS: RawTool[] = [
     description:
       "Read ONE task with its context hydrated: { action, linked, epic? } — `linked` carries the " +
       "referenced roadmap items and notes (title, body, status), which is where the real brief " +
-      "lives, and `epic` says which batch it belongs to. Call this on the task you chose from " +
+      "lives, and `epic` says which batch it belongs to — including the epic's own `body`, which " +
+      "is where the contracts shared by every ticket in the batch are written once instead of " +
+      "copied into each one, so read it before you start. Call this on the task you chose from " +
       "queue_next; it is all the context you need to start, so you never have to read the whole " +
       "canvas. Progress reported via task_progress comes back here too. THIS IS ALSO WHERE WORK " +
       "THAT CAME BACK EXPLAINS ITSELF: a ticket a human rejected, or finished work a reviewer " +
